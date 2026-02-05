@@ -32,14 +32,19 @@ export function Hero() {
 
       <div className="relative z-10 w-full px-5 py-12 sm:py-14 lg:py-20 xl:py-24">
         <div className="mx-auto w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl text-center">
-          {/* Logo – prominent on desktop, centered, balanced */}
+          {/* Logo – pop in: scale up with a satisfying spring overshoot */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
+            className="relative flex justify-center mb-4 sm:mb-5 lg:mb-8"
+            initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="flex justify-center mb-4 sm:mb-5 lg:mb-8"
+            transition={{
+              type: "spring",
+              stiffness: 380,
+              damping: 19,
+              opacity: { duration: 0.25 },
+            }}
           >
-            <Link href="/" className="inline-block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px]" aria-label={`${brand.logoAlt} home`}>
+            <Link href="/" className="block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px]" aria-label={`${brand.logoAlt} home`}>
               <Image
                 src={brand.logoHeroPath ?? brand.logoDarkPath}
                 alt={brand.logoAlt}

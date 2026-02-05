@@ -65,14 +65,14 @@ export default function MorePage() {
           Explore {brand.companyName} – book a boat, read our story, or get in touch.
         </p>
 
-        <nav className="space-y-5 sm:space-y-3" aria-label="Site navigation">
+        <nav className="space-y-6 sm:space-y-3" aria-label="Site navigation">
           {pageLinks.map((item) => {
             const Icon = item.icon;
             return (
               <Link key={item.href} href={item.href}>
                 <Card className="transition-shadow hover:shadow-soft-lg border-brand-dark/10 overflow-hidden">
                   <CardContent className="p-0">
-                    <div className="flex items-center gap-4 py-6 px-5 sm:py-4 sm:px-5 sm:p-5">
+                    <div className="flex items-center gap-5 py-7 px-6 sm:gap-4 sm:py-4 sm:px-5 sm:p-5">
                       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
                         <Icon className="h-6 w-6" aria-hidden />
                       </div>
@@ -96,7 +96,7 @@ export default function MorePage() {
           })}
         </nav>
 
-        <div className="mt-12 sm:mt-8 space-y-5 sm:space-y-3">
+        <div className="mt-14 sm:mt-8 space-y-6 sm:space-y-3">
           <CallCard phone={siteConfig.phone} phoneTel={siteConfig.phoneTel} />
 
           <Link href="/book" className="block">
