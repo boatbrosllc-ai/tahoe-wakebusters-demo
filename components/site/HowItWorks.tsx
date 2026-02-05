@@ -26,14 +26,14 @@ const steps = [
 export function HowItWorks() {
   return (
     <section className="section-padding bg-brand-bg" aria-labelledby="how-it-works-heading">
-      <div className="container-wide px-4 sm:px-6 lg:px-8">
-        <h2 id="how-it-works-heading" className="text-3xl sm:text-4xl font-bold text-brand-dark text-center mb-4">
+      <div className="container-wide">
+        <h2 id="how-it-works-heading" className="text-2xl sm:text-3xl lg:text-4xl font-bold text-brand-dark text-center mb-4 sm:mb-4">
           How it works
         </h2>
-        <p className="text-lg text-brand-muted text-center max-w-2xl mx-auto mb-12">
+        <p className="text-base sm:text-lg text-brand-muted text-center max-w-2xl mx-auto mb-10 sm:mb-12">
           Three simple steps from choosing your trip to being on the water.
         </p>
-        <div className="grid sm:grid-cols-3 gap-8 max-w-4xl mx-auto">
+        <div className="grid sm:grid-cols-3 gap-8 sm:gap-8 max-w-4xl mx-auto gap-y-10 sm:gap-y-0">
           {steps.map((step, i) => (
             <motion.div
               key={step.title}

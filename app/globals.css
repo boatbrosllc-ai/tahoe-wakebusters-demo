@@ -29,7 +29,7 @@
     @apply rounded-2xl bg-white/90 backdrop-blur-md shadow-soft border border-white/60;
   }
   .section-padding {
-    @apply px-4 sm:px-6 lg:px-8 py-16 sm:py-20 lg:py-24;
+    @apply px-5 sm:px-6 lg:px-8 py-14 sm:py-16 lg:py-20 xl:py-24;
   }
   .container-narrow {
     @apply max-w-4xl mx-auto;

@@ -32,11 +32,11 @@ export function LeadCapture() {
 
   return (
     <section className="section-padding bg-brand-dark" aria-labelledby="lead-capture-heading">
-      <div className="container-narrow px-4 sm:px-6 lg:px-8 text-center">
-        <h2 id="lead-capture-heading" className="text-2xl sm:text-3xl font-bold text-white mb-2">
+      <div className="container-narrow text-center">
+        <h2 id="lead-capture-heading" className="text-2xl sm:text-3xl font-bold text-white mb-3 sm:mb-2">
           Get availability + tips
         </h2>
-        <p className="text-white/80 mb-6 max-w-md mx-auto">
+        <p className="text-white/80 mb-6 sm:mb-6 max-w-md mx-auto text-sm sm:text-base">
           Drop your email for seasonal availability, last-minute openings, and Lake Travis & Lake Austin tips. No spam.
         </p>
         {status === "success" ? (

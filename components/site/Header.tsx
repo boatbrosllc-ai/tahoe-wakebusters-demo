@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Calendar } from "lucide-react";
+import { Calendar, Phone } from "lucide-react";
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
@@ -62,17 +62,16 @@ export function Header() {
           ))}
         </nav>
 
-        {/* Right: phone + CTAs (desktop); mobile calendar – always right-aligned */}
-        <div className="flex flex-1 justify-end items-center gap-1 min-w-0">
+        {/* Right: phone icon + calendar + CTAs – always right-aligned */}
+        <div className="flex flex-1 justify-end items-center gap-2 sm:gap-3 min-w-0">
           <a
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
-            className="hidden lg:inline-flex px-4 py-2.5 rounded-lg text-sm font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap"
+            className="flex items-center justify-center p-2.5 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
             aria-label={`Call ${siteConfig.phone}`}
           >
-            {siteConfig.phone}
+            <Phone className="h-5 w-5 lg:h-5 lg:w-5 shrink-0" aria-hidden />
           </a>
-          <span className="hidden lg:block w-px h-5 bg-white/25 mx-1" aria-hidden />
           <button
             type="button"
             onClick={() => setCalendarOpen(true)}

@@ -14,8 +14,8 @@ export function Footer() {
   const address = `${brand.address.line1}, ${brand.address.city}, ${brand.address.state} ${brand.address.zip}`;
 
   return (
-    <footer className="bg-brand-dark text-white/90" role="contentinfo">
-      <div className="container-wide px-5 py-10 pb-24 sm:px-6 sm:py-12 lg:px-8 lg:py-16 lg:pb-16">
+    <footer className="bg-brand-dark text-white/90 mt-[-72px] lg:mt-0" role="contentinfo">
+      <div className="container-wide px-5 pt-[72px] py-10 pb-24 sm:px-6 sm:py-12 lg:pt-8 lg:px-8 lg:py-16 lg:pb-16">
         <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <p className="font-semibold text-white text-lg">{brand.companyName}</p>

@@ -51,10 +51,17 @@ export function ContactForm() {
     );
   }
 
+  const inputBase = cn(
+    "w-full rounded-xl border border-brand-dark/15 bg-brand-bg/50 text-brand-dark transition-colors",
+    "placeholder:text-brand-muted/70",
+    "focus:outline-none focus:ring-2 focus:ring-brand-primary/40 focus:border-brand-primary focus:bg-white",
+    "disabled:opacity-60 disabled:cursor-not-allowed"
+  );
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label htmlFor="contact-name" className="block text-sm font-medium text-brand-dark mb-1">
+        <label htmlFor="contact-name" className="block text-sm font-medium text-brand-dark mb-1.5">
           Name
         </label>
         <input
@@ -64,16 +71,13 @@ export function ContactForm() {
           onChange={(e) => setName(e.target.value)}
           required
           disabled={status === "loading"}
-          className={cn(
-            "w-full h-11 px-4 rounded-xl border border-brand-dark/20 bg-white text-brand-dark",
-            "focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent",
-            "disabled:opacity-60"
-          )}
+          placeholder="Your name"
+          className={cn(inputBase, "h-11 px-4")}
           autoComplete="name"
         />
       </div>
       <div>
-        <label htmlFor="contact-email" className="block text-sm font-medium text-brand-dark mb-1">
+        <label htmlFor="contact-email" className="block text-sm font-medium text-brand-dark mb-1.5">
           Email
         </label>
         <input
@@ -83,16 +87,13 @@ export function ContactForm() {
           onChange={(e) => setEmail(e.target.value)}
           required
           disabled={status === "loading"}
-          className={cn(
-            "w-full h-11 px-4 rounded-xl border border-brand-dark/20 bg-white text-brand-dark",
-            "focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent",
-            "disabled:opacity-60"
-          )}
+          placeholder="you@example.com"
+          className={cn(inputBase, "h-11 px-4")}
           autoComplete="email"
         />
       </div>
       <div>
-        <label htmlFor="contact-message" className="block text-sm font-medium text-brand-dark mb-1">
+        <label htmlFor="contact-message" className="block text-sm font-medium text-brand-dark mb-1.5">
           Message
         </label>
         <textarea
@@ -102,11 +103,8 @@ export function ContactForm() {
           required
           rows={4}
           disabled={status === "loading"}
-          className={cn(
-            "w-full px-4 py-3 rounded-xl border border-brand-dark/20 bg-white text-brand-dark resize-y",
-            "focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent",
-            "disabled:opacity-60"
-          )}
+          placeholder="How can we help?"
+          className={cn(inputBase, "min-h-[112px] px-4 py-3 resize-y")}
         />
       </div>
       {status === "error" && (
@@ -114,7 +112,7 @@ export function ContactForm() {
           Something went wrong. Try again or call us.
         </p>
       )}
-      <Button type="submit" disabled={status === "loading"} size="lg" className="rounded-xl w-full sm:w-auto">
+      <Button type="submit" disabled={status === "loading"} size="lg" className="rounded-xl w-full sm:w-auto mt-1">
         {status === "loading" ? "Sending…" : "Send message"}
       </Button>
     </form>

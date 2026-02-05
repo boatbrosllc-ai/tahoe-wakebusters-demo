@@ -30,7 +30,7 @@ export function Hero() {
         <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/88 via-brand-dark/70 to-brand-dark" />
       </div>
 
-      <div className="relative z-10 w-full px-4 py-10 sm:py-14 lg:py-20 xl:py-24">
+      <div className="relative z-10 w-full px-5 py-12 sm:py-14 lg:py-20 xl:py-24">
         <div className="mx-auto w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl text-center">
           {/* Logo – prominent on desktop, centered, balanced */}
           <motion.div

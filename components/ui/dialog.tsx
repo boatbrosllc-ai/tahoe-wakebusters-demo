@@ -40,29 +40,29 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? "dialog-title" : undefined}
       aria-describedby={description ? "dialog-description" : undefined}
     >
-      {/* Overlay */}
+      {/* Overlay – blocks scroll */}
       <div
         className="absolute inset-0 bg-brand-dark/70 backdrop-blur-sm"
         onClick={close}
         aria-hidden
       />
-      {/* Panel */}
+      {/* Panel – centered on mobile and desktop, max height so inner content scrolls */}
       <div
         className={cn(
-          "relative w-full max-w-lg rounded-2xl bg-white shadow-premium",
+          "relative w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 rounded-2xl bg-white shadow-premium my-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}
       >
         <DialogCloseButton onClose={close} />
         {(title || description) && (
-          <div className="border-b border-brand-dark/10 px-6 py-4 pr-12">
+          <div className="border-b border-brand-dark/10 px-4 sm:px-6 py-3 sm:py-4 pr-12 shrink-0">
             {title && (
               <h2 id="dialog-title" className="text-lg font-semibold text-brand-dark">
                 {title}
@@ -75,7 +75,9 @@ export function Dialog({
             )}
           </div>
         )}
-        <div className="px-6 py-5">{children}</div>
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-4 sm:px-6 py-4 sm:py-5">
+          {children}
+        </div>
       </div>
     </div>
   );
