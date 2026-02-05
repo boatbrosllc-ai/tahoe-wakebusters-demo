@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Boat Bros ATX – main two */
+  --brand-primary: #50bdba;   /* Teal – primary CTAs, links */
+  --brand-secondary: #fe3f93; /* Pink – accent, secondary CTAs */
+  /* Supporting */
+  --brand-dark: #001c30;      /* Navy – dark sections, headings */
+  --brand-muted: #196a87;     /* Darker teal – subtle elements */
+  --brand-bg: #f0fafb;        /* Very light teal tint */
+}
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+  body {
+    @apply antialiased text-brand-dark bg-white;
+  }
+  *:focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-primary;
+  }
+}
+
+@layer components {
+  .card-glass {
+    @apply rounded-2xl bg-white/90 backdrop-blur-md shadow-soft border border-white/60;
+  }
+  .section-padding {
+    @apply px-4 sm:px-6 lg:px-8 py-16 sm:py-20 lg:py-24;
+  }
+  .container-narrow {
+    @apply max-w-4xl mx-auto;
+  }
+  .container-wide {
+    @apply max-w-7xl mx-auto;
+  }
+}

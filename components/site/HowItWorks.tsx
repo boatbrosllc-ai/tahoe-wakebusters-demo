@@ -1,0 +1,62 @@
+"use client";
+
+import { motion } from "framer-motion";
+import { Calendar, CheckCircle, Anchor } from "lucide-react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+
+const steps = [
+  {
+    icon: Calendar,
+    title: "Choose experience & date",
+    description: "Pick pontoon, wake, sunset, or another package and your preferred date.",
+  },
+  {
+    icon: CheckCircle,
+    title: "Check availability",
+    description: "See open slots and book in a few clicks. Instant confirmation.",
+  },
+  {
+    icon: Anchor,
+    title: "Show up & enjoy",
+    description: "We'll send details and meet you at the dock. Life vests and safety briefing included.",
+  },
+];
+
+export function HowItWorks() {
+  return (
+    <section className="section-padding bg-brand-bg" aria-labelledby="how-it-works-heading">
+      <div className="container-wide px-4 sm:px-6 lg:px-8">
+        <h2 id="how-it-works-heading" className="text-3xl sm:text-4xl font-bold text-brand-dark text-center mb-4">
+          How it works
+        </h2>
+        <p className="text-lg text-brand-muted text-center max-w-2xl mx-auto mb-12">
+          Three simple steps from choosing your trip to being on the water.
+        </p>
+        <div className="grid sm:grid-cols-3 gap-8 max-w-4xl mx-auto">
+          {steps.map((step, i) => (
+            <motion.div
+              key={step.title}
+              initial={{ opacity: 0, y: 12 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.35, delay: i * 0.1 }}
+              className="text-center"
+            >
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-primary text-white mb-4 shadow-soft" aria-hidden>
+                <step.icon className="h-7 w-7" />
+              </div>
+              <h3 className="text-lg font-semibold text-brand-dark mb-2">{step.title}</h3>
+              <p className="text-sm text-brand-muted">{step.description}</p>
+            </motion.div>
+          ))}
+        </div>
+        <div className="mt-10 text-center">
+          <Button asChild size="lg" className="rounded-xl">
+            <Link href="/book">Check Availability</Link>
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
