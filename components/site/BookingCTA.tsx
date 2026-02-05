@@ -68,12 +68,15 @@ export function BookingCTA({
 
   return (
     <div className={cn("space-y-2", className)}>
-      <div className="flex flex-col sm:flex-row sm:justify-center sm:items-center gap-3">
+      <div className="flex flex-row flex-wrap items-center justify-center gap-2 sm:gap-3">
         <Button
           asChild
           variant="default"
           size={variant === "primary" ? "xl" : "lg"}
-          className="w-full sm:w-auto rounded-xl"
+          className={cn(
+            "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
+            variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
+          )}
         >
           <Link href={bookUrl} onClick={handleBookClick}>
             Check Availability
@@ -84,10 +87,10 @@ export function BookingCTA({
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
             className={cn(
-              "inline-flex items-center justify-center gap-2 rounded-xl border-2 font-medium min-h-[48px] px-6 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
+              "inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 font-medium px-4 sm:px-6 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 shrink-0 text-sm sm:text-base",
               variant === "primary"
-                ? "h-14 text-lg px-10"
-                : "h-12 text-base px-8",
+                ? "h-14 text-base sm:text-lg px-5 sm:px-10"
+                : "h-12 px-4 sm:px-8",
               onDark
                 ? "border-white text-white hover:bg-white hover:text-brand-dark focus-visible:ring-white focus-visible:ring-offset-brand-dark"
                 : "border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary focus-visible:ring-offset-white"
