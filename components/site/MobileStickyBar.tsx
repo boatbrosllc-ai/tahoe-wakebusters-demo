@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Home, Compass, CalendarCheck, MoreHorizontal, Mail } from "lucide-react";
+import { Home, Compass, CalendarCheck, Menu, Mail } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +13,7 @@ const navItems: NavLink[] = [
   { href: "/", label: "Home", icon: Home },
   { href: "/experiences", label: "Experiences", icon: Compass },
   { href: "/book", label: "Book Now", icon: CalendarCheck, center: true },
-  { href: "/more", label: "More", icon: MoreHorizontal },
+  { href: "/more", label: "Menu", icon: Menu },
   { href: "/contact", label: "Contact", icon: Mail },
 ];
 

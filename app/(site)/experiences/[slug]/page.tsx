@@ -13,6 +13,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
+import { Clock, Users, Tag, CheckCircle2, ArrowLeft } from "lucide-react";
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -46,10 +47,10 @@ export default async function ExperienceDetailPage({ params }: Props) {
   return (
     <div className="bg-white pb-36 lg:pb-0">
       <MobileExperienceBookRail title={experience.title} slug={slug} />
-      {/* Hero – consistent sizing and centering on mobile/desktop */}
+      {/* Hero – elevated with stronger gradient and typography */}
       <section
         id="experience-detail-hero"
-        className="relative aspect-[16/10] sm:aspect-[2/1] max-h-[360px] sm:max-h-[420px] lg:max-h-[480px] bg-brand-dark"
+        className="relative aspect-[16/10] sm:aspect-[2/1] min-h-[280px] max-h-[360px] sm:max-h-[440px] lg:max-h-[520px] bg-brand-dark"
       >
         <Image
           src={experience.heroImage}
@@ -59,59 +60,101 @@ export default async function ExperienceDetailPage({ params }: Props) {
           priority
           sizes="100vw"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/80 to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 lg:p-8 text-white">
+        <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/95 via-brand-dark/30 to-transparent" />
+        <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-8 lg:p-10 text-white">
           <div className="container-narrow mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight drop-shadow-lg">
               {experience.title}
             </h1>
-            <p className="mt-2 text-sm sm:text-base text-white/90 max-w-xl">
+            <p className="mt-3 text-base sm:text-lg lg:text-xl text-white/95 max-w-2xl leading-relaxed">
               {experience.shortDescription}
             </p>
           </div>
         </div>
       </section>
 
-      <div className="section-padding pt-8 sm:pt-10 lg:pt-12">
+      {/* Main content + sidebar */}
+      <section className="section-padding pt-10 sm:pt-12 lg:pt-16 bg-brand-bg/30">
         <div className="container-narrow mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid lg:grid-cols-3 gap-8 lg:gap-10">
+          {/* Back to experiences – prominent on mobile */}
+          <Link
+            href="/experiences"
+            className="inline-flex items-center gap-2 text-brand-primary font-medium text-sm sm:text-base mb-6 sm:mb-8 hover:text-brand-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-white rounded-lg"
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
+            Back to experiences
+          </Link>
+          <div className="grid lg:grid-cols-3 gap-10 lg:gap-12">
             {/* Main content */}
-            <div className="lg:col-span-2 space-y-6 lg:space-y-8">
-              <p className="text-base sm:text-lg text-brand-muted leading-relaxed">
-                {experience.description}
-              </p>
-              <div>
-                <h2 className="text-lg sm:text-xl font-semibold text-brand-dark mb-3">
+            <div className="lg:col-span-2 space-y-8 lg:space-y-10">
+              <div className="rounded-2xl bg-white p-6 sm:p-8 shadow-soft border border-brand-dark/5">
+                <p className="text-lg sm:text-xl text-brand-dark leading-relaxed">
+                  {experience.description}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 sm:p-8 shadow-soft border border-brand-dark/5">
+                <h2 className="text-xl sm:text-2xl font-bold text-brand-dark mb-4 flex items-center gap-2">
+                  <CheckCircle2 className="h-6 w-6 text-brand-primary shrink-0" aria-hidden />
                   Highlights
                 </h2>
-                <ul className="grid sm:grid-cols-2 gap-2 sm:gap-3">
+                <ul className="grid sm:grid-cols-2 gap-3 sm:gap-4">
                   {experience.highlights.map((h) => (
-                    <li key={h} className="flex items-center gap-2 text-brand-dark/90 text-sm sm:text-base">
-                      <span className="h-2 w-2 rounded-full bg-brand-primary shrink-0" aria-hidden />
+                    <li key={h} className="flex items-center gap-3 text-brand-dark text-sm sm:text-base">
+                      <span className="h-2.5 w-2.5 rounded-full bg-brand-primary shrink-0" aria-hidden />
                       {h}
                     </li>
                   ))}
                 </ul>
               </div>
+
               {experience.gallery.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-                  {experience.gallery.map((src) => (
-                    <div key={src} className="relative aspect-[4/3] rounded-xl overflow-hidden bg-brand-dark/5">
-                      <Image src={src} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, 33vw" />
-                    </div>
-                  ))}
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-brand-dark mb-4">Gallery</h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+                    {experience.gallery.map((src) => (
+                      <div key={src} className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-brand-dark/5 shadow-soft">
+                        <Image src={src} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, 33vw" />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
-            {/* Sidebar – booking card */}
+
+            {/* Sidebar – elevated booking card */}
             <div className="lg:col-span-1">
-              <div className="rounded-2xl border border-brand-dark/10 bg-brand-bg/80 p-5 sm:p-6 lg:sticky lg:top-24">
-                <div className="space-y-3 sm:space-y-4 text-sm text-brand-muted">
-                  <p><strong className="text-brand-dark">Duration:</strong> {experience.duration}</p>
-                  <p><strong className="text-brand-dark">Capacity:</strong> {experience.capacity}</p>
-                  <p><strong className="text-brand-dark">From:</strong> {experience.pricingNote}</p>
+              <div className="rounded-2xl border border-brand-dark/8 bg-white shadow-soft-lg p-6 sm:p-7 lg:sticky lg:top-24">
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
+                      <Clock className="h-5 w-5" aria-hidden />
+                    </span>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Duration</p>
+                      <p className="text-base font-medium text-brand-dark">{experience.duration}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
+                      <Users className="h-5 w-5" aria-hidden />
+                    </span>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Capacity</p>
+                      <p className="text-base font-medium text-brand-dark">{experience.capacity}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
+                      <Tag className="h-5 w-5" aria-hidden />
+                    </span>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">From</p>
+                      <p className="text-base font-medium text-brand-dark">{experience.pricingNote}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-5 sm:mt-6">
+                <div className="mt-6 pt-6 border-t border-brand-dark/10">
                   <BookingCTA
                     source="experience_detail"
                     page={`experiences/${slug}`}
@@ -123,35 +166,43 @@ export default async function ExperienceDetailPage({ params }: Props) {
             </div>
           </div>
 
+          {/* FAQs – elevated section */}
           {faqs.length > 0 && (
-            <section className="mt-12 sm:mt-14 lg:mt-16" aria-labelledby="faq-heading">
-              <h2 id="faq-heading" className="text-xl sm:text-2xl font-bold text-brand-dark mb-4 sm:mb-6">
-                FAQs
-              </h2>
-              <Accordion type="single" collapsible className="w-full">
-                {faqs.map((item, i) => (
-                  <AccordionItem key={i} value={`faq-${i}`}>
-                    <AccordionTrigger className="text-left font-medium text-sm sm:text-base">
-                      {item.q}
-                    </AccordionTrigger>
-                    <AccordionContent className="text-sm sm:text-base">{item.a}</AccordionContent>
-                  </AccordionItem>
-                ))}
-              </Accordion>
+            <section className="mt-14 lg:mt-16" aria-labelledby="faq-heading">
+              <div className="rounded-2xl bg-white border border-brand-dark/8 shadow-soft p-6 sm:p-8 lg:p-10">
+                <h2 id="faq-heading" className="text-xl sm:text-2xl font-bold text-brand-dark mb-6">
+                  FAQs
+                </h2>
+                <Accordion type="single" collapsible className="w-full">
+                  {faqs.map((item, i) => (
+                    <AccordionItem key={i} value={`faq-${i}`} className="border-brand-dark/10">
+                      <AccordionTrigger className="text-left font-medium text-base sm:text-lg py-5 hover:no-underline">
+                        {item.q}
+                      </AccordionTrigger>
+                      <AccordionContent className="text-base text-brand-muted leading-relaxed">
+                        {item.a}
+                      </AccordionContent>
+                    </AccordionItem>
+                  ))}
+                </Accordion>
+              </div>
             </section>
           )}
 
-          {/* Bottom actions – centered on mobile, left on desktop */}
-          <div className="mt-10 sm:mt-12 flex flex-wrap justify-center sm:justify-start gap-3 sm:gap-4">
-            <Button asChild size="lg" className="rounded-xl min-h-[48px]">
-              <Link href="/book">Check Availability</Link>
-            </Button>
-            <Button asChild variant="outline" size="lg" className="rounded-xl min-h-[48px]">
-              <Link href="/experiences">All experiences</Link>
-            </Button>
+          {/* Bottom CTAs – elevated block */}
+          <div className="mt-14 lg:mt-16 rounded-2xl bg-brand-bg/60 border border-brand-dark/5 p-6 sm:p-8 text-center">
+            <p className="text-sm text-brand-muted mb-6">Ready to book? Check availability or browse more experiences.</p>
+            <div className="flex flex-wrap justify-center gap-4">
+              <Button asChild size="lg" className="rounded-xl h-14 px-10 shadow-soft">
+                <Link href="/book">Check Availability</Link>
+              </Button>
+              <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 border-brand-primary text-brand-dark hover:bg-brand-primary/10">
+                <Link href="/experiences">All experiences</Link>
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

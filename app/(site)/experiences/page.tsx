@@ -39,27 +39,27 @@ export default function ExperiencesPage() {
         </div>
       </section>
 
-      {/* Trust strip – why choose an experience */}
-      <section className="border-b border-brand-dark/5 bg-brand-bg/60 py-6 sm:py-8">
+      {/* Trust strip – Same-day, Groups, Licensed: one row on all screens */}
+      <section className="border-b border-brand-dark/5 bg-brand-bg/60 py-5 sm:py-8">
         <div className="container-wide mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-12 lg:gap-16 text-center">
-            <div className="flex items-center gap-3 text-brand-muted">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
-                <Clock className="h-5 w-5" aria-hidden />
+          <div className="flex flex-nowrap items-center justify-center gap-4 sm:gap-10 lg:gap-16">
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
+                <Clock className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               </span>
-              <span className="text-sm font-medium text-brand-dark sm:text-base">Same-day availability</span>
+              <span className="text-xs font-medium text-brand-dark sm:text-base">Same-day availability</span>
             </div>
-            <div className="flex items-center gap-3 text-brand-muted">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
-                <Users className="h-5 w-5" aria-hidden />
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
+                <Users className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               </span>
-              <span className="text-sm font-medium text-brand-dark sm:text-base">Groups 2–40+</span>
+              <span className="text-xs font-medium text-brand-dark sm:text-base">Groups 2–40+</span>
             </div>
-            <div className="flex items-center gap-3 text-brand-muted">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-primary/15 text-brand-primary">
-                <Sparkles className="h-5 w-5" aria-hidden />
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
+                <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               </span>
-              <span className="text-sm font-medium text-brand-dark sm:text-base">Licensed & insured</span>
+              <span className="text-xs font-medium text-brand-dark sm:text-base">Licensed & insured</span>
             </div>
           </div>
         </div>

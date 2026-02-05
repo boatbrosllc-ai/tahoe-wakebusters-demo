@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, ChevronLeft } from "lucide-react";
 import { TrustLine } from "./TrustLine";
 import { analytics } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
@@ -56,6 +56,14 @@ export function MobileExperienceBookRail({
           style={{ bottom: BOTTOM_NAV_HEIGHT }}
         >
           <div className="flex items-center gap-3 max-w-2xl mx-auto">
+            <Link
+              href="/experiences"
+              className="shrink-0 inline-flex items-center gap-1 text-brand-primary font-medium text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded-lg py-2 pr-2"
+              aria-label="Back to experiences"
+            >
+              <ChevronLeft className="h-5 w-5" aria-hidden />
+              <span className="sm:inline hidden">Back</span>
+            </Link>
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-brand-dark truncate text-sm">{title}</p>
               <TrustLine variant="default" className="mt-0.5" />
