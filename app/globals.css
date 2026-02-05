@@ -37,4 +37,8 @@
   .container-wide {
     @apply max-w-7xl mx-auto;
   }
+  /* Hero logo: turn white to brand pink (#fe3f93) on hover */
+  .hero-logo-hover-pink {
+    filter: brightness(0) saturate(100%) invert(27%) sepia(98%) saturate(2000%) hue-rotate(315deg);
+  }
 }

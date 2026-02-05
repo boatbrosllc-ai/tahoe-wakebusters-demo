@@ -16,6 +16,8 @@ export interface BookingCTAProps {
   showCall?: boolean;
   /** When true (e.g. hero on dark bg), Call link uses white border/text */
   onDark?: boolean;
+  /** When true with onDark, Call link uses pink (brand-secondary) instead of white */
+  callPinkOnDark?: boolean;
   primaryHint?: string;
   callHint?: string;
 }
@@ -28,6 +30,7 @@ export function BookingCTA({
   className,
   showCall = true,
   onDark = false,
+  callPinkOnDark = false,
   primaryHint = "Instant confirmation · Easy reschedule",
   callHint = "Text or call for same-day questions",
 }: BookingCTAProps) {
@@ -55,7 +58,7 @@ export function BookingCTA({
           <a
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
-            className="inline-flex items-center justify-center gap-2 h-12 min-h-[48px] px-8 text-base font-medium rounded-xl text-brand-primary hover:text-brand-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 border-2 border-brand-primary hover:bg-brand-primary/10"
+            className="inline-flex items-center justify-center gap-2 h-12 min-h-[48px] px-8 text-base font-medium rounded-xl text-brand-primary hover:text-brand-muted transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 border-2 border-brand-primary hover:bg-brand-primary/10"
             aria-label={`Call ${siteConfig.phone}`}
           >
             <Phone className="h-4 w-4" aria-hidden />
@@ -87,13 +90,15 @@ export function BookingCTA({
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
             className={cn(
-              "inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 font-medium px-4 sm:px-6 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 shrink-0 text-sm sm:text-base",
+              "inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 font-medium px-4 sm:px-6 transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 shrink-0 text-sm sm:text-base",
               variant === "primary"
                 ? "h-14 text-base sm:text-lg px-5 sm:px-10"
                 : "h-12 px-4 sm:px-8",
-              onDark
-                ? "border-white text-white hover:bg-white hover:text-brand-dark focus-visible:ring-white focus-visible:ring-offset-brand-dark"
-                : "border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary focus-visible:ring-offset-white"
+              callPinkOnDark && onDark
+                ? "border-brand-secondary bg-brand-secondary text-white hover:bg-brand-secondary/90 hover:border-brand-secondary/90 focus-visible:ring-brand-secondary focus-visible:ring-offset-brand-dark"
+                : onDark
+                  ? "border-white text-white hover:bg-white hover:text-brand-dark focus-visible:ring-white focus-visible:ring-offset-brand-dark"
+                  : "border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary focus-visible:ring-offset-white"
             )}
             aria-label={`Call ${siteConfig.phone}`}
           >

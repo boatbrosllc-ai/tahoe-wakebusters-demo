@@ -79,7 +79,7 @@ export const experiences: Experience[] = [
     duration: "4 hours",
     durationMinutes: 240,
     capacity: "Up to 10",
-    heroImage: "/photos/DSC00539.webp",
+    heroImage: "/photos/DSC00544.webp",
     gallery: ["/photos/DSC00544.webp", "/photos/DSC00597.webp"],
     pricingNote: "From $349 for 4 hours. Captain add-on popular for families.",
     faqs: [],

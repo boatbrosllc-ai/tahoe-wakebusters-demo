@@ -44,13 +44,17 @@ export function Hero() {
               opacity: { duration: 0.25 },
             }}
           >
-            <Link href="/" className="block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px]" aria-label={`${brand.logoAlt} home`}>
+            <Link
+              href="/"
+              className="group block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px] transition-transform duration-300 ease-out drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)] hover:rotate-2"
+              aria-label={`${brand.logoAlt} home`}
+            >
               <Image
                 src={brand.logoHeroPath ?? brand.logoDarkPath}
                 alt={brand.logoAlt}
                 width={1000}
                 height={312}
-                className="object-contain object-center drop-shadow-[0_4px_32px_rgba(0,0,0,0.35)] w-full h-auto max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px]"
+                className="object-contain object-center w-full h-auto max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] group-hover:hero-logo-hover-pink"
                 priority
               />
             </Link>
@@ -105,6 +109,7 @@ export function Hero() {
                   page="home"
                   variant="primary"
                   onDark
+                  callPinkOnDark
                   className="w-full text-center [&>p]:text-center [&>p]:text-xs lg:[&>p]:text-sm"
                   primaryHint="Instant confirmation · Easy reschedule"
                   callHint="Text or call for same-day questions"
