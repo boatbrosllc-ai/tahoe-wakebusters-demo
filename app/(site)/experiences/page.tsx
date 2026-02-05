@@ -19,7 +19,7 @@ export default function ExperiencesPage() {
       {/* Hero – full-width lake/boat vibe */}
       <section className="relative aspect-[3/2] sm:aspect-[21/9] min-h-[280px] sm:min-h-[320px] lg:min-h-[400px] overflow-hidden bg-brand-dark">
         <Image
-          src="/photos/DSC09454.webp"
+          src="/photos/DSC09354.webp"
           alt=""
           fill
           className="object-cover"

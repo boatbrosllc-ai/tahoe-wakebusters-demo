@@ -18,7 +18,7 @@ export default function OurStoryPage() {
           src="/photos/brothers.webp"
           alt="The Boat Bros crew – local Austin team"
           fill
-          className="object-cover object-center sm:object-center"
+          className="object-cover object-[center_20%]"
           priority
           sizes="100vw"
         />
