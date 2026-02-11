@@ -42,6 +42,20 @@ Create a `.env.local` (or set in your host) with:
 
 See `.env.example` for a template.
 
+## Production deployment (Netlify / Vercel / etc.)
+
+For **Book now** and experiences to work in production, the server must have Firebase Admin credentials. If they are missing, `/api/experiences` returns 500 and the booking modal shows “No experiences” or “Failed to load experiences.”
+
+**Set these in your host’s environment** (e.g. Netlify → Site settings → Environment variables):
+
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_CLIENT_EMAIL`
+- `FIREBASE_PRIVATE_KEY` (paste the full key; escape newlines as `\n` if the UI requires it)
+
+**Avoid** relying on `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in production unless the JSON file is committed or built into the app; most hosts don’t have your local file. Using the three variables above is the reliable approach.
+
+Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. After saving, redeploy so the new env vars are applied.
+
 ## Admin sign-in (Firebase Auth)
 
 - **Firebase Console:** Enable **Authentication** → **Sign-in method** → **Email/Password**. Create a user with the email you use for admin (e.g. `boatbrosll@gmail.com`) and set that user’s password. In **Project settings** → **General** → **Your apps**, add a Web app if needed and copy the **API key**, **Auth domain** (`your-project.firebaseapp.com`), and **Project ID** into `.env.local` as `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, and `NEXT_PUBLIC_FIREBASE_PROJECT_ID`.

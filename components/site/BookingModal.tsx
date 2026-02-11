@@ -137,6 +137,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const router = useRouter();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [experiences, setExperiences] = useState<ExperienceItem[] | null>(null);
+  const [experiencesLoadError, setExperiencesLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
   const [boats, setBoats] = useState<BoatOption[]>([]);
@@ -205,13 +206,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setHoldId(null);
     setClientSecret(null);
     setPaymentError(null);
+    setExperiencesLoadError(null);
     fetch("/api/experiences")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.experiences?.length) setExperiences(data.experiences);
+      .then((res) => res.json().then((data) => ({ res, data })))
+      .then(({ res, data }) => {
+        const list = Array.isArray(data) ? data : (data?.experiences ?? []);
+        if (!res.ok) {
+          setExperiences([]);
+          setExperiencesLoadError((data as { error?: string })?.error ?? "Failed to load experiences");
+          return;
+        }
+        if (Array.isArray(list) && list.length > 0) setExperiences(list);
         else setExperiences([]);
       })
-      .catch(() => setExperiences([]))
+      .catch(() => {
+        setExperiences([]);
+        setExperiencesLoadError("Failed to load experiences");
+      })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when modal open state changes
   }, [open]);
@@ -637,6 +648,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     );
                   })}
                 </div>
+              ) : experiencesLoadError ? (
+                <p className="text-sm text-amber-700 py-8 px-4">{experiencesLoadError}. Please try again or contact us.</p>
               ) : (
                 <p className="text-sm text-brand-muted py-8">No experiences available.</p>
               )}

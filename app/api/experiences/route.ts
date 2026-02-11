@@ -29,16 +29,17 @@ export async function GET() {
       });
       list.push({
         id: doc.id,
-        slug: exp.slug,
-        title: exp.title,
-        subtitle: exp.subtitle,
+        slug: exp.slug ?? "",
+        title: exp.title ?? "",
+        subtitle: exp.subtitle ?? "",
         heroMedia: exp.heroMedia ?? { type: "image", url: "" },
         maxGuests: exp.maxGuests ?? 14,
         petsMax: exp.petsMax ?? 0,
         fromPriceCents,
-        active: exp.active,
+        active: exp.active ?? true,
       });
     }
+    console.log("[experiences] GET", { count: list.length, docCount: snap.docs.length });
     return NextResponse.json({ experiences: list });
   } catch (err) {
     console.error("[experiences]", err);
