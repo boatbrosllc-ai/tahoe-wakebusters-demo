@@ -3,7 +3,6 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getStorageBucket } from "@/lib/booking/firebase-admin";
 import { bookingEnv } from "@/lib/booking/env";
 
-const MAX_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 /** POST /api/admin/upload — upload one image file. Body: multipart/form-data with "file". Returns { url }. */
@@ -23,9 +22,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing file" }, { status: 400 });
   }
 
-  if (file.size > MAX_SIZE_BYTES) {
-    return NextResponse.json({ error: `File too large (max ${MAX_SIZE_BYTES / 1024 / 1024} MB)` }, { status: 400 });
-  }
   if (!ALLOWED_TYPES.includes(file.type)) {
     return NextResponse.json({ error: "Allowed types: JPEG, PNG, WebP, GIF" }, { status: 400 });
   }

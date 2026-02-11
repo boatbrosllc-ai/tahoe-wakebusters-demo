@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import { Upload, X, FolderOpen, Link2, GripVertical } from "lucide-react";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
-const MAX_SIZE_MB = 8;
 
 /** Rewrite Firebase Storage REST URL to GCS public URL so images load (firebasestorage.googleapis.com often 403s). */
 function imageDisplayUrl(url: string): string {
@@ -93,9 +92,9 @@ export function PhotoUploader({
 
   const uploadFiles = useCallback(
     async (files: FileList | File[]) => {
-      const fileArray = Array.from(files).filter((f) => f.type.startsWith("image/") && f.size <= MAX_SIZE_MB * 1024 * 1024);
+      const fileArray = Array.from(files).filter((f) => f.type.startsWith("image/"));
       if (fileArray.length === 0) {
-        setError("No valid images (JPEG, PNG, WebP, GIF; max 8 MB each).");
+        setError("No valid images (JPEG, PNG, WebP, GIF).");
         return;
       }
       if (value.length + fileArray.length > maxPhotos) {
@@ -261,7 +260,7 @@ export function PhotoUploader({
                 browse
               </label>
             </p>
-            <p className="text-xs text-brand-muted">JPEG, PNG, WebP, GIF · max {MAX_SIZE_MB} MB each</p>
+            <p className="text-xs text-brand-muted">JPEG, PNG, WebP, GIF</p>
             {uploading && (
               <p className="text-xs text-brand-primary font-medium">Uploading…</p>
             )}
