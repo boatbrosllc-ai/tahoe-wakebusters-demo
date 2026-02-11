@@ -6,9 +6,13 @@ const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
 
 /** GET: Check if admin is signed in (for navbar). Returns { signedIn: boolean }. */
 export async function GET(request: NextRequest) {
-  const cookie = request.headers.get("cookie");
-  const signedIn = await verifyAdminSessionCookie(cookie);
-  return NextResponse.json({ signedIn });
+  try {
+    const cookie = request.headers.get("cookie");
+    const signedIn = await verifyAdminSessionCookie(cookie);
+    return NextResponse.json({ signedIn: signedIn === true });
+  } catch {
+    return NextResponse.json({ signedIn: false });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -32,7 +36,9 @@ export async function POST(request: NextRequest) {
   try {
     const app = getFirebaseApp();
     const decoded = await app.auth().verifyIdToken(idToken);
-    if (decoded.email !== adminEmail) {
+    const email = decoded.email?.trim().toLowerCase();
+    const allowed = adminEmail.trim().toLowerCase();
+    if (!email || email !== allowed) {
       return NextResponse.json({ error: "Not authorized for admin" }, { status: 403 });
     }
     const sessionCookie = await createAdminSessionCookie(idToken);

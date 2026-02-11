@@ -82,6 +82,15 @@ export function Header() {
               {link.label}
             </Link>
           ))}
+          {adminSignedIn && (
+            <Link
+              href="/admin"
+              className="shrink-0 px-3 py-3 rounded-lg text-base font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap flex items-center gap-1.5"
+            >
+              <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
+              Dashboard
+            </Link>
+          )}
           <button
             type="button"
             onClick={() => setBookingModalOpen(true)}

@@ -1,10 +1,26 @@
 # GitHub setup
 
-## Current state
+## Current state (confirm this is the right account)
 
-- **Git** is initialized and the first commit is done.
+- **Remote (origin):** `https://github.com/boatbrosllc-ai/Boat-Bros.git`  
+  → Repo lives under GitHub user/org **boatbrosllc-ai**, repo name **Boat-Bros**.
 - **Git config (commits):** `Michael` / `usalandspecialist@gmail.com` (global).
-- **GitHub CLI:** logged in as **mikemacmadeit** (used for creating repos and pushing).
+- **GitHub CLI:** run `gh auth status` to see who is logged in (e.g. **mikemacmadeit**).  
+  Pushes go to the remote above; your `gh` user must have push access to **boatbrosllc-ai/Boat-Bros** (member/collaborator or org access).
+
+## Confirm the right account
+
+- **Which repo are we pushing to?**  
+  `git remote -v`  
+  Right now: **boatbrosllc-ai/Boat-Bros**.
+- **Who is GitHub CLI using?**  
+  `gh auth status`  
+  That account must have push access to the repo above (e.g. be a collaborator or in the **boatbrosllc-ai** org).
+- **To point to a different repo (different account/org):**
+  ```bash
+  git remote set-url origin https://github.com/YOUR_ACCOUNT/YOUR_REPO.git
+  git remote -v   # confirm
+  ```
 
 ## If you need to use a different GitHub account
 

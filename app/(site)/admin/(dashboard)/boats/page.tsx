@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type BoatListItem = {
@@ -38,9 +39,17 @@ export default function AdminBoatsPage() {
 
   return (
     <div className="space-y-6 sm:space-y-8">
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Boats</h1>
-        <p className="mt-1 text-sm text-brand-muted">Add boats with photos and pricing, then assign them to listings. Users pick a boat when booking an experience.</p>
+      <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Boats</h1>
+          <p className="mt-1 text-sm text-brand-muted">Add boats with photos and pricing, then assign them to listings. Users pick a boat when booking an experience.</p>
+        </div>
+        <Link href="/admin/boats/new" className="shrink-0">
+          <Button className="min-h-[44px] gap-2">
+            <Plus className="h-4 w-4" aria-hidden />
+            Add boat
+          </Button>
+        </Link>
       </div>
 
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">

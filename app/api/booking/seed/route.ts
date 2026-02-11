@@ -48,10 +48,9 @@ const RATES = [
 ];
 
 const ADDONS = [
-  { name: "Snack pack", priceCents: 2500, type: "toggle" as const, active: true },
-  { name: "Ice", priceCents: 500, type: "toggle" as const, active: true },
-  { name: "Towels", priceCents: 1500, type: "quantity" as const, maxQty: 10, active: true },
-  { name: "Sunscreen", priceCents: 800, type: "toggle" as const, active: true },
+  { name: "Snack pack", priceCents: 2500, type: "quantity" as const, maxQty: 10, active: true },
+  { name: "Ice", priceCents: 500, type: "quantity" as const, maxQty: 2, active: true },
+  { name: "Towels", priceCents: 1500, type: "quantity" as const, maxQty: 14, active: true },
 ];
 
 export async function POST(request: NextRequest) {

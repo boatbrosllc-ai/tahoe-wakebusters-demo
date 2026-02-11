@@ -57,6 +57,9 @@ interface AddonOption {
   highlight?: boolean;
 }
 
+/** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
+const TEXAS_SALES_TAX_RATE = 0.0825;
+
 function getNextDays(days: number): { dateStr: string; label: string; weekday: string }[] {
   const out: { dateStr: string; label: string; weekday: string }[] = [];
   const today = new Date();
@@ -154,7 +157,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
+  const [addonQtyModalAddon, setAddonQtyModalAddon] = useState<AddonOption | null>(null);
+  const [addonQtyModalQty, setAddonQtyModalQty] = useState(0);
   const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
+  const [tipPercent, setTipPercent] = useState(20); // 20–100 when "Tip now"
+  const [tipModalPercent, setTipModalPercent] = useState(20); // value while tip-amount modal is open
+  const [tipNowModalOpen, setTipNowModalOpen] = useState(false);
   const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
@@ -323,10 +331,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     [selectedRateId, ratesForSelection]
   );
 
-  // Price breakdown for step 4: rate + addons + tip (20% when "Tip now") → total
+  // Add-ons to show (exclude sunscreen)
+  const displayAddons = useMemo(
+    () => addons.filter((a) => !/sunscreen/i.test(a.name)),
+    [addons]
+  );
+
+  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") → total
   const priceSummary = useMemo(() => {
     const rateCents = selectedRate?.priceCents ?? 0;
-    const addonLines = addons
+    const addonLines = displayAddons
       .filter((a) => (addonSelections[a.id] ?? 0) > 0)
       .map((a) => ({
         name: a.name,
@@ -334,17 +348,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         priceCents: a.priceCents * (addonSelections[a.id] ?? 0),
       }));
     const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
-    const subtotalBeforeTip = rateCents + addonsTotalCents;
-    const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTip * 0.2) : 0;
-    const totalCents = subtotalBeforeTip + tipCents;
+    const subtotalBeforeTax = rateCents + addonsTotalCents;
+    const salesTaxCents = Math.round(subtotalBeforeTax * TEXAS_SALES_TAX_RATE);
+    const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
+    const pct = Math.min(35, Math.max(20, tipPercent));
+    const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
+    const totalCents = subtotalAfterTax + tipCents;
     return {
       rateLabel: selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental"),
       rateCents,
       addonLines,
+      salesTaxCents,
       tipCents,
       totalCents,
     };
-  }, [selectedRate, addons, addonSelections, tipChoice]);
+  }, [selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
 
   // When opened with initialSelection (slot pre-picked), go to step 4 (details & payment)
   useEffect(() => {
@@ -492,19 +510,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const stepTitles = ["Pick category", "Choose your boat", "Pick date & time", "Details & payment"];
 
   // Smart modal: min-height per step to fit content (step 2 compact when no boats; step 4 content-fitting)
-  const stepMinHeight =
-    step === 1
-      ? "min-h-[280px] md:min-h-[360px]"
-      : step === 2
-        ? boats.length === 0 && !boatsLoading
-          ? "min-h-[200px] md:min-h-[260px]"
-          : "min-h-[280px] md:min-h-[360px]"
-        : step === 3
-          ? "min-h-[420px] md:min-h-[520px]"
-          : "min-h-0";
-
-  const isCompactStep = step === 2 && boats.length === 0 && !boatsLoading;
-  const isStep4 = step === 4;
+  // Only the active panel contributes to height so the modal grows per step
+  const panel1Collapsed = step !== 1;
+  const panel2Collapsed = step !== 2;
+  const panel3Collapsed = step !== 3;
+  const panel4Collapsed = step !== 4;
 
   return (
     <Dialog
@@ -518,10 +528,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     >
       <div
         className={cn(
-          "flex flex-col flex-1 overflow-hidden max-h-[90vh] md:max-h-[88vh]",
-          isCompactStep && "min-h-[320px] md:min-h-[380px]",
-          !isCompactStep && !isStep4 && "min-h-[50vh] md:min-h-[420px]",
-          isStep4 && "min-h-[320px] md:min-h-[360px]"
+          "flex flex-col overflow-hidden max-h-[90vh] md:max-h-[88vh] min-h-[260px]",
+          step === 4 ? "h-[85vh] min-h-[500px]" : "flex-1 min-h-0"
         )}
       >
         {/* Step indicator + back */}
@@ -567,26 +575,30 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           </div>
         )}
 
-        {/* Sliding panels — min height per step so content fits (step 3 needs more for full calendar) */}
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        {/* Sliding panels — fixed height on step 4 so inner scroll works */}
+        <div className={cn("flex flex-col overflow-hidden min-h-0 flex-1", step === 4 && "min-h-0")}>
           <div
             className={cn(
-              "flex w-[400%] transition-transform duration-300 ease-out",
+              "flex w-[400%] transition-transform duration-300 ease-out items-stretch h-full min-h-0",
               step === 1 && "translate-x-0",
               step === 2 && "-translate-x-[25%]",
               step === 3 && "-translate-x-[50%]",
-              step === 4 && "-translate-x-[75%]",
-              stepMinHeight
+              step === 4 && "-translate-x-[75%]"
             )}
           >
-            {/* Step 1: Category — tap category to go to step 2; cards fill panel to avoid empty space */}
-            <div className="w-1/4 shrink-0 pr-1 overflow-y-auto flex flex-col min-h-0">
+            {/* Step 1: Category */}
+            <div
+              className={cn(
+                "w-1/4 shrink-0 pr-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
+                panel1Collapsed && "!min-h-0 !h-0 overflow-hidden"
+              )}
+            >
               {loading ? (
                 <div className="py-12 flex justify-center">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
                 </div>
               ) : experiences && experiences.length > 0 ? (
-                <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-3 md:gap-4 flex-1 min-h-0">
+                <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-4 md:gap-5 flex-1 min-h-0">
                   {experiences.map((exp) => {
                     const isSelected = selectedExperience?.id === exp.id;
                     const hasImage = exp.heroMedia?.url && exp.heroMedia.type === "image";
@@ -596,7 +608,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         type="button"
                         onClick={() => handleSelectCategory(exp)}
                         className={cn(
-                          "relative flex flex-col overflow-hidden rounded-2xl border-2 min-h-[140px] md:min-h-[170px] transition-all",
+                          "relative flex flex-col overflow-hidden rounded-2xl border-2 min-h-[165px] md:min-h-[200px] transition-all",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
                           isSelected ? "border-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]"
                         )}
@@ -628,7 +640,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             </div>
 
             {/* Step 2: Boat */}
-            <div className="w-1/4 shrink-0 px-1 overflow-y-auto flex flex-col">
+            <div
+              className={cn(
+                "w-1/4 shrink-0 px-1 overflow-y-auto flex flex-col transition-[min-height] duration-300",
+                panel2Collapsed && "!min-h-0 !h-0 overflow-hidden"
+              )}
+            >
               {boatsLoading ? (
                 <div className="py-8 flex justify-center">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
@@ -676,12 +693,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               </button>
             </div>
 
-            {/* Step 3: Date & time — taller panel so full calendar dates fit */}
-            <div className="w-1/4 shrink-0 pl-1 overflow-y-auto flex flex-col">
-              <div className="space-y-5 md:space-y-6">
+            {/* Step 3: Date & time — compact panel; expands when date selected (time slots show) */}
+            <div
+              className={cn(
+                "w-1/4 shrink-0 pl-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
+                panel3Collapsed && "!min-h-0 !h-0 overflow-hidden"
+              )}
+            >
+              <div className="space-y-3 md:space-y-4">
                 <div>
-                  <p className="text-sm font-medium text-brand-dark mb-2 md:mb-3">Date</p>
-                  <div className="grid grid-cols-5 gap-2 md:gap-2.5">
+                  <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Date</p>
+                  <div className="grid grid-cols-5 gap-1.5 md:gap-2">
                     {dateOptions.map(({ dateStr, label, weekday }) => {
                       const isSelected = selectedDate === dateStr;
                       const isPast = dateStr < new Date().toISOString().slice(0, 10);
@@ -692,13 +714,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           disabled={isPast}
                           onClick={() => setSelectedDate(dateStr)}
                           className={cn(
-                            "rounded-xl border-2 py-3 px-2 md:py-4 md:px-2.5 text-center transition-all text-xs md:text-sm min-h-[52px] md:min-h-[60px]",
+                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-[10px] md:text-xs min-h-[42px] md:min-h-[46px]",
                             isPast && "opacity-50 cursor-not-allowed",
                             isSelected ? "border-brand-primary bg-brand-primary/10 font-semibold" : !isPast && "border-brand-dark/15 hover:border-brand-dark/30"
                           )}
                         >
-                          <span className="block text-[10px] md:text-xs text-brand-muted uppercase">{weekday}</span>
-                          <span className="block font-medium mt-0.5 md:mt-1">{label}</span>
+                          <span className="block text-[9px] md:text-[10px] text-brand-muted uppercase">{weekday}</span>
+                          <span className="block font-medium mt-0.5">{label}</span>
                         </button>
                       );
                     })}
@@ -706,13 +728,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 </div>
                 {selectedDate && (
                   <div>
-                    <p className="text-sm font-medium text-brand-dark mb-2 md:mb-3">Time</p>
+                    <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
                     {slotsLoading ? (
-                      <p className="text-sm text-brand-muted">Loading times…</p>
+                      <p className="text-xs text-brand-muted">Loading times…</p>
                     ) : openSlotsByTime.length === 0 ? (
-                      <p className="text-sm text-brand-muted">No open slots this day.</p>
+                      <p className="text-xs text-brand-muted">No open slots this day.</p>
                     ) : (
-                      <div className="flex flex-wrap gap-2 md:gap-3">
+                      <div className="flex flex-wrap gap-1.5 md:gap-2">
                         {openSlotsByTime.map((slot) => {
                           const isSelected = selectedSlot?.id === slot.id;
                           return (
@@ -721,7 +743,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                               type="button"
                               onClick={() => setSelectedSlot(slot)}
                               className={cn(
-                                "rounded-xl border-2 px-4 py-3 md:px-5 md:py-3.5 text-sm md:text-base font-medium transition-all",
+                                "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all",
                                 isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
                               )}
                             >
@@ -738,17 +760,28 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 type="button"
                 onClick={handleContinueToCheckout}
                 disabled={!canGoToStep4}
-                className="mt-6 w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 md:py-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="mt-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
               >
                 Continue to checkout
               </button>
-              <p className="text-center text-xs text-brand-muted mt-3">Details & payment in next step</p>
+              <p className="text-center text-[11px] text-brand-muted mt-2">Details & payment in next step</p>
             </div>
 
-            {/* Step 4: Details & payment — order summary + form; content-fitting height */}
-            <div className="w-1/4 shrink-0 pl-1 overflow-y-auto min-h-0 flex flex-col">
+            {/* Step 4: Details & payment — scroll area has explicit max-height so it always scrolls */}
+            <div
+              className={cn(
+                "w-1/4 shrink-0 pl-1 min-h-0 flex flex-col transition-[min-height] duration-300",
+                step === 4 && !panel4Collapsed && "h-full min-h-0 max-h-full",
+                panel4Collapsed && "!min-h-0 !h-0 overflow-hidden"
+              )}
+            >
               {paymentPhase === "form" && (
-                <div className="space-y-5 pb-4">
+                <>
+                <div
+                  className="booking-step4-scroll overflow-x-hidden pr-1 space-y-5 pb-8 scroll-smooth overscroll-y-contain touch-pan-y min-h-0 max-h-[55vh] md:max-h-[58vh]"
+                  role="region"
+                  aria-label="Booking details form"
+                >
                   {/* Order summary: what you're booking + price breakdown */}
                   {selectedExperience && selectedDate && selectedSlot && selectedRate && (
                     <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden">
@@ -780,9 +813,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             <span className="font-medium text-brand-dark">+${(line.priceCents / 100).toFixed(2)}</span>
                           </div>
                         ))}
+                        {priceSummary.salesTaxCents > 0 && (
+                          <div className="flex justify-between items-baseline text-sm">
+                            <span className="text-brand-muted">Sales tax (8.25%)</span>
+                            <span className="font-medium text-brand-dark">+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
+                          </div>
+                        )}
                         {priceSummary.tipCents > 0 && (
                           <div className="flex justify-between items-baseline text-sm">
-                            <span className="text-brand-muted">Tip (20%)</span>
+                            <span className="text-brand-muted">Tip ({Math.min(35, Math.max(20, tipPercent))}%)</span>
                             <span className="font-medium text-brand-dark">+${(priceSummary.tipCents / 100).toFixed(2)}</span>
                           </div>
                         )}
@@ -794,12 +833,64 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                   )}
 
+                  {/* Contact details — first so user can fill before party/add-ons */}
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Contact details</p>
+                    <div className="space-y-3 rounded-xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm">
+                      <div>
+                        <label htmlFor="booking-name" className="block text-sm font-medium text-brand-dark mb-1">Full name <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
+                        <input
+                          id="booking-name"
+                          type="text"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          required
+                          placeholder="As on ID"
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="booking-email" className="block text-sm font-medium text-brand-dark mb-1">Email <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
+                        <input
+                          id="booking-email"
+                          type="email"
+                          value={customerEmail}
+                          onChange={(e) => setCustomerEmail(e.target.value)}
+                          required
+                          placeholder="you@example.com"
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="booking-phone" className="block text-sm font-medium text-brand-dark mb-1">Phone <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
+                        <input
+                          id="booking-phone"
+                          type="tel"
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          required
+                          placeholder="(555) 000-0000"
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <label className="mt-2 flex items-center gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={marketingOptIn}
+                        onChange={(e) => setMarketingOptIn(e.target.checked)}
+                        className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary focus:ring-brand-primary/30"
+                      />
+                      <span className="text-xs text-brand-muted">Get occasional updates and offers from Boat Bros</span>
+                    </label>
+                  </div>
+
                   {/* Party & add-ons */}
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Party & add-ons</p>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">Party size *</label>
+                        <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">Party size <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
                         <input
                           id="booking-party-size"
                           type="number"
@@ -829,132 +920,147 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                     {addonsLoading ? (
                       <p className="text-sm text-brand-muted mt-3">Loading add-ons…</p>
-                    ) : addons.length > 0 ? (
+                    ) : displayAddons.length > 0 ? (
                       <div className="mt-3 space-y-1.5">
-                        {addons.map((addon) => (
-                          <label
-                            key={addon.id}
-                            className={cn(
-                              "flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 cursor-pointer transition-all",
-                              addon.highlight
-                                ? (addonSelections[addon.id] ?? 0) > 0
-                                  ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
-                                  : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
-                                : (addonSelections[addon.id] ?? 0) > 0
-                                  ? "border-brand-primary/40 bg-brand-primary/5"
-                                  : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
-                            )}
-                          >
-                            <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
-                              {addon.name}
-                              {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
-                            </span>
-                            <span className="text-sm font-semibold text-brand-primary shrink-0">+${(addon.priceCents / 100).toFixed(0)}</span>
-                            <input
-                              type="checkbox"
-                              checked={(addonSelections[addon.id] ?? 0) > 0}
-                              onChange={(e) =>
-                                setAddonSelections((prev) => ({
-                                  ...prev,
-                                  [addon.id]: e.target.checked ? 1 : 0,
-                                }))
-                              }
-                              className="sr-only"
-                              aria-label={`Add ${addon.name} for $${(addon.priceCents / 100).toFixed(0)}`}
-                            />
-                          </label>
-                        ))}
+                        {displayAddons.map((addon) => {
+                          const rawQty = addonSelections[addon.id] ?? 0;
+                          const name = addon.name.toLowerCase();
+                          const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                          const qty = Math.min(rawQty, effectiveMax);
+                          return (
+                            <button
+                              key={addon.id}
+                              type="button"
+                              onClick={() => {
+                                setAddonQtyModalAddon(addon);
+                                setAddonQtyModalQty(Math.min(rawQty || 1, effectiveMax));
+                              }}
+                              className={cn(
+                                "w-full flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all",
+                                addon.highlight
+                                  ? qty > 0
+                                    ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
+                                    : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
+                                  : qty > 0
+                                    ? "border-brand-primary/40 bg-brand-primary/5"
+                                    : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
+                              )}
+                            >
+                              <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
+                                {addon.name}
+                                {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
+                                {qty > 0 && (
+                                  <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>
+                                )}
+                              </span>
+                              <span className="text-sm font-semibold text-brand-primary shrink-0">
+                                +${(addon.priceCents / 100).toFixed(0)}{qty > 1 ? ` × ${qty}` : ""}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : null}
+                  </div>
 
-                    {/* Tip: Tip now (20%) or Tip later */}
-                    <div className="mt-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Tip</p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setTipChoice("now")}
-                          className={cn(
-                            "flex-1 rounded-xl border-2 py-3 px-4 text-sm font-semibold transition-all",
-                            tipChoice === "now"
-                              ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/30"
-                              : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
-                          )}
-                        >
-                          Tip now (20%)
-                        </button>
+                  {/* Add-on quantity modal */}
+                  <Dialog
+                    open={!!addonQtyModalAddon}
+                    onOpenChange={(open) => {
+                      if (!open) setAddonQtyModalAddon(null);
+                    }}
+                    className="max-w-sm"
+                  >
+                    {addonQtyModalAddon && (() => {
+                      const name = addonQtyModalAddon.name.toLowerCase();
+                      const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addonQtyModalAddon.maxQty ?? 10);
+                      return (
+                      <>
+                        <h3 className="text-lg font-bold text-brand-dark mb-1">How many?</h3>
+                        <p className="text-sm text-brand-muted mb-4">
+                          {addonQtyModalAddon.name} — +${(addonQtyModalAddon.priceCents / 100).toFixed(0)} each
+                          {effectiveMax < 10 && <span className="block text-xs mt-1">Max {effectiveMax} per rental</span>}
+                        </p>
+                        <div className="mb-4">
+                          <label htmlFor="addon-qty" className="block text-xs font-medium text-brand-dark mb-1.5">Quantity</label>
+                          <input
+                            id="addon-qty"
+                            type="number"
+                            min={0}
+                            max={effectiveMax}
+                            value={addonQtyModalQty}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              if (!Number.isNaN(v)) setAddonQtyModalQty(Math.min(effectiveMax, Math.max(0, v)));
+                            }}
+                            className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={() => {
-                            setTipChoice("later");
-                            setTipLaterMessageOpen(true);
+                            setAddonSelections((prev) => ({
+                              ...prev,
+                              [addonQtyModalAddon.id]: addonQtyModalQty,
+                            }));
+                            setAddonQtyModalAddon(null);
                           }}
-                          className={cn(
-                            "flex-1 rounded-xl border-2 py-3 px-4 text-sm font-semibold transition-all",
-                            tipChoice === "later"
-                              ? "border-brand-primary/40 bg-brand-primary/5 text-brand-dark"
-                              : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
-                          )}
+                          className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                         >
-                          Tip later
+                          {addonQtyModalQty === 0 ? "Remove" : `Add ${addonQtyModalQty}`}
                         </button>
-                      </div>
-                      {tipChoice === "now" && priceSummary.tipCents > 0 && (
-                        <p className="text-xs text-brand-muted mt-1.5">+${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
-                      )}
-                    </div>
-                  </div>
+                      </>
+                    );})()}
+                  </Dialog>
 
-                  {/* Contact */}
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Contact details</p>
-                    <div className="space-y-3 rounded-xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm">
-                      <div>
-                        <label htmlFor="booking-name" className="block text-sm font-medium text-brand-dark mb-1">Full name *</label>
-                        <input
-                          id="booking-name"
-                          type="text"
-                          value={customerName}
-                          onChange={(e) => setCustomerName(e.target.value)}
-                          required
-                          placeholder="As on ID"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="booking-email" className="block text-sm font-medium text-brand-dark mb-1">Email *</label>
-                        <input
-                          id="booking-email"
-                          type="email"
-                          value={customerEmail}
-                          onChange={(e) => setCustomerEmail(e.target.value)}
-                          required
-                          placeholder="you@example.com"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="booking-phone" className="block text-sm font-medium text-brand-dark mb-1">Phone *</label>
-                        <input
-                          id="booking-phone"
-                          type="tel"
-                          value={customerPhone}
-                          onChange={(e) => setCustomerPhone(e.target.value)}
-                          required
-                          placeholder="(555) 000-0000"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
-                        />
-                      </div>
+                  {/* Tip — required: choose Tip now or Tip later */}
+                  <div className="pb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
+                      Tip <span className="text-red-500 font-semibold normal-case" aria-hidden>*</span>
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
+                          setTipNowModalOpen(true);
+                        }}
+                        className={cn(
+                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-brand-primary/50",
+                          tipChoice === "now"
+                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary"
+                            : "border-brand-primary bg-white text-brand-dark hover:bg-brand-primary/10 hover:border-brand-primary"
+                        )}
+                        title="Choose tip amount (20–35%)"
+                      >
+                        Tip now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTipChoice("later");
+                          setTipLaterMessageOpen(true);
+                        }}
+                        className={cn(
+                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center",
+                          tipChoice === "later"
+                            ? "border-brand-primary/40 bg-brand-primary/5 text-brand-dark"
+                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+                        )}
+                        title="Tip your crew later"
+                      >
+                        Tip later
+                      </button>
                     </div>
-                    <label className="mt-2 flex items-center gap-2.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={marketingOptIn}
-                        onChange={(e) => setMarketingOptIn(e.target.checked)}
-                        className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary focus:ring-brand-primary/30"
-                      />
-                      <span className="text-xs text-brand-muted">Get occasional updates and offers from Boat Bros</span>
-                    </label>
+                    {tipChoice === "now" && priceSummary.tipCents > 0 && (
+                      <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
+                    )}
+                    {tipChoice === "later" && (
+                      <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
+                    )}
+                    {tipChoice === null && paymentError?.toLowerCase().includes("tip") && (
+                      <p className="text-xs text-red-600 mt-1.5">Please choose Tip now or Tip later.</p>
+                    )}
                   </div>
 
                   {/* Optional */}
@@ -991,25 +1097,29 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         onChange={(e) => setCancellationAck(e.target.checked)}
                         className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary focus:ring-brand-primary/30 mt-0.5 shrink-0"
                       />
-                      <span className="text-sm text-brand-dark">I have read and accept the cancellation policy *</span>
+                      <span className="text-sm text-brand-dark">I have read and accept the cancellation policy <span className="text-red-500 font-semibold" aria-hidden>*</span></span>
                     </label>
                   </div>
-
-                  <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-4 flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-brand-dark">Total due</p>
-                      <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleProceedToPayment}
-                      className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20"
-                    >
-                      Proceed to payment
-                    </button>
-                  </div>
-                  <p className="text-center text-[11px] text-brand-muted">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
                 </div>
+
+                  {/* Sticky pay block — always visible at bottom of step 4 */}
+                  <div className="shrink-0 pt-4 pb-2 mt-2 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+                    <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-brand-dark">Total due</p>
+                        <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleProceedToPayment}
+                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20"
+                      >
+                        Proceed to payment
+                      </button>
+                    </div>
+                    <p className="text-center text-[11px] text-brand-muted mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
+                  </div>
+                </>
               )}
               {paymentPhase === "loading" && (
                 <div className="py-8 flex flex-col items-center justify-center gap-3">
@@ -1049,11 +1159,66 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   </div>
                 </div>
               )}
+              {/* Tip amount modal — 20% minimum, up to 100%; presets + custom */}
+              <Dialog
+                open={tipNowModalOpen}
+                onOpenChange={(open) => {
+                  setTipNowModalOpen(open);
+                  if (!open) setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
+                }}
+                className="max-w-sm"
+              >
+                <h3 className="text-lg font-bold text-brand-dark mb-1">Choose tip amount</h3>
+                <p className="text-xs text-brand-muted mb-4">20–35%. Tips go directly to your captain and crew.</p>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {[20, 22, 25, 28, 30, 35].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setTipModalPercent(p)}
+                      className={cn(
+                        "rounded-xl border-2 px-4 py-2.5 text-sm font-semibold transition-all",
+                        tipModalPercent === p
+                          ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/30"
+                          : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+                      )}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                </div>
+                <div className="mb-4">
+                  <label htmlFor="tip-custom-pct" className="block text-xs font-medium text-brand-dark mb-1.5">Or enter custom % (20–35)</label>
+                  <input
+                    id="tip-custom-pct"
+                    type="number"
+                    min={20}
+                    max={35}
+                    value={tipModalPercent}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
+                    }}
+                    className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTipPercent(Math.min(35, Math.max(20, tipModalPercent)));
+                    setTipChoice("now");
+                    setTipNowModalOpen(false);
+                  }}
+                  className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+                >
+                  Apply {tipModalPercent}% tip
+                </button>
+              </Dialog>
               {/* Tip later message dialog */}
               <Dialog open={tipLaterMessageOpen} onOpenChange={setTipLaterMessageOpen} className="max-w-sm">
                 <h3 className="text-lg font-bold text-brand-dark mb-2">We encourage tipping</h3>
                 <p className="text-sm text-brand-muted leading-relaxed mb-4">
-                  Our crew works hard to make your trip great. Tips go directly to your captain and crew and are a meaningful way to show appreciation. You can add a tip when you pay or leave one after your trip.
+                  Our crew works hard to make your trip great. Tips go directly to your captain and crew and are a meaningful way to show appreciation. You can add a tip when you pay or tip your captain directly.
                 </p>
                 <button
                   type="button"

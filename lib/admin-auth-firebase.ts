@@ -38,7 +38,9 @@ export async function verifyAdminSessionCookie(cookieHeader: string | null): Pro
   try {
     const app = getFirebaseApp();
     const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
-    return decoded.email === adminEmail;
+    const email = decoded.email?.trim().toLowerCase();
+    const allowed = adminEmail.trim().toLowerCase();
+    return !!email && email === allowed;
   } catch {
     return false;
   }

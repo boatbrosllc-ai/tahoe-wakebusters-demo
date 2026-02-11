@@ -7,7 +7,6 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   List,
-  PlusCircle,
   Ship,
   Calendar,
   BookOpen,
@@ -32,9 +31,7 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
     label: "Content",
     links: [
       { href: "/admin/experiences", label: "Listings", icon: List },
-      { href: "/admin/experiences/new", label: "Create listing", icon: PlusCircle },
       { href: "/admin/boats", label: "Boats", icon: Ship },
-      { href: "/admin/boats/new", label: "Add boat", icon: PlusCircle },
     ],
   },
   {

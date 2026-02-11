@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -38,24 +39,24 @@ export function Dialog({
 
   if (!open) return null;
 
-  return (
+  const overlay = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? "dialog-title" : undefined}
       aria-describedby={description ? "dialog-description" : undefined}
     >
-      {/* Overlay – blocks scroll */}
+      {/* Full-viewport overlay – blurs entire site (navbar + main + footer); portal ensures we're above everything */}
       <div
-        className="absolute inset-0 bg-brand-dark/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-brand-dark/60 backdrop-blur-lg"
         onClick={close}
         aria-hidden
       />
       {/* Panel – centered on mobile and desktop, max height so inner content scrolls */}
       <div
         className={cn(
-          "relative w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 rounded-2xl bg-white shadow-premium my-auto",
+          "relative z-10 w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 rounded-2xl bg-white shadow-premium my-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}
@@ -81,6 +82,10 @@ export function Dialog({
       </div>
     </div>
   );
+
+  return typeof document !== "undefined"
+    ? createPortal(overlay, document.body)
+    : overlay;
 }
 
 type DialogCloseButtonProps = {
