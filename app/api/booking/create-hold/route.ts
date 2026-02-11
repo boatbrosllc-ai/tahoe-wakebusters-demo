@@ -9,8 +9,10 @@ import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate
 
 const HOLD_EXPIRY_MINUTES = 10;
 
-function parseBody(body: unknown): CreateHoldInput | null {
-  if (body == null || typeof body !== "object") return null;
+function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | { input: null; hint: string } {
+  if (body == null || typeof body !== "object") {
+    return { input: null, hint: "Request body must be a JSON object." };
+  }
   const o = body as Record<string, unknown>;
   const boatId = typeof o.boatId === "string" ? o.boatId : null;
   const experienceId = typeof o.experienceId === "string" ? o.experienceId : null;
@@ -20,32 +22,47 @@ function parseBody(body: unknown): CreateHoldInput | null {
   const petsCount = typeof o.petsCount === "number" ? o.petsCount : null;
   const marketingOptIn = typeof o.marketingOptIn === "boolean" ? o.marketingOptIn : false;
   const tipCents = typeof o.tipCents === "number" && o.tipCents >= 0 ? o.tipCents : undefined;
-  if ((!boatId && !experienceId) || !slotId || !rateId || partySize == null || petsCount == null) return null;
+  const missing: string[] = [];
+  if (!boatId && !experienceId) missing.push("experienceId or boatId");
+  if (!slotId) missing.push("slotId");
+  if (!rateId) missing.push("rateId");
+  if (partySize == null) missing.push("partySize (number)");
+  if (petsCount == null) missing.push("petsCount (number)");
+  const customerDraft = o.customerDraft as { name?: string; email?: string; phone?: string } | undefined;
+  if (!customerDraft || typeof customerDraft !== "object") {
+    missing.push("customerDraft (object with name, email, phone)");
+  } else {
+    if (typeof customerDraft.name !== "string") missing.push("customerDraft.name");
+    if (typeof customerDraft.email !== "string") missing.push("customerDraft.email");
+    if (typeof customerDraft.phone !== "string") missing.push("customerDraft.phone");
+  }
+  if (missing.length) {
+    return { input: null, hint: `Missing or invalid: ${missing.join(", ")}.` };
+  }
   const addonSelections = Array.isArray(o.addonSelections)
     ? (o.addonSelections as { addonId: string; qty: number }[]).filter(
         (s) => typeof s.addonId === "string" && typeof s.qty === "number"
       )
     : [];
   const answers = o.answers != null && typeof o.answers === "object" ? (o.answers as Record<string, string>) : {};
-  const customerDraft = o.customerDraft as { name?: string; email?: string; phone?: string } | undefined;
-  if (!customerDraft || typeof customerDraft.name !== "string" || typeof customerDraft.email !== "string" || typeof customerDraft.phone !== "string")
-    return null;
   return {
-    boatId: boatId ?? undefined,
-    experienceId: experienceId ?? undefined,
-    slotId,
-    rateId,
-    addonSelections,
-    partySize,
-    petsCount,
-    answers,
-    customerDraft: {
-      name: customerDraft.name.trim(),
-      email: customerDraft.email.trim(),
-      phone: customerDraft.phone.trim(),
+    input: {
+      boatId: boatId ?? undefined,
+      experienceId: experienceId ?? undefined,
+      slotId: slotId!,
+      rateId: rateId!,
+      addonSelections,
+      partySize: partySize!,
+      petsCount: petsCount!,
+      answers,
+      customerDraft: {
+        name: (customerDraft!.name as string).trim(),
+        email: (customerDraft!.email as string).trim(),
+        phone: (customerDraft!.phone as string).trim(),
+      },
+      marketingOptIn,
+      tipCents,
     },
-    marketingOptIn,
-    tipCents,
   };
 }
 
@@ -68,11 +85,15 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
-    const body = await request.json();
-    const input = parseBody(body);
-    if (!input) {
-      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    const body = await request.json().catch(() => null);
+    const parsed = parseBody(body);
+    if (!parsed.input) {
+      return NextResponse.json(
+        { error: "Invalid request body", hint: parsed.hint },
+        { status: 400 }
+      );
     }
+    const input = parsed.input;
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const hasExperience = !!input.experienceId;

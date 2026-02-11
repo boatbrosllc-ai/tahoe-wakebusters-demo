@@ -213,6 +213,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .catch(() => setExperiences([]))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when modal open state changes
   }, [open]);
 
   // When opened with initialSelection, apply it once experiences (and boats/slots) are ready
@@ -225,7 +226,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setSelectedExperience(exp);
       if (initialSelection.date) setSelectedDate(initialSelection.date);
     }
-  }, [open, initialSelection, experiences]);
+  }, [open, initialSelection, initialSelection?.date, experiences]);
 
   useEffect(() => {
     if (!open || !initialSelection?.boatId || !boats.length) return;
@@ -364,12 +365,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     };
   }, [selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
 
-  // When opened with initialSelection (slot pre-picked), go to step 4 (details & payment)
+  // When opened with initialSelection (slot pre-picked), go to step 4 (details & payment).
+  // Do not overwrite payment phase if user has already proceeded to Stripe or completed payment.
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
+    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "success") return;
     setStep(4);
     setPaymentPhase("form");
-  }, [open, initialSelection?.slotId, selectedSlot, selectedRateId]);
+  }, [open, initialSelection?.slotId, selectedSlot, selectedRateId, paymentPhase]);
 
   // When opened with initialSelection (date but no slot), go to step 3 (pick time)
   useEffect(() => {
@@ -468,7 +471,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
         const message = holdData.error ?? "Failed to create hold";
-        setPaymentError(holdRes.status === 409 ? "This time is no longer available. Please choose another date or time." : message);
+        const hint = holdData.hint ? ` ${holdData.hint}` : "";
+        setPaymentError(holdRes.status === 409 ? "This time is no longer available. Please choose another date or time." : `${message}${hint}`);
         setPaymentPhase("form");
         if (holdRes.status === 409) setStep(3);
         return;
@@ -1129,21 +1133,55 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               )}
               {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex flex-col gap-4 min-h-0">
-                  <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 flex flex-wrap items-center justify-between gap-3 shrink-0">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary/90">Paying now</p>
-                      <p className="font-bold text-brand-dark mt-0.5">{selectedExperience.title}</p>
-                      <p className="text-sm text-brand-muted">
-                        {selectedDate && new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-                        {" · "}
-                        {formatTime(selectedSlot.startAt)}
-                        {" · "}
-                        {priceSummary.rateLabel}
-                      </p>
+                  <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 shrink-0 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary/90">Paying now</p>
+                        <p className="font-bold text-brand-dark mt-0.5">{selectedExperience.title}</p>
+                        <p className="text-sm text-brand-muted">
+                          {selectedDate && new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                          {" · "}
+                          {formatTime(selectedSlot.startAt)}
+                          {" · "}
+                          {priceSummary.rateLabel}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
+                        <p className="text-[11px] text-brand-muted">Total due</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
-                      <p className="text-[11px] text-brand-muted">Total due</p>
+                    {/* Itemized list */}
+                    <div className="border-t border-brand-primary/20 pt-3 space-y-1.5 text-sm">
+                      <div className="flex justify-between text-brand-dark">
+                        <span className="text-brand-muted">{priceSummary.rateLabel}</span>
+                        <span>${(priceSummary.rateCents / 100).toFixed(2)}</span>
+                      </div>
+                      {priceSummary.addonLines.map((line) => (
+                        <div key={line.name} className="flex justify-between text-brand-dark">
+                          <span className="text-brand-muted">
+                            {line.name}
+                            {line.qty > 1 ? ` × ${line.qty}` : ""}
+                          </span>
+                          <span>+${(line.priceCents / 100).toFixed(2)}</span>
+                        </div>
+                      ))}
+                      {priceSummary.salesTaxCents > 0 && (
+                        <div className="flex justify-between text-brand-dark">
+                          <span className="text-brand-muted">Sales tax (8.25%)</span>
+                          <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                      {priceSummary.tipCents > 0 && (
+                        <div className="flex justify-between text-brand-dark">
+                          <span className="text-brand-muted">Tip ({Math.min(35, Math.max(20, tipPercent))}%)</span>
+                          <span>+${(priceSummary.tipCents / 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
+                        <span>Total due</span>
+                        <span>${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                      </div>
                     </div>
                   </div>
                   <div className="min-h-[220px] flex flex-col shrink-0">
@@ -1236,12 +1274,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </svg>
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-brand-dark">You're all set!</h3>
+                    <h3 className="text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
                     <p className="text-sm text-brand-muted mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && priceSummary.totalCents > 0 ? (
-                        <>We've received your payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You'll get a confirmation email shortly.</>
+                        <>We&apos;ve received your payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
                       ) : (
-                        "We've received your payment. You'll get a confirmation email shortly."
+                        "We&apos;ve received your payment. You&apos;ll get a confirmation email shortly."
                       )}
                     </p>
                   </div>

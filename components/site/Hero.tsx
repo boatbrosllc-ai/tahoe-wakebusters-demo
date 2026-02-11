@@ -54,8 +54,8 @@ export function Hero() {
                 alt={brand.logoAlt}
                 width={1000}
                 height={312}
-                className="object-contain object-center w-full h-auto max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] group-hover:hero-logo-hover-pink"
-                style={{ width: "auto", height: "auto" }}
+                className="object-contain object-center w-full max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] group-hover:hero-logo-hover-pink"
+                style={{ width: "100%", height: "auto" }}
                 priority
               />
             </Link>

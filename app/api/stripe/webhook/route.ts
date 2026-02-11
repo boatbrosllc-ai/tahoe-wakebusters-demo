@@ -156,15 +156,13 @@ export async function POST(request: NextRequest) {
       const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
       const paymentIntentId =
         typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? undefined;
+      // Always use the email from the booking details form for the confirmation email.
       const customerDetails = session.customer_details;
-      const customer =
-        customerDetails?.email?.trim()
-          ? {
-              name: (customerDetails.name ?? "").trim() || hold.customerDraft.name,
-              email: customerDetails.email.trim(),
-              phone: (customerDetails.phone ?? "").trim() || hold.customerDraft.phone,
-            }
-          : hold.customerDraft;
+      const customer = {
+        name: (customerDetails?.name ?? "").trim() || hold.customerDraft.name,
+        email: hold.customerDraft.email,
+        phone: (customerDetails?.phone ?? "").trim() || hold.customerDraft.phone,
+      };
       let specialNotes: string | undefined;
       if (Array.isArray(session.custom_fields)) {
         const field = session.custom_fields.find((f: { key?: string }) => f.key === "special_notes");
@@ -340,6 +338,7 @@ export async function POST(request: NextRequest) {
       const pricing = computePricing({ rate, addons: addonsForPricing, currency: "usd" });
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
       const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
+      // Use the email from the booking details form for the confirmation email.
       const customer = hold.customerDraft;
       const specialNotes = hold.answers?.comments?.trim() || undefined;
       const bookingId = db.collection("bookings").doc().id;

@@ -28,11 +28,15 @@ export interface BookingEmailContext {
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
 
 /**
- * Send booking confirmation email.
+ * Send booking confirmation email to the customer email from the booking details form.
  * Uses transactional send endpoint. If BREVO_BOOKING_TEMPLATE_ID is set, use template; else send HTML from email-templates.
  * Pass context for formatted date/time and boat/location/cancellation text.
  */
 export async function sendBookingConfirmationEmail(booking: Booking, context: BookingEmailContext): Promise<void> {
+  const toEmail = booking.customer?.email?.trim();
+  if (!toEmail) {
+    throw new Error("Booking customer email is required to send confirmation");
+  }
   const html = renderBookingConfirmationHtml(booking, context);
 
   const templateId = bookingEnv.brevoBookingTemplateId;
@@ -45,10 +49,11 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const totalPaid = (booking.pricing.totalCents / 100).toFixed(2);
   const cancellationPolicy = cancellationPolicyText || "Cancel 24h before for full refund. See terms for details.";
 
+  const toName = booking.customer?.name?.trim() ?? "";
   const payload: Record<string, unknown> = templateId
     ? {
         templateId,
-        to: [{ email: booking.customer.email, name: booking.customer.name }],
+        to: [{ email: toEmail, name: toName }],
         params: {
           customerName: booking.customer.name,
           boatName,
@@ -64,7 +69,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
       }
     : {
         sender: { name: "Boat Bros ATX", email: "noreply@boatbrosatx.com" },
-        to: [{ email: booking.customer.email, name: booking.customer.name }],
+        to: [{ email: toEmail, name: toName }],
         subject: BOOKING_CONFIRMATION_SUBJECT,
         htmlContent: html,
       };

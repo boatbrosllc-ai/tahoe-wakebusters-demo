@@ -170,7 +170,10 @@ export function ExperienceCalendarSection({
     return map;
   }, [slots]);
 
-  const selectedDateOpenSlots = selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : [];
+  const selectedDateOpenSlots = useMemo(
+    () => (selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : []),
+    [selectedDate, openSlotsByDate]
+  );
 
   /** Group slots by start time (e.g. "11:00 AM") for cleaner modal UX. */
   const slotsGroupedByStartTime = useMemo(() => {

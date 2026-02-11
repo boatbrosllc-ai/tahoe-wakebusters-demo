@@ -142,7 +142,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         }
       })
       .catch(() => setSlotsLoading(false));
-  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end]);
+  }, [selectedExperience?.slug, selectedExperience?.id, selectedExperience, dateRange.start, dateRange.end]);
 
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
@@ -197,7 +197,10 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     return cells;
   }, [calendarMonth, slotsByDate, todayStr]);
 
-  const selectedDateOpenSlots = selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : [];
+  const selectedDateOpenSlots = useMemo(
+    () => (selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : []),
+    [selectedDate, openSlotsByDate]
+  );
   const slotsGroupedByStartTime = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
     for (const s of selectedDateOpenSlots) {
