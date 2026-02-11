@@ -11,13 +11,14 @@ let stripe: Stripe | null = null;
 
 export function getStripe(): Stripe {
   if (!stripe) {
-    stripe = new Stripe(bookingEnv.stripeSecretKey, { apiVersion: "2025-03-31.basil" });
+    stripe = new Stripe(bookingEnv.stripeSecretKey, { apiVersion: "2023-10-16" });
   }
   return stripe;
 }
 
 function rateBaseCents(rate: Rate | ExperienceRate): number {
-  return "basePriceCents" in rate && rate.basePriceCents != null ? rate.basePriceCents : rate.priceCents;
+  if ("basePriceCents" in rate && rate.basePriceCents != null) return rate.basePriceCents;
+  return (rate as ExperienceRate).priceCents;
 }
 
 export function buildLineItems(params: {

@@ -134,9 +134,12 @@ export function ExperienceBookFlow({
   }
 
   const effectiveRates = selectedBoat ? selectedBoat.rates : rates;
-  const rateDtos: RateDto[] = effectiveRates.map((r) =>
-    "id" in r ? r : { id: (r as { id?: string }).id ?? "", durationHours: r.durationHours, priceCents: r.priceCents, displayName: r.displayName }
-  );
+  const rateDtos: RateDto[] = effectiveRates.map((r) => ({
+    id: r.id ?? "",
+    durationHours: r.durationHours,
+    priceCents: r.priceCents,
+    displayName: r.displayName,
+  }));
 
   return (
     <ExperienceCalendarPage

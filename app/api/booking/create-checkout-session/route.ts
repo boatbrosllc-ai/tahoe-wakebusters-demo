@@ -3,6 +3,7 @@
  * This route remains for backwards compatibility with redirect/hosted Checkout only.
  */
 import { NextRequest, NextResponse } from "next/server";
+import type Stripe from "stripe";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
@@ -152,7 +153,7 @@ export async function POST(request: NextRequest) {
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
-    const sessionParams: Parameters<typeof stripe.checkout.sessions.create>[0] = {
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       line_items: lineItems,
       customer_email:
@@ -160,7 +161,7 @@ export async function POST(request: NextRequest) {
       metadata,
     };
     if (input.embedded) {
-      sessionParams.ui_mode = "custom";
+      (sessionParams as { ui_mode?: string }).ui_mode = "custom";
       sessionParams.return_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
     } else {
       sessionParams.success_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;

@@ -6,7 +6,7 @@ import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
-import type { Booking, Hold, Slot, Boat, Rate, Addon } from "@/lib/booking/types";
+import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate } from "@/lib/booking/types";
 
 function formatSlotDateTime(ts: { toDate(): Date }): string {
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
           typeof v === "string" ? v.trim() || undefined : typeof v === "object" && v?.value != null ? String(v.value).trim() || undefined : undefined;
       }
       const bookingId = db.collection("bookings").doc().id;
-      const booking: Omit<Booking, "createdAt"> & { createdAt: Timestamp } = {
+      const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
         ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
         ...(hold.boatId ? { boatId: hold.boatId } : {}),
         slotId: hold.slotId,
@@ -342,7 +342,7 @@ export async function POST(request: NextRequest) {
       const customer = hold.customerDraft;
       const specialNotes = hold.answers?.comments?.trim() || undefined;
       const bookingId = db.collection("bookings").doc().id;
-      const booking: Omit<Booking, "createdAt"> & { createdAt: Timestamp } = {
+      const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
         ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
         ...(hold.boatId ? { boatId: hold.boatId } : {}),
         slotId: hold.slotId,
@@ -414,11 +414,12 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("[stripe-webhook]", err);
     // Mark event as failed so doc is not left in "processing" and retries return 200
-    if (event?.id) {
+    const stripeEventId = (event as Stripe.Event | undefined)?.id;
+    if (stripeEventId) {
       try {
         const db = getDb();
         const { Timestamp } = getFirestoreExports();
-        await db.collection("stripeEvents").doc(event.id).set({
+        await db.collection("stripeEvents").doc(stripeEventId).set({
           processedAt: Timestamp.now(),
           error: err instanceof Error ? err.message : String(err),
         });

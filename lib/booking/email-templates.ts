@@ -141,7 +141,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     petsCount: 0,
     answers: {},
     customer: { name: "Jordan Smith", email: "jordan@example.com", phone: "(512) 555-0123" },
-    pricing: { subtotalCents: 32000, addonsCents: 2500, totalCents: 34500, currency: "usd" },
+    pricing: { subtotalCents: 29500, taxCents: 2500, feesCents: 0, totalCents: 32000, currency: "usd" },
     status: "paid",
     stripe: { paymentIntentId: "pi_preview" },
     createdAt: { toDate: () => new Date() } as any,

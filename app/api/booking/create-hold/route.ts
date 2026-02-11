@@ -360,7 +360,7 @@ export async function POST(request: NextRequest) {
     if (reusedHoldId != null && reusedExpiresAt != null) {
       const response: CreateHoldResponse = {
         holdId: reusedHoldId,
-        expiresAt: reusedExpiresAt.toISOString(),
+        expiresAt: (reusedExpiresAt as Date).toISOString(),
         pricing: responsePricing,
       };
       return NextResponse.json(response);
