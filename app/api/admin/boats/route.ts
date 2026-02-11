@@ -3,6 +3,15 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { ListingBoat } from "@/lib/booking/types";
 
+/** Remove undefined values so Firestore accepts the document (ignoreUndefinedProperties is off). */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: T[K] } {
+  const out = {} as { [K in keyof T]: T[K] };
+  for (const key of Object.keys(obj) as (keyof T)[]) {
+    if (obj[key] !== undefined) (out as Record<string, unknown>)[key as string] = obj[key];
+  }
+  return out;
+}
+
 function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boolean }) | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -16,7 +25,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   const description = typeof b.description === "string" ? b.description.trim() || undefined : undefined;
   const active = typeof b.active === "boolean" ? b.active : true;
   const boatType = typeof b.boatType === "string" ? b.boatType.trim() || undefined : undefined;
-  return {
+  const parsed = {
     name,
     slug,
     description,
@@ -26,6 +35,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
     isListingBoat: true as const,
     ...(boatType && { boatType }),
   };
+  return stripUndefined(parsed as Record<string, unknown>) as (Omit<ListingBoat, "active"> & { active?: boolean });
 }
 
 /** GET /api/admin/boats — list all listing boats */
@@ -70,10 +80,8 @@ export async function POST(request: NextRequest) {
   try {
     const db = getDb();
     const boatRef = db.collection("boats").doc();
-    await boatRef.set({
-      ...parsed,
-      isListingBoat: true,
-    });
+    const doc = stripUndefined({ ...parsed, isListingBoat: true } as Record<string, unknown>);
+    await boatRef.set(doc);
     return NextResponse.json({ id: boatRef.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

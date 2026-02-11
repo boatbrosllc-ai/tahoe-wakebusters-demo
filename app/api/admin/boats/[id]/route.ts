@@ -3,6 +3,15 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { ListingBoat } from "@/lib/booking/types";
 
+/** Remove undefined values so Firestore accepts the update (ignoreUndefinedProperties is off). */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== undefined) out[key] = obj[key];
+  }
+  return out;
+}
+
 function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -14,7 +23,8 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (typeof b.active === "boolean") out.active = b.active;
   if (typeof b.boatType === "string") out.boatType = b.boatType.trim() || undefined;
   if (Array.isArray(b.experienceIds)) out.experienceIds = b.experienceIds.filter((x): x is string => typeof x === "string");
-  return Object.keys(out).length ? out : null;
+  const filtered = stripUndefined(out as Record<string, unknown>);
+  return Object.keys(filtered).length ? (filtered as Partial<ListingBoat>) : null;
 }
 
 /** GET /api/admin/boats/[id] — get one listing boat */
@@ -77,7 +87,8 @@ export async function PATCH(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     if (Object.keys(parsed).length > 0) {
-      await boatRef.update(parsed as Partial<ListingBoat>);
+      const updateData = stripUndefined(parsed as Record<string, unknown>);
+      await boatRef.update(updateData);
     }
     return NextResponse.json({ id });
   } catch (err) {
