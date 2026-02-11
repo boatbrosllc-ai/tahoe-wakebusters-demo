@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
       }
       const ratesSnap = await expRef.collection("rates").where("active", "==", true).get();
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
-      const durationsUnique = [...new Set(durations)];
+      const durationsUnique = Array.from(new Set(durations));
       if (durationsUnique.length === 0) {
         return NextResponse.json({ slots: [] });
       }
@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
         };
       });
       // Enrich held slots with hold expiry (for admin calendar countdown)
-      const heldHoldIds = [...new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!))];
+      const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
       if (heldHoldIds.length > 0) {
         const holdSnap = await Promise.all(heldHoldIds.map((id) => db.collection("holds").doc(id).get()));
         const expiresByHoldId = new Map<string, string>();

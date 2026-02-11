@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       .collection("rates")
       .where("active", "==", true)
       .get();
-    const durations = [...new Set(ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours))];
+    const durations = Array.from(new Set(ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours)));
     if (durations.length === 0) {
       return NextResponse.json({ error: "Experience has no rates" }, { status: 400 });
     }

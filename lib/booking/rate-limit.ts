@@ -11,9 +11,9 @@ const store = new Map<string, { count: number; resetAt: number }>();
 
 function prune(): void {
   const now = Date.now();
-  for (const [key, entry] of store.entries()) {
+  Array.from(store.entries()).forEach(([key, entry]) => {
     if (entry.resetAt <= now) store.delete(key);
-  }
+  });
 }
 
 export function checkRateLimit(key: string): { allowed: boolean; retryAfterMs?: number } {

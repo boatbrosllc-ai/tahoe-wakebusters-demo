@@ -324,7 +324,7 @@ export function ExperienceCalendarSection({
 
 
   const hasAnyAvailability = useMemo(
-    () => [...slotsByDate.entries()].some(([dateStr, v]) => v.open > 0 && dateStr >= todayStr),
+    () => Array.from(slotsByDate.entries()).some(([dateStr, v]) => v.open > 0 && dateStr >= todayStr),
     [slotsByDate, todayStr]
   );
 
