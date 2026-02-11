@@ -92,7 +92,9 @@ export async function POST(request: NextRequest) {
     // #endregion
     const lower = message.toLowerCase();
     let hint: string | undefined;
-    if (lower.includes("config missing") || lower.includes("private key") || lower.includes("firebase_")) {
+    if (lower.includes("secretorprivatekey") || lower.includes("asymmetric key") || lower.includes("rs256") || lower.includes("private key")) {
+      hint = "FIREBASE_PRIVATE_KEY format: In Netlify paste the full PEM as one line. Replace every newline with the two characters backslash and n (\\n). Remove any surrounding quotes from the value.";
+    } else if (lower.includes("config missing") || lower.includes("firebase_")) {
       hint = "Firebase server config: in Netlify set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY (full key on one line with \\n for newlines).";
     } else if (lower.includes("aud") || lower.includes("audience") || lower.includes("project")) {
       hint = "Project mismatch: set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same value (e.g. boat-bros-app) in Netlify and redeploy.";

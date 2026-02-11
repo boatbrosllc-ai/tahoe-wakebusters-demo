@@ -13,11 +13,19 @@ function getEnv(name: string): string | undefined {
 }
 
 function normalizePemKey(key: string): string {
-  let s = key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    s = s.slice(1, -1);
+  let s = key.trim();
+  // Strip any leading/trailing quotes (Netlify or UI may add one or both)
+  s = s.replace(/^["'\s]+/, "").replace(/["'\s]+$/, "").trim();
+  // Convert literal \n (two chars) to real newlines; repeat to handle double-escaped
+  while (s.includes("\\n")) {
+    s = s.replace(/\\n/g, "\n");
   }
-  return s;
+  s = s.replace(/\r\n/g, "\n").trim();
+  // Some env systems turn newlines into spaces: restore newline before ----- lines
+  if (s.includes(" -----") && !s.includes("\n-----")) {
+    s = s.replace(/ -----/g, "\n-----");
+  }
+  return s.trim();
 }
 
 /** When process.env truncates the key (e.g. multi-line .env), read full value from .env.local */
@@ -95,6 +103,11 @@ export const bookingEnv = {
       // #region agent log
       logEnv("firebasePrivateKey after normalize", { hypothesisId: "H1", normLen: out.length, startsWithBegin: out.startsWith("-----BEGIN"), hasNewline: out.includes("\n") });
       // #endregion
+    }
+    if (!out.startsWith("-----BEGIN") || !out.includes("-----END")) {
+      throw new Error(
+        "FIREBASE_PRIVATE_KEY is invalid: must be the full PEM (starts with -----BEGIN PRIVATE KEY-----). In Netlify use one line with \\n for newlines, no surrounding quotes."
+      );
     }
     return out;
   },

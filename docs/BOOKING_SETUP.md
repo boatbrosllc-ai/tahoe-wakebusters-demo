@@ -64,6 +64,7 @@ Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), a
 - **Logout:** Use the **Sign out** button on the admin page, or call `POST /api/admin/logout` (clears the cookie and redirects to `/admin/login`).
 - **Password not working / Forgot password:** Use **Forgot password?** on the login page to send a reset link to your admin email. The email must match `ADMIN_EMAIL` and the user must exist in Firebase Console → Authentication → Users. If you never set a password, add the user in Firebase Console (Authentication → Users → Add user) with the same email as `ADMIN_EMAIL` and set a password. Ensure **Email/Password** is enabled under Authentication → Sign-in method.
 - **"Not authorized for admin":** You signed in with an email that does not match `ADMIN_EMAIL`. Sign in with the exact email configured as `ADMIN_EMAIL` in your environment.
+- **401 "Invalid or expired token" in production:** The login page and browser console (F12 → Console) show a hint. Common fixes: (1) In Netlify, set **FIREBASE_PROJECT_ID** and **NEXT_PUBLIC_FIREBASE_PROJECT_ID** to the **exact same value** (e.g. `boat-bros-app`) and ensure both are available at **build time** (env scope "All" or "Build"). (2) **FIREBASE_PRIVATE_KEY** must be the full key on one line with `\n` for newlines; remove any surrounding quotes in the Netlify value. (3) Redeploy after changing env vars. To see the exact server error: Netlify → your site → Deploys → latest deploy → Functions / Logs, and search for `[admin/session] 401 cause:`.
 
 ## Create a listing
 

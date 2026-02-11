@@ -31,17 +31,17 @@ export default function AdminLoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        const hint = (data as { hint?: string }).hint;
         if (res.status === 403) {
           setError("This email is not the admin account. Sign in with the exact email set as ADMIN_EMAIL for this site.");
         } else if ((data as { code?: string }).code === "FIREBASE_PROJECT_MISMATCH") {
-          setError(
-            (data as { hint?: string }).hint ??
-              "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID."
-          );
-        } else if (res.status === 401 && (data as { hint?: string }).hint) {
-          setError((data as { hint?: string }).hint ?? "Invalid or expired token");
+          setError(hint ?? "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID.");
+        } else if (res.status === 401) {
+          const msg = hint ?? (data as { error?: string }).error ?? "Invalid or expired token";
+          setError(msg);
+          if (hint) console.error("[admin login] 401 hint:", hint);
         } else {
-          setError(data.error ?? "Login failed");
+          setError((data as { error?: string }).error ?? "Login failed");
         }
         return;
       }
