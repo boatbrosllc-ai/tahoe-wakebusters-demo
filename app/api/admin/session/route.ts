@@ -90,6 +90,17 @@ export async function POST(request: NextRequest) {
     log("session/route.ts:POST", "session POST catch", { hypothesisId: "H1", H2: true, H3: true, errorMessage: message });
     console.log("[admin/session] 401 cause:", message);
     // #endregion
-    return NextResponse.json({ error: "Invalid or expired token" }, { status: 401 });
+    const lower = message.toLowerCase();
+    let hint: string | undefined;
+    if (lower.includes("config missing") || lower.includes("private key") || lower.includes("firebase_")) {
+      hint = "Firebase server config: in Netlify set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY (full key on one line with \\n for newlines).";
+    } else if (lower.includes("aud") || lower.includes("audience") || lower.includes("project")) {
+      hint = "Project mismatch: set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same value (e.g. boat-bros-app) in Netlify and redeploy.";
+    } else if (lower.includes("expired") || lower.includes("invalid")) {
+      hint = "Token rejected. Ensure FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match in Netlify, then redeploy and try again.";
+    } else {
+      hint = "Check Netlify function logs for [admin/session] 401 cause to see the exact error.";
+    }
+    return NextResponse.json({ error: "Invalid or expired token", hint }, { status: 401 });
   }
 }
