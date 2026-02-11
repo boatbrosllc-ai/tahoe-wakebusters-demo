@@ -39,7 +39,7 @@ export default function AdminLoginPage() {
               "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID."
           );
         } else if (res.status === 401 && (data as { hint?: string }).hint) {
-          setError((data as { hint?: string }).hint);
+          setError((data as { hint?: string }).hint ?? "Invalid or expired token");
         } else {
           setError(data.error ?? "Login failed");
         }
