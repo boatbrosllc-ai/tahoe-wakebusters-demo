@@ -19,10 +19,10 @@ export async function GET(request: NextRequest) {
     const toParam = request.nextUrl.searchParams.get("to");
     const experienceIdFilter = request.nextUrl.searchParams.get("experienceId") ?? undefined;
 
-    const fromDate = fromParam ? new Date(fromParam) : null;
-    const toDate = toParam ? new Date(toParam) : null;
-    if (fromDate && isNaN(fromDate.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
-    if (toDate && isNaN(toDate.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
+    const fromDateVal = fromParam ? new Date(fromParam) : null;
+    const toDateVal = toParam ? new Date(toParam) : null;
+    if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
+    if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
     const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
 
@@ -59,8 +59,8 @@ export async function GET(request: NextRequest) {
       const totalCents = b.pricing?.totalCents ?? 0;
       const eid = b.experienceId ?? "";
       const inRange =
-        (!fromDate || (createdAt && createdAt >= fromDate)) &&
-        (!toDate || (createdAt && createdAt <= toDateEndOfDay(toDate)));
+        (!fromDateVal || (createdAt && createdAt >= fromDateVal)) &&
+        (!toDateVal || (createdAt && createdAt <= toDateEndOfDay(toDateVal)));
       const matchesExperience = !experienceIdFilter || b.experienceId === experienceIdFilter;
       const include = inRange && matchesExperience;
 
