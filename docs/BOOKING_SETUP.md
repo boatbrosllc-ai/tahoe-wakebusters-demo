@@ -54,7 +54,7 @@ For **Book now** and experiences to work in production, the server must have Fir
 
 **Avoid** relying on `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in production unless the JSON file is committed or built into the app; most hosts don’t have your local file. Using the three variables above is the reliable approach. **Do not set FIREBASE_SERVICE_ACCOUNT_JSON_PATH in Netlify**—if set, the app tries to read that file at runtime and it does not exist in the deploy, so Firebase fails and the app returns 500.
 
-Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. After saving, redeploy so the new env vars are applied.
+Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. **For admin login in production:** `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` must be the same Firebase project; otherwise the server cannot verify the sign-in token and returns 401. After saving, redeploy so the new env vars are applied.
 
 ## Admin sign-in (Firebase Auth)
 

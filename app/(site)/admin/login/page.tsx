@@ -33,6 +33,11 @@ export default function AdminLoginPage() {
       if (!res.ok) {
         if (res.status === 403) {
           setError("This email is not the admin account. Sign in with the exact email set as ADMIN_EMAIL for this site.");
+        } else if ((data as { code?: string }).code === "FIREBASE_PROJECT_MISMATCH") {
+          setError(
+            (data as { hint?: string }).hint ??
+              "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID."
+          );
         } else {
           setError(data.error ?? "Login failed");
         }

@@ -13,8 +13,11 @@ function getEnv(name: string): string | undefined {
 }
 
 function normalizePemKey(key: string): string {
-  const withNewlines = key.replace(/\\n/g, "\n");
-  return withNewlines.replace(/\r\n/g, "\n").trim();
+  let s = key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s;
 }
 
 /** When process.env truncates the key (e.g. multi-line .env), read full value from .env.local */
