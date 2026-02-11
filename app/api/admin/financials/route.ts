@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       totalRevenueCents,
       revenueThisMonthCents,
-      revenueInRangeCents: fromDate || toDate ? revenueInRangeCents : undefined,
+      revenueInRangeCents: fromDateVal || toDateVal ? revenueInRangeCents : undefined,
       recent: recentSlice,
       byExperience,
     });
