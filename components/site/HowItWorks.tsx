@@ -13,7 +13,7 @@ const steps = [
   },
   {
     icon: CheckCircle,
-    title: "Check availability",
+    title: "Book now",
     description: "See open slots and book in a few clicks. Instant confirmation.",
   },
   {
@@ -53,7 +53,7 @@ export function HowItWorks() {
         </div>
         <div className="mt-10 text-center">
           <Button asChild size="lg" className="rounded-xl">
-            <Link href="/book">Check Availability</Link>
+            <Link href="/booking">Book now</Link>
           </Button>
         </div>
       </div>

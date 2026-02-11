@@ -17,6 +17,8 @@ yarn-error.log*
 # Env
 .env
 .env.local
+firebase-private-key.pem
+*-service-account*.json
 .env.development.local
 .env.test.local
 .env.production.local
@@ -24,6 +26,7 @@ yarn-error.log*
 # IDE / OS
 .idea
 .vscode
+.cursor
 .DS_Store
 Thumbs.db
 

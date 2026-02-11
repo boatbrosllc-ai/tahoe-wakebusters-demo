@@ -1,0 +1,226 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
+import { getDb } from "@/lib/booking/firebase-admin";
+import type {
+  Experience,
+  ExperienceRate,
+  ExperienceAddon,
+  ExperienceLocation,
+  ExperienceCancellationPolicy,
+  ExperienceSeasonal,
+} from "@/lib/booking/types";
+
+function parseBody(
+  body: unknown
+): Partial<{
+  slug: string;
+  title: string;
+  subtitle: string;
+  descriptionLong: string;
+  heroMedia: { type: "image" | "video"; url: string };
+  gallery: string[];
+  location: ExperienceLocation;
+  maxGuests: number;
+  petsMax: number;
+  included: string[];
+  whatToBring: string[];
+  rules: string[];
+  cancellationPolicy: ExperienceCancellationPolicy;
+  faqs: { q: string; a: string }[];
+  seasonal: ExperienceSeasonal;
+  active: boolean;
+  timezone: string;
+  rates: Omit<ExperienceRate, "active">[];
+  addons: Omit<ExperienceAddon, "active">[];
+  heroOverlayText: string;
+  promoVideoUrl: string;
+  metaTitle: string;
+  metaDescription: string;
+  ctaButtonText: string;
+  cancellationSummary: string;
+  testimonials: { name: string; quote: string; date?: string }[];
+  featured: boolean;
+  spotsLeftOverride: number;
+  defaultRateId: string;
+  bookingPosition: "sidebar" | "inline" | "modal";
+  galleryAltTexts: string[];
+}> | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const out: ReturnType<typeof parseBody> = {};
+  if (typeof b.slug === "string") out.slug = b.slug.trim();
+  if (typeof b.title === "string") out.title = b.title.trim();
+  if (typeof b.subtitle === "string") out.subtitle = b.subtitle.trim();
+  if (typeof b.descriptionLong === "string") out.descriptionLong = b.descriptionLong.trim();
+  if (b.heroMedia && typeof b.heroMedia === "object" && "url" in b.heroMedia && typeof (b.heroMedia as { url: unknown }).url === "string") {
+    out.heroMedia = {
+      type: (b.heroMedia as { type?: string }).type === "video" ? "video" : "image",
+      url: (b.heroMedia as { url: string }).url,
+    };
+  }
+  if (Array.isArray(b.gallery)) out.gallery = b.gallery.filter((x): x is string => typeof x === "string");
+  if (b.location && typeof b.location === "object") {
+    const loc = b.location as Record<string, unknown>;
+    out.location = {
+      title: typeof loc.title === "string" ? loc.title.trim() : "",
+      addressText: typeof loc.addressText === "string" ? loc.addressText.trim() : "",
+      notes: typeof loc.notes === "string" ? loc.notes.trim() : undefined,
+    };
+  }
+  if (typeof b.maxGuests === "number" && b.maxGuests >= 0) out.maxGuests = Math.floor(b.maxGuests);
+  if (typeof b.petsMax === "number" && b.petsMax >= 0) out.petsMax = Math.floor(b.petsMax);
+  if (Array.isArray(b.included)) out.included = b.included.filter((x): x is string => typeof x === "string");
+  if (Array.isArray(b.whatToBring)) out.whatToBring = b.whatToBring.filter((x): x is string => typeof x === "string");
+  if (Array.isArray(b.rules)) out.rules = b.rules.filter((x): x is string => typeof x === "string");
+  if (b.cancellationPolicy && typeof b.cancellationPolicy === "object") {
+    const cp = b.cancellationPolicy as Record<string, unknown>;
+    out.cancellationPolicy = {
+      freeCancelDays: typeof cp.freeCancelDays === "number" ? cp.freeCancelDays : 30,
+      partialRefundDaysStart: typeof cp.partialRefundDaysStart === "number" ? cp.partialRefundDaysStart : 15,
+      partialRefundDaysEnd: typeof cp.partialRefundDaysEnd === "number" ? cp.partialRefundDaysEnd : 30,
+      noRefundWithinDays: typeof cp.noRefundWithinDays === "number" ? cp.noRefundWithinDays : 14,
+      fullText: typeof cp.fullText === "string" ? cp.fullText : "",
+    };
+  }
+  if (Array.isArray(b.faqs)) {
+    out.faqs = b.faqs
+      .filter((x): x is { q?: unknown; a?: unknown } => x != null && typeof x === "object")
+      .map((x) => ({ q: typeof x.q === "string" ? x.q : "", a: typeof x.a === "string" ? x.a : "" }));
+  }
+  if (b.seasonal && typeof b.seasonal === "object") {
+    const sea = b.seasonal as Record<string, unknown>;
+    out.seasonal = {
+      enabled: sea.enabled === true,
+      startMonth: typeof sea.startMonth === "number" ? sea.startMonth : undefined,
+      endMonth: typeof sea.endMonth === "number" ? sea.endMonth : undefined,
+    };
+  }
+  if (typeof b.active === "boolean") out.active = b.active;
+  if (typeof b.timezone === "string") out.timezone = b.timezone.trim() || "";
+  if (Array.isArray(b.rates)) {
+    out.rates = b.rates
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((x) => ({
+        durationHours: typeof x.durationHours === "number" ? x.durationHours : 0,
+        displayName: typeof x.displayName === "string" ? x.displayName : "",
+        priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
+      }));
+  }
+  if (Array.isArray(b.addons)) {
+    out.addons = b.addons
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((x) => ({
+        name: typeof x.name === "string" ? x.name : "",
+        description: typeof x.description === "string" ? x.description : undefined,
+        priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
+        type: (x.type === "quantity" || x.type === "tip" ? x.type : "toggle") as "toggle" | "quantity" | "tip",
+        maxQty: typeof x.maxQty === "number" ? x.maxQty : undefined,
+      }));
+  }
+  if (typeof b.heroOverlayText === "string") out.heroOverlayText = b.heroOverlayText.trim();
+  if (typeof b.promoVideoUrl === "string") out.promoVideoUrl = b.promoVideoUrl.trim();
+  if (typeof b.metaTitle === "string") out.metaTitle = b.metaTitle.trim();
+  if (typeof b.metaDescription === "string") out.metaDescription = b.metaDescription.trim();
+  if (typeof b.ctaButtonText === "string") out.ctaButtonText = b.ctaButtonText.trim();
+  if (typeof b.cancellationSummary === "string") out.cancellationSummary = b.cancellationSummary.trim();
+  if (Array.isArray(b.testimonials)) {
+    out.testimonials = b.testimonials
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((x) => ({
+        name: typeof x.name === "string" ? x.name : "",
+        quote: typeof x.quote === "string" ? x.quote : "",
+        date: typeof x.date === "string" ? x.date : undefined,
+      }))
+      .filter((t) => t.name || t.quote);
+  }
+  if (typeof b.featured === "boolean") out.featured = b.featured;
+  if (typeof b.spotsLeftOverride === "number" && b.spotsLeftOverride >= 0) out.spotsLeftOverride = b.spotsLeftOverride;
+  if (typeof b.defaultRateId === "string") out.defaultRateId = b.defaultRateId.trim();
+  if (b.bookingPosition === "sidebar" || b.bookingPosition === "inline" || b.bookingPosition === "modal") out.bookingPosition = b.bookingPosition;
+  if (Array.isArray(b.galleryAltTexts)) out.galleryAltTexts = b.galleryAltTexts.filter((x): x is string => typeof x === "string");
+  return Object.keys(out).length ? out : null;
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+  try {
+    const db = getDb();
+    const expRef = db.collection("experiences").doc(id);
+    const expSnap = await expRef.get();
+    if (!expSnap.exists) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const data = expSnap.data() as Record<string, unknown>;
+    const ratesSnap = await expRef.collection("rates").get();
+    const addonsSnap = await expRef.collection("addons").get();
+    const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const addons = addonsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return NextResponse.json({ id: expSnap.id, ...data, rates, addons });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    return NextResponse.json(
+      { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
+      { status: isFirebaseConfig ? 503 : 500 }
+    );
+  }
+}
+
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  const parsed = parseBody(body);
+  if (!parsed) {
+    return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+
+  try {
+    const db = getDb();
+    const expRef = db.collection("experiences").doc(id);
+    const expSnap = await expRef.get();
+    if (!expSnap.exists) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const { rates, addons, ...expFields } = parsed;
+    if (Object.keys(expFields).length > 0) {
+      await expRef.update(expFields as Partial<Experience>);
+    }
+    if (Array.isArray(rates)) {
+      const ratesRef = expRef.collection("rates");
+      const existing = await ratesRef.get();
+      for (const d of existing.docs) await d.ref.delete();
+      for (const r of rates) {
+        await ratesRef.doc().set({ ...r, active: true });
+      }
+    }
+    if (Array.isArray(addons)) {
+      const addonsRef = expRef.collection("addons");
+      const existing = await addonsRef.get();
+      for (const d of existing.docs) await d.ref.delete();
+      for (const a of addons) {
+        await addonsRef.doc().set({ ...a, active: true });
+      }
+    }
+    return NextResponse.json({ id });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    return NextResponse.json(
+      { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
+      { status: isFirebaseConfig ? 503 : 500 }
+    );
+  }
+}

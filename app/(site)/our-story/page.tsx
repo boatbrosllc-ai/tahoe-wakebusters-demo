@@ -54,7 +54,7 @@ export default function OurStoryPage() {
           {/* CTAs */}
           <div className="flex flex-col sm:flex-row gap-4 sm:gap-5 pt-4">
             <Button asChild size="lg" className="rounded-xl shadow-soft">
-              <Link href="/book">Check Availability</Link>
+              <Link href="/booking">Book now</Link>
             </Button>
             <Button asChild variant="outline" size="lg" className="rounded-xl border-brand-primary text-brand-dark hover:bg-brand-primary/10">
               <Link href="/contact">Contact us</Link>

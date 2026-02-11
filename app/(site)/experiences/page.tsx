@@ -79,7 +79,7 @@ export default function ExperiencesPage() {
             <TrustLine variant="default" className="justify-center flex-wrap mb-8" />
             <div className="inline-flex flex-col sm:flex-row items-center justify-center gap-4">
               <Button asChild size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg shadow-soft-lg w-full sm:w-auto">
-                <Link href="/book">Check Availability</Link>
+                <Link href="/booking">Book now</Link>
               </Button>
               <span className="text-sm text-brand-muted">or</span>
               <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg w-full sm:w-auto border-brand-primary text-brand-dark hover:bg-brand-primary/10">

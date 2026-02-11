@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 const images = [
   "/photos/DSC00427.webp",
   "/photos/DSC09255.webp",
-  "/photos/DSC00539.webp",
+  "/photos/DSC00544.webp",
   "/photos/DSC09354.webp",
 ];
 

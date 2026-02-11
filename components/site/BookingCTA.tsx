@@ -43,22 +43,22 @@ export function BookingCTA({
   };
 
   const bookUrl = experience
-    ? `/book?experience=${encodeURIComponent(experience)}`
-    : "/book";
+    ? `/booking?experience=${encodeURIComponent(experience)}`
+    : "/booking";
 
   if (variant === "inline") {
     return (
-      <div className={cn("flex flex-wrap items-center gap-3", className)}>
-        <Button asChild variant="default" size="lg" className="rounded-xl">
+      <div className={cn("flex flex-nowrap items-center justify-center gap-2 sm:gap-3 min-w-0", className)}>
+        <Button asChild variant="default" size="default" className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6">
           <Link href={bookUrl} onClick={handleBookClick}>
-            Check Availability
+            Book now
           </Link>
         </Button>
         {showCall && (
           <a
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
-            className="inline-flex items-center justify-center gap-2 h-12 min-h-[48px] px-8 text-base font-medium rounded-xl text-brand-primary hover:text-brand-muted transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 border-2 border-brand-primary hover:bg-brand-primary/10"
+            className="shrink-0 inline-flex items-center justify-center gap-1.5 h-11 sm:h-12 min-h-[44px] px-4 sm:px-6 text-sm sm:text-base font-medium rounded-xl text-brand-primary hover:text-brand-muted transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 border-2 border-brand-primary hover:bg-brand-primary/10"
             aria-label={`Call ${siteConfig.phone}`}
           >
             <Phone className="h-4 w-4" aria-hidden />
@@ -82,7 +82,7 @@ export function BookingCTA({
           )}
         >
           <Link href={bookUrl} onClick={handleBookClick}>
-            Check Availability
+            Book now
           </Link>
         </Button>
         {showCall && (

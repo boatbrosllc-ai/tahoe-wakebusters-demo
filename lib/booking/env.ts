@@ -1,0 +1,149 @@
+/**
+ * Booking engine environment variables.
+ * All must be set for the booking flow to work; validated at runtime where used.
+ */
+
+const LOG_ENDPOINT = "http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624";
+function logEnv(m: string, data: Record<string, unknown>) {
+  fetch(LOG_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "env.ts", message: m, data, timestamp: Date.now() }) }).catch(() => {});
+}
+
+function getEnv(name: string): string | undefined {
+  return process.env[name];
+}
+
+function normalizePemKey(key: string): string {
+  const withNewlines = key.replace(/\\n/g, "\n");
+  return withNewlines.replace(/\r\n/g, "\n").trim();
+}
+
+/** When process.env truncates the key (e.g. multi-line .env), read full value from .env.local */
+function readFirebasePrivateKeyFromEnvFile(): string | undefined {
+  try {
+    const path = require("path") as typeof import("path");
+    const fs = require("fs") as typeof import("fs");
+    const envPath = path.join(process.cwd(), ".env.local");
+    const raw = fs.readFileSync(envPath, "utf8");
+    // Value between quotes; can contain \n and \"; [^"\\] matches newline too
+    const match = raw.match(/FIREBASE_PRIVATE_KEY\s*=\s*"((?:[^"\\]|\\.)*)"/);
+    if (!match) return undefined;
+    return normalizePemKey(match[1]);
+  } catch {
+    return undefined;
+  }
+}
+
+function requireEnv(name: string): string {
+  const v = getEnv(name);
+  if (v == null || v === "") {
+    throw new Error(`Missing required env: ${name}`);
+  }
+  return v;
+}
+
+export const bookingEnv = {
+  get firebaseProjectId(): string | undefined {
+    return getEnv("FIREBASE_PROJECT_ID");
+  },
+  get firebaseClientEmail(): string | undefined {
+    return getEnv("FIREBASE_CLIENT_EMAIL");
+  },
+  /** Path to service account JSON file (avoids .env key encoding/truncation). Preferred over FIREBASE_PRIVATE_KEY. */
+  get firebaseServiceAccountPath(): string | undefined {
+    const p = getEnv("FIREBASE_SERVICE_ACCOUNT_JSON_PATH") || getEnv("GOOGLE_APPLICATION_CREDENTIALS");
+    return p == null || p === "" ? undefined : p;
+  },
+  get firebasePrivateKey(): string | undefined {
+    const keyPath = getEnv("FIREBASE_PRIVATE_KEY_PATH");
+    if (keyPath) {
+      // Read full PEM from file (avoids .env truncation of multi-line values)
+      const path = require("path") as typeof import("path");
+      const fs = require("fs") as typeof import("fs");
+      const resolved = path.isAbsolute(keyPath) ? keyPath : path.join(process.cwd(), keyPath);
+      const raw = fs.readFileSync(resolved, "utf8");
+      const out = normalizePemKey(raw);
+      // #region agent log
+      logEnv("firebasePrivateKey from file", { hypothesisId: "H1", source: "file", normLen: out.length });
+      // #endregion
+      return out;
+    }
+    let k = getEnv("FIREBASE_PRIVATE_KEY");
+    // #region agent log
+    logEnv("firebasePrivateKey getter", { hypothesisId: "H1", keyDefined: !!k, rawLen: k?.length ?? 0 });
+    // #endregion
+    if (!k) return undefined;
+    let out = normalizePemKey(k);
+    // If env loader truncated (multi-line .env often keeps only first line), read full key from .env.local
+    if (out.length < 200 || !out.includes("-----END")) {
+      const fromFile = readFirebasePrivateKeyFromEnvFile();
+      if (fromFile && fromFile.length >= 200 && fromFile.includes("-----END")) {
+        out = fromFile;
+        // #region agent log
+        logEnv("firebasePrivateKey from .env.local fallback", { hypothesisId: "H1", source: "envFile", normLen: out.length });
+        // #endregion
+      } else {
+        throw new Error(
+          "FIREBASE_PRIVATE_KEY is truncated (multi-line .env often keeps only the first line). " +
+            "Use either: (1) FIREBASE_PRIVATE_KEY_PATH=./path/to/key.pem and put the full PEM in that file, or " +
+            "(2) Put the entire key on one line in .env with literal \\n for newlines."
+        );
+      }
+    } else {
+      // #region agent log
+      logEnv("firebasePrivateKey after normalize", { hypothesisId: "H1", normLen: out.length, startsWithBegin: out.startsWith("-----BEGIN"), hasNewline: out.includes("\n") });
+      // #endregion
+    }
+    return out;
+  },
+  get stripeSecretKey(): string {
+    return requireEnv("STRIPE_SECRET_KEY");
+  },
+  get stripeWebhookSecret(): string {
+    return requireEnv("STRIPE_WEBHOOK_SECRET");
+  },
+  get brevoApiKey(): string {
+    return requireEnv("BREVO_API_KEY");
+  },
+  get brevoBookingTemplateId(): number | undefined {
+    const v = getEnv("BREVO_TEMPLATE_ID_BOOKING_CONFIRMATION") ?? getEnv("BREVO_BOOKING_TEMPLATE_ID");
+    if (v == null || v === "") return undefined;
+    const n = parseInt(v, 10);
+    return Number.isNaN(n) ? undefined : n;
+  },
+  get brevoMarketingListId(): number | undefined {
+    const v = getEnv("BREVO_LIST_ID_MARKETING") ?? getEnv("BREVO_MARKETING_LIST_ID");
+    if (v == null || v === "") return undefined;
+    const n = parseInt(v, 10);
+    return Number.isNaN(n) ? undefined : n;
+  },
+  get appBaseUrl(): string {
+    return requireEnv("APP_BASE_URL").replace(/\/$/, "");
+  },
+};
+
+export function hasFirebaseConfig(): boolean {
+  if (bookingEnv.firebaseServiceAccountPath) return true;
+  return !!(
+    bookingEnv.firebaseProjectId &&
+    bookingEnv.firebaseClientEmail &&
+    bookingEnv.firebasePrivateKey
+  );
+}
+
+/** Safe check for admin/API routes: returns false if config is missing or getter throws (e.g. truncated key). */
+export function safeHasFirebaseConfig(): boolean {
+  try {
+    return hasFirebaseConfig();
+  } catch {
+    return false;
+  }
+}
+
+export function hasStripeConfig(): boolean {
+  try {
+    bookingEnv.stripeSecretKey;
+    return true;
+  } catch {
+    return false;
+  }
+}

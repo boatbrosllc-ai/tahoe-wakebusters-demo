@@ -37,7 +37,7 @@ export function MobileExperienceBookRail({
     return () => observer.disconnect();
   }, [heroId]);
 
-  const bookUrl = `/book?experience=${encodeURIComponent(slug)}`;
+  const bookUrl = `/booking?experience=${encodeURIComponent(slug)}`;
 
   return (
     <AnimatePresence>
@@ -80,7 +80,7 @@ export function MobileExperienceBookRail({
               )}
             >
               <CalendarCheck className="h-5 w-5" aria-hidden />
-              Check availability
+              Book now
             </Link>
           </div>
         </motion.div>

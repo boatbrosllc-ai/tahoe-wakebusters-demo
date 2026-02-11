@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "boats",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isListingBoat", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "experienceIds", "arrayConfig": "CONTAINS" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

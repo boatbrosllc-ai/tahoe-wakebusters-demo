@@ -11,11 +11,13 @@ export const siteConfig = {
   /** Optional SMS number (same as phone if not set) */
   sms: "+15125550123",
 
-  /** Booking provider behavior */
+  /** Booking: use custom flow at /booking */
   booking: {
-    /** "embed" = show iframe; "link" = show deep link button(s) */
+    /** Path to the main booking page (custom calendar + Stripe checkout) */
+    path: "/booking",
+    /** "embed" = show iframe; "link" = show deep link button(s) — used on /book if you keep it */
     mode: "link" as "embed" | "link",
-    /** Base URL for booking (e.g. Calendly, FareHarbor, custom) */
+    /** Legacy / external URL (e.g. FareHarbor); unused when path is /booking */
     providerUrl: "https://example.com/boat-bros-booking",
     /** Optional: direct embed iframe src when mode === "embed" */
     embedSrc: "",

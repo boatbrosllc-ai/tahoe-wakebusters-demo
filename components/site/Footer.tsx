@@ -3,7 +3,7 @@ import { brand } from "@/content/brand";
 
 const footerLinks = [
   { href: "/experiences", label: "Experiences" },
-  { href: "/book", label: "Book" },
+  { href: "/booking", label: "Book" },
   { href: "/faqs", label: "FAQs" },
   { href: "/our-story", label: "Our Story" },
   { href: "/contact", label: "Contact" },

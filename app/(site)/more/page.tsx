@@ -29,10 +29,10 @@ const pageLinks = [
     description: "Browse pontoon, wake, sunset & more on Lake Travis & Lake Austin",
   },
   {
-    href: "/book",
+    href: "/booking",
     label: "Book Now",
     icon: CalendarCheck,
-    description: "Check availability and reserve your boat rental",
+    description: "Book now and reserve your boat rental",
   },
   {
     href: "/our-story",
@@ -99,14 +99,14 @@ export default function MorePage() {
         <div className="mt-14 sm:mt-8 space-y-8 sm:space-y-3">
           <CallCard phone={siteConfig.phone} phoneTel={siteConfig.phoneTel} />
 
-          <Link href="/book" className="block">
+          <Link href="/booking" className="block">
             <Button
               variant="secondary"
               size="lg"
               className="w-full rounded-xl h-14 text-base font-semibold"
             >
               <CalendarCheck className="h-5 w-5 mr-2" aria-hidden />
-              Check Availability
+              Book now
             </Button>
           </Link>
         </div>

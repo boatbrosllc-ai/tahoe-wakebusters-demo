@@ -23,6 +23,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+**Booking system (cold start):** The booking calendar and checkout start with an empty Firestore. To enable them: set Firebase, Stripe, Brevo, and `APP_BASE_URL` in `.env.local`, then open **[http://localhost:3000/admin](http://localhost:3000/admin)** and click **Run setup**. See **`docs/BOOKING_SETUP.md`** for the full checklist.
+
 ### Build (production)
 
 ```bash
@@ -55,7 +57,14 @@ Edit **`content/brand.ts`** for:
 | `/` | Home (hero, experience chooser, how it works, testimonials, gallery, lead capture) |
 | `/book` | Booking funnel (experience selection + embed or link to provider) |
 | `/experiences` | Grid of experience packages |
-| `/experiences/[slug]` | Experience detail (gallery, includes, pricing, FAQ, CTA) |
+| `/experiences/[slug]` | Experience detail (Firestore: pontoon, watersports, sunset, holiday) — hero, content, sticky booking card |
+| `/experiences/pontoon` | Lake Austin Pontoon Charter |
+| `/experiences/watersports` | Lake Austin WaterSports Charter |
+| `/experiences/sunset` | Lake Austin Sunset Cruise |
+| `/experiences/holiday` | Lake Austin Holiday Boat Tour (seasonal) |
+| `/booking` | Legacy booking calendar (boats) |
+| `/booking/success` | Post-Stripe success; shows receipt from `?session_id=` |
+| `/booking/cancel` | Checkout cancelled; slot released |
 | `/faqs` | FAQs (with FAQPage JSON-LD) |
 | `/our-story` | About |
 | `/contact` | Contact (map link, form → `POST /api/contact`) |
@@ -77,6 +86,40 @@ Edit **`content/brand.ts`** for:
 
 - **`POST /api/lead`** – Body: `{ email, source }`. Logs to console; TODO: DB/CRM.
 - **`POST /api/contact`** – Body: `{ name, email, message }`. Logs to console; TODO: DB/email/CRM.
+- **Custom booking engine** – See **Environment variables** below and **`docs/BOOKING_SETUP.md`**. Routes: `/api/booking/*`, `/api/experiences`, `/api/experiences/[slug]`, `/api/stripe/webhook`. Frontend: `/booking`, `/booking/success`, `/booking/cancel`, `/experiences/pontoon`, etc.
+
+### Environment variables (booking + experiences)
+
+Create **`.env.local`** (see **`.env.example`**):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` | Yes* | Path to Firebase service account JSON (e.g. `./boat-bros-service-account.json`) |
+| `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Yes* | Alternative to JSON path (use one or the other) |
+| `STRIPE_SECRET_KEY` | Yes | Stripe secret key |
+| `STRIPE_WEBHOOK_SECRET` | Yes | Stripe webhook signing secret (from Stripe CLI or Dashboard) |
+| `BREVO_API_KEY` | Yes | Brevo API key for transactional email |
+| `BREVO_BOOKING_TEMPLATE_ID` | No | Brevo template ID for booking confirmation (or inline HTML) |
+| `BREVO_MARKETING_LIST_ID` | No | Brevo list ID for marketing opt-in |
+| `APP_BASE_URL` | Yes | Base URL (e.g. `http://localhost:3000`) |
+| `SEED_SECRET` / `CRON_SECRET` | No | Optional; protect seed and cleanup-holds with `Authorization: Bearer <secret>` |
+
+**Local dev – Stripe webhooks:** Forward events to your app:
+
+```bash
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+```
+
+Use the printed webhook signing secret as `STRIPE_WEBHOOK_SECRET` in `.env.local`. Then trigger a test payment; `checkout.session.completed` will finalize the booking and send the Brevo confirmation email.
+
+**Seed experiences (4 listings + 60 days of slots):**
+
+```bash
+curl -X POST http://localhost:3000/api/booking/seed-experiences
+# Or with auth: curl -X POST -H "Authorization: Bearer YOUR_SEED_SECRET" http://localhost:3000/api/booking/seed-experiences
+```
+
+Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/sunset`, `/experiences/holiday`.
 
 ## Analytics events
 

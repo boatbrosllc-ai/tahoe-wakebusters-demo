@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { brand } from "@/content/brand";
-import { Header } from "@/components/site/Header";
-import { Footer } from "@/components/site/Footer";
-import { MobileStickyBar } from "@/components/site/MobileStickyBar";
+import { SiteChrome } from "@/components/site/SiteChrome";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 
@@ -65,14 +63,7 @@ export default function SiteLayout({
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <div className="min-h-screen flex flex-col">
-        <Header />
-        <main className="flex-1 pb-[72px] lg:pb-0">{children}</main>
-        <Footer />
-        <MobileStickyBar />
-      </div>
-      {/* Spacer for mobile bottom nav – match footer bg so no white strip */}
-      <div className="h-24 lg:hidden bg-brand-dark" aria-hidden />
+      <SiteChrome>{children}</SiteChrome>
     </>
   );
 }

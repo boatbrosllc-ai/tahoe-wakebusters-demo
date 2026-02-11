@@ -26,7 +26,7 @@ export const blogPosts: BlogPost[] = [
     excerpt: "A simple checklist so you don't forget the essentials.",
     date: "2024-05-15",
     author: "Boat Bros",
-    image: "/photos/DSC00539.webp",
+    image: "/photos/DSC00544.webp",
   },
 ];
 
