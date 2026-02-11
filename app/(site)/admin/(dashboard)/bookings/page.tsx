@@ -103,11 +103,21 @@ export default function AdminBookingsPage() {
   }
 
   const handleBookingClick = (booking: AdminBookingCalendarItem) => {
-    setSelectedBooking(booking as BookingItem);
+    setSelectedBooking(list.find((b) => b.id === booking.id) ?? null);
     setDetailOpen(true);
   };
 
-  const calendarBookings: AdminBookingCalendarItem[] = list;
+  const calendarBookings: AdminBookingCalendarItem[] = list.map((b) => ({
+    id: b.id,
+    experienceName: b.experienceName,
+    customer: b.customer,
+    pricing: b.pricing,
+    status: b.status,
+    createdAt: b.createdAt ?? null,
+    startDate: b.startDate ?? null,
+    startTime: b.startTime ?? null,
+    endTime: b.endTime ?? null,
+  }));
 
   return (
     <div className="space-y-6 sm:space-y-8">
