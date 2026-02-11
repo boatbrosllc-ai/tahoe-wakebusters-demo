@@ -23,17 +23,17 @@ export async function GET(request: NextRequest) {
     const fromTripParam = request.nextUrl.searchParams.get("fromTripDate"); // trip date (startDate from slotId)
     const toTripParam = request.nextUrl.searchParams.get("toTripDate"); // trip date
 
-    const fromDate = fromParam ? new Date(fromParam) : null;
-    const toDate = toParam ? new Date(toParam) : null;
+    const fromDateVal = fromParam ? new Date(fromParam) : null;
+    const toDateVal = toParam ? new Date(toParam) : null;
     const fromTripDate = fromTripParam && /^\d{4}-\d{2}-\d{2}$/.test(fromTripParam) ? fromTripParam : null;
     const toTripDate = toTripParam && /^\d{4}-\d{2}-\d{2}$/.test(toTripParam) ? toTripParam : null;
-    if (fromDate && isNaN(fromDate.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
-    if (toDate && isNaN(toDate.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
+    if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
+    if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
     const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
     let docs = snap.docs;
     if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
-    if (fromDate || toDate) {
+    if (fromDateVal || toDateVal) {
       docs = docs.filter((d) => {
         const b = d.data() as Booking;
         const createdAt = b.createdAt
@@ -44,9 +44,9 @@ export async function GET(request: NextRequest) {
               : null)
           : null;
         if (!createdAt) return false;
-        if (fromDate && createdAt < fromDate) return false;
-        if (toDate) {
-          const endOfDay = new Date(toDate);
+        if (fromDateVal && createdAt < fromDateVal) return false;
+        if (toDateVal) {
+          const endOfDay = new Date(toDateVal);
           endOfDay.setHours(23, 59, 59, 999);
           if (createdAt > endOfDay) return false;
         }
