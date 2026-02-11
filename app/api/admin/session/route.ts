@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminSessionCookie, getAdminSessionCookieName, verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
+import { createAdminSessionCookie, getAllowedAdminEmails, getAdminSessionCookieName, verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 
 const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
@@ -16,8 +16,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const adminEmail = process.env.ADMIN_EMAIL?.trim();
-  if (!adminEmail) {
+  const allowed = getAllowedAdminEmails();
+  if (allowed.length === 0) {
     return NextResponse.json({ error: "Admin not configured (set ADMIN_EMAIL)" }, { status: 503 });
   }
 
@@ -37,8 +37,7 @@ export async function POST(request: NextRequest) {
     const app = getFirebaseApp();
     const decoded = await app.auth().verifyIdToken(idToken);
     const email = decoded.email?.trim().toLowerCase();
-    const allowed = adminEmail.trim().toLowerCase();
-    if (!email || email !== allowed) {
+    if (!email || !allowed.includes(email)) {
       return NextResponse.json({ error: "Not authorized for admin" }, { status: 403 });
     }
     const sessionCookie = await createAdminSessionCookie(idToken);

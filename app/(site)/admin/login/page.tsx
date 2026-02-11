@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/firebase-client";
 import { Button } from "@/components/ui/button";
 
@@ -11,6 +11,9 @@ export default function AdminLoginPage() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -28,21 +31,55 @@ export default function AdminLoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.error ?? "Login failed");
+        if (res.status === 403) {
+          setError("This email is not the admin account. Sign in with the exact email set as ADMIN_EMAIL for this site.");
+        } else {
+          setError(data.error ?? "Login failed");
+        }
         return;
       }
       window.location.href = data.redirect ?? "/admin";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("auth/") || msg.includes("identitytoolkit")) {
+      if (msg.includes("auth/invalid-credential") || msg.includes("auth/wrong-password") || msg.includes("auth/user-not-found")) {
         setError(
-          "Invalid email or password. Create the user in Firebase Console: Authentication → Users → Add user (use the same email as ADMIN_EMAIL and set a password)."
+          "Invalid email or password. Use the same email as ADMIN_EMAIL. Forgot password? Use the link below to reset it."
+        );
+      } else if (msg.includes("auth/") || msg.includes("identitytoolkit")) {
+        setError(
+          "Invalid email or password. In Firebase Console enable Authentication → Sign-in method → Email/Password, then add the user under Users (email must match ADMIN_EMAIL)."
         );
       } else {
         setError(msg);
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    const resetEmail = email.trim() || (document.getElementById("reset-email") as HTMLInputElement)?.value?.trim();
+    if (!resetEmail) {
+      setError("Enter your admin email to receive a password reset link.");
+      return;
+    }
+    setResetLoading(true);
+    setError(null);
+    setResetSent(false);
+    try {
+      const auth = getFirebaseAuth();
+      await sendPasswordResetEmail(auth, resetEmail);
+      setResetSent(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("auth/user-not-found")) {
+        setError("No account with that email. Use the exact admin email (ADMIN_EMAIL).");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setResetLoading(false);
     }
   }
 
@@ -88,6 +125,35 @@ export default function AdminLoginPage() {
           <Button type="submit" size="lg" className="w-full rounded-xl" disabled={loading}>
             {loading ? "Signing in…" : "Sign in"}
           </Button>
+          <p className="text-center">
+            <button
+              type="button"
+              onClick={() => { setShowReset(!showReset); setError(null); setResetSent(false); }}
+              className="text-sm text-brand-primary hover:underline"
+            >
+              {showReset ? "Cancel" : "Forgot password?"}
+            </button>
+          </p>
+          {showReset && (
+            <form onSubmit={handleForgotPassword} className="pt-2 border-t border-brand-dark/10 space-y-2">
+              <p className="text-sm text-brand-muted">Enter your admin email to receive a password reset link.</p>
+              <input
+                id="reset-email"
+                type="email"
+                defaultValue={email}
+                placeholder="Admin email (same as ADMIN_EMAIL)"
+                className="block w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+              />
+              <Button type="submit" variant="outline" size="sm" className="w-full" disabled={resetLoading}>
+                {resetLoading ? "Sending…" : "Send reset link"}
+              </Button>
+              {resetSent && (
+                <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  Check your email for a link to reset your password.
+                </p>
+              )}
+            </form>
+          )}
         </form>
         <p className="mt-4 text-xs text-brand-muted">
           <Link href="/" className="text-brand-primary hover:underline">

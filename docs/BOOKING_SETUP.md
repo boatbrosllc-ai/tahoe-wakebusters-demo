@@ -48,11 +48,11 @@ For **Book now** and experiences to work in production, the server must have Fir
 
 **Set these in your host’s environment** (e.g. Netlify → Site settings → Environment variables):
 
-- `FIREBASE_PROJECT_ID`
-- `FIREBASE_CLIENT_EMAIL`
-- `FIREBASE_PRIVATE_KEY` (paste the full key; escape newlines as `\n` if the UI requires it)
+- `FIREBASE_PROJECT_ID` — your Firebase project ID
+- `FIREBASE_CLIENT_EMAIL` — from the service account JSON (`client_email`)
+- `FIREBASE_PRIVATE_KEY` — **must be the full private key on a single line.** Netlify (and most hosts) do not support multi-line env values. In the service account JSON, `private_key` is multiple lines. To use it in Netlify: open the key in a text editor, replace every actual newline with the two characters backslash + n (`\n`), so you get one long line (e.g. `-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n`). Paste that single line as the value of `FIREBASE_PRIVATE_KEY`. The app will turn `\n` back into newlines at runtime.
 
-**Avoid** relying on `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in production unless the JSON file is committed or built into the app; most hosts don’t have your local file. Using the three variables above is the reliable approach.
+**Avoid** relying on `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in production unless the JSON file is committed or built into the app; most hosts don’t have your local file. Using the three variables above is the reliable approach. **Do not set FIREBASE_SERVICE_ACCOUNT_JSON_PATH in Netlify**—if set, the app tries to read that file at runtime and it does not exist in the deploy, so Firebase fails and the app returns 500.
 
 Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. After saving, redeploy so the new env vars are applied.
 
@@ -62,6 +62,8 @@ Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), a
 - **Login:** Go to **[/admin/login](http://localhost:3000/admin/login)** and sign in with that email and password. The app uses Firebase Auth; on success it exchanges the ID token for a session cookie and redirects to `/admin`.
 - **Protection:** When `ADMIN_EMAIL` is set, all routes under `/admin` (except `/admin/login`) require a valid Firebase session cookie. Only the user with that email can access admin.
 - **Logout:** Use the **Sign out** button on the admin page, or call `POST /api/admin/logout` (clears the cookie and redirects to `/admin/login`).
+- **Password not working / Forgot password:** Use **Forgot password?** on the login page to send a reset link to your admin email. The email must match `ADMIN_EMAIL` and the user must exist in Firebase Console → Authentication → Users. If you never set a password, add the user in Firebase Console (Authentication → Users → Add user) with the same email as `ADMIN_EMAIL` and set a password. Ensure **Email/Password** is enabled under Authentication → Sign-in method.
+- **"Not authorized for admin":** You signed in with an email that does not match `ADMIN_EMAIL`. Sign in with the exact email configured as `ADMIN_EMAIL` in your environment.
 
 ## Create a listing
 

@@ -2,7 +2,7 @@
  * Admin auth via Firebase Auth session cookie.
  * Client signs in with Firebase (email/password), sends ID token to /api/admin/session;
  * server creates a session cookie and verifies it on protected routes.
- * Only the email in ADMIN_EMAIL is allowed to access admin.
+ * The super-admin email below is always allowed. ADMIN_EMAIL (if set) is also allowed.
  */
 
 import "server-only";
@@ -11,6 +11,9 @@ import { safeHasFirebaseConfig } from "@/lib/booking/env";
 
 const COOKIE_NAME = "admin_session";
 const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
+
+/** Single super-admin; always allowed for admin access. */
+const SUPER_ADMIN_EMAIL = "boatbrosllc@gmail.com";
 
 /** Shown when Firebase/Firestore server config is missing or invalid (503/500). */
 export const FIREBASE_SETUP_HINT =
@@ -21,16 +24,27 @@ function getAdminEmail(): string | null {
   return email || null;
 }
 
+/** All emails that are allowed to access admin (super-admin + ADMIN_EMAIL if set). Exported for session route. */
+export function getAllowedAdminEmails(): string[] {
+  const list = [SUPER_ADMIN_EMAIL.toLowerCase()];
+  const env = getAdminEmail();
+  if (env) {
+    const lower = env.toLowerCase();
+    if (!list.includes(lower)) list.push(lower);
+  }
+  return list;
+}
+
 /** Create a Firebase session cookie from an ID token. Returns cookie value or throws. */
 export async function createAdminSessionCookie(idToken: string): Promise<string> {
   const app = getFirebaseApp();
   return app.auth().createSessionCookie(idToken, { expiresIn: SESSION_EXPIRES_MS });
 }
 
-/** Verify the admin session cookie and that the user is the allowed admin email. Returns true if valid. */
+/** Verify the admin session cookie and that the user is an allowed admin email. Returns true if valid. */
 export async function verifyAdminSessionCookie(cookieHeader: string | null): Promise<boolean> {
-  const adminEmail = getAdminEmail();
-  if (!adminEmail) return false;
+  const allowed = getAllowedAdminEmails();
+  if (allowed.length === 0) return false;
   if (!cookieHeader) return false;
   const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`, "i"));
   const sessionCookie = match?.[1]?.trim();
@@ -39,8 +53,7 @@ export async function verifyAdminSessionCookie(cookieHeader: string | null): Pro
     const app = getFirebaseApp();
     const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
     const email = decoded.email?.trim().toLowerCase();
-    const allowed = adminEmail.trim().toLowerCase();
-    return !!email && email === allowed;
+    return !!email && allowed.includes(email);
   } catch {
     return false;
   }
@@ -52,7 +65,7 @@ export function getAdminSessionCookieName(): string {
 
 /** For API routes: require valid Firebase admin session. Returns null if allowed, or a Response (401/503). */
 export async function requireAdminSession(cookieHeader: string | null): Promise<Response | null> {
-  if (!getAdminEmail()) {
+  if (getAllowedAdminEmails().length === 0) {
     return new Response(JSON.stringify({ error: "Admin not configured (set ADMIN_EMAIL)" }), {
       status: 503,
       headers: { "Content-Type": "application/json" },

@@ -42,9 +42,23 @@ export async function GET() {
     console.log("[experiences] GET", { count: list.length, docCount: snap.docs.length });
     return NextResponse.json({ experiences: list });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isConfigMissing =
+      message.includes("Firebase config missing") ||
+      message.includes("FIREBASE_PRIVATE_KEY is truncated") ||
+      message.includes("Missing required env");
     console.error("[experiences]", err);
+    if (isConfigMissing) {
+      return NextResponse.json(
+        {
+          error: "Booking is not configured. Set Firebase env vars (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY) in your host.",
+          code: "FIREBASE_NOT_CONFIGURED",
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
-      { error: "Failed to load experiences", detail: process.env.NODE_ENV === "development" ? (err instanceof Error ? err.message : String(err)) : undefined },
+      { error: "Failed to load experiences", detail: process.env.NODE_ENV === "development" ? message : undefined },
       { status: 500 }
     );
   }
