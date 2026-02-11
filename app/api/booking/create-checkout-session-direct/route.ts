@@ -165,7 +165,7 @@ export async function POST(request: NextRequest) {
       pricing,
       rate,
       addons: addonsForPricing,
-      hold: hold as import("@/lib/booking/types").Hold,
+      hold: hold as unknown as import("@/lib/booking/types").Hold,
     });
     const baseUrl = bookingEnv.appBaseUrl;
     const stripe = getStripe();
