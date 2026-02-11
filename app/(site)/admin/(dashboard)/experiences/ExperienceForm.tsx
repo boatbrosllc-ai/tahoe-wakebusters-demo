@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { DynamicPricingEditor } from "@/components/admin/DynamicPricingEditor";
+import { PhotoUploader } from "@/components/admin/PhotoUploader";
 
 const inputClass =
   "mt-1 block w-full min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0 sm:py-2";
@@ -15,10 +17,17 @@ const defaultCancellation = {
   partialRefundDaysEnd: 30,
   noRefundWithinDays: 14,
   fullText:
-    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days. See full terms on our site.",
+    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days.",
 };
 
-type RateRow = { durationHours: number; displayName: string; priceCents: number };
+type RateRow = {
+  durationHours: number;
+  displayName: string;
+  priceCents: number;
+  priceWeekendCents?: number;
+  priceHolidayCents?: number;
+};
+type HolidayDateRow = { label: string; start: string; end: string; recurring?: boolean; priceCents?: number };
 type AddonRow = { name: string; description: string; priceCents: number; type: "toggle" | "quantity" | "tip"; maxQty: number; highlight: boolean };
 type FaqRow = { q: string; a: string };
 type TestimonialRow = { name: string; quote: string; date: string };
@@ -60,6 +69,8 @@ export type ExperienceFormData = {
   defaultRateId: string;
   bookingPosition: "sidebar" | "inline" | "modal";
   galleryAltTexts: string[];
+  holidayDates: HolidayDateRow[];
+  weekendDays: number[];
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -100,6 +111,8 @@ function getDefaultFormData(): ExperienceFormData {
     defaultRateId: "",
     bookingPosition: "sidebar",
     galleryAltTexts: [],
+    holidayDates: [],
+    weekendDays: [0, 6],
   };
 }
 
@@ -144,6 +157,8 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
       durationHours: typeof r.durationHours === "number" ? r.durationHours : 0,
       displayName: typeof r.displayName === "string" ? r.displayName : "",
       priceCents: typeof r.priceCents === "number" ? r.priceCents : 0,
+      priceWeekendCents: typeof (r as { priceWeekendCents?: number }).priceWeekendCents === "number" ? (r as { priceWeekendCents: number }).priceWeekendCents : undefined,
+      priceHolidayCents: typeof (r as { priceHolidayCents?: number }).priceHolidayCents === "number" ? (r as { priceHolidayCents: number }).priceHolidayCents : undefined,
     })),
     addons: addons.map((a) => ({
       name: typeof a.name === "string" ? a.name : "",
@@ -171,6 +186,18 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     defaultRateId: typeof api.defaultRateId === "string" ? api.defaultRateId : "",
     bookingPosition: api.bookingPosition === "inline" || api.bookingPosition === "modal" ? api.bookingPosition : "sidebar",
     galleryAltTexts: Array.isArray(api.galleryAltTexts) ? api.galleryAltTexts.filter((x): x is string => typeof x === "string") : [],
+    holidayDates: Array.isArray(api.holidayDates)
+      ? (api.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number }[]).map((h) => ({
+          label: typeof h.label === "string" ? h.label : "",
+          start: typeof h.start === "string" ? h.start : "",
+          end: typeof h.end === "string" ? h.end : "",
+          recurring: h.recurring === true,
+          priceCents: typeof h.priceCents === "number" ? h.priceCents : undefined,
+        }))
+      : [],
+    weekendDays: Array.isArray(api.weekendDays)
+      ? (api.weekendDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
+      : [0, 6],
   };
 }
 
@@ -197,7 +224,13 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     },
     active: d.active,
     timezone: d.timezone || undefined,
-    rates: d.rates,
+    rates: d.rates.map((r) => ({
+      durationHours: r.durationHours,
+      displayName: r.displayName,
+      priceCents: r.priceCents,
+      ...(r.priceWeekendCents != null && { priceWeekendCents: r.priceWeekendCents }),
+      ...(r.priceHolidayCents != null && { priceHolidayCents: r.priceHolidayCents }),
+    })),
     addons: d.addons.map((a) => ({
       name: a.name,
       description: a.description || undefined,
@@ -218,6 +251,8 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     ...(d.defaultRateId && { defaultRateId: d.defaultRateId }),
     ...(d.bookingPosition !== "sidebar" && { bookingPosition: d.bookingPosition }),
     ...(d.galleryAltTexts.length > 0 && { galleryAltTexts: d.galleryAltTexts }),
+    ...(d.holidayDates.length > 0 && { holidayDates: d.holidayDates.filter((h) => h.start || h.end) }),
+    weekendDays: d.weekendDays.length > 0 ? d.weekendDays : [0, 6],
   };
 }
 
@@ -282,7 +317,11 @@ export function ExperienceForm({
     });
   };
 
-  const addRate = () => setData((prev) => ({ ...prev, rates: [...prev.rates, { durationHours: 3, displayName: "", priceCents: 0 }] }));
+  const addRate = () =>
+    setData((prev) => ({
+      ...prev,
+      rates: [...prev.rates, { durationHours: 3, displayName: "", priceCents: 0 }],
+    }));
   const removeRate = (i: number) => setData((prev) => ({ ...prev, rates: prev.rates.filter((_, idx) => idx !== i) }));
   const setRate = (i: number, field: keyof RateRow, value: number | string) => {
     setData((prev) => ({
@@ -292,10 +331,29 @@ export function ExperienceForm({
       ),
     }));
   };
-  const setRateNum = (i: number, field: "durationHours" | "priceCents", value: number) => {
+  const setRateNum = (i: number, field: "durationHours" | "priceCents" | "priceWeekendCents" | "priceHolidayCents", value: number) => {
     setData((prev) => ({
       ...prev,
       rates: prev.rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)),
+    }));
+  };
+  const setRateOptionalCents = (i: number, field: "priceWeekendCents" | "priceHolidayCents", value: number | undefined) => {
+    setData((prev) => ({
+      ...prev,
+      rates: prev.rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)),
+    }));
+  };
+  const addHoliday = () =>
+    setData((prev) => ({
+      ...prev,
+      holidayDates: [...prev.holidayDates, { label: "", start: "", end: "" }],
+    }));
+  const removeHoliday = (i: number) =>
+    setData((prev) => ({ ...prev, holidayDates: prev.holidayDates.filter((_, idx) => idx !== i) }));
+  const setHoliday = (i: number, field: keyof HolidayDateRow, value: string) => {
+    setData((prev) => ({
+      ...prev,
+      holidayDates: prev.holidayDates.map((h, idx) => (idx === i ? { ...h, [field]: value } : h)),
     }));
   };
 
@@ -365,30 +423,41 @@ export function ExperienceForm({
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-desc">Description (long)</label>
           <textarea id="exp-desc" className={textareaClass} rows={4} value={data.descriptionLong} onChange={(e) => update("descriptionLong", e.target.value)} aria-label="Description" />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-hero-type">Hero type</label>
-            <select id="exp-hero-type" className={inputClass} value={data.heroType} onChange={(e) => update("heroType", e.target.value as "image" | "video")} aria-label="Hero type">
-              <option value="image">Image</option>
-              <option value="video">Video</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-hero-url">Hero URL</label>
-            <input id="exp-hero-url" className={inputClass} value={data.heroUrl} onChange={(e) => update("heroUrl", e.target.value)} placeholder="/photos/hero.webp" aria-label="Hero URL" />
-          </div>
-        </div>
         <div>
-          <label className="block text-sm font-medium text-brand-dark">Gallery URLs (one per line or comma)</label>
-          <div className="space-y-2">
-            {data.gallery.map((url, i) => (
-              <div key={i} className="flex gap-2">
-                <input className={inputClass} value={url} onChange={(e) => setListItem("gallery", i, e.target.value)} placeholder="/photos/1.webp" aria-label={`Gallery URL ${i + 1}`} />
-                <Button type="button" variant="ghost" size="icon" onClick={() => removeFromList("gallery", i)} aria-label={`Remove gallery URL ${i + 1}`}>−</Button>
-              </div>
-            ))}
-            <Button type="button" variant="outline" size="sm" onClick={() => addToList("gallery")}>Add gallery URL</Button>
+          <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-hero-type">Hero type</label>
+          <select id="exp-hero-type" className={inputClass} value={data.heroType} onChange={(e) => update("heroType", e.target.value as "image" | "video")} aria-label="Hero type">
+            <option value="image">Image</option>
+            <option value="video">Video</option>
+          </select>
+        </div>
+        {data.heroType === "image" ? (
+          <div>
+            <label className="block text-sm font-medium text-brand-dark mb-2">Hero image</label>
+            <p className="text-sm text-brand-muted mb-2">Upload one image or paste a URL. Drag to upload, or use Browse uploads / Paste URL.</p>
+            <PhotoUploader
+              value={data.heroUrl ? [data.heroUrl] : []}
+              onChange={(urls) => update("heroUrl", urls[0] ?? "")}
+              maxPhotos={1}
+              listPrefix="experiences/heroes/"
+              mainLabel="Hero"
+            />
           </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-hero-url">Hero video URL</label>
+            <input id="exp-hero-url" className={inputClass} value={data.heroUrl} onChange={(e) => update("heroUrl", e.target.value)} placeholder="https://..." aria-label="Hero video URL" />
+          </div>
+        )}
+        <div>
+          <label className="block text-sm font-medium text-brand-dark mb-2">Gallery</label>
+          <p className="text-sm text-brand-muted mb-2">Upload or paste URLs. Drag photos to reorder. First image can be used as the listing cover.</p>
+          <PhotoUploader
+            value={data.gallery}
+            onChange={(urls) => update("gallery", urls)}
+            maxPhotos={24}
+            listPrefix="experiences/gallery/"
+            reorderable
+          />
         </div>
       </section>
 
@@ -532,27 +601,28 @@ export function ExperienceForm({
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Cancellation policy</h2>
+        <p className="text-sm text-brand-muted">Only three refund options: free cancellation, partial refund, and no refund. Set the day cutoffs below.</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-free">Free cancel days</label>
-            <input id="exp-cp-free" type="number" min={0} className={inputClass} value={data.cancellationPolicy.freeCancelDays} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, freeCancelDays: parseInt(e.target.value, 10) || 0 })} aria-label="Free cancel days" />
+            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-free">Free cancellation — up to (days before)</label>
+            <input id="exp-cp-free" type="number" min={0} className={inputClass} value={data.cancellationPolicy.freeCancelDays} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, freeCancelDays: parseInt(e.target.value, 10) || 0 })} aria-label="Free cancellation up to how many days before" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-partial-start">Partial start</label>
-            <input id="exp-cp-partial-start" type="number" min={0} className={inputClass} value={data.cancellationPolicy.partialRefundDaysStart} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, partialRefundDaysStart: parseInt(e.target.value, 10) || 0 })} aria-label="Partial refund start days" />
+            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-partial-start">Partial refund — from (days before)</label>
+            <input id="exp-cp-partial-start" type="number" min={0} className={inputClass} value={data.cancellationPolicy.partialRefundDaysStart} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, partialRefundDaysStart: parseInt(e.target.value, 10) || 0 })} aria-label="Partial refund from days before" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-partial-end">Partial end</label>
-            <input id="exp-cp-partial-end" type="number" min={0} className={inputClass} value={data.cancellationPolicy.partialRefundDaysEnd} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, partialRefundDaysEnd: parseInt(e.target.value, 10) || 0 })} aria-label="Partial refund end days" />
+            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-partial-end">Partial refund — to (days before)</label>
+            <input id="exp-cp-partial-end" type="number" min={0} className={inputClass} value={data.cancellationPolicy.partialRefundDaysEnd} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, partialRefundDaysEnd: parseInt(e.target.value, 10) || 0 })} aria-label="Partial refund to days before" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-no-refund">No refund within</label>
-            <input id="exp-cp-no-refund" type="number" min={0} className={inputClass} value={data.cancellationPolicy.noRefundWithinDays} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, noRefundWithinDays: parseInt(e.target.value, 10) || 0 })} aria-label="No refund within days" />
+            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-no-refund">No refund — within (days)</label>
+            <input id="exp-cp-no-refund" type="number" min={0} className={inputClass} value={data.cancellationPolicy.noRefundWithinDays} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, noRefundWithinDays: parseInt(e.target.value, 10) || 0 })} aria-label="No refund within how many days" />
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-full">Full text</label>
-          <textarea id="exp-cp-full" className={textareaClass} rows={2} value={data.cancellationPolicy.fullText} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, fullText: e.target.value })} aria-label="Cancellation policy full text" />
+          <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-full">Full text (shown to guests)</label>
+          <textarea id="exp-cp-full" className={textareaClass} rows={2} value={data.cancellationPolicy.fullText} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, fullText: e.target.value })} placeholder="e.g. Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days." aria-label="Cancellation policy full text" />
         </div>
       </section>
 
@@ -598,22 +668,27 @@ export function ExperienceForm({
         </div>
       </section>
 
-      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Rates</h2>
-        {data.rates.map((r, i) => (
-          <div key={i} className="flex flex-wrap gap-2 items-center">
-            <input type="number" min={0} step={0.5} className={`${inputClass} w-24`} placeholder="Hours" value={r.durationHours || ""} onChange={(e) => setRateNum(i, "durationHours", parseFloat(e.target.value) || 0)} aria-label={`Rate ${i + 1} duration hours`} />
-            <input className={`${inputClass} flex-1 min-w-[120px]`} placeholder="Display name" value={r.displayName} onChange={(e) => setRate(i, "displayName", e.target.value)} aria-label={`Rate ${i + 1} display name`} />
-            <input type="number" min={0} className={`${inputClass} w-28`} placeholder="Price cents" value={r.priceCents || ""} onChange={(e) => setRateNum(i, "priceCents", parseInt(e.target.value, 10) || 0)} aria-label={`Rate ${i + 1} price cents`} />
-            <Button type="button" variant="ghost" size="icon" onClick={() => removeRate(i)} aria-label={`Remove rate ${i + 1}`}>−</Button>
-          </div>
-        ))}
-        <Button type="button" variant="outline" size="sm" onClick={addRate}>Add rate</Button>
+      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-6">
+        <div>
+          <h2 className="text-lg font-semibold text-brand-dark">Rates & calendar</h2>
+          <p className="text-sm text-brand-muted mt-1">
+            Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced.
+          </p>
+        </div>
+        <DynamicPricingEditor
+          rates={data.rates}
+          onRatesChange={(rates) => setData((prev) => ({ ...prev, rates }))}
+          holidayDates={data.holidayDates}
+          onHolidayDatesChange={(holidayDates) => setData((prev) => ({ ...prev, holidayDates }))}
+          weekendDays={data.weekendDays}
+          onWeekendDaysChange={(weekendDays) => setData((prev) => ({ ...prev, weekendDays }))}
+          boatHint={false}
+        />
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Add-ons</h2>
-        <p className="text-sm text-brand-muted">Add or remove add-ons. Set a price (cents) and type. &quot;Stand out&quot; makes the add-on more prominent (e.g. damage waiver).</p>
+        <p className="text-sm text-brand-muted">Optional extras customers can add (e.g. damage waiver). Name, price in cents, and type. Check &quot;Stand out&quot; to highlight one.</p>
         {data.addons.map((a, i) => (
           <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-start p-3 rounded-lg bg-brand-bg/30 border border-brand-dark/10">
             <input className={inputClass} placeholder="Name" value={a.name} onChange={(e) => setAddon(i, "name", e.target.value)} aria-label={`Add-on ${i + 1} name`} />

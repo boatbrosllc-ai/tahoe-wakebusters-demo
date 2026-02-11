@@ -12,6 +12,7 @@ export interface ExperienceListItem {
   petsMax: number;
   fromPriceCents: number | null;
   active: boolean;
+  sortOrder?: number;
 }
 
 export async function GET() {
@@ -37,9 +38,15 @@ export async function GET() {
         petsMax: exp.petsMax ?? 0,
         fromPriceCents,
         active: exp.active ?? true,
+        sortOrder: exp.sortOrder,
       });
     }
-    console.log("[experiences] GET", { count: list.length, docCount: snap.docs.length });
+    list.sort((a, b) => {
+      const orderA = a.sortOrder ?? 999;
+      const orderB = b.sortOrder ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.title ?? "").localeCompare(b.title ?? "");
+    });
     return NextResponse.json({ experiences: list });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

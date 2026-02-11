@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
-import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
+import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot } from "@/lib/booking/types";
@@ -112,7 +112,8 @@ export async function POST(request: NextRequest) {
     const addonsById = new Map<string, ExperienceAddon>();
     addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     const addonsForPricing = buildAddonSelectionsForPricing([], addonsById);
-    const pricing = computePricing({ rate, addons: addonsForPricing, currency: "usd" });
+    const rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate, slotStart, experience.holidayDates, experience.weekendDays) };
+    const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
 
     const holdId = db.collection("holds").doc().id;
     const now = new Date();
@@ -163,7 +164,7 @@ export async function POST(request: NextRequest) {
     const hold = { ...holdPayload, expiresAt: holdPayload.expiresAt };
     const lineItems = buildLineItems({
       pricing,
-      rate,
+      rate: rateForPricing,
       addons: addonsForPricing,
       hold: hold as unknown as import("@/lib/booking/types").Hold,
     });

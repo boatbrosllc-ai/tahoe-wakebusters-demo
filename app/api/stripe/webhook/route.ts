@@ -4,10 +4,10 @@ import { getStripe } from "@/lib/booking/stripe-client";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
-import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
+import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
-import type { Experience, ExperienceRate, ExperienceAddon, BoatRate } from "@/lib/booking/types";
+import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
 function formatSlotDateTime(ts: { toDate(): Date }): string {
   const d = ts.toDate();
@@ -46,29 +46,42 @@ export async function POST(request: NextRequest) {
     const claimed = await db.runTransaction(async (tx) => {
       const d = await tx.get(eventsRef.doc(eventId));
       if (d.exists) return false;
-      tx.set(eventsRef.doc(eventId), { receivedAt: Timestamp.now(), status: "processing" });
+      tx.set(eventsRef.doc(eventId), { receivedAt: Timestamp.now(), status: "processing", eventType: event.type });
       return true;
     });
     if (!claimed) {
       return NextResponse.json({ received: true });
     }
+    const writeEventResult = async (
+      docId: string,
+      data: { processedAt: FirestoreTimestamp; error?: string; outcome?: string; bookingId?: string; holdId?: string; sessionId?: string; paymentIntentId?: string; amountTotal?: number; currency?: string }
+    ) => {
+      await eventsRef.doc(docId).set(data, { merge: true });
+    };
+
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
+      const sessionId = session.id;
+      const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? undefined;
+      const amountTotal = session.amount_total ?? undefined;
+      const currency = session.currency ?? undefined;
       const holdId = session.metadata?.holdId;
       if (!holdId) {
-        console.error("[stripe-webhook] checkout.session.completed missing holdId in metadata");
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now() });
+        console.error("[stripe-webhook] checkout.session.completed missing holdId in metadata", { sessionId, paymentIntentId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in session metadata", sessionId, paymentIntentId, amountTotal, currency });
         return NextResponse.json({ received: true });
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Hold not found" });
+        console.error("[stripe-webhook] checkout.session.completed hold not found", { holdId, sessionId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
         return NextResponse.json({ received: true });
       }
       const hold = holdSnap.data() as Hold;
       if (hold.status !== "active") {
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Hold already converted" });
+        console.error("[stripe-webhook] checkout.session.completed hold already converted", { holdId, status: hold.status });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold already converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
         return NextResponse.json({ received: true });
       }
       const hasExperience = !!hold.experienceId;
@@ -81,25 +94,29 @@ export async function POST(request: NextRequest) {
       let cancellationPolicyText: string;
       let rate: Rate | ExperienceRate | BoatRate;
       let slot: Slot;
+      let experienceForPricing: Experience | null = null;
+      let boatForPricing: ListingBoat | null = null;
       if (isListingBoatFlow) {
         const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
         const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
+        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
         if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         const exp = expSnap.data() as Experience;
-        const boat = boatSnap.data() as { name?: string };
+        experienceForPricing = exp;
+        boatForPricing = boatSnap.data() as ListingBoat;
+        const boat = boatForPricing as { name?: string };
         experienceName = exp.title;
         boatNameForEmail = boat.name ?? exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
         cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
-        rate = rateSnap.data() as BoatRate;
+        rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
@@ -108,10 +125,11 @@ export async function POST(request: NextRequest) {
         const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
         if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Experience/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         const exp = expSnap.data() as Experience;
+        experienceForPricing = exp;
         experienceName = exp.title;
         boatNameForEmail = exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
@@ -119,7 +137,7 @@ export async function POST(request: NextRequest) {
         rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
@@ -128,7 +146,7 @@ export async function POST(request: NextRequest) {
         const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
         if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Boat/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         const boat = boatSnap.data() as Boat;
@@ -139,7 +157,7 @@ export async function POST(request: NextRequest) {
         rate = rateSnap.data() as Rate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
@@ -151,11 +169,14 @@ export async function POST(request: NextRequest) {
       const addonsById = new Map<string, Addon | ExperienceAddon>();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
       const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-      const pricing = computePricing({ rate, addons: addonsForPricing, currency: "usd" });
+      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+      if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
+        const slotStart = (slot.startAt as { toDate(): Date }).toDate();
+        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays) };
+      }
+      const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
       const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
-      const paymentIntentId =
-        typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? undefined;
       // Always use the email from the booking details form for the confirmation email.
       const customerDetails = session.customer_details;
       const customer = {
@@ -185,7 +206,12 @@ export async function POST(request: NextRequest) {
         ...(specialNotes ? { specialNotes } : {}),
         pricing: finalPricing,
         status: "paid",
-        stripe: { checkoutSessionId: session.id, paymentIntentId },
+        stripe: {
+          checkoutSessionId: session.id,
+          paymentIntentId,
+          ...(amountTotal != null && { amountTotalCents: amountTotal }),
+          ...(currency && { currency }),
+        },
         createdAt: Timestamp.now(),
       };
       await db.runTransaction(async (tx) => {
@@ -232,27 +258,31 @@ export async function POST(request: NextRequest) {
           console.error("[stripe-webhook] Brevo list subscribe failed", listErr);
         }
       }
+      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
     }
     if (event.type === "payment_intent.succeeded") {
       const pi = event.data.object as Stripe.PaymentIntent;
+      const piId = pi.id;
+      const piAmountTotal = pi.amount ?? undefined;
+      const piCurrency = pi.currency ?? undefined;
       const holdId = pi.metadata?.holdId;
-      console.log("[stripe-webhook] payment_intent.succeeded", { eventId, holdId, paymentIntentId: pi.id });
+      console.log("[stripe-webhook] payment_intent.succeeded", { eventId, holdId, paymentIntentId: piId });
       if (!holdId) {
         console.error("[stripe-webhook] payment_intent.succeeded missing holdId in metadata");
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Missing holdId in metadata" });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
         console.error("[stripe-webhook] payment_intent.succeeded hold not found", { holdId });
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Hold not found", holdId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
       const hold = holdSnap.data() as Hold;
       if (hold.status !== "active") {
         console.error("[stripe-webhook] payment_intent.succeeded hold not active", { holdId, status: hold.status });
-        await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Hold already converted", holdId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold already converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
       const hasExperience = !!hold.experienceId;
@@ -265,25 +295,29 @@ export async function POST(request: NextRequest) {
       let cancellationPolicyText: string;
       let rate: Rate | ExperienceRate | BoatRate;
       let slot: Slot;
+      let experienceForPricing: Experience | null = null;
+      let boatForPricing: ListingBoat | null = null;
       if (isListingBoatFlow) {
         const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
         const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
+        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
         if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         const exp = expSnap.data() as Experience;
-        const boat = boatSnap.data() as { name?: string };
+        experienceForPricing = exp;
+        boatForPricing = boatSnap.data() as ListingBoat;
+        const boat = boatForPricing as { name?: string };
         experienceName = exp.title;
         boatNameForEmail = boat.name ?? exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
         cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
-        rate = rateSnap.data() as BoatRate;
+        rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
@@ -292,10 +326,11 @@ export async function POST(request: NextRequest) {
         const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
         if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Experience/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         const exp = expSnap.data() as Experience;
+        experienceForPricing = exp;
         experienceName = exp.title;
         boatNameForEmail = exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
@@ -303,7 +338,7 @@ export async function POST(request: NextRequest) {
         rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
@@ -312,7 +347,7 @@ export async function POST(request: NextRequest) {
         const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
         const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
         if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Boat/rate/slot not found" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         const boat = boatSnap.data() as Boat;
@@ -323,7 +358,7 @@ export async function POST(request: NextRequest) {
         rate = rateSnap.data() as Rate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await eventsRef.doc(eventId).set({ processedAt: Timestamp.now(), error: "Slot not held by this hold" });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
@@ -335,7 +370,12 @@ export async function POST(request: NextRequest) {
       const addonsById = new Map<string, Addon | ExperienceAddon>();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
       const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-      const pricing = computePricing({ rate, addons: addonsForPricing, currency: "usd" });
+      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+      if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
+        const slotStart = (slot.startAt as { toDate(): Date }).toDate();
+        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays) };
+      }
+      const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
       const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
       // Use the email from the booking details form for the confirmation email.
@@ -356,7 +396,11 @@ export async function POST(request: NextRequest) {
         ...(specialNotes ? { specialNotes } : {}),
         pricing: finalPricing,
         status: "paid",
-        stripe: { paymentIntentId: pi.id },
+        stripe: {
+          paymentIntentId: pi.id,
+          ...(piAmountTotal != null && { amountTotalCents: piAmountTotal }),
+          ...(piCurrency && { currency: piCurrency }),
+        },
         createdAt: Timestamp.now(),
       };
       await db.runTransaction(async (tx) => {
@@ -374,10 +418,7 @@ export async function POST(request: NextRequest) {
         tx.update(holdRef, { status: "converted" });
       });
       console.log("[stripe-webhook] payment_intent.succeeded booking created", { bookingId, holdId });
-      await eventsRef.doc(eventId).set(
-        { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId },
-        { merge: true }
-      );
+      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
       const startTs = slot.startAt as { toDate(): Date };
       const endTs = slot.endAt as { toDate(): Date };
       const emailContext = {
@@ -409,20 +450,39 @@ export async function POST(request: NextRequest) {
         }
       }
     }
-    await eventsRef.doc(eventId).set({ processedAt: Timestamp.now() }, { merge: true });
+    await writeEventResult(eventId, { processedAt: Timestamp.now() });
     return NextResponse.json({ received: true });
   } catch (err) {
     console.error("[stripe-webhook]", err);
     // Mark event as failed so doc is not left in "processing" and retries return 200
-    const stripeEventId = (event as Stripe.Event | undefined)?.id;
+    const ev = event as Stripe.Event | undefined;
+    const stripeEventId = ev?.id;
     if (stripeEventId) {
       try {
         const db = getDb();
         const { Timestamp } = getFirestoreExports();
-        await db.collection("stripeEvents").doc(stripeEventId).set({
+        const obj = ev?.data?.object as Record<string, unknown> | undefined;
+        const payload: Record<string, unknown> = {
           processedAt: Timestamp.now(),
           error: err instanceof Error ? err.message : String(err),
-        });
+        };
+        if (ev?.type === "checkout.session.completed" && obj) {
+          if (obj.id) payload.sessionId = obj.id;
+          const pi = obj.payment_intent;
+          if (typeof pi === "string") payload.paymentIntentId = pi;
+          else if (pi && typeof pi === "object" && typeof (pi as { id?: string }).id === "string") payload.paymentIntentId = (pi as { id: string }).id;
+          if (typeof obj.amount_total === "number") payload.amountTotal = obj.amount_total;
+          if (typeof obj.currency === "string") payload.currency = obj.currency;
+        } else if (ev?.type === "payment_intent.succeeded" && obj) {
+          if (obj.id) payload.paymentIntentId = obj.id;
+          if (typeof obj.amount === "number") payload.amountTotal = obj.amount;
+          if (typeof obj.currency === "string") payload.currency = obj.currency;
+        } else if (obj?.id) {
+          payload.paymentIntentId = obj.id;
+          if (typeof obj.amount === "number") payload.amountTotal = obj.amount;
+          if (typeof obj.currency === "string") payload.currency = obj.currency;
+        }
+        await db.collection("stripeEvents").doc(stripeEventId).set(payload, { merge: true });
       } catch (_) {
         // ignore
       }

@@ -5,7 +5,7 @@ This document covers local development and deployment for the custom booking flo
 ## Cold start (full process)
 
 1. **Environment** — Copy `.env.example` to `.env.local` and fill in the variables below (Firebase, Stripe, Brevo, `APP_BASE_URL`).
-2. **Firebase** — Create a Firebase project, enable Firestore (Blaze plan enables it; you still need a **service account** for the server). Create a service account and set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` (or the individual Firebase env vars). Admin and booking APIs use the server-side Firebase Admin SDK; without this, admin pages and booking will return 503 with a setup hint.
+2. **Firebase** — Create a Firebase project, enable Firestore (Blaze plan enables it; you still need a **service account** for the server). Create a service account and set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` (or the individual Firebase env vars). Admin and booking APIs use the server-side Firebase Admin SDK; without this, admin pages and booking will return 503 with a setup hint. For **boat photo uploads** in admin, enable **Firebase Storage** in the Console (Build → Storage → Get started); uploads go to the default bucket and are stored under `boats/`.
 3. **Stripe** — Create a Stripe account, add test keys (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`), and configure the webhook to point to `APP_BASE_URL/api/stripe/webhook`.
 4. **Brevo** — Create a Brevo account and set `BREVO_API_KEY` (for booking confirmation emails).
 5. **App URL** — Set `APP_BASE_URL` (e.g. `http://localhost:3000` for local dev).

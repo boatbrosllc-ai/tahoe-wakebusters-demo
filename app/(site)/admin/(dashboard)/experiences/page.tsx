@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Plus, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-type ExperienceListItem = { id: string; slug: string; title: string; active: boolean; heroUrl?: string };
+type ExperienceListItem = { id: string; slug: string; title: string; active: boolean; heroUrl?: string; sortOrder?: number };
 
 export default function AdminExperiencesPage() {
   const [list, setList] = useState<ExperienceListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/admin/experiences", { credentials: "include" })
+  const fetchList = useCallback(() => {
+    return fetch("/api/admin/experiences", { credentials: "include" })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -29,12 +30,47 @@ export default function AdminExperiencesPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    fetchList();
+  }, [fetchList]);
+
+  async function moveItem(index: number, direction: "up" | "down") {
+    const item = list[index];
+    const swapIndex = direction === "up" ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= list.length) return;
+    const swapItem = list[swapIndex];
+    setMovingId(item.id);
+    try {
+      const itemOrder = item.sortOrder ?? 999;
+      const swapOrder = swapItem.sortOrder ?? 999;
+      const newItemOrder = direction === "up" ? Math.max(0, swapOrder - 1) : swapOrder + 1;
+      const newSwapOrder = direction === "up" ? itemOrder : itemOrder + 1;
+      await Promise.all([
+        fetch(`/api/admin/experiences/${item.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ sortOrder: newItemOrder }),
+        }),
+        fetch(`/api/admin/experiences/${swapItem.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ sortOrder: newSwapOrder }),
+        }),
+      ]);
+      await fetchList();
+    } finally {
+      setMovingId(null);
+    }
+  }
+
   return (
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Listings</h1>
-          <p className="mt-1 text-sm text-brand-muted">Create and edit experiences. Calendar and booking read from Firestore.</p>
+          <p className="mt-1 text-sm text-brand-muted">Create and edit experiences. Use the arrows to change the order they appear on the website.</p>
         </div>
         <Link href="/admin/experiences/new" className="shrink-0">
           <Button className="min-h-[44px] gap-2">
@@ -68,8 +104,32 @@ export default function AdminExperiencesPage() {
         )}
         {!loading && !error && list.length > 0 && (
           <ul className="divide-y divide-brand-dark/10">
-            {list.map((item) => (
+            {list.map((item, index) => (
               <li key={item.id} className="flex items-center gap-3 px-4 py-4 sm:px-6 hover:bg-brand-bg/50 min-h-[56px] sm:min-h-0">
+                <div className="flex flex-col shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded"
+                    onClick={() => moveItem(index, "up")}
+                    disabled={index === 0 || movingId !== null}
+                    aria-label="Move up"
+                  >
+                    <ChevronUp className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded -mt-1"
+                    onClick={() => moveItem(index, "down")}
+                    disabled={index === list.length - 1 || movingId !== null}
+                    aria-label="Move down"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </Button>
+                </div>
                 {item.heroUrl ? (
                   <div className="relative h-12 w-16 shrink-0 rounded-lg overflow-hidden bg-brand-dark/5">
                     <Image src={item.heroUrl} alt="" fill className="object-cover" sizes="64px" />

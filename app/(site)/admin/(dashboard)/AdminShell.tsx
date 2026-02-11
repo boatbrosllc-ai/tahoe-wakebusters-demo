@@ -5,7 +5,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
   List,
   Ship,
   Calendar,
@@ -22,12 +21,6 @@ import { cn } from "@/lib/utils";
 
 const navGroups: { label: string; links: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[] }[] = [
   {
-    label: "Overview",
-    links: [
-      { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-    ],
-  },
-  {
     label: "Content",
     links: [
       { href: "/admin/experiences", label: "Listings", icon: List },
@@ -37,7 +30,8 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
   {
     label: "Business",
     links: [
-      { href: "/admin/calendars", label: "Calendars", icon: Calendar },
+      { href: "/admin/calendars", label: "Block dates", icon: Calendar },
+      { href: "/admin/pricing-calendar", label: "Pricing calendar", icon: DollarSign },
       { href: "/admin/bookings", label: "Bookings", icon: BookOpen },
       { href: "/admin/customers", label: "Customers", icon: Users },
       { href: "/admin/financials", label: "Financials", icon: DollarSign },
@@ -163,7 +157,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       {/* Main content: full width on Calendars for a big readable calendar, constrained on other pages */}
       <main className="min-w-0 flex-1 overflow-auto py-6 px-4 sm:py-8 sm:px-6 lg:px-8">
-        <div className={cn("mx-auto w-full", (pathname?.includes("/admin/calendars") || pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
+        <div className={cn("mx-auto w-full", (pathname?.includes("/admin/calendars") || pathname?.includes("/admin/pricing-calendar") || pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
           {children}
         </div>
       </main>

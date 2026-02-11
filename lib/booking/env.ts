@@ -56,6 +56,11 @@ export const bookingEnv = {
   get firebaseProjectId(): string | undefined {
     return getEnv("FIREBASE_PROJECT_ID");
   },
+  /** Override Storage bucket name (e.g. my-project.firebasestorage.app). If unset, uses {projectId}.appspot.com. Set this if you get "bucket does not exist" after enabling Storage. */
+  get firebaseStorageBucket(): string | undefined {
+    const v = getEnv("FIREBASE_STORAGE_BUCKET");
+    return v == null || v === "" ? undefined : v.trim();
+  },
   get firebaseClientEmail(): string | undefined {
     return getEnv("FIREBASE_CLIENT_EMAIL");
   },

@@ -18,7 +18,9 @@ export function getStripe(): Stripe {
 
 function rateBaseCents(rate: Rate | ExperienceRate): number {
   if ("basePriceCents" in rate && rate.basePriceCents != null) return rate.basePriceCents;
-  return (rate as ExperienceRate).priceCents;
+  const cents = (rate as ExperienceRate & { priceCents?: number }).priceCents;
+  if (typeof cents === "number") return cents;
+  return 0;
 }
 
 export function buildLineItems(params: {

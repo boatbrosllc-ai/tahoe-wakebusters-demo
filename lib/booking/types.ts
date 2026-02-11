@@ -28,6 +28,15 @@ export interface Boat {
 // Stored in same boats collection; has experienceIds and photos.
 // ---------------------------------------------------------------------------
 
+/** Custom price for a date range (overrides weekday/weekend/holiday for this boat). */
+export interface BoatPriceOverride {
+  startDate: string; // YYYY-MM-DD
+  endDate: string;
+  /** If set, applies only to this duration; if omitted, applies to all rates for this boat in the range. */
+  durationHours?: number;
+  priceCents: number;
+}
+
 export interface ListingBoat {
   name: string;
   slug?: string;
@@ -39,13 +48,23 @@ export interface ListingBoat {
   experienceIds: string[];
   /** True for admin-created boats tied to experiences (vs legacy standalone boats) */
   isListingBoat?: true;
+  /** Custom prices for specific date ranges (e.g. "March 10–19 = $499"). Checked before weekday/weekend/holiday. */
+  priceOverrides?: BoatPriceOverride[];
+  /** Boat type for the pricing calendar (e.g. "pontoon", "wake", "tritoon"). Calendar overrides apply by boat type. */
+  boatType?: string;
 }
 
-/** Boat rate for listing boats — same shape as ExperienceRate (priceCents). Subcollection boats/{boatId}/rates */
+/** Calendar override: one doc per boatType, field rates = { [date YYYY-MM-DD]: hourlyRateCents }. Overrides always win. */
+export type PricingCalendarRates = Record<string, number>;
+
+/** Boat rate for listing boats — availability only (duration + display). Price comes from the experience (listing). Subcollection boats/{boatId}/rates */
 export interface BoatRate {
   durationHours: number;
   displayName: string;
-  priceCents: number;
+  /** @deprecated Pricing is on the listing (experience). Kept for backward compat; may be absent. */
+  priceCents?: number;
+  priceWeekendCents?: number;
+  priceHolidayCents?: number;
   active: boolean;
 }
 
@@ -111,6 +130,12 @@ export interface Experience {
   defaultRateId?: string;
   bookingPosition?: "sidebar" | "inline" | "modal";
   galleryAltTexts?: string[];
+  /** Date ranges when holiday pricing applies (e.g. July 4, Memorial Day) */
+  holidayDates?: ExperienceHolidayDate[];
+  /** Day numbers (0=Sun … 6=Sat) that use weekend pricing. Default [0, 6] = Sat–Sun. e.g. [0, 5, 6] = Fri–Sun. */
+  weekendDays?: number[];
+  /** Display order on website (lower = first). Default undefined = last. */
+  sortOrder?: number;
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents
@@ -118,7 +143,24 @@ export interface ExperienceRate {
   durationHours: number;
   displayName: string;
   priceCents: number;
+  /** Weekend price (Sat/Sun); falls back to priceCents if unset */
+  priceWeekendCents?: number;
+  /** Holiday price; falls back to priceWeekendCents or priceCents if unset */
+  priceHolidayCents?: number;
   active: boolean;
+}
+
+/** Date range when holiday/special pricing applies (stored on experience doc) */
+export interface ExperienceHolidayDate {
+  label?: string;
+  start: string; // ISO date YYYY-MM-DD
+  end: string;
+  /** If true, range repeats every year (compare month-day only) */
+  recurring?: boolean;
+  /** Optional single price in cents for this range (all durations); overrides rate.priceHolidayCents when set */
+  priceCents?: number;
+  /** Per-duration price overrides (durationHours -> cents). Takes precedence over priceCents when set for a given duration. */
+  priceCentsByDuration?: Record<number, number>;
 }
 
 // Addons (subcollection experiences/{experienceId}/addons/{addonId})
@@ -247,6 +289,9 @@ export interface Booking {
   stripe: {
     checkoutSessionId?: string;
     paymentIntentId?: string;
+    /** Amount charged in Stripe (cents) – for reconciliation with Stripe dashboard */
+    amountTotalCents?: number;
+    currency?: string;
   };
   createdAt: FirestoreTimestamp;
 }

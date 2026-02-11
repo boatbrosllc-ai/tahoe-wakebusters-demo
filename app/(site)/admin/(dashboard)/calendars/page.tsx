@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -52,6 +53,9 @@ export default function AdminCalendarsPage() {
   const [dayDetailOpen, setDayDetailOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [blocking, setBlocking] = useState<string | null>(null);
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
+  const [rangeLoading, setRangeLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchExperiences = useCallback(async () => {
@@ -179,7 +183,7 @@ export default function AdminCalendarsPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, date: dateStr }),
+        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block" }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to block date");
@@ -187,6 +191,29 @@ export default function AdminCalendarsPage() {
       setDayDetailOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to block date");
+    } finally {
+      setBlocking(null);
+    }
+  };
+
+  const unblockDate = async (dateStr: string) => {
+    if (!selectedId) return;
+    const key = `date-${dateStr}`;
+    setBlocking(key);
+    setError(null);
+    try {
+      const res = await fetch("/api/booking/block-date", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "unblock" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
+      await fetchSlots();
+      setDayDetailOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unblock date");
     } finally {
       setBlocking(null);
     }
@@ -218,6 +245,78 @@ export default function AdminCalendarsPage() {
     setDayDetailOpen(true);
   };
 
+  /** One-click: block or unblock the whole day. If day has any booking/hold, open modal instead. */
+  const handleDateCellClick = (cell: (typeof calendarDays)[0]) => {
+    if (cell.isPast || !selectedId) return;
+    const hasBookedOrHeld = cell.bookedCount > 0 || cell.heldCount > 0;
+    if (hasBookedOrHeld) {
+      openDayDetail(cell.dateStr);
+      return;
+    }
+    if (cell.blockedCount > 0) {
+      unblockDate(cell.dateStr);
+    } else {
+      blockDate(cell.dateStr);
+    }
+  };
+
+  const blockRange = async () => {
+    if (!selectedId || !rangeStart || !rangeEnd) return;
+    const start = new Date(rangeStart + "T00:00:00");
+    const end = new Date(rangeEnd + "T00:00:00");
+    if (start > end) {
+      setError("Start date must be before end date.");
+      return;
+    }
+    setRangeLoading(true);
+    setError(null);
+    try {
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = toDateStr(d);
+        if (dateStr < todayStr) continue;
+        await fetch("/api/booking/block-date", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block" }),
+        });
+      }
+      await fetchSlots();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to block range");
+    } finally {
+      setRangeLoading(false);
+    }
+  };
+
+  const unblockRange = async () => {
+    if (!selectedId || !rangeStart || !rangeEnd) return;
+    const start = new Date(rangeStart + "T00:00:00");
+    const end = new Date(rangeEnd + "T00:00:00");
+    if (start > end) {
+      setError("Start date must be before end date.");
+      return;
+    }
+    setRangeLoading(true);
+    setError(null);
+    try {
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = toDateStr(d);
+        await fetch("/api/booking/block-date", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "unblock" }),
+        });
+      }
+      await fetchSlots();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unblock range");
+    } finally {
+      setRangeLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
@@ -239,10 +338,9 @@ export default function AdminCalendarsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-brand-dark">Calendars</h1>
+        <h1 className="text-2xl font-bold text-brand-dark">Block dates</h1>
         <p className="mt-1 text-sm text-brand-muted">
-          Switch between listings and mark dates or time slots as booked elsewhere (e.g. GetMyBoat, Boatsetter) when
-          you get bookings from other sites. App bookings are marked automatically.
+          Click a date to block it (unavailable) or unblock it. Blocked dates won’t show as bookable. Use the range below to block or unblock multiple days at once.
         </p>
       </div>
 
@@ -273,8 +371,55 @@ export default function AdminCalendarsPage() {
 
       {selectedId && (
         <>
+          {/* Block / unblock date range */}
+          <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-4 sm:p-6">
+            <h2 className="text-lg font-semibold text-brand-dark mb-3">Block or unblock a date range</h2>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-brand-dark">From</span>
+                <input
+                  type="date"
+                  value={rangeStart}
+                  onChange={(e) => setRangeStart(e.target.value)}
+                  className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+                  aria-label="Range start date"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-brand-dark">To</span>
+                <input
+                  type="date"
+                  value={rangeEnd}
+                  onChange={(e) => setRangeEnd(e.target.value)}
+                  className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+                  aria-label="Range end date"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={blockRange}
+                disabled={rangeLoading || !rangeStart || !rangeEnd}
+                className="min-h-[40px]"
+              >
+                {rangeLoading ? "Saving…" : "Block range"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={unblockRange}
+                disabled={rangeLoading || !rangeStart || !rangeEnd}
+                className="min-h-[40px]"
+              >
+                {rangeLoading ? "Saving…" : "Unblock range"}
+              </Button>
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
-            {/* Sticky header: title + month nav (match reference calendar chrome) */}
+            {/* Sticky header: title + month nav */}
             <div className="sticky top-0 z-10 p-4 sm:p-6 border-b border-brand-dark/10 bg-white/95 backdrop-blur-sm flex flex-wrap items-center justify-between gap-4">
               <h2 className="text-xl font-semibold text-brand-dark">
                 {selectedExperience?.title ?? selectedExperience?.slug ?? selectedId}
@@ -309,10 +454,13 @@ export default function AdminCalendarsPage() {
             </div>
 
             <div className="p-4 sm:p-6 space-y-4">
-              {/* Legend: pill-style like reference */}
+              {/* Legend */}
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500" /> Open
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" /> Available (click to block)
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-dark/10 px-3 py-1 text-xs font-medium text-brand-muted">
+                  <span className="h-2 w-2 rounded-full bg-brand-muted" /> Blocked (click to unblock)
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
                   <span className="h-2 w-2 rounded-full bg-amber-500" /> Held
@@ -320,10 +468,8 @@ export default function AdminCalendarsPage() {
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800">
                   <span className="h-2 w-2 rounded-full bg-blue-500" /> Booked
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-dark/10 px-3 py-1 text-xs font-medium text-brand-muted">
-                  <span className="h-2 w-2 rounded-full bg-brand-muted" /> Booked elsewhere
-                </span>
               </div>
+              <p className="text-xs text-brand-muted">Click a date to block or unblock it. Days with existing bookings open the detail modal.</p>
 
               {slotsLoading ? (
                 <div className="grid min-h-[360px] place-items-center text-brand-muted">Loading slots…</div>
@@ -347,6 +493,9 @@ export default function AdminCalendarsPage() {
                         cell.dateStr === todayStr;
                       const visibleSlots = daySlots.slice(0, 4);
                       const moreCount = daySlots.length - 4;
+                      const isFullyBlocked = cell.blockedCount > 0 && cell.openCount === 0 && cell.heldCount === 0 && cell.bookedCount === 0;
+                      const isFullyOpen = cell.openCount > 0 && cell.blockedCount === 0 && cell.heldCount === 0 && cell.bookedCount === 0;
+                      const cellBusy = blocking === `date-${cell.dateStr}`;
                       const statusClass: Record<SlotStatus, string> = {
                         open: "bg-emerald-100 text-emerald-800 border-emerald-200",
                         held: "bg-amber-100 text-amber-800 border-amber-200",
@@ -357,23 +506,44 @@ export default function AdminCalendarsPage() {
                         <button
                           key={cell.dateStr + cell.day}
                           type="button"
-                          onClick={() => !isPast && openDayDetail(cell.dateStr)}
-                          disabled={isPast}
+                          onClick={() => !isPast && handleDateCellClick(cell)}
+                          disabled={isPast || cellBusy}
+                          title={
+                            isPast
+                              ? "Past date"
+                              : cellBusy
+                                ? "Saving…"
+                                : isFullyBlocked
+                                  ? "Click to unblock"
+                                  : isFullyOpen || !hasAny
+                                    ? "Click to block"
+                                    : "Click for options (has bookings)"
+                          }
                           className={cn(
-                            "h-[160px] flex flex-col rounded-xl border border-brand-dark/10 p-2 text-left transition-all duration-200 overflow-hidden",
-                            "bg-white hover:shadow-lg hover:ring-1 hover:ring-brand-primary/30 group cursor-pointer",
+                            "h-[160px] flex flex-col rounded-xl border p-2 text-left transition-all duration-200 overflow-hidden",
+                            "hover:shadow-lg hover:ring-1 hover:ring-brand-primary/30 group",
                             cell.isCurrentMonth ? "text-brand-dark" : "text-brand-muted/70",
-                            isPast && "cursor-not-allowed bg-brand-bg/30 opacity-75 hover:shadow-none hover:ring-0",
-                            isToday && !isPast && "ring-2 ring-brand-primary/40 bg-brand-primary/5"
+                            isPast && "cursor-not-allowed bg-brand-bg/30 opacity-75 hover:shadow-none hover:ring-0 border-brand-dark/10",
+                            !isPast && "cursor-pointer border-brand-dark/10 bg-white",
+                            isFullyBlocked && !isPast && "bg-brand-dark/10 border-brand-dark/20",
+                            isToday && !isPast && "ring-2 ring-brand-primary/40 bg-brand-primary/5",
+                            cellBusy && "opacity-70 pointer-events-none"
                           )}
                         >
-                          <div
-                            className={cn(
-                              "text-sm font-semibold mb-1 shrink-0",
-                              isToday ? "text-brand-primary" : "text-brand-dark"
+                          <div className="flex items-center justify-between mb-1 shrink-0">
+                            <span
+                              className={cn(
+                                "text-sm font-semibold",
+                                isToday ? "text-brand-primary" : "text-brand-dark"
+                              )}
+                            >
+                              {cell.day}
+                            </span>
+                            {!isPast && (isFullyBlocked || isFullyOpen || !hasAny) && (
+                              <span className="text-[10px] text-brand-muted opacity-0 group-hover:opacity-100 transition-opacity">
+                                {cellBusy ? "…" : isFullyBlocked ? "Unblock" : "Block"}
+                              </span>
                             )}
-                          >
-                            {cell.day}
                           </div>
                           <div className="flex flex-col gap-1 flex-1 overflow-hidden min-h-0">
                             {!hasAny ? (
@@ -386,10 +556,10 @@ export default function AdminCalendarsPage() {
                                     "rounded-lg border px-2 py-1 text-xs leading-tight shrink-0 truncate",
                                     statusClass[slot.status]
                                   )}
-                                  title={`${formatTime(slot.startAt)} – ${formatTime(slot.endAt)} · ${slot.status === "blocked" ? "Booked elsewhere" : slot.status}`}
+                                  title={`${formatTime(slot.startAt)} – ${formatTime(slot.endAt)} · ${slot.status === "blocked" ? "Blocked" : slot.status}`}
                                 >
                                   <span className="font-medium">{formatTime(slot.startAt)}</span>
-                                  <span className="opacity-90"> · {slot.status === "blocked" ? "Booked elsewhere" : slot.status}</span>
+                                  <span className="opacity-90"> · {slot.status === "blocked" ? "Blocked" : slot.status}</span>
                                 </div>
                               ))
                             )}
@@ -403,7 +573,6 @@ export default function AdminCalendarsPage() {
                       );
                     })}
                   </div>
-                  <p className="text-xs text-brand-muted">Click a day to mark the whole day or individual slots as booked elsewhere.</p>
                 </>
               )}
             </div>
@@ -411,21 +580,38 @@ export default function AdminCalendarsPage() {
         </>
       )}
 
-      {/* Day detail modal: list slots, mark day/slot as booked elsewhere (for open only) */}
+      {/* Day detail modal: list slots, block/unblock day or individual slots */}
       <Dialog open={dayDetailOpen} onOpenChange={setDayDetailOpen} title={selectedDate ? `Slots for ${selectedDate}` : undefined}>
         <div className="space-y-4">
           {selectedDate && (
             <>
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => blockDate(selectedDate)}
-                  disabled={!!blocking}
-                  className="rounded-lg bg-brand-dark px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark/90 disabled:opacity-50"
-                >
-                  {blocking === `date-${selectedDate}` ? "Saving…" : "Mark entire day as booked elsewhere"}
-                </button>
-                <span className="text-xs text-brand-muted">Marks all time slots on this date as booked on another site (e.g. GetMyBoat, Boatsetter).</span>
+                {selectedDateSlots.some((s) => s.status === "open") && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => blockDate(selectedDate)}
+                      disabled={!!blocking}
+                      className="rounded-lg bg-brand-dark px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark/90 disabled:opacity-50"
+                    >
+                      {blocking === `date-${selectedDate}` ? "Saving…" : "Block entire day"}
+                    </button>
+                    <span className="text-xs text-brand-muted">Makes this date unavailable for booking.</span>
+                  </>
+                )}
+                {selectedDateSlots.length > 0 && selectedDateSlots.every((s) => s.status === "blocked") && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => unblockDate(selectedDate)}
+                      disabled={!!blocking}
+                      className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-primary/90 disabled:opacity-50"
+                    >
+                      {blocking === `date-${selectedDate}` ? "Saving…" : "Unblock entire day"}
+                    </button>
+                    <span className="text-xs text-brand-muted">Makes this date available for booking again.</span>
+                  </>
+                )}
               </div>
               <div className="max-h-[50vh] overflow-y-auto border-t border-brand-dark/10 pt-4">
                 <p className="mb-2 text-xs font-medium text-brand-muted">Slots on this day</p>
@@ -450,7 +636,7 @@ export default function AdminCalendarsPage() {
                             {formatTime(slot.startAt)} – {formatTime(slot.endAt)}
                             {duration && ` (${duration})`} ·{" "}
                             <span className="font-medium capitalize">
-                              {slot.status === "blocked" ? "Booked elsewhere" : slot.status}
+                              {slot.status === "blocked" ? "Blocked" : slot.status}
                             </span>
                           </span>
                           {slot.status === "held" && slot.expiresAt && (
@@ -466,7 +652,7 @@ export default function AdminCalendarsPage() {
                             disabled={!!blocking}
                             className="rounded bg-brand-dark px-2 py-1 text-xs font-medium text-white hover:bg-brand-dark/90 disabled:opacity-50"
                           >
-                            {blocking === slot.id ? "Saving…" : "Mark as booked elsewhere"}
+                            {blocking === slot.id ? "Saving…" : "Block this slot"}
                           </button>
                         )}
                       </li>

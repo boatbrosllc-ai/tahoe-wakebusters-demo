@@ -3,23 +3,23 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import type { ListingBoat, BoatRate } from "@/lib/booking/types";
+import { PhotoUploader } from "@/components/admin/PhotoUploader";
 
 const inputClass =
   "mt-1 block w-full min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0 sm:py-2";
 const textareaClass =
   "mt-1 block w-full rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary";
 
-type RateRow = { durationHours: number; displayName: string; priceCents: number };
+const BOAT_TYPES = [{ value: "pontoon", label: "Pontoon" }, { value: "wake", label: "Wake boat" }, { value: "tritoon", label: "Tritoon" }] as const;
 
 export type BoatFormData = {
   name: string;
   slug: string;
   description: string;
+  boatType: string;
   photos: string[];
   active: boolean;
   experienceIds: string[];
-  rates: RateRow[];
 };
 
 type ExperienceOption = { id: string; slug: string; title: string; active: boolean };
@@ -29,31 +29,24 @@ function getDefaultFormData(): BoatFormData {
     name: "",
     slug: "",
     description: "",
+    boatType: "",
     photos: [],
     active: true,
     experienceIds: [],
-    rates: [],
   };
 }
 
 function dataFromApi(api: Record<string, unknown>): BoatFormData {
   const photos = Array.isArray(api.photos) ? api.photos.filter((x): x is string => typeof x === "string") : [];
   const experienceIds = Array.isArray(api.experienceIds) ? api.experienceIds.filter((x): x is string => typeof x === "string") : [];
-  const rates = Array.isArray(api.rates)
-    ? (api.rates as { id?: string; durationHours?: number; displayName?: string; priceCents?: number }[]).map((r) => ({
-        durationHours: typeof r.durationHours === "number" ? r.durationHours : 0,
-        displayName: typeof r.displayName === "string" ? r.displayName : "",
-        priceCents: typeof r.priceCents === "number" ? r.priceCents : 0,
-      }))
-    : [];
   return {
     name: typeof api.name === "string" ? api.name : "",
     slug: typeof api.slug === "string" ? api.slug : "",
     description: typeof api.description === "string" ? api.description : "",
+    boatType: typeof api.boatType === "string" ? api.boatType : "",
     photos,
     active: api.active !== false,
     experienceIds,
-    rates,
   };
 }
 
@@ -62,10 +55,10 @@ function formDataToBody(d: BoatFormData): Record<string, unknown> {
     name: d.name,
     slug: d.slug || undefined,
     description: d.description || undefined,
+    boatType: d.boatType || undefined,
     photos: d.photos,
     active: d.active,
     experienceIds: d.experienceIds,
-    rates: d.rates,
   };
 }
 
@@ -100,38 +93,12 @@ export function BoatForm({
     setData((prev) => ({ ...prev, [key]: value }));
   };
 
-  const addPhoto = () => setData((prev) => ({ ...prev, photos: [...prev.photos, ""] }));
-  const removePhoto = (i: number) => setData((prev) => ({ ...prev, photos: prev.photos.filter((_, idx) => idx !== i) }));
-  const setPhoto = (i: number, value: string) => {
-    setData((prev) => ({
-      ...prev,
-      photos: prev.photos.map((v, idx) => (idx === i ? value : v)),
-    }));
-  };
-
   const toggleExperience = (expId: string) => {
     setData((prev) =>
       prev.experienceIds.includes(expId)
         ? { ...prev, experienceIds: prev.experienceIds.filter((id) => id !== expId) }
         : { ...prev, experienceIds: [...prev.experienceIds, expId] }
     );
-  };
-
-  const addRate = () => setData((prev) => ({ ...prev, rates: [...prev.rates, { durationHours: 3, displayName: "", priceCents: 0 }] }));
-  const removeRate = (i: number) => setData((prev) => ({ ...prev, rates: prev.rates.filter((_, idx) => idx !== i) }));
-  const setRate = (i: number, field: keyof RateRow, value: number | string) => {
-    setData((prev) => ({
-      ...prev,
-      rates: prev.rates.map((r, idx) =>
-        idx === i ? { ...r, [field]: value } : r
-      ),
-    }));
-  };
-  const setRateNum = (i: number, field: "durationHours" | "priceCents", value: number) => {
-    setData((prev) => ({
-      ...prev,
-      rates: prev.rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)),
-    }));
   };
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -176,6 +143,15 @@ export function BoatForm({
           <input id="boat-slug" className={inputClass} value={data.slug} onChange={(e) => update("slug", e.target.value)} placeholder="party-pontoon-a" />
         </div>
         <div>
+          <label className="block text-sm font-medium text-brand-dark" htmlFor="boat-type">Boat type (optional)</label>
+          <select id="boat-type" className={inputClass} value={data.boatType} onChange={(e) => update("boatType", e.target.value)} aria-label="Boat type">
+            <option value="">—</option>
+            {BOAT_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="boat-desc">Description</label>
           <textarea id="boat-desc" className={textareaClass} rows={3} value={data.description} onChange={(e) => update("description", e.target.value)} placeholder="Short description for the boat" />
         </div>
@@ -187,19 +163,19 @@ export function BoatForm({
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Photos</h2>
-        <p className="text-sm text-brand-muted">Photo URLs (one per line or add multiple). First photo is used as the main image in the boat picker.</p>
-        {data.photos.map((url, i) => (
-          <div key={i} className="flex gap-2">
-            <input className={inputClass} value={url} onChange={(e) => setPhoto(i, e.target.value)} placeholder="/photos/boat1.webp or https://..." aria-label={`Photo URL ${i + 1}`} />
-            <Button type="button" variant="ghost" size="icon" onClick={() => removePhoto(i)} aria-label={`Remove photo ${i + 1}`}>−</Button>
-          </div>
-        ))}
-        <Button type="button" variant="outline" size="sm" onClick={addPhoto}>Add photo URL</Button>
+        <p className="text-sm text-brand-muted">Upload images or paste URLs. First photo is the main image in the boat picker.</p>
+        <PhotoUploader
+          value={data.photos}
+          onChange={(urls) => setData((prev) => ({ ...prev, photos: urls }))}
+          maxPhotos={20}
+          listPrefix="boats/"
+          reorderable
+        />
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Assign to listings</h2>
-        <p className="text-sm text-brand-muted">Select which experiences (listings) this boat appears in. Users will choose this boat when booking that experience.</p>
+        <p className="text-sm text-brand-muted">Select which experiences (listings) this boat appears in. Users will choose this boat when booking that experience. Pricing is set on each listing.</p>
         <div className="space-y-2">
           {experiences.length === 0 && <p className="text-sm text-brand-muted">No listings yet. Create experiences first.</p>}
           {experiences.map((exp) => (
@@ -216,20 +192,6 @@ export function BoatForm({
             </label>
           ))}
         </div>
-      </section>
-
-      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Pricing (rates)</h2>
-        <p className="text-sm text-brand-muted">Rates for this boat. When a user selects this boat for an experience, this pricing is used.</p>
-        {data.rates.map((r, i) => (
-          <div key={i} className="flex flex-wrap gap-2 items-center">
-            <input type="number" min={0} step={0.5} className={`${inputClass} w-24`} placeholder="Hours" value={r.durationHours || ""} onChange={(e) => setRateNum(i, "durationHours", parseFloat(e.target.value) || 0)} />
-            <input className={`${inputClass} flex-1 min-w-[120px]`} placeholder="Display name" value={r.displayName} onChange={(e) => setRate(i, "displayName", e.target.value)} />
-            <input type="number" min={0} className={`${inputClass} w-28`} placeholder="Price cents" value={r.priceCents || ""} onChange={(e) => setRateNum(i, "priceCents", parseInt(e.target.value, 10) || 0)} />
-            <Button type="button" variant="ghost" size="icon" onClick={() => removeRate(i)}>−</Button>
-          </div>
-        ))}
-        <Button type="button" variant="outline" size="sm" onClick={addRate}>Add rate</Button>
       </section>
 
       <div className="flex gap-3">

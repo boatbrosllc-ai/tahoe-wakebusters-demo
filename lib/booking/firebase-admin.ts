@@ -58,20 +58,28 @@ export function getFirebaseApp(): import("firebase-admin").app.App {
   try {
     const serviceAccountPath = bookingEnv.firebaseServiceAccountPath;
     const pathMod = require("path") as typeof import("path");
-    const credential =
-      serviceAccountPath != null
-        ? admin.credential.cert(
-            pathMod.isAbsolute(serviceAccountPath) ? serviceAccountPath : pathMod.join(process.cwd(), serviceAccountPath)
-          )
-        : admin.credential.cert({
-            projectId: bookingEnv.firebaseProjectId,
-            clientEmail: bookingEnv.firebaseClientEmail,
-            privateKey: bookingEnv.firebasePrivateKey,
-          });
-    _app = admin.initializeApp({ credential });
-    // #region agent log
-    log("getFirebaseApp initializeApp ok", { hypothesisId: "H3" });
-    // #endregion
+    let projectId = bookingEnv.firebaseProjectId;
+    let credential: import("firebase-admin").credential.Credential;
+    if (serviceAccountPath != null) {
+      const resolvedPath = pathMod.isAbsolute(serviceAccountPath) ? serviceAccountPath : pathMod.join(process.cwd(), serviceAccountPath);
+      const fs = require("fs") as typeof import("fs");
+      const json = JSON.parse(fs.readFileSync(resolvedPath, "utf8")) as { project_id?: string; client_email?: string; private_key?: string };
+      if (!projectId && json.project_id) projectId = json.project_id;
+      credential = admin.credential.cert(json as import("firebase-admin").ServiceAccount);
+    } else {
+      credential = admin.credential.cert({
+        projectId: bookingEnv.firebaseProjectId,
+        clientEmail: bookingEnv.firebaseClientEmail,
+        privateKey: bookingEnv.firebasePrivateKey,
+      });
+    }
+    const storageBucket =
+      bookingEnv.firebaseStorageBucket ||
+      (projectId ? `${projectId}.appspot.com` : undefined);
+    _app = admin.initializeApp({
+      credential,
+      storageBucket,
+    });
     return _app;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -84,6 +92,18 @@ export function getFirebaseApp(): import("firebase-admin").app.App {
 
 export function getDb(): import("firebase-admin").firestore.Firestore {
   return getFirebaseApp().firestore();
+}
+
+/** Firebase Storage bucket for uploads (e.g. boat photos). Uses FIREBASE_STORAGE_BUCKET at call time so .env changes apply without restart. */
+export function getStorageBucket() {
+  const app = getFirebaseApp();
+  const fromEnv = bookingEnv.firebaseStorageBucket;
+  const projectId = bookingEnv.firebaseProjectId;
+  const bucketName =
+    fromEnv ||
+    (projectId ? `${projectId}.firebasestorage.app` : undefined) ||
+    (projectId ? `${projectId}.appspot.com` : undefined);
+  return app.storage().bucket(bucketName ?? undefined);
 }
 
 /** Use getFirestoreExports().FieldValue and .Timestamp in API routes. */

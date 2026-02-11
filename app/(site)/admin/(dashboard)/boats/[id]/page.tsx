@@ -71,7 +71,7 @@ export default function EditBoatPage() {
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Edit boat</h1>
-        <p className="mt-1 text-sm text-brand-muted">Update boat details, photos, pricing, and which listings it appears in.</p>
+        <p className="mt-1 text-sm text-brand-muted">Update boat details, photos, and which listings it appears in. Pricing is set on each listing.</p>
       </div>
       <BoatForm
         initialData={initialData}

@@ -23,7 +23,7 @@ export default function NewBoatPage() {
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Add boat</h1>
-        <p className="mt-1 text-sm text-brand-muted">Create a boat with photos and pricing, then assign it to one or more listings. Users will select this boat when booking that experience.</p>
+        <p className="mt-1 text-sm text-brand-muted">Create a boat (photos and charter durations), then assign it to one or more listings. Pricing is set on each listing.</p>
       </div>
       <BoatForm
         initialData={getDefaultBoatFormData()}

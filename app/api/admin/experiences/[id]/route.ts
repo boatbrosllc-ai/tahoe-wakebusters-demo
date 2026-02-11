@@ -44,6 +44,9 @@ function parseBody(
   defaultRateId: string;
   bookingPosition: "sidebar" | "inline" | "modal";
   galleryAltTexts: string[];
+  holidayDates: { label?: string; start: string; end: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<number, number> }[];
+  weekendDays: number[];
+  sortOrder: number;
 }> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -104,7 +107,31 @@ function parseBody(
         durationHours: typeof x.durationHours === "number" ? x.durationHours : 0,
         displayName: typeof x.displayName === "string" ? x.displayName : "",
         priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
+        priceWeekendCents: typeof x.priceWeekendCents === "number" ? x.priceWeekendCents : undefined,
+        priceHolidayCents: typeof x.priceHolidayCents === "number" ? x.priceHolidayCents : undefined,
       }));
+  }
+  if (Array.isArray(b.holidayDates)) {
+    out.holidayDates = (b.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<string, number> }[])
+      .filter((x) => x != null && typeof x === "object" && (typeof (x as { start?: string }).start === "string" || typeof (x as { end?: string }).end === "string"))
+      .map((x) => {
+        const byDur = x.priceCentsByDuration && typeof x.priceCentsByDuration === "object"
+          ? Object.fromEntries(
+              Object.entries(x.priceCentsByDuration).filter(
+                ([k, v]) => Number.isFinite(Number(k)) && typeof v === "number" && v >= 0
+              ).map(([k, v]) => [Number(k), v] as [number, number])
+            ) as Record<number, number>
+          : undefined;
+        const priceCentsByDuration = byDur && Object.keys(byDur).length > 0 ? byDur : undefined;
+        return {
+          label: typeof x.label === "string" ? x.label : undefined,
+          start: typeof x.start === "string" ? x.start : "",
+          end: typeof x.end === "string" ? x.end : "",
+          recurring: (x as { recurring?: boolean }).recurring === true,
+          priceCents: typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined,
+          ...(priceCentsByDuration && { priceCentsByDuration }),
+        };
+      });
   }
   if (Array.isArray(b.addons)) {
     out.addons = b.addons
@@ -115,6 +142,7 @@ function parseBody(
         priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
         type: (x.type === "quantity" || x.type === "tip" ? x.type : "toggle") as "toggle" | "quantity" | "tip",
         maxQty: typeof x.maxQty === "number" ? x.maxQty : undefined,
+        highlight: x.highlight === true,
       }));
   }
   if (typeof b.heroOverlayText === "string") out.heroOverlayText = b.heroOverlayText.trim();
@@ -138,6 +166,11 @@ function parseBody(
   if (typeof b.defaultRateId === "string") out.defaultRateId = b.defaultRateId.trim();
   if (b.bookingPosition === "sidebar" || b.bookingPosition === "inline" || b.bookingPosition === "modal") out.bookingPosition = b.bookingPosition;
   if (Array.isArray(b.galleryAltTexts)) out.galleryAltTexts = b.galleryAltTexts.filter((x): x is string => typeof x === "string");
+  if (Array.isArray(b.weekendDays)) {
+    const arr = (b.weekendDays as unknown[]).filter((x): x is number => typeof x === "number" && x >= 0 && x <= 6);
+    if (arr.length > 0) out.weekendDays = Array.from(new Set(arr)).sort((a, b) => a - b);
+  }
+  if (typeof b.sortOrder === "number") out.sortOrder = b.sortOrder;
   return Object.keys(out).length ? out : null;
 }
 

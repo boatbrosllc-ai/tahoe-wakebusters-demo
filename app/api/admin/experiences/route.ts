@@ -12,7 +12,7 @@ import type {
 
 function parseBody(
   body: unknown
-): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[] } | null {
+): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[] } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const slug = typeof b.slug === "string" ? b.slug.trim() : "";
@@ -64,7 +64,31 @@ function parseBody(
           durationHours: typeof x.durationHours === "number" ? x.durationHours : 0,
           displayName: typeof x.displayName === "string" ? x.displayName : "",
           priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
+          priceWeekendCents: typeof x.priceWeekendCents === "number" ? x.priceWeekendCents : undefined,
+          priceHolidayCents: typeof x.priceHolidayCents === "number" ? x.priceHolidayCents : undefined,
         }))
+    : undefined;
+  const holidayDates = Array.isArray(b.holidayDates)
+    ? (b.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<string, number> }[])
+        .filter((x) => x != null && typeof x === "object" && (typeof (x as { start?: string }).start === "string" || typeof (x as { end?: string }).end === "string"))
+        .map((x) => {
+          const byDur = x.priceCentsByDuration && typeof x.priceCentsByDuration === "object"
+            ? Object.fromEntries(
+                Object.entries(x.priceCentsByDuration).filter(
+                  ([k, v]) => Number.isFinite(Number(k)) && typeof v === "number" && v >= 0
+                ).map(([k, v]) => [Number(k), v] as [number, number])
+              ) as Record<number, number>
+            : undefined;
+          const priceCentsByDuration = byDur && Object.keys(byDur).length > 0 ? byDur : undefined;
+          return {
+            label: typeof x.label === "string" ? x.label : undefined,
+            start: typeof x.start === "string" ? x.start : "",
+            end: typeof x.end === "string" ? x.end : "",
+            recurring: (x as { recurring?: boolean }).recurring === true,
+            priceCents: typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined,
+            ...(priceCentsByDuration && { priceCentsByDuration }),
+          };
+        })
     : undefined;
   const addons = Array.isArray(b.addons)
     ? b.addons
@@ -75,6 +99,7 @@ function parseBody(
           priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
           type: (x.type === "quantity" || x.type === "tip" ? x.type : "toggle") as "toggle" | "quantity" | "tip",
           maxQty: typeof x.maxQty === "number" ? x.maxQty : undefined,
+          highlight: x.highlight === true,
         }))
     : undefined;
   const heroOverlayText = typeof b.heroOverlayText === "string" ? b.heroOverlayText.trim() || undefined : undefined;
@@ -130,6 +155,7 @@ function parseBody(
     defaultRateId,
     bookingPosition,
     galleryAltTexts,
+    holidayDates,
   };
 }
 
@@ -149,7 +175,14 @@ export async function GET(request: NextRequest) {
         title: data.title ?? "",
         active: data.active === true,
         heroUrl: typeof heroMedia === "string" ? heroMedia : undefined,
+        sortOrder: typeof data.sortOrder === "number" ? data.sortOrder : undefined,
       };
+    });
+    list.sort((a, b) => {
+      const orderA = a.sortOrder ?? 999;
+      const orderB = b.sortOrder ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.title ?? "").localeCompare(b.title ?? "");
     });
     return NextResponse.json(list);
   } catch (err) {
@@ -212,6 +245,7 @@ export async function POST(request: NextRequest) {
       ...(parsed.defaultRateId != null && { defaultRateId: parsed.defaultRateId }),
       ...(parsed.bookingPosition != null && { bookingPosition: parsed.bookingPosition }),
       ...(parsed.galleryAltTexts != null && parsed.galleryAltTexts.length > 0 && { galleryAltTexts: parsed.galleryAltTexts }),
+      ...(parsed.holidayDates != null && parsed.holidayDates.length > 0 && { holidayDates: parsed.holidayDates }),
     };
     const ref = db.collection("experiences").doc();
     await ref.set(exp);

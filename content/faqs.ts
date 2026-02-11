@@ -13,13 +13,13 @@ export const faqs: FaqItem[] = [
     id: "what-included",
     question: "What's included in the rental?",
     answer:
-      "Boat, fuel for the rental period, life vests (all sizes), and basic safety gear. Cooler and Bluetooth stereo on pontoons. Optional add-ons: captain, tubes, wake gear.",
+      "Boat, fuel for the rental period, life vests (all sizes), a captain, and basic safety gear. Cooler and Bluetooth stereo on pontoons. Optional add-ons: tubes, wake gear.",
   },
   {
     id: "need-license",
     question: "Do I need a boating license?",
     answer:
-      "In Texas, you don't need a license to operate a rental boat for recreational use. We'll give you a brief orientation before you head out. If you prefer not to drive, book a captain.",
+      "In Texas, you don't need a license for recreational boating. Every charter includes a licensed captain who handles the boat so you can relax and enjoy the day.",
   },
   {
     id: "cancel-reschedule",

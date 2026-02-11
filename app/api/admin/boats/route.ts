@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
-import type { ListingBoat, BoatRate } from "@/lib/booking/types";
+import type { ListingBoat } from "@/lib/booking/types";
 
-type RateInput = { durationHours: number; displayName: string; priceCents: number };
-
-function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boolean } & { rates?: RateInput[] }) | null {
+function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boolean }) | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const name = typeof b.name === "string" ? b.name.trim() : "";
@@ -17,15 +15,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   const slug = typeof b.slug === "string" ? b.slug.trim() || undefined : undefined;
   const description = typeof b.description === "string" ? b.description.trim() || undefined : undefined;
   const active = typeof b.active === "boolean" ? b.active : true;
-  const rates = Array.isArray(b.rates)
-    ? (b.rates as Record<string, unknown>[])
-        .filter((x) => x != null && typeof x === "object")
-        .map((x) => ({
-          durationHours: typeof x.durationHours === "number" ? x.durationHours : 0,
-          displayName: typeof x.displayName === "string" ? x.displayName : "",
-          priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
-        }))
-    : undefined;
+  const boatType = typeof b.boatType === "string" ? b.boatType.trim() || undefined : undefined;
   return {
     name,
     slug,
@@ -34,7 +24,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
     active,
     experienceIds,
     isListingBoat: true as const,
-    rates,
+    ...(boatType && { boatType }),
   };
 }
 
@@ -74,24 +64,16 @@ export async function POST(request: NextRequest) {
   }
   const parsed = parseBody(body);
   if (!parsed) {
-    return NextResponse.json({ error: "name and photos/experienceIds required" }, { status: 400 });
+    return NextResponse.json({ error: "name required" }, { status: 400 });
   }
-
-  const { rates, ...boatFields } = parsed;
 
   try {
     const db = getDb();
     const boatRef = db.collection("boats").doc();
     await boatRef.set({
-      ...boatFields,
+      ...parsed,
       isListingBoat: true,
     });
-    if (Array.isArray(rates) && rates.length > 0) {
-      const ratesRef = boatRef.collection("rates");
-      for (const r of rates) {
-        await ratesRef.doc().set({ ...r, active: true } as BoatRate);
-      }
-    }
     return NextResponse.json({ id: boatRef.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

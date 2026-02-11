@@ -1,10 +1,10 @@
 /**
  * GET /api/booking/boats?experienceId=... — list boats assigned to an experience (for booking flow).
- * Returns listing boats with their rates (fromPriceCents) for the picker.
+ * Boats are for availability only (e.g. which pontoon). Rates and pricing come from the experience (listing).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import type { ListingBoat, BoatRate } from "@/lib/booking/types";
+import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 export interface BoatOption {
   id: string;
@@ -24,6 +24,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
+    const expDoc = await db.collection("experiences").doc(experienceId).get();
+    if (!expDoc.exists) {
+      return NextResponse.json({ error: "Experience not found" }, { status: 404 });
+    }
+    const expRatesSnap = await db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get();
+    const experienceRates = expRatesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string } & ExperienceRate));
+    const ratesForBoats = experienceRates
+      .filter((r) => typeof r.priceCents === "number")
+      .map((r) => ({ id: r.id, durationHours: r.durationHours, displayName: r.displayName, priceCents: r.priceCents }));
+
+    let fromPriceCents: number | null = null;
+    ratesForBoats.forEach((r) => {
+      if (fromPriceCents == null || r.priceCents < fromPriceCents) fromPriceCents = r.priceCents;
+    });
+
     const snap = await db
       .collection("boats")
       .where("isListingBoat", "==", true)
@@ -31,28 +46,18 @@ export async function GET(request: NextRequest) {
       .where("experienceIds", "array-contains", experienceId)
       .get();
 
-    const boats: BoatOption[] = [];
-    for (const doc of snap.docs) {
+    const boats: BoatOption[] = snap.docs.map((doc) => {
       const boat = doc.data() as ListingBoat;
-      const ratesSnap = await db.collection("boats").doc(doc.id).collection("rates").where("active", "==", true).get();
-      const rates = ratesSnap.docs.map((r) => {
-        const d = r.data() as BoatRate;
-        return { id: r.id, durationHours: d.durationHours, displayName: d.displayName, priceCents: d.priceCents };
-      });
-      let fromPriceCents: number | null = null;
-      rates.forEach((r) => {
-        if (fromPriceCents == null || r.priceCents < fromPriceCents) fromPriceCents = r.priceCents;
-      });
-      boats.push({
+      return {
         id: doc.id,
         name: boat.name,
         slug: boat.slug,
         description: boat.description,
         photos: boat.photos ?? [],
         fromPriceCents,
-        rates,
-      });
-    }
+        rates: ratesForBoats,
+      };
+    });
     return NextResponse.json({ boats });
   } catch (err) {
     console.error("[booking/boats]", err);

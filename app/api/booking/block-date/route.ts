@@ -1,6 +1,7 @@
 /**
- * Block all slots for a date (admin). Creates/updates slot docs for that date.
- * POST body: { experienceId, date: "YYYY-MM-DD" }
+ * Block or unblock all slots for a date (admin).
+ * POST body: { experienceId, date: "YYYY-MM-DD", action?: "block" | "unblock" }
+ * Default action is "block". Unblock deletes slot docs so the date becomes available again.
  * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
  */
 
@@ -29,11 +30,37 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const experienceId = typeof body?.experienceId === "string" ? body.experienceId : null;
     const dateStr = typeof body?.date === "string" ? body.date : null;
+    const action = body?.action === "unblock" ? "unblock" : "block";
     if (!experienceId || !dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       return NextResponse.json({ error: "experienceId and date (YYYY-MM-DD) required" }, { status: 400 });
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
+    const slotsRef = db.collection("experiences").doc(experienceId).collection("slots");
+
+    if (action === "unblock") {
+      const dayStart = new Date(dateStr + "T00:00:00");
+      const dayEnd = new Date(dateStr + "T23:59:59.999");
+      const snap = await slotsRef
+        .where("startAt", ">=", Timestamp.fromDate(dayStart))
+        .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+        .get();
+      const BATCH_SIZE = 500;
+      let batch = db.batch();
+      let batchCount = 0;
+      for (const doc of snap.docs) {
+        batch.delete(doc.ref);
+        batchCount++;
+        if (batchCount >= BATCH_SIZE) {
+          await batch.commit();
+          batch = db.batch();
+          batchCount = 0;
+        }
+      }
+      if (batchCount > 0) await batch.commit();
+      return NextResponse.json({ ok: true, date: dateStr, action: "unblock", slotsUnblocked: snap.size });
+    }
+
     const ratesSnap = await db
       .collection("experiences")
       .doc(experienceId)
@@ -44,7 +71,6 @@ export async function POST(request: NextRequest) {
     if (durations.length === 0) {
       return NextResponse.json({ error: "Experience has no rates" }, { status: 400 });
     }
-    const slotsRef = db.collection("experiences").doc(experienceId).collection("slots");
     const BATCH_SIZE = 500;
     let batch = db.batch();
     let batchCount = 0;

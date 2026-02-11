@@ -39,12 +39,12 @@ const BOATS = [
 ];
 
 const RATES = [
-  { durationHours: 3, basePriceCents: 45000, displayName: "Three Hour Charter", active: true },
-  { durationHours: 4, basePriceCents: 60000, displayName: "Four Hour Charter", active: true },
-  { durationHours: 5, basePriceCents: 75000, displayName: "Five Hour Charter", active: true },
-  { durationHours: 6, basePriceCents: 90000, displayName: "Six Hour Charter", active: true },
-  { durationHours: 7, basePriceCents: 105000, displayName: "Seven Hour Charter", active: true },
-  { durationHours: 8, basePriceCents: 120000, displayName: "Eight Hour Charter", active: true },
+  { durationHours: 3, displayName: "Three Hour Charter", active: true },
+  { durationHours: 4, displayName: "Four Hour Charter", active: true },
+  { durationHours: 5, displayName: "Five Hour Charter", active: true },
+  { durationHours: 6, displayName: "Six Hour Charter", active: true },
+  { durationHours: 7, displayName: "Seven Hour Charter", active: true },
+  { durationHours: 8, displayName: "Eight Hour Charter", active: true },
 ];
 
 const ADDONS = [

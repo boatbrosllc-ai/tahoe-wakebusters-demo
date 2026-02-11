@@ -5,8 +5,24 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { List, CalendarDays } from "lucide-react";
+import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+type StripeEventItem = {
+  id: string;
+  eventType: string | null;
+  receivedAt: string | null;
+  processedAt: string | null;
+  status: string | null;
+  error: string | null;
+  outcome: string | null;
+  bookingId: string | null;
+  holdId: string | null;
+  sessionId: string | null;
+  paymentIntentId: string | null;
+  amountTotal: number | null;
+  currency: string | null;
+};
 
 type BookingItem = {
   id: string;
@@ -33,6 +49,9 @@ export default function AdminBookingsPage() {
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [selectedBooking, setSelectedBooking] = useState<BookingItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [webhookEventsOpen, setWebhookEventsOpen] = useState(false);
+  const [webhookEvents, setWebhookEvents] = useState<StripeEventItem[]>([]);
+  const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -62,6 +81,17 @@ export default function AdminBookingsPage() {
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setLoading(false));
   }, [buildParams]);
+
+  useEffect(() => {
+    if (!webhookEventsOpen) return;
+    setWebhookEventsLoading(true);
+    fetch("/api/admin/stripe-events?limit=50", { credentials: "include" })
+      .then((res) => res.json())
+      .then((data) => (Array.isArray(data) ? data : []))
+      .then(setWebhookEvents)
+      .catch(() => setWebhookEvents([]))
+      .finally(() => setWebhookEventsLoading(false));
+  }, [webhookEventsOpen]);
 
   function exportCsv() {
     const headers = ["Date", "Experience", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
@@ -119,105 +149,117 @@ export default function AdminBookingsPage() {
     endTime: b.endTime ?? null,
   }));
 
+  const inputClass =
+    "rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary min-h-[40px] sm:min-h-[36px]";
+
   return (
     <div className="space-y-6 sm:space-y-8">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4 sm:mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Bookings</h1>
-          <p className="mt-1 text-sm text-brand-muted">Upcoming and past reservations.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-          {/* List / Calendar view toggle */}
-          <div className="flex rounded-lg p-1 bg-brand-bg/50 border border-brand-dark/15">
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                viewMode === "list"
-                  ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
-                  : "text-brand-muted hover:text-brand-dark"
-              )}
-            >
-              <List className="w-4 h-4" />
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("calendar")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                viewMode === "calendar"
-                  ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
-                  : "text-brand-muted hover:text-brand-dark"
-              )}
-            >
-              <CalendarDays className="w-4 h-4" />
-              Calendar
-            </button>
+      <div className="mb-6 sm:mb-8">
+        <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Bookings</h1>
+        <p className="mt-1 text-sm text-brand-muted">Upcoming and past reservations.</p>
+      </div>
+
+      {/* Filters */}
+      <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6">
+        <div className="flex flex-wrap items-end gap-4 sm:gap-6">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-brand-dark">View</span>
+            <div className="flex rounded-lg p-0.5 bg-brand-bg/50 border border-brand-dark/15">
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                  viewMode === "list"
+                    ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
+                    : "text-brand-muted hover:text-brand-dark"
+                )}
+              >
+                <List className="w-4 h-4" />
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("calendar")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                  viewMode === "calendar"
+                    ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
+                    : "text-brand-muted hover:text-brand-dark"
+                )}
+              >
+                <CalendarDays className="w-4 h-4" />
+                Calendar
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+          <div className="flex flex-wrap items-end gap-3 sm:gap-4">
+            <label htmlFor="status" className="text-sm font-medium text-brand-dark">Status</label>
+            <select
+              id="status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">All</option>
+              <option value="paid">Paid</option>
+              <option value="canceled">Canceled</option>
+              <option value="refunded">Refunded</option>
+            </select>
+          </div>
+          <div className="border-l border-brand-dark/15 pl-4 sm:pl-6 flex flex-wrap items-end gap-3 sm:gap-4">
+            <span className="text-xs font-medium text-brand-muted uppercase tracking-wide w-full sm:w-auto">Booking date</span>
             <div className="flex items-center gap-2">
-              <label htmlFor="from" className="text-sm font-medium text-brand-dark">From</label>
+              <label htmlFor="from" className="text-sm text-brand-muted sr-only sm:not-sr-only sm:whitespace-nowrap">From</label>
               <input
                 id="from"
                 type="date"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0"
+                className={inputClass}
+                aria-label="Filter from date (booking created)"
               />
             </div>
             <div className="flex items-center gap-2">
-              <label htmlFor="to" className="text-sm font-medium text-brand-dark">To</label>
+              <label htmlFor="to" className="text-sm text-brand-muted sr-only sm:not-sr-only sm:whitespace-nowrap">To</label>
               <input
                 id="to"
                 type="date"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0"
+                className={inputClass}
+                aria-label="Filter to date (booking created)"
               />
             </div>
-            <span className="text-xs text-brand-muted hidden sm:inline">Booking date</span>
+          </div>
+          <div className="border-l border-brand-dark/15 pl-4 sm:pl-6 flex flex-wrap items-end gap-3 sm:gap-4">
+            <span className="text-xs font-medium text-brand-muted uppercase tracking-wide w-full sm:w-auto">Trip date</span>
             <div className="flex items-center gap-2">
-              <label htmlFor="fromTrip" className="text-sm font-medium text-brand-dark">Trip from</label>
+              <label htmlFor="fromTrip" className="text-sm text-brand-muted sr-only sm:not-sr-only sm:whitespace-nowrap">From</label>
               <input
                 id="fromTrip"
                 type="date"
                 value={fromTripDate}
                 onChange={(e) => setFromTripDate(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0"
-                title="Filter by trip date"
+                className={inputClass}
+                aria-label="Filter from date (trip start)"
               />
             </div>
             <div className="flex items-center gap-2">
-              <label htmlFor="toTrip" className="text-sm font-medium text-brand-dark">Trip to</label>
+              <label htmlFor="toTrip" className="text-sm text-brand-muted sr-only sm:not-sr-only sm:whitespace-nowrap">To</label>
               <input
                 id="toTrip"
                 type="date"
                 value={toTripDate}
                 onChange={(e) => setToTripDate(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0"
-                title="Filter by trip date"
+                className={inputClass}
+                aria-label="Filter to date (trip start)"
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label htmlFor="status" className="text-sm font-medium text-brand-dark">Status</label>
-              <select
-                id="status"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0"
-              >
-                <option value="">All</option>
-                <option value="paid">Paid</option>
-                <option value="canceled">Canceled</option>
-                <option value="refunded">Refunded</option>
-              </select>
-            </div>
-            <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0}>
-              Export CSV
-            </Button>
           </div>
+          <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="ml-auto">
+            Export CSV
+          </Button>
         </div>
       </div>
 
@@ -235,8 +277,11 @@ export default function AdminBookingsPage() {
       )}
 
       {!loading && !error && list.length === 0 && (
-        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center text-brand-muted text-sm">
-          No bookings yet.
+        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
+          <p className="text-brand-muted text-sm">No bookings yet.</p>
+          <p className="mt-3 text-brand-muted text-xs max-w-md mx-auto">
+            If you have payments in Stripe but don&apos;t see them here, open <strong>Webhook events</strong> below and look for that payment&apos;s event — the <strong>error</strong> field explains why (e.g. Hold not found, Hold already converted).
+          </p>
         </div>
       )}
 
@@ -292,6 +337,79 @@ export default function AdminBookingsPage() {
           onBookingClick={handleBookingClick}
         />
       )}
+
+      {/* Webhook events – diagnose why Stripe charges don't create bookings */}
+      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setWebhookEventsOpen((o) => !o)}
+          className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-brand-dark hover:bg-brand-bg/50"
+        >
+          <span>Webhook events (Stripe → booking)</span>
+          {webhookEventsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+        {webhookEventsOpen && (
+          <div className="border-t border-brand-dark/10 p-4">
+            <p className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              If a charge appears in Stripe but no booking shows above: (1) In Stripe Dashboard → Developers → Webhooks, ensure the endpoint is <code className="bg-amber-100 px-1 rounded">APP_BASE_URL/api/stripe/webhook</code> and events <strong>checkout.session.completed</strong> and <strong>payment_intent.succeeded</strong> are enabled. (2) Check the table below for errors (e.g. &quot;Hold not found&quot;, &quot;Missing holdId&quot;). Match Stripe payment by Payment ID or Session ID to find the event and its error.
+            </p>
+            {webhookEventsLoading && (
+              <p className="text-sm text-brand-muted py-2">Loading…</p>
+            )}
+            {!webhookEventsLoading && webhookEvents.length === 0 && (
+              <p className="text-sm text-brand-muted py-2">No webhook events recorded yet. Complete a test payment to see events here.</p>
+            )}
+            {!webhookEventsLoading && webhookEvents.length > 0 && (
+              <div className="overflow-x-auto -mx-2">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead>
+                    <tr className="border-b border-brand-dark/15">
+                      <th className="px-2 py-2 text-left font-medium text-brand-dark">Event</th>
+                      <th className="px-2 py-2 text-left font-medium text-brand-dark">Received</th>
+                      <th className="px-2 py-2 text-left font-medium text-brand-dark">Error / Outcome</th>
+                      <th className="px-2 py-2 text-left font-medium text-brand-dark">Booking / Hold</th>
+                      <th className="px-2 py-2 text-left font-medium text-brand-dark">Stripe ID / Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webhookEvents.map((ev) => (
+                      <tr key={ev.id} className="border-b border-brand-dark/5">
+                        <td className="px-2 py-2 text-brand-dark font-mono text-xs">{ev.eventType ?? "—"}</td>
+                        <td className="px-2 py-2 text-brand-muted text-xs whitespace-nowrap">
+                          {ev.receivedAt ? new Date(ev.receivedAt).toLocaleString() : "—"}
+                        </td>
+                        <td className="px-2 py-2">
+                          {ev.error ? (
+                            <span className="text-red-700 font-medium" title={ev.error}>{ev.error}</span>
+                          ) : ev.outcome ? (
+                            <span className="text-green-700">{ev.outcome}</span>
+                          ) : (
+                            <span className="text-brand-muted">—</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-brand-muted text-xs">
+                          {ev.bookingId ? `Booking: ${ev.bookingId}` : ev.holdId ? `Hold: ${ev.holdId}` : "—"}
+                        </td>
+                        <td className="px-2 py-2 text-brand-muted text-xs font-mono">
+                          {ev.paymentIntentId && <span title="Payment Intent ID">{ev.paymentIntentId.slice(0, 20)}…</span>}
+                          {ev.sessionId && ev.eventType === "checkout.session.completed" && (
+                            <span title="Session ID" className="block truncate max-w-[12rem]">{ev.sessionId}</span>
+                          )}
+                          {ev.amountTotal != null && (
+                            <span className="block">{(ev.amountTotal / 100).toFixed(2)} {ev.currency ?? "USD"}</span>
+                          )}
+                          {!ev.paymentIntentId && !ev.sessionId && ev.amountTotal == null && "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Booking detail modal */}
       <Dialog

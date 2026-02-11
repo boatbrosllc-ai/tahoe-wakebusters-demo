@@ -48,7 +48,7 @@ export function TrustRow({ className }: { className?: string }) {
       <span className="text-white/50" aria-hidden>·</span>
       <span>Local Austin crew</span>
       <span className="text-white/50" aria-hidden>·</span>
-      <span>Captain options available</span>
+      <span>Captain included</span>
     </div>
   );
 }

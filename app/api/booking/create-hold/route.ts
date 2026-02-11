@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
-import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
+import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
@@ -108,10 +108,12 @@ export async function POST(request: NextRequest) {
     let rate: Rate | ExperienceRate | BoatRate;
     let addonsById: Map<string, Addon | ExperienceAddon>;
     let slotRef: import("firebase-admin").firestore.DocumentReference;
+    let slotStartForPricing: Date | null = null;
+    let experienceForPricing: Experience | null = null;
     const expId = input.experienceId!;
 
     if (isListingBoatFlow) {
-      // Experience + listing boat: experience slots & addons, boat rates
+      // Experience + listing boat: experience slots, addons, and rates (boat is for availability only)
       const expDoc = await db.collection("experiences").doc(expId).get();
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -140,11 +142,11 @@ export async function POST(request: NextRequest) {
       if (input.petsCount > petsMax) {
         return NextResponse.json({ error: "Pets exceed maximum" }, { status: 400 });
       }
-      const rateDoc = await db.collection("boats").doc(boatId).collection("rates").doc(input.rateId).get();
+      const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
       }
-      rate = rateDoc.data() as BoatRate;
+      rate = rateDoc.data() as ExperienceRate;
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
@@ -168,6 +170,8 @@ export async function POST(request: NextRequest) {
       if (!isSeasonalAllowed(experience, slotStart)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
+      slotStartForPricing = slotStart;
+      experienceForPricing = experience;
       const addonsSnap = await db.collection("experiences").doc(expId).collection("addons").get();
       addonsById = new Map();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
@@ -218,6 +222,8 @@ export async function POST(request: NextRequest) {
       if (!isSeasonalAllowed(experience, slotStartExp)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
+      slotStartForPricing = slotStartExp;
+      experienceForPricing = experience;
       const addonsSnap = await db.collection("experiences").doc(expId).collection("addons").get();
       addonsById = new Map();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
@@ -255,8 +261,12 @@ export async function POST(request: NextRequest) {
     }
 
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
+    let rateForPricing: typeof rate & { priceCents: number } = rate as typeof rate & { priceCents: number };
+    if (experienceForPricing && slotStartForPricing && "priceCents" in rate) {
+      rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number; durationHours?: number }, slotStartForPricing, experienceForPricing.holidayDates, experienceForPricing.weekendDays) } as typeof rate & { priceCents: number };
+    }
     const pricing = computePricing({
-      rate,
+      rate: rateForPricing,
       addons: addonsForPricing,
       currency: "usd",
     });

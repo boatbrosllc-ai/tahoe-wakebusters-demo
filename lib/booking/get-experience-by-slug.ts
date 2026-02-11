@@ -5,7 +5,7 @@ import type { Experience, ExperienceRate, ExperienceAddon } from "./types";
 export interface ExperienceWithDetails {
   id: string;
   experience: Experience;
-  rates: { id: string; durationHours: number; displayName: string; priceCents: number; active: boolean }[];
+  rates: { id: string; durationHours: number; displayName: string; priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number; active: boolean }[];
   addons: { id: string; name: string; description?: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
 }
 
@@ -36,7 +36,15 @@ export async function getExperienceBySlug(slug: string): Promise<ExperienceWithD
   const ratesSnap = await db.collection("experiences").doc(doc.id).collection("rates").where("active", "==", true).get();
   const rates = ratesSnap.docs.map((r) => {
     const d = r.data() as ExperienceRate;
-    return { id: r.id, durationHours: d.durationHours, displayName: d.displayName, priceCents: d.priceCents, active: d.active };
+    return {
+      id: r.id,
+      durationHours: d.durationHours,
+      displayName: d.displayName,
+      priceCents: d.priceCents,
+      priceWeekendCents: d.priceWeekendCents,
+      priceHolidayCents: d.priceHolidayCents,
+      active: d.active,
+    };
   });
   const addonsSnap = await db.collection("experiences").doc(doc.id).collection("addons").where("active", "==", true).get();
   const addons = addonsSnap.docs.map((a) => {

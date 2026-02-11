@@ -29,7 +29,7 @@ export function TrustLine({
       <span className={isOnDark ? "text-white/50" : "text-brand-muted/70"} aria-hidden>·</span>
       <span>Local Austin crew</span>
       <span className={isOnDark ? "text-white/50" : "text-brand-muted/70"} aria-hidden>·</span>
-      <span>Captain options</span>
+      <span>Captain included</span>
     </div>
   );
 }

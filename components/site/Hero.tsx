@@ -10,7 +10,7 @@ import { TrustRow } from "./TrustRow";
 const bullets = [
   "Lake Travis & Lake Austin",
   "Pontoon, wake, and party boats",
-  "Captain options · Same-day availability",
+  "Captain included · Same-day availability",
   "Licensed & insured",
 ];
 

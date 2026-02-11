@@ -41,7 +41,7 @@
 **CTAs & booking**  
 - **BookingCTA** (`components/site/BookingCTA.tsx`): Variants primary/secondary/inline. Renders “Check Availability” (Link to `/book` or `/book?experience=…`) + optional “Call Now” (tel). Uses `siteConfig` for `phoneTel`.  
 - **BookingEmbed** (`components/site/BookingEmbed.tsx`): If `siteConfig.booking.mode === "embed"` and `embedSrc` → iframe. Else **link mode**: dashed box + single external link to `siteConfig.booking.providerUrl` (“Continue to Check Availability”).  
-- **TrustRow** (`components/site/TrustRow.tsx`): Stars, “4.9 (200+ reviews)”, “Local Austin crew”, “Captain options”. No links.
+- **TrustRow** (`components/site/TrustRow.tsx`): Stars, “4.9 (200+ reviews)”, “Local Austin crew”, “Captain included”. No links.
 
 **Other**  
 - **HowItWorks**, **Testimonials**, **GalleryPreview**, **LeadCapture**: Section layout; no mobile-specific structure.  

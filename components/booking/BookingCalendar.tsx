@@ -22,7 +22,9 @@ interface SlotDto {
 interface RateDto {
   id: string;
   durationHours: number;
-  basePriceCents: number;
+  /** Legacy boat flow; listing flow uses priceCents from experience */
+  basePriceCents?: number;
+  priceCents?: number;
   displayName: string;
   active: boolean;
 }
@@ -223,7 +225,8 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
     }, 0);
   }, [detail, addonSelections]);
 
-  const orderSummaryTotalCents = selectedRate ? selectedRate.basePriceCents + addonsTotalCents : 0;
+  const ratePriceCents = selectedRate ? (selectedRate.basePriceCents ?? selectedRate.priceCents ?? 0) : 0;
+  const orderSummaryTotalCents = ratePriceCents + addonsTotalCents;
 
   const handleCreateHoldAndCheckout = async () => {
     if (!detail || !selectedSlot || !selectedRateId || !customer.name.trim() || !customer.email.trim() || !customer.phone.trim() || !cancellationAck) return;
@@ -452,7 +455,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         )}
                       >
                         <span className="block">{r.displayName}</span>
-                        <span className="font-semibold">${(r.basePriceCents / 100).toFixed(0)}</span>
+                        <span className="font-semibold">${(((r.basePriceCents ?? r.priceCents) ?? 0) / 100).toFixed(0)}</span>
                       </button>
                     ))}
                   </div>

@@ -13,7 +13,7 @@ const CANCELLATION_POLICY = {
   partialRefundDaysEnd: 30,
   noRefundWithinDays: 14,
   fullText:
-    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days. See full terms on our site.",
+    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days.",
 };
 
 const SHARED_RATES: Omit<ExperienceRate, "active">[] = [
@@ -37,18 +37,18 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     title: "Lake Austin Pontoon Charter",
     subtitle: "Spacious pontoon for groups. Coolers, Bluetooth, shade.",
     descriptionLong:
-      "Our most popular experience. Roomy pontoon with Bluetooth stereo, built-in cooler, and plenty of shade. Perfect for friends, families, or bachelor/bachelorette groups. Captain optional.",
+      "Our most popular experience. Roomy pontoon with Bluetooth stereo, built-in cooler, and plenty of shade. Perfect for friends, families, or bachelor/bachelorette groups. Captain included.",
     heroMedia: { type: "image", url: "/photos/DSC00427.webp" },
     gallery: ["/photos/DSC00452.webp", "/photos/DSC00456.webp", "/photos/DSC00461.webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking.", notes: "Parking available nearby." },
     maxGuests: 14,
     petsMax: 4,
-    included: ["Captain optional", "Cooler", "Bluetooth stereo", "Shade canopy", "Life vests"],
+    included: ["Captain", "Cooler", "Bluetooth stereo", "Shade canopy", "Life vests"],
     whatToBring: ["Sunscreen", "Water-friendly shoes", "Valid ID"],
     rules: ["No glass on board", "No smoking", "Follow captain instructions"],
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [
-      { q: "Do we need a captain?", a: "No. You can self-drive with a valid ID and brief orientation. We offer licensed captains for an extra fee." },
+      { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain so you can relax and enjoy the day." },
       { q: "Can we bring food and drinks?", a: "Yes. Bring your own cooler and drinks. Glass is not allowed on the boat." },
     ],
     seasonal: { enabled: false },

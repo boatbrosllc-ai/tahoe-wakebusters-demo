@@ -6,10 +6,11 @@ import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
-import { buildAddonSelectionsForPricing, computePricing } from "@/lib/booking/pricing";
+import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import type { Hold, Rate, Addon, Boat } from "@/lib/booking/types";
-import type { Experience, ExperienceRate, ExperienceAddon, BoatRate } from "@/lib/booking/types";
+import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
 function formatStripeError(e: unknown): Record<string, unknown> {
   const err = e as Record<string, unknown> | null | undefined;
@@ -102,11 +103,11 @@ export async function POST(request: NextRequest) {
     let rate: Rate | ExperienceRate | BoatRate;
     const addonsById = new Map<string, Addon | ExperienceAddon>();
     if (isListingBoatFlow) {
-      const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
+      const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
       if (!rateSnap.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
       }
-      rate = rateSnap.data() as BoatRate;
+      rate = rateSnap.data() as ExperienceRate;
       const addonsSnap = await db.collection("experiences").doc(hold.experienceId!).collection("addons").get();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     } else if (hasExperience) {
@@ -131,10 +132,22 @@ export async function POST(request: NextRequest) {
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
     }
     const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-    const pricing = computePricing({ rate, addons: addonsForPricing, currency: "usd" });
+    let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+    if (hasExperience && "priceCents" in rate) {
+      const parsed = parseSlotId(hold.slotId);
+      if (parsed) {
+        const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
+        const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
+        const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
+        if (experience) {
+          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays) };
+        }
+      }
+    }
+    const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     const lineItems = buildLineItems({
       pricing,
-      rate,
+      rate: rateForPricing as Rate | ExperienceRate,
       addons: addonsForPricing,
       hold,
     });

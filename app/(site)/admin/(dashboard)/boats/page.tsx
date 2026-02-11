@@ -42,7 +42,7 @@ export default function AdminBoatsPage() {
       <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Boats</h1>
-          <p className="mt-1 text-sm text-brand-muted">Add boats with photos and pricing, then assign them to listings. Users pick a boat when booking an experience.</p>
+          <p className="mt-1 text-sm text-brand-muted">Add boats (photos and availability), then assign them to listings. Pricing is set on each listing. Users pick a boat when booking an experience.</p>
         </div>
         <Link href="/admin/boats/new" className="shrink-0">
           <Button className="min-h-[44px] gap-2">
