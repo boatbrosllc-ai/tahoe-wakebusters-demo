@@ -1,6 +1,7 @@
 /**
  * Returns the listing price (cents) per date for the next N days for an experience.
- * Uses the experience's first rate and holiday/weekend pricing so step 3 can show dynamic prices.
+ * Optional rateId: when set, uses that rate so step 3 calendar prices match checkout.
+ * Uses holiday/weekend/Fri-Sun pricing so step 3 shows true prices for each date.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -23,6 +24,8 @@ export async function GET(request: NextRequest) {
     }
     const daysParam = request.nextUrl.searchParams.get("days");
     const days = Math.min(Math.max(parseInt(daysParam ?? "35", 10) || 35, 1), 90);
+    const startDateParam = request.nextUrl.searchParams.get("startDate"); // YYYY-MM-DD, optional
+    const rateIdParam = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
 
     const db = getDb();
     const [expSnap, ratesSnap] = await Promise.all([
@@ -43,20 +46,28 @@ export async function GET(request: NextRequest) {
     const friSunDays = exp.friSunDays;
 
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ExperienceRate & { id: string }));
-    const firstRate = rates[0];
+    const chosenRate = rateIdParam
+      ? rates.find((r) => r.id === rateIdParam) ?? rates[0]
+      : rates[0];
     const rateForPricing = {
-      priceCents: firstRate.priceCents,
-      priceWeekendCents: firstRate.priceWeekendCents,
-      priceFriSunCents: firstRate.priceFriSunCents,
-      priceHolidayCents: firstRate.priceHolidayCents,
-      durationHours: firstRate.durationHours,
+      priceCents: chosenRate.priceCents,
+      priceWeekendCents: chosenRate.priceWeekendCents,
+      priceFriSunCents: chosenRate.priceFriSunCents,
+      priceHolidayCents: chosenRate.priceHolidayCents,
+      durationHours: chosenRate.durationHours,
     };
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    let start: Date;
+    if (startDateParam && /^\d{4}-\d{2}-\d{2}$/.test(startDateParam)) {
+      start = new Date(startDateParam + "T00:00:00");
+      if (isNaN(start.getTime())) start = new Date();
+    } else {
+      start = new Date();
+    }
+    start.setHours(0, 0, 0, 0);
     const prices: Record<string, number> = {};
     for (let i = 0; i < days; i++) {
-      const d = new Date(today);
+      const d = new Date(start);
       d.setDate(d.getDate() + i);
       const dateStr = toISODate(d);
       prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);

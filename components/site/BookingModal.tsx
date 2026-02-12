@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -67,6 +67,24 @@ function getNextDays(days: number): { dateStr: string; label: string; weekday: s
   for (let i = 0; i < days; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    out.push({
+      dateStr,
+      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
+    });
+  }
+  return out;
+}
+
+/** All days in a given calendar month (1-based). */
+function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
+  const out: { dateStr: string; label: string; weekday: string }[] = [];
+  const first = new Date(year, month - 1, 1);
+  const last = new Date(year, month, 0);
+  const count = last.getDate();
+  for (let day = 1; day <= count; day++) {
+    const d = new Date(year, month - 1, day);
     const dateStr = d.toISOString().slice(0, 10);
     out.push({
       dateStr,
@@ -148,7 +166,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [addons, setAddons] = useState<AddonOption[]>([]);
   const [addonsLoading, setAddonsLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const today = useMemo(() => {
+    const t = new Date();
+    return { year: t.getFullYear(), month: t.getMonth() + 1 };
+  }, []);
+  const [viewMonthYear, setViewMonthYear] = useState(today.year);
+  const [viewMonthMonth, setViewMonthMonth] = useState(today.month);
+  const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
@@ -176,7 +202,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  const dateOptions = useMemo(() => getNextDays(35), []);
+  const dateOptions = useMemo(
+    () => getDaysInMonth(viewMonthYear, viewMonthMonth),
+    [viewMonthYear, viewMonthMonth]
+  );
+  const viewMonthLabel = useMemo(
+    () => new Date(viewMonthYear, viewMonthMonth - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    [viewMonthYear, viewMonthMonth]
+  );
+  const isViewMonthCurrent = viewMonthYear === today.year && viewMonthMonth === today.month;
 
   useEffect(() => {
     if (!open) return;
@@ -190,6 +224,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setExperienceRates([]);
     setAddons([]);
     setSelectedDate(null);
+    const now = new Date();
+    setViewMonthYear(now.getFullYear());
+    setViewMonthMonth(now.getMonth() + 1);
+    setSelectedRateIdForCalendar(null);
+    setEffectiveRateCents(null);
     setDatePrices({});
     setSlots([]);
     setSelectedSlot(null);
@@ -305,19 +344,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .finally(() => setExperienceRatesLoading(false));
   }, [selectedExperience, boats.length]);
 
+  const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
   useEffect(() => {
     if (!selectedExperience) {
       setDatePrices({});
       return;
     }
-    fetch(`/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&days=35`)
+    const rateIdQ = selectedRateIdForCalendar ? `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}` : "";
+    fetch(
+      `/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&days=35${rateIdQ}`
+    )
       .then((res) => res.json())
       .then((data) => {
         if (data.prices && typeof data.prices === "object") setDatePrices(data.prices);
         else setDatePrices({});
       })
       .catch(() => setDatePrices({}));
-  }, [selectedExperience?.id]);
+  }, [selectedExperience?.id, viewMonthStartStr, selectedRateIdForCalendar]);
 
   useEffect(() => {
     if (!selectedExperience || !selectedDate) {
@@ -339,15 +382,32 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .finally(() => setSlotsLoading(false));
   }, [selectedExperience, selectedDate]);
 
-  const openSlotsByTime = useMemo(() => {
-    const sorted = [...slots].sort((a, b) => a.startAt.localeCompare(b.startAt));
-    return sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
-  }, [slots]);
-
   // Single definition: boat rates when boat selected, else experience rates (used for selectedRateId and step-4 effect)
   const ratesForSelection = selectedBoat
     ? (selectedBoat.rates as RateOption[])
     : experienceRates;
+  // Keep calendar duration in sync with available rates (e.g. when switching boat/experience)
+  useEffect(() => {
+    if (ratesForSelection.length === 0) return;
+    const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
+    if (!valid) setSelectedRateIdForCalendar(ratesForSelection[0].id);
+  }, [ratesForSelection, selectedRateIdForCalendar]);
+  const rateForCalendar = useMemo(
+    () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
+    [selectedRateIdForCalendar, ratesForSelection]
+  );
+  const openSlotsByTime = useMemo(() => {
+    const durationHours = rateForCalendar?.durationHours;
+    const filtered =
+      durationHours != null
+        ? slots.filter((s) => {
+            const parsed = parseSlotId(s.id);
+            return parsed?.durationHours === durationHours;
+          })
+        : slots;
+    const sorted = [...filtered].sort((a, b) => a.startAt.localeCompare(b.startAt));
+    return sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
+  }, [slots, rateForCalendar?.durationHours]);
   const selectedRateId = useMemo(() => {
     if (!selectedSlot || ratesForSelection.length === 0) return null;
     const parsed = parseSlotId(selectedSlot.id);
@@ -367,9 +427,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     [addons]
   );
 
-  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") → total
+  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") → total (use effective price for selected date so it matches checkout)
   const priceSummary = useMemo(() => {
-    const rateCents = selectedRate?.priceCents ?? 0;
+    const rateCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
     const addonLines = displayAddons
       .filter((a) => (addonSelections[a.id] ?? 0) > 0)
       .map((a) => ({
@@ -392,7 +452,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       tipCents,
       totalCents,
     };
-  }, [selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
+  }, [effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
 
   // When opened with initialSelection (slot pre-picked), go to step 4 (details & payment).
   // Do not overwrite payment phase if user has already proceeded to Stripe or completed payment.
@@ -409,6 +469,22 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     if (!selectedExperience || !selectedDate) return;
     setStep(3);
   }, [open, initialSelection?.date, initialSelection?.slotId, selectedExperience, selectedDate]);
+
+  useEffect(() => {
+    if (!selectedExperience || !selectedRateId || !selectedDate) {
+      setEffectiveRateCents(null);
+      return;
+    }
+    fetch(
+      `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
+        else setEffectiveRateCents(null);
+      })
+      .catch(() => setEffectiveRateCents(null));
+  }, [selectedExperience?.id, selectedRateId, selectedDate]);
 
   const handleBack = () => {
     if (step === 2) setStep(1);
@@ -737,8 +813,72 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               )}
             >
               <div className="space-y-3 md:space-y-4">
+                {ratesForSelection.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ratesForSelection.map((r) => {
+                        const isSelected = selectedRateIdForCalendar === r.id;
+                        return (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => setSelectedRateIdForCalendar(r.id)}
+                            className={cn(
+                              "rounded-lg border-2 px-2.5 py-1.5 text-xs font-medium transition-all",
+                              isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                            )}
+                          >
+                            {r.displayName ?? `${r.durationHours} hr`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div>
-                  <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Date</p>
+                  <div className="flex items-center justify-between gap-2 mb-1.5 md:mb-2">
+                    <p className="text-xs font-semibold text-brand-dark">Date</p>
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        disabled={isViewMonthCurrent}
+                        onClick={() => {
+                          if (viewMonthMonth === 1) {
+                            setViewMonthYear((y) => y - 1);
+                            setViewMonthMonth(12);
+                          } else {
+                            setViewMonthMonth((m) => m - 1);
+                          }
+                        }}
+                        className={cn(
+                          "rounded p-1.5 text-brand-dark transition-colors",
+                          isViewMonthCurrent ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10"
+                        )}
+                        aria-label="Previous month"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <span className="text-xs font-medium text-brand-dark min-w-[7rem] text-center">
+                        {viewMonthLabel}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (viewMonthMonth === 12) {
+                            setViewMonthYear((y) => y + 1);
+                            setViewMonthMonth(1);
+                          } else {
+                            setViewMonthMonth((m) => m + 1);
+                          }
+                        }}
+                        className="rounded p-1.5 text-brand-dark hover:bg-brand-dark/10 transition-colors"
+                        aria-label="Next month"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-5 gap-1.5 md:gap-2">
                     {dateOptions.map(({ dateStr, label, weekday }) => {
                       const isSelected = selectedDate === dateStr;

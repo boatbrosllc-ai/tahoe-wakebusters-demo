@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Calendar, Phone, User, LayoutDashboard, ChevronDown } from "lucide-react";
+import { Calendar, Phone } from "lucide-react";
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
@@ -23,25 +23,6 @@ const navLinks = [
 export function Header() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection } = useBookingModal();
-  const [adminSignedIn, setAdminSignedIn] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const accountRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    fetch("/api/admin/session", { credentials: "include" })
-      .then((res) => res.json().catch(() => ({})))
-      .then((data) => setAdminSignedIn(data.signedIn === true))
-      .catch(() => setAdminSignedIn(false));
-  }, []);
-
-  useEffect(() => {
-    if (!accountOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (accountRef.current && !accountRef.current.contains(e.target as Node)) setAccountOpen(false);
-    };
-    document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
-  }, [accountOpen]);
 
   const handleCallClick = () => analytics.callClick("header", "global");
 
@@ -82,15 +63,6 @@ export function Header() {
               {link.label}
             </Link>
           ))}
-          {adminSignedIn && (
-            <Link
-              href="/admin"
-              className="shrink-0 px-3 py-3 rounded-lg text-base font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap flex items-center gap-1.5"
-            >
-              <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
-              Dashboard
-            </Link>
-          )}
           <button
             type="button"
             onClick={() => setBookingModalOpen(true)}
@@ -119,35 +91,6 @@ export function Header() {
             <Calendar className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
           </button>
           <CalendarModal open={calendarOpen} onOpenChange={setCalendarOpen} />
-          {adminSignedIn && (
-            <div className="relative shrink-0" ref={accountRef}>
-              <button
-                type="button"
-                onClick={() => setAccountOpen((o) => !o)}
-                className="flex items-center gap-1 shrink-0 rounded-xl p-3 text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
-                aria-haspopup="true"
-                aria-label="Account menu"
-              >
-                <User className="h-6 w-6 shrink-0" aria-hidden />
-                <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", accountOpen && "rotate-180")} aria-hidden />
-              </button>
-              {accountOpen && (
-                <div
-                  className="absolute right-0 top-full mt-1 min-w-[180px] rounded-xl border border-white/20 bg-white/95 backdrop-blur-md py-1.5 shadow-lg z-50"
-                  aria-label="Account options"
-                >
-                  <Link
-                    href="/admin"
-                    onClick={() => setAccountOpen(false)}
-                    className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-brand-dark hover:bg-brand-primary/10 transition-colors rounded-lg mx-1"
-                  >
-                    <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
-                    Dashboard
-                  </Link>
-                </div>
-              )}
-            </div>
-          )}
           <Button
             type="button"
             variant="secondary"

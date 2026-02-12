@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
+  LayoutDashboard,
   List,
   Ship,
   Calendar,
@@ -20,6 +21,10 @@ import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
 
 const navGroups: { label: string; links: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[] }[] = [
+  {
+    label: "Overview",
+    links: [{ href: "/admin", label: "Dashboard", icon: LayoutDashboard }],
+  },
   {
     label: "Content",
     links: [
@@ -157,7 +162,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       {/* Main content: full width on Calendars for a big readable calendar, constrained on other pages */}
       <main className="min-w-0 flex-1 overflow-auto py-6 px-4 sm:py-8 sm:px-6 lg:px-8">
-        <div className={cn("mx-auto w-full", (pathname?.includes("/admin/calendars") || pathname?.includes("/admin/pricing-calendar") || pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
+        <div className={cn("mx-auto w-full", pathname === "/admin" ? "max-w-6xl" : (pathname?.includes("/admin/calendars") || pathname?.includes("/admin/pricing-calendar") || pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
           {children}
         </div>
       </main>
