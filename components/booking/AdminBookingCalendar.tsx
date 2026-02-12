@@ -31,10 +31,18 @@ function toDateStr(d: Date): string {
 export function AdminBookingCalendar({
   bookings,
   onBookingClick,
+  compact,
+  onMonthChange,
 }: {
   bookings: AdminBookingCalendarItem[];
   onBookingClick?: (booking: AdminBookingCalendarItem) => void;
+  /** When true, use smaller cells and fewer bookings per day (e.g. for dashboard) */
+  compact?: boolean;
+  /** Called when the user changes month (prev/next/today). year, month (0-indexed). */
+  onMonthChange?: (year: number, month: number) => void;
 }) {
+  const cellHeight = compact ? "h-[110px]" : "h-[160px]";
+  const maxBookingsPerDay = compact ? 2 : 4;
   const [currentDate, setCurrentDate] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -58,16 +66,22 @@ export function AdminBookingCalendar({
   const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
 
   const previousMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+    const next = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    setCurrentDate(next);
+    onMonthChange?.(next.getFullYear(), next.getMonth());
   };
 
   const nextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+    const next = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+    setCurrentDate(next);
+    onMonthChange?.(next.getFullYear(), next.getMonth());
   };
 
   const goToToday = () => {
     const now = new Date();
-    setCurrentDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    const next = new Date(now.getFullYear(), now.getMonth(), 1);
+    setCurrentDate(next);
+    onMonthChange?.(next.getFullYear(), next.getMonth());
   };
 
   const calendarCells = useMemo(() => {
@@ -158,7 +172,8 @@ export function AdminBookingCalendar({
             <div
               key={cell.dateStr + cell.day}
               className={cn(
-                "h-[160px] flex flex-col rounded-xl border border-brand-dark/10 p-2 overflow-hidden transition-all duration-200 ease-out",
+                cellHeight,
+                "flex flex-col rounded-xl border border-brand-dark/10 p-2 overflow-hidden transition-all duration-200 ease-out",
                 "bg-white hover:shadow-lg hover:ring-1 hover:ring-brand-primary/30 hover:-translate-y-0.5",
                 !cell.isCurrentMonth && "bg-brand-bg/20 text-brand-muted/70",
                 cell.isToday && "ring-2 ring-brand-primary/40 bg-brand-primary/5"
@@ -176,7 +191,7 @@ export function AdminBookingCalendar({
                 {dayBookings.length === 0 ? (
                   <span className="text-xs italic text-brand-muted">No bookings</span>
                 ) : (
-                  dayBookings.slice(0, 4).map((booking) => (
+                  dayBookings.slice(0, maxBookingsPerDay).map((booking) => (
                     <button
                       key={booking.id}
                       type="button"
@@ -200,9 +215,9 @@ export function AdminBookingCalendar({
                     </button>
                   ))
                 )}
-                {dayBookings.length > 4 && (
+                {dayBookings.length > maxBookingsPerDay && (
                   <span className="text-[10px] text-brand-muted mt-0.5 shrink-0">
-                    +{dayBookings.length - 4} more
+                    +{dayBookings.length - maxBookingsPerDay} more
                   </span>
                 )}
               </div>

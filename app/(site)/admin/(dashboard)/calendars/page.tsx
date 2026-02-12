@@ -9,13 +9,26 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
 
+interface BookingSummary {
+  bookingId: string;
+  customerName: string;
+  customerEmail: string;
+  boatName: string | null;
+  totalCents: number;
+  status: string;
+}
+
 interface SlotDto {
   id: string;
   startAt: string;
   endAt: string;
   status: SlotStatus;
+  holdId?: string | null;
+  bookingId?: string | null;
   /** ISO date string when hold expires (only for status === "held") */
   expiresAt?: string;
+  /** Enriched from bookings API for status === "booked" */
+  bookingSummary?: BookingSummary | null;
 }
 
 interface ExperienceItem {
@@ -40,12 +53,22 @@ function getMonthRange(month: Date): { start: string; end: string } {
   return { start: toDateStr(start), end: toDateStr(end) };
 }
 
+const SLOT_STATUS_CLASS: Record<SlotStatus, string> = {
+  open: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  held: "bg-amber-100 text-amber-800 border-amber-200",
+  booked: "bg-blue-100 text-blue-800 border-blue-200",
+  blocked: "bg-brand-dark/10 text-brand-muted border-brand-dark/20",
+};
+
 export default function AdminCalendarsPage() {
   const [experiences, setExperiences] = useState<ExperienceItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [slots, setSlots] = useState<SlotDto[]>([]);
+  const [bookingsBySlotId, setBookingsBySlotId] = useState<Map<string, BookingSummary>>(new Map());
   const [loading, setLoading] = useState(true);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -105,9 +128,52 @@ export default function AdminCalendarsPage() {
     fetchSlots();
   }, [selectedId, fetchSlots]);
 
+  const fetchBookings = useCallback(async () => {
+    if (!selectedId) return;
+    setBookingsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/bookings?experienceId=${encodeURIComponent(selectedId)}&fromTripDate=${dateRange.start}&toTripDate=${dateRange.end}&limit=500`,
+        { credentials: "include" }
+      );
+      if (!res.ok) throw new Error("Failed to load bookings");
+      const list = await res.json();
+      const map = new Map<string, BookingSummary>();
+      (Array.isArray(list) ? list : [])
+        .filter((b: { status?: string }) => b.status === "paid")
+        .forEach((b: { id: string; customer?: { name?: string; email?: string }; boatName?: string | null; pricing?: { totalCents?: number }; status?: string }) => {
+          map.set(b.id, {
+            bookingId: b.id,
+            customerName: b.customer?.name ?? "",
+            customerEmail: b.customer?.email ?? "",
+            boatName: b.boatName ?? null,
+            totalCents: b.pricing?.totalCents ?? 0,
+            status: b.status ?? "",
+          });
+        });
+      setBookingsBySlotId(map);
+    } catch {
+      setBookingsBySlotId(new Map());
+    } finally {
+      setBookingsLoading(false);
+    }
+  }, [selectedId, dateRange.start, dateRange.end]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    fetchBookings();
+  }, [selectedId, fetchBookings]);
+
+  const enrichedSlots = useMemo(() => {
+    return slots.map((s) => ({
+      ...s,
+      bookingSummary: s.bookingId ? bookingsBySlotId.get(s.bookingId) ?? null : null,
+    }));
+  }, [slots, bookingsBySlotId]);
+
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number; held: number; booked: number; blocked: number; slots: SlotDto[] }>();
-    for (const s of slots) {
+    for (const s of enrichedSlots) {
       const day = s.startAt.slice(0, 10);
       if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0, slots: [] });
       const entry = map.get(day)!;
@@ -119,7 +185,7 @@ export default function AdminCalendarsPage() {
     }
     map.forEach((entry) => entry.slots.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
-  }, [slots]);
+  }, [enrichedSlots]);
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -240,6 +306,64 @@ export default function AdminCalendarsPage() {
     }
   };
 
+  const unblockSlot = async (slotId: string) => {
+    if (!selectedId) return;
+    setActionLoading(slotId);
+    setError(null);
+    try {
+      const res = await fetch("/api/booking/unblock-slot", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ experienceId: selectedId, slotId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to unblock slot");
+      await fetchSlots();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unblock slot");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const releaseHold = async (holdId: string) => {
+    setActionLoading(holdId);
+    setError(null);
+    try {
+      const res = await fetch("/api/booking/release-hold", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.released) throw new Error(data.message ?? "Failed to release hold");
+      await fetchSlots();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to release hold");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const cancelBooking = async (bookingId: string) => {
+    if (!confirm("Cancel this booking? The slot will become available again. This cannot be undone.")) return;
+    setActionLoading(bookingId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: "POST", credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to cancel booking");
+      await fetchSlots();
+      await fetchBookings();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to cancel booking");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const openDayDetail = (dateStr: string) => {
     setSelectedDate(dateStr);
     setDayDetailOpen(true);
@@ -334,13 +458,15 @@ export default function AdminCalendarsPage() {
   }
 
   const selectedExperience = experiences.find((e) => e.id === selectedId);
+  const formatCents = (cents: number) =>
+    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(cents / 100);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-brand-dark">Block dates</h1>
-        <p className="mt-1 text-sm text-brand-muted">
-          Click a date to block it (unavailable) or unblock it. Blocked dates won’t show as bookable. Use the range below to block or unblock multiple days at once.
+        <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Calendar management</h1>
+        <p className="mt-1 text-sm text-brand-muted max-w-2xl">
+          View and manage all bookings by day. See which time slots and boats are booked, block or unblock dates, cancel bookings, and release holds. Synced with website bookings.
         </p>
       </div>
 
@@ -450,6 +576,16 @@ export default function AdminCalendarsPage() {
                 >
                   Next →
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    setCalendarMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                  }}
+                  className="px-3 py-2 text-sm font-medium rounded-lg bg-brand-primary/10 text-brand-primary border border-brand-primary/30 hover:bg-brand-primary/20 transition-colors"
+                >
+                  Today
+                </button>
               </div>
             </div>
 
@@ -463,13 +599,13 @@ export default function AdminCalendarsPage() {
                   <span className="h-2 w-2 rounded-full bg-brand-muted" /> Blocked (click to unblock)
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
-                  <span className="h-2 w-2 rounded-full bg-amber-500" /> Held
+                  <span className="h-2 w-2 rounded-full bg-amber-500" /> Held (in checkout)
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800">
-                  <span className="h-2 w-2 rounded-full bg-blue-500" /> Booked
+                  <span className="h-2 w-2 rounded-full bg-blue-500" /> Booked (boat shown)
                 </span>
               </div>
-              <p className="text-xs text-brand-muted">Click a date to block or unblock it. Days with existing bookings open the detail modal.</p>
+              <p className="text-xs text-brand-muted">Click a date to block or unblock. Click a day with bookings to see boats, customers, and cancel/release actions.</p>
 
               {slotsLoading ? (
                 <div className="grid min-h-[360px] place-items-center text-brand-muted">Loading slots…</div>
@@ -496,12 +632,6 @@ export default function AdminCalendarsPage() {
                       const isFullyBlocked = cell.blockedCount > 0 && cell.openCount === 0 && cell.heldCount === 0 && cell.bookedCount === 0;
                       const isFullyOpen = cell.openCount > 0 && cell.blockedCount === 0 && cell.heldCount === 0 && cell.bookedCount === 0;
                       const cellBusy = blocking === `date-${cell.dateStr}`;
-                      const statusClass: Record<SlotStatus, string> = {
-                        open: "bg-emerald-100 text-emerald-800 border-emerald-200",
-                        held: "bg-amber-100 text-amber-800 border-amber-200",
-                        booked: "bg-blue-100 text-blue-800 border-blue-200",
-                        blocked: "bg-brand-dark/10 text-brand-muted border-brand-dark/20",
-                      };
                       return (
                         <button
                           key={cell.dateStr + cell.day}
@@ -549,19 +679,22 @@ export default function AdminCalendarsPage() {
                             {!hasAny ? (
                               <span className="text-xs italic text-brand-muted">No slots</span>
                             ) : (
-                              visibleSlots.map((slot) => (
-                                <div
-                                  key={slot.id}
-                                  className={cn(
-                                    "rounded-lg border px-2 py-1 text-xs leading-tight shrink-0 truncate",
-                                    statusClass[slot.status]
-                                  )}
-                                  title={`${formatTime(slot.startAt)} – ${formatTime(slot.endAt)} · ${slot.status === "blocked" ? "Blocked" : slot.status}`}
-                                >
-                                  <span className="font-medium">{formatTime(slot.startAt)}</span>
-                                  <span className="opacity-90"> · {slot.status === "blocked" ? "Blocked" : slot.status}</span>
-                                </div>
-                              ))
+                              visibleSlots.map((slot) => {
+                                const boatLabel = slot.status === "booked" && slot.bookingSummary?.boatName ? ` · ${slot.bookingSummary.boatName}` : "";
+                                return (
+                                  <div
+                                    key={slot.id}
+                                    className={cn(
+                                      "rounded-lg border px-2 py-1 text-xs leading-tight shrink-0 truncate",
+                                      SLOT_STATUS_CLASS[slot.status]
+                                    )}
+                                    title={`${formatTime(slot.startAt)} – ${formatTime(slot.endAt)} · ${slot.status === "blocked" ? "Blocked" : slot.status}${boatLabel}`}
+                                  >
+                                    <span className="font-medium">{formatTime(slot.startAt)}</span>
+                                    <span className="opacity-90"> · {slot.status === "blocked" ? "Blocked" : slot.status}{boatLabel}</span>
+                                  </div>
+                                );
+                              })
                             )}
                             {moreCount > 0 && (
                               <span className="text-[10px] text-brand-muted mt-0.5 shrink-0">
@@ -580,11 +713,32 @@ export default function AdminCalendarsPage() {
         </>
       )}
 
-      {/* Day detail modal: list slots, block/unblock day or individual slots */}
-      <Dialog open={dayDetailOpen} onOpenChange={setDayDetailOpen} title={selectedDate ? `Slots for ${selectedDate}` : undefined}>
+      {/* Day detail modal: friendly date, summary, block/unblock day, slots with boat/customer and actions */}
+      <Dialog
+        open={dayDetailOpen}
+        onOpenChange={setDayDetailOpen}
+        title={
+          selectedDate
+            ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", {
+                weekday: "long",
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              })
+            : undefined
+        }
+      >
         <div className="space-y-4">
           {selectedDate && (
             <>
+              {selectedDateSlots.length > 0 && (
+                <p className="text-sm text-brand-muted">
+                  {selectedDateSlots.filter((s) => s.status === "booked").length} booked ·{" "}
+                  {selectedDateSlots.filter((s) => s.status === "held").length} held ·{" "}
+                  {selectedDateSlots.filter((s) => s.status === "open").length} open ·{" "}
+                  {selectedDateSlots.filter((s) => s.status === "blocked").length} blocked
+                </p>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 {selectedDateSlots.some((s) => s.status === "open") && (
                   <>
@@ -613,54 +767,101 @@ export default function AdminCalendarsPage() {
                   </>
                 )}
               </div>
-              <div className="max-h-[50vh] overflow-y-auto border-t border-brand-dark/10 pt-4">
-                <p className="mb-2 text-xs font-medium text-brand-muted">Slots on this day</p>
-                <ul className="space-y-1.5">
+              <div className="max-h-[55vh] overflow-y-auto border-t border-brand-dark/10 pt-4">
+                <p className="mb-2 text-xs font-semibold text-brand-dark uppercase tracking-wide">Time slots</p>
+                <ul className="space-y-2">
                   {selectedDateSlots.map((slot) => {
                     const parsed = parseSlotId(slot.id);
                     const duration = parsed ? `${parsed.durationHours}h` : "";
                     const isOpen = slot.status === "open";
+                    const isBooked = slot.status === "booked";
+                    const isHeld = slot.status === "held";
+                    const isBlocked = slot.status === "blocked";
+                    const summary = slot.bookingSummary;
                     return (
                       <li
                         key={slot.id}
                         className={cn(
-                          "flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm",
+                          "flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm",
                           slot.status === "open" && "border-emerald-200 bg-emerald-50/50",
                           slot.status === "held" && "border-amber-200 bg-amber-50/50",
                           slot.status === "booked" && "border-blue-200 bg-blue-50/50",
                           slot.status === "blocked" && "border-brand-dark/10 bg-brand-bg/30"
                         )}
                       >
-                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span>
-                            {formatTime(slot.startAt)} – {formatTime(slot.endAt)}
-                            {duration && ` (${duration})`} ·{" "}
-                            <span className="font-medium capitalize">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span className="font-semibold text-brand-dark">
+                              {formatTime(slot.startAt)} – {formatTime(slot.endAt)}
+                              {duration && ` (${duration})`}
+                            </span>
+                            <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium capitalize", SLOT_STATUS_CLASS[slot.status])}>
                               {slot.status === "blocked" ? "Blocked" : slot.status}
                             </span>
-                          </span>
-                          {slot.status === "held" && slot.expiresAt && (
-                            <span className="text-xs text-amber-700 font-medium tabular-nums">
+                          </div>
+                          {isBooked && summary && (
+                            <div className="mt-1.5 text-xs text-brand-muted space-y-0.5">
+                              {summary.boatName && <span className="block font-medium text-brand-dark">Boat: {summary.boatName}</span>}
+                              <span className="block">{summary.customerName || summary.customerEmail || "—"}</span>
+                              {summary.totalCents > 0 && (
+                                <span className="block font-medium text-brand-primary">{formatCents(summary.totalCents)}</span>
+                              )}
+                            </div>
+                          )}
+                          {isHeld && slot.expiresAt && (
+                            <span className="mt-1 block text-xs text-amber-700 font-medium tabular-nums">
                               <HoldCountdown expiresAt={slot.expiresAt} label="Expires in " compact />
                             </span>
                           )}
-                        </span>
-                        {isOpen && (
-                          <button
-                            type="button"
-                            onClick={() => blockSlot(slot.id)}
-                            disabled={!!blocking}
-                            className="rounded bg-brand-dark px-2 py-1 text-xs font-medium text-white hover:bg-brand-dark/90 disabled:opacity-50"
-                          >
-                            {blocking === slot.id ? "Saving…" : "Block this slot"}
-                          </button>
-                        )}
+                        </div>
+                        <div className="shrink-0 flex items-center gap-2">
+                          {isOpen && (
+                            <button
+                              type="button"
+                              onClick={() => blockSlot(slot.id)}
+                              disabled={!!blocking}
+                              className="rounded-lg bg-brand-dark px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-dark/90 disabled:opacity-50"
+                            >
+                              {blocking === slot.id ? "Saving…" : "Block slot"}
+                            </button>
+                          )}
+                          {isBlocked && (
+                            <button
+                              type="button"
+                              onClick={() => unblockSlot(slot.id)}
+                              disabled={!!actionLoading}
+                              className="rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-primary/90 disabled:opacity-50"
+                            >
+                              {actionLoading === slot.id ? "Saving…" : "Unblock slot"}
+                            </button>
+                          )}
+                          {isHeld && (
+                            <button
+                              type="button"
+                              onClick={() => releaseHold(slot.holdId!)}
+                              disabled={!!actionLoading || !slot.holdId}
+                              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                            >
+                              {actionLoading === slot.holdId ? "Releasing…" : "Release hold"}
+                            </button>
+                          )}
+                          {isBooked && summary && (
+                            <button
+                              type="button"
+                              onClick={() => cancelBooking(summary.bookingId)}
+                              disabled={!!actionLoading}
+                              className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                            >
+                              {actionLoading === summary.bookingId ? "Cancelling…" : "Cancel booking"}
+                            </button>
+                          )}
+                        </div>
                       </li>
                     );
                   })}
                 </ul>
                 {selectedDateSlots.length === 0 && (
-                  <p className="py-4 text-center text-sm text-brand-muted">No slots in range for this day.</p>
+                  <p className="py-6 text-center text-sm text-brand-muted">No slots in range for this day.</p>
                 )}
               </div>
             </>

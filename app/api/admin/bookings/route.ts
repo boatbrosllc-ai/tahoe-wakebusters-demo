@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     const db = getDb();
     const limit = Math.min(parseInt(request.nextUrl.searchParams.get("limit") ?? "100", 10) || 100, 500);
     const statusFilter = request.nextUrl.searchParams.get("status"); // paid | canceled | refunded
+    const experienceIdParam = request.nextUrl.searchParams.get("experienceId"); // filter by experience (e.g. for calendar)
     const fromParam = request.nextUrl.searchParams.get("from"); // booking date (createdAt)
     const toParam = request.nextUrl.searchParams.get("to"); // booking date (createdAt)
     const fromTripParam = request.nextUrl.searchParams.get("fromTripDate"); // trip date (startDate from slotId)
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
     const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
     let docs = snap.docs;
     if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
+    if (experienceIdParam) docs = docs.filter((d) => (d.data() as Booking).experienceId === experienceIdParam);
     if (fromDateVal || toDateVal) {
       docs = docs.filter((d) => {
         const b = d.data() as Booking;
@@ -153,6 +155,9 @@ export async function GET(request: NextRequest) {
         if (toTripDate && tripDate > toTripDate) return false;
         return true;
       });
+    }
+    if (experienceIdParam) {
+      list = list.filter((item) => item.experienceId === experienceIdParam);
     }
 
     return NextResponse.json(list);

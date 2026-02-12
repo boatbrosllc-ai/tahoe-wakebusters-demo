@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   DollarSign,
   Calendar,
@@ -11,12 +12,13 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  ArrowRight,
   Ship,
   Mail,
   ChevronRight,
   Sparkles,
+  CalendarDays,
 } from "lucide-react";
+import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
 
 type DashboardStats = {
   totalRevenueCents: number;
@@ -105,9 +107,16 @@ function SkeletonCard() {
 }
 
 export default function AdminHomePage() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [calendarView, setCalendarView] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [calendarBookings, setCalendarBookings] = useState<AdminBookingCalendarItem[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
 
   useEffect(() => {
     fetch("/api/admin/dashboard", { credentials: "include" })
@@ -124,6 +133,37 @@ export default function AdminHomePage() {
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    const { year, month } = calendarView;
+    const firstDay = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+    const lastDate = new Date(year, month + 1, 0);
+    const lastDay = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDate.getDate()).padStart(2, "0")}`;
+    setCalendarLoading(true);
+    fetch(`/api/admin/bookings?fromTripDate=${firstDay}&toTripDate=${lastDay}&limit=500`, { credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => []);
+        if (!res.ok) return [];
+        return Array.isArray(data) ? data : [];
+      })
+      .then((list) => {
+        const items: AdminBookingCalendarItem[] = list.map((b: { id: string; experienceName: string; customer: { name: string; email: string; phone: string }; partySize?: number | null; pricing: { totalCents: number; currency: string }; status: string; createdAt: string | null; startDate: string | null; startTime: string | null; endTime: string | null }) => ({
+          id: b.id,
+          experienceName: b.experienceName ?? "—",
+          customer: b.customer ?? { name: "", email: "", phone: "" },
+          partySize: b.partySize ?? null,
+          pricing: b.pricing ?? { totalCents: 0, currency: "usd" },
+          status: b.status ?? "",
+          createdAt: b.createdAt != null ? (typeof b.createdAt === "string" ? b.createdAt : new Date(b.createdAt).toISOString()) : null,
+          startDate: b.startDate ?? null,
+          startTime: b.startTime ?? null,
+          endTime: b.endTime ?? null,
+        }));
+        setCalendarBookings(items);
+      })
+      .catch(() => setCalendarBookings([]))
+      .finally(() => setCalendarLoading(false));
+  }, [calendarView.year, calendarView.month]);
 
   function formatCents(cents: number) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
@@ -333,6 +373,41 @@ export default function AdminHomePage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Booking calendar */}
+          <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between border-b border-brand-dark/10 px-5 py-4 sm:px-6">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-brand-dark">
+                <CalendarDays className="h-5 w-5 text-brand-primary" aria-hidden />
+                Booking calendar
+              </h2>
+              <Link
+                href="/admin/bookings"
+                className="text-sm font-medium text-brand-primary hover:underline"
+              >
+                View all bookings
+              </Link>
+            </div>
+            <div className="p-4 sm:p-6">
+              {calendarLoading ? (
+                <div className="grid grid-cols-7 gap-1 sm:gap-2 animate-pulse">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                    <div key={d} className="h-8 rounded bg-brand-dark/10" />
+                  ))}
+                  {Array.from({ length: 35 }).map((_, i) => (
+                    <div key={i} className="h-[110px] rounded-xl bg-brand-dark/5" />
+                  ))}
+                </div>
+              ) : (
+                <AdminBookingCalendar
+                  bookings={calendarBookings}
+                  compact
+                  onBookingClick={(b) => router.push(`/admin/bookings?highlight=${b.id}`)}
+                  onMonthChange={(year, month) => setCalendarView({ year, month })}
+                />
+              )}
             </div>
           </div>
 

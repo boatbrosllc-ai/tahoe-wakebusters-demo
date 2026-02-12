@@ -100,3 +100,40 @@ export async function PATCH(
     );
   }
 }
+
+/** DELETE /api/admin/boats/[id] — delete a listing boat (and its subcollections: rates, slots, addons) */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+  try {
+    const db = getDb();
+    const boatRef = db.collection("boats").doc(id);
+    const boatSnap = await boatRef.get();
+    if (!boatSnap.exists || (boatSnap.data() as { isListingBoat?: boolean })?.isListingBoat !== true) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const subcollections = ["rates", "slots", "addons"];
+    for (const sub of subcollections) {
+      const snap = await boatRef.collection(sub).get();
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      if (!snap.empty) await batch.commit();
+    }
+    await boatRef.delete();
+    return NextResponse.json({ id, deleted: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    return NextResponse.json(
+      { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
+      { status: isFirebaseConfig ? 503 : 500 }
+    );
+  }
+}

@@ -19,12 +19,13 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function getDateRange(days: number): { start: string; end: string } {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + days);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+/** Range covering one month before through one month after the given calendar month (so nav always has data). */
+function getDateRangeForMonth(calendarMonth: Date): { start: string; end: string } {
+  const y = calendarMonth.getFullYear();
+  const m = calendarMonth.getMonth();
+  const start = new Date(y, m - 1, 1);
+  const end = new Date(y, m + 2, 0); // last day of month + 1
+  return { start: toDateStr(start), end: toDateStr(end) };
 }
 
 function toDateStr(d: Date): string {
@@ -48,27 +49,40 @@ function getNextWeekend(today: Date): { sat: string; sun: string } {
   return { sat: toDateStr(sat), sun: toDateStr(sun) };
 }
 
+export interface ExperienceCalendarOpenModalSelection {
+  experienceId?: string;
+  experienceSlug?: string;
+  date: string;
+  slotId: string;
+}
+
 interface ExperienceCalendarSectionProps {
   experienceId?: string;
   firestoreSlug?: string | null;
+  /** Slug for opening BookingModal (e.g. experience.slug). Passed to onOpenInModal. */
+  experienceSlug?: string | null;
   /** When user picks a date only (no slot selection). */
   onSelectDate?: (date: string) => void;
   /** When user picks a time slot – go to checkout for this slot. */
   onSelectSlot?: (slotId: string, dateStr: string) => void;
-  /** Base URL for booking (e.g. /experiences/slug/book). Used with onSelectSlot when not directCheckout. */
+  /** Base URL for booking (e.g. /experiences/slug/book). Used with onSelectSlot when not directCheckout and no onOpenInModal. */
   bookHref?: string;
-  /** When true, clicking a time goes straight to Stripe Checkout (no book page). Requires experienceId. */
+  /** When true, clicking a time goes straight to Stripe Checkout (no book page). Ignored if onOpenInModal is set. */
   directCheckout?: boolean;
+  /** When set, picking a time opens the app BookingModal with this selection (experience + date + slot). Use for "calendar first" flow. */
+  onOpenInModal?: (selection: ExperienceCalendarOpenModalSelection) => void;
   className?: string;
 }
 
 export function ExperienceCalendarSection({
   experienceId: experienceIdProp,
   firestoreSlug,
+  experienceSlug,
   onSelectDate,
   onSelectSlot,
   bookHref,
   directCheckout = false,
+  onOpenInModal,
   className,
 }: ExperienceCalendarSectionProps) {
   const [experienceId, setExperienceId] = useState<string | null>(experienceIdProp ?? null);
@@ -77,6 +91,7 @@ export function ExperienceCalendarSection({
   const [loading, setLoading] = useState(!!experienceIdProp || !!firestoreSlug);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
+  const [selectedDurationForModal, setSelectedDurationForModal] = useState<number | null>(null);
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
@@ -123,7 +138,7 @@ export function ExperienceCalendarSection({
     };
   }, [experienceId, experienceIdProp]);
 
-  const dateRange = useMemo(() => getDateRange(60), []);
+  const dateRange = useMemo(() => getDateRangeForMonth(calendarMonth), [calendarMonth]);
 
   const fetchSlots = useCallback(() => {
     if (!experienceId) return;
@@ -188,6 +203,26 @@ export function ExperienceCalendarSection({
     );
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [selectedDateOpenSlots]);
+
+  /** For time modal (step-3 style): slots for selected date filtered by selected duration. */
+  const slotsForModalDuration = useMemo(() => {
+    if (selectedDurationForModal == null) return [];
+    return selectedDateOpenSlots.filter((s) => parseSlotId(s.id)?.durationHours === selectedDurationForModal);
+  }, [selectedDateOpenSlots, selectedDurationForModal]);
+
+  /** Unique start times for selected duration (for step-3 style time list). */
+  const timeOptionsForModal = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { timeLabel: string; slot: SlotDto }[] = [];
+    for (const s of slotsForModalDuration) {
+      const t = formatTime(s.startAt);
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out.push({ timeLabel: t, slot: s });
+    }
+    out.sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt));
+    return out;
+  }, [slotsForModalDuration]);
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -305,7 +340,8 @@ export function ExperienceCalendarSection({
 
   const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
-    if (onSelectSlot) {
+    if (onSelectSlot || onOpenInModal) {
+      setSelectedDurationForModal(null);
       setSlotModalOpen(true);
       return;
     }
@@ -318,8 +354,10 @@ export function ExperienceCalendarSection({
     const d = new Date(dateStr + "T12:00:00");
     setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
     setSelectedDate(dateStr);
-    if (onSelectSlot) setSlotModalOpen(true);
-    else if (onSelectDate) onSelectDate(dateStr);
+    if (onSelectSlot || onOpenInModal) {
+      setSelectedDurationForModal(null);
+      setSlotModalOpen(true);
+    } else if (onSelectDate) onSelectDate(dateStr);
   };
 
 
@@ -350,7 +388,7 @@ export function ExperienceCalendarSection({
               Choose your date
             </h2>
             <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
-              Green = available. Tap a date to see times, then pick one to checkout.
+              Green = available, amber = booked/full, gray = unavailable or past. Tap a date to see times and checkout.
             </p>
 
         {loading ? (
@@ -415,8 +453,8 @@ export function ExperienceCalendarSection({
                       <span className="font-medium text-brand-dark">Available</span>
                     </span>
                     <span className="flex items-center gap-1.5 sm:gap-2">
-                      <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-amber-100 ring-2 ring-amber-300/60 shrink-0" aria-hidden />
-                      <span className="font-medium text-brand-dark">Booked</span>
+                      <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-amber-100 ring-2 ring-amber-400/60 shrink-0" aria-hidden />
+                      <span className="font-medium text-brand-dark">Booked / full</span>
                     </span>
                     <span className="flex items-center gap-1.5 sm:gap-2">
                       <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-brand-dark/10 ring-2 ring-brand-dark/20 shrink-0" aria-hidden />
@@ -470,6 +508,14 @@ export function ExperienceCalendarSection({
                   {calendarDays.map((cell) => {
                     const isPast = cell.isPast;
                     const isAvailable = cell.available && !isPast;
+                    const takenCount = cell.bookedCount + cell.heldCount + cell.blockedCount;
+                    const isFullyBooked =
+                      cell.isCurrentMonth &&
+                      !isPast &&
+                      !cell.available &&
+                      takenCount > 0;
+                    const isUnavailable =
+                      cell.isCurrentMonth && !isPast && !cell.available && takenCount === 0;
                     const isClickable = cell.isCurrentMonth && isAvailable;
                     const isToday = cell.dateStr === todayStr;
                     const isSelected = selectedDate === cell.dateStr;
@@ -487,7 +533,9 @@ export function ExperienceCalendarSection({
                           "relative flex min-h-[44px] sm:min-h-[88px] lg:min-h-[120px] xl:min-h-[140px] flex-col items-center justify-center sm:items-stretch sm:justify-start rounded-lg sm:rounded-xl text-center sm:text-left p-0.5 sm:p-2 lg:p-2.5 text-sm font-medium transition-all touch-manipulation active:scale-[0.98]",
                           !cell.isCurrentMonth && "text-brand-muted/40",
                           cell.isCurrentMonth && isPast && "text-brand-muted/50 bg-brand-dark/5",
-                          cell.isCurrentMonth && !isPast && !cell.available && "bg-brand-dark/10 text-brand-muted",
+                          isUnavailable && "bg-brand-dark/10 text-brand-muted",
+                          isFullyBooked &&
+                            "bg-amber-100/90 text-amber-900 ring-2 ring-amber-400/50",
                           isAvailable &&
                             "bg-emerald-500/15 text-emerald-900 ring-2 ring-emerald-500/40 hover:bg-emerald-500/25 hover:ring-emerald-500/60",
                           isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1 sm:ring-offset-2 ring-offset-white",
@@ -508,8 +556,14 @@ export function ExperienceCalendarSection({
                           {!isToday && isAvailable && cell.openCount > 0 && (
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden />
                           )}
+                          {!isToday && isFullyBooked && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" aria-hidden title="Booked / full" />
+                          )}
                           {!isToday && cell.isCurrentMonth && isPast && (
                             <span className="w-1.5 h-1.5 rounded-full bg-brand-muted/30 shrink-0" aria-hidden />
+                          )}
+                          {!isToday && isUnavailable && cell.isCurrentMonth && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-brand-muted/20 shrink-0" aria-hidden />
                           )}
                         </span>
                         {/* Desktop: full card with times + booked */}
@@ -529,6 +583,11 @@ export function ExperienceCalendarSection({
                               <span className="text-[10px] lg:text-xs text-brand-muted/70 font-normal">Past</span>
                             ) : (
                               <>
+                                {isFullyBooked && (
+                                  <span className="text-[10px] lg:text-xs font-semibold text-amber-800 bg-amber-200/60 rounded px-1 py-0.5 w-fit leading-tight">
+                                    Full
+                                  </span>
+                                )}
                                 {openTimes.length > 0 && (
                                   <div className="flex flex-wrap gap-0.5">
                                     {openTimes.slice(0, 3).map((t) => (
@@ -587,8 +646,8 @@ export function ExperienceCalendarSection({
                 )}
                 {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
                   <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
-                    <p className="font-medium">No availability in the next 60 days.</p>
-                    <p className="mt-1 text-amber-700/90">Call us to request a date or check back later.</p>
+                    <p className="font-medium">No availability for the dates shown.</p>
+                    <p className="mt-1 text-amber-700/90">Try another month or call us to request a date.</p>
                   </div>
                 )}
               </>
@@ -597,96 +656,139 @@ export function ExperienceCalendarSection({
         </div>
       </section>
 
-      {/* Time slots modal – grouped by start time, touch-friendly on mobile */}
+      {/* Time slots modal – step-3 style: Duration first, then Time (same UX/look as BookingModal step 3) */}
       <Dialog
         open={slotModalOpen && !!selectedDate}
         onOpenChange={(open) => {
           if (!open) setSlotModalOpen(false);
         }}
         title={selectedDate ? `Pick a time · ${selectedDateLabel}` : "Choose a time"}
-        description="Tap a duration to go to checkout. Price shown per option."
+        description="Select a duration, then a start time. Price shown per option."
         className="max-w-md w-[calc(100vw-2rem)] sm:w-full"
       >
-        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 pb-2">
-          {slotsGroupedByStartTime.length > 0 ? (
-            <div className="space-y-5 sm:space-y-6">
-              {slotsGroupedByStartTime.map(([timeLabel, timeSlots]) => (
-                <div key={timeLabel} className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">
-                    {timeLabel}
-                  </p>
-                  <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
-                    {timeSlots.map((slot) => {
-                      const parsed = parseSlotId(slot.id);
-                      const durationLabel = parsed
-                        ? `${parsed.durationHours} hr${parsed.durationHours !== 1 ? "s" : ""}`
-                        : "";
-                      const rate = parsed ? rates.find((r) => r.durationHours === parsed.durationHours) : null;
-                      const priceLabel = rate ? formatPrice(rate.priceCents) : null;
-                      const useDirectCheckout = directCheckout;
-                      const checkoutHref =
-                        !useDirectCheckout && bookHref && selectedDate
-                          ? `${bookHref}?date=${encodeURIComponent(selectedDate)}&slotId=${encodeURIComponent(slot.id)}`
-                          : null;
-                      const isDirectLoading = directCheckoutLoading === slot.id;
-                      if (useDirectCheckout) {
-                        return (
-                          <button
-                            key={slot.id}
-                            type="button"
-                            disabled={!experienceId || isDirectLoading}
-                            onClick={async () => {
-                              if (!experienceId) return;
-                              setDirectCheckoutLoading(slot.id);
-                              try {
-                                const res = await fetch("/api/booking/create-checkout-session-direct", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    experienceId,
-                                    slotId: slot.id,
-                                    partySize: 1,
-                                    petsCount: 0,
-                                  }),
-                                });
-                                const data = await res.json().catch(() => ({}));
-                                if (res.ok && data?.url) {
-                                  setSlotModalOpen(false);
-                                  window.location.href = data.url;
-                                  return;
-                                }
-                                const msg = (data as { error?: string }).error ?? "Checkout failed";
-                                alert(msg);
-                              } finally {
-                                setDirectCheckoutLoading(null);
-                              }
-                            }}
-                            className="inline-flex flex-col items-center justify-center min-h-[52px] rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 sm:py-2.5 text-sm font-semibold text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100 active:scale-[0.98] transition-colors touch-manipulation disabled:opacity-60 disabled:pointer-events-none"
-                          >
-                            {isDirectLoading ? "…" : <><span>{durationLabel}</span>{priceLabel && <span className="text-xs font-medium opacity-90 mt-0.5">{priceLabel}</span>}</>}
-                          </button>
-                        );
-                      }
-                      return checkoutHref ? (
-                        <Link
-                          key={slot.id}
-                          href={checkoutHref}
-                          onClick={() => setSlotModalOpen(false)}
-                          className="inline-flex flex-col items-center justify-center min-h-[52px] rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 sm:py-2.5 text-sm font-semibold text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100 active:scale-[0.98] transition-colors touch-manipulation"
-                        >
-                          <span>{durationLabel}</span>
-                          {priceLabel && <span className="text-xs font-medium opacity-90 mt-0.5">{priceLabel}</span>}
-                        </Link>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-              ))}
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+          {/* Duration – same as BookingModal step 3 */}
+          <div>
+            <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
+            <div className="flex flex-wrap gap-1.5">
+              {rates.map((r) => {
+                const isSelected = selectedDurationForModal === r.durationHours;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setSelectedDurationForModal(r.durationHours)}
+                    className={cn(
+                      "rounded-lg border-2 px-2.5 py-1.5 text-xs font-medium transition-all",
+                      isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                    )}
+                  >
+                    {r.displayName ?? `${r.durationHours} hr`}
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            <p className="text-sm text-brand-muted py-4 text-center">
-              No available time slots for this date.
-            </p>
+            {selectedDurationForModal == null && (
+              <p className="mt-2 text-xs text-brand-muted">Select a duration to see available times.</p>
+            )}
+          </div>
+
+          {/* Time – same as BookingModal step 3 (one button per start time, with price) */}
+          {selectedDurationForModal != null && (
+            <div>
+              <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
+              {timeOptionsForModal.length === 0 ? (
+                <p className="text-xs text-brand-muted">No open slots for this duration on this day.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5 md:gap-2">
+                  {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                    const rate = rates.find((r) => r.durationHours === selectedDurationForModal);
+                    const priceLabel = rate ? formatPrice(rate.priceCents) : null;
+                    const useOpenInModal = !!onOpenInModal && !!selectedDate;
+                    const useDirectCheckout = !useOpenInModal && directCheckout;
+                    const checkoutHref =
+                      !useOpenInModal && !useDirectCheckout && bookHref && selectedDate
+                        ? `${bookHref}?date=${encodeURIComponent(selectedDate)}&slotId=${encodeURIComponent(slot.id)}`
+                        : null;
+                    const isDirectLoading = directCheckoutLoading === slot.id;
+                    const btnClass = cn(
+                      "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all flex flex-col items-center justify-center min-h-[52px]",
+                      "border-brand-dark/15 hover:border-brand-dark/30"
+                    );
+                    if (useOpenInModal && selectedDate) {
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          onClick={() => {
+                            onOpenInModal?.({
+                              experienceId: experienceId ?? undefined,
+                              experienceSlug: experienceSlug ?? undefined,
+                              date: selectedDate,
+                              slotId: slot.id,
+                            });
+                            setSlotModalOpen(false);
+                          }}
+                          className={btnClass}
+                        >
+                          <span>{timeLabel}</span>
+                          {priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}
+                        </button>
+                      );
+                    }
+                    if (useDirectCheckout) {
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          disabled={!experienceId || isDirectLoading}
+                          onClick={async () => {
+                            if (!experienceId) return;
+                            setDirectCheckoutLoading(slot.id);
+                            try {
+                              const res = await fetch("/api/booking/create-checkout-session-direct", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  experienceId,
+                                  slotId: slot.id,
+                                  partySize: 1,
+                                  petsCount: 0,
+                                }),
+                              });
+                              const data = await res.json().catch(() => ({}));
+                              if (res.ok && data?.url) {
+                                setSlotModalOpen(false);
+                                window.location.href = data.url;
+                                return;
+                              }
+                              const msg = (data as { error?: string }).error ?? "Checkout failed";
+                              alert(msg);
+                            } finally {
+                              setDirectCheckoutLoading(null);
+                            }
+                          }}
+                          className={cn(btnClass, "disabled:opacity-60 disabled:pointer-events-none")}
+                        >
+                          {isDirectLoading ? "…" : (<><span>{timeLabel}</span>{priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}</>)}
+                        </button>
+                      );
+                    }
+                    return checkoutHref ? (
+                      <Link
+                        key={slot.id}
+                        href={checkoutHref}
+                        onClick={() => setSlotModalOpen(false)}
+                        className={btnClass}
+                      >
+                        <span>{timeLabel}</span>
+                        {priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}
+                      </Link>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </Dialog>

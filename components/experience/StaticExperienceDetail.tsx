@@ -10,6 +10,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 import { ExperienceCalendarSection } from "./ExperienceCalendarSection";
 import { STATIC_TO_FIRESTORE_SLUG } from "@/lib/booking/static-slug-map";
 import type { Experience } from "@/content/experiences";
@@ -19,6 +20,7 @@ interface StaticExperienceDetailProps {
 }
 
 export function StaticExperienceDetail({ experience }: StaticExperienceDetailProps) {
+  const { openWithSelection } = useBookingModal();
   const slug = experience.slug;
   const bookHref = `/experiences/${slug}/book`;
   const firestoreSlug = STATIC_TO_FIRESTORE_SLUG[slug] ?? null;
@@ -71,9 +73,9 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
       {firestoreSlug && (
         <ExperienceCalendarSection
           firestoreSlug={firestoreSlug}
+          experienceSlug={firestoreSlug}
           bookHref={bookHref}
-          directCheckout
-          onSelectSlot={() => {}}
+          onOpenInModal={(selection) => openWithSelection({ ...selection, experienceSlug: firestoreSlug ?? slug })}
         />
       )}
 

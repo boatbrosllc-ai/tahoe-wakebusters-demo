@@ -35,7 +35,7 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
   {
     label: "Business",
     links: [
-      { href: "/admin/calendars", label: "Block dates", icon: Calendar },
+      { href: "/admin/calendars", label: "Calendar", icon: Calendar },
       { href: "/admin/pricing-calendar", label: "Pricing calendar", icon: DollarSign },
       { href: "/admin/bookings", label: "Bookings", icon: BookOpen },
       { href: "/admin/customers", label: "Customers", icon: Users },

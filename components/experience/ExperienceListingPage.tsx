@@ -10,6 +10,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 import { ExperienceCalendarSection } from "./ExperienceCalendarSection";
 import type { ExperienceWithDetails } from "@/lib/booking/get-experience-by-slug";
 
@@ -18,6 +19,7 @@ interface ExperienceListingPageProps {
 }
 
 export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
+  const { openWithSelection } = useBookingModal();
   const { id, experience, rates, addons } = data;
   const fromPrice = rates.length > 0 ? Math.min(...rates.map((r) => r.priceCents)) : null;
   const ctaText = experience.ctaButtonText?.trim() || "Book now";
@@ -225,9 +227,9 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
 
             <ExperienceCalendarSection
               experienceId={id}
+              experienceSlug={experience.slug}
               bookHref={bookHref}
-              directCheckout
-              onSelectSlot={() => {}}
+              onOpenInModal={(selection) => openWithSelection({ ...selection, experienceId: id, experienceSlug: experience.slug })}
             />
 
             <div className="rounded-3xl bg-brand-dark p-8 sm:p-12 text-center text-white shadow-premium">

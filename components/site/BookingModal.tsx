@@ -176,6 +176,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [slots, setSlots] = useState<SlotDto[]>([]);
+  const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   // Step 4 form
@@ -202,6 +203,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  // Define before any hook that may reference it (avoids TDZ)
+  const ratesForSelection = selectedBoat
+    ? (selectedBoat.rates as RateOption[])
+    : experienceRates;
+  useEffect(() => {
+    if (ratesForSelection.length === 0) return;
+    const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
+    if (!valid) setSelectedRateIdForCalendar(null);
+  }, [ratesForSelection, selectedRateIdForCalendar]);
+
   const dateOptions = useMemo(
     () => getDaysInMonth(viewMonthYear, viewMonthMonth),
     [viewMonthYear, viewMonthMonth]
@@ -215,9 +226,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    // When opening with pre-selection (date/slot), start at step 3 so we don't flash step 1
-    if (initialSelection?.date) setStep(3);
-    else setStep(1);
+    // When opening with pre-selection: date+slot but no boat → step 2 (pick boat); date+boat+slot → step 4 later when slot loads; date only → step 3
+    if (initialSelection?.date) {
+      if (initialSelection?.boatId) setStep(3);
+      else setStep(2);
+    } else setStep(1);
     setSelectedExperience(null);
     setBoats([]);
     setSelectedBoat(null);
@@ -231,6 +244,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setEffectiveRateCents(null);
     setDatePrices({});
     setSlots([]);
+    setMonthSlots([]);
     setSelectedSlot(null);
     setPartySize(1);
     setPetsCount(0);
@@ -345,12 +359,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [selectedExperience, boats.length]);
 
   const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
+  const viewMonthEndStr = useMemo(() => {
+    const last = new Date(viewMonthYear, viewMonthMonth, 0);
+    return last.toISOString().slice(0, 10);
+  }, [viewMonthYear, viewMonthMonth]);
   useEffect(() => {
-    if (!selectedExperience) {
+    if (!selectedExperience || !selectedRateIdForCalendar) {
       setDatePrices({});
       return;
     }
-    const rateIdQ = selectedRateIdForCalendar ? `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}` : "";
+    const rateIdQ = `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}`;
     fetch(
       `/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&days=35${rateIdQ}`
     )
@@ -362,40 +380,63 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch(() => setDatePrices({}));
   }, [selectedExperience?.id, viewMonthStartStr, selectedRateIdForCalendar]);
 
+  // Fetch all slots for the visible month (all statuses) so calendar shows available vs booked
   useEffect(() => {
-    if (!selectedExperience || !selectedDate) {
-      setSlots([]);
-      setSelectedSlot(null);
+    if (!selectedExperience) {
+      setMonthSlots([]);
       return;
     }
     setSlotsLoading(true);
-    setSelectedSlot(null);
     fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${selectedDate}&endDate=${selectedDate}`
+      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}`
     )
       .then((res) => res.json())
       .then((data) => {
         const list = data?.slots ?? [];
-        setSlots(list.filter((s: SlotDto) => s.status === "open"));
+        setMonthSlots(list);
       })
-      .catch(() => setSlots([]))
+      .catch(() => setMonthSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [selectedExperience, selectedDate]);
+  }, [selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
 
-  // Single definition: boat rates when boat selected, else experience rates (used for selectedRateId and step-4 effect)
-  const ratesForSelection = selectedBoat
-    ? (selectedBoat.rates as RateOption[])
-    : experienceRates;
-  // Keep calendar duration in sync with available rates (e.g. when switching boat/experience)
+  // Open slots for the selected date only (for time list) — derived from monthSlots
   useEffect(() => {
-    if (ratesForSelection.length === 0) return;
-    const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
-    if (!valid) setSelectedRateIdForCalendar(ratesForSelection[0].id);
-  }, [ratesForSelection, selectedRateIdForCalendar]);
+    if (!selectedDate) {
+      setSlots([]);
+      setSelectedSlot(null);
+      return;
+    }
+    const openForDate = monthSlots.filter(
+      (s) => s.startAt.startsWith(selectedDate) && s.status === "open"
+    );
+    setSlots(openForDate);
+    setSelectedSlot((prev) => {
+      if (!prev) return null;
+      const stillThere = openForDate.some((s) => s.id === prev.id);
+      return stillThere ? prev : null;
+    });
+  }, [selectedDate, monthSlots]);
+
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
+  const slotsByDate = useMemo(() => {
+    const map = new Map<
+      string,
+      { open: number; held: number; booked: number; blocked: number }
+    >();
+    for (const s of monthSlots) {
+      const day = s.startAt.slice(0, 10);
+      if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
+      const e = map.get(day)!;
+      if (s.status === "open") e.open++;
+      else if (s.status === "held") e.held++;
+      else if (s.status === "booked") e.booked++;
+      else e.blocked++;
+    }
+    return map;
+  }, [monthSlots]);
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
     const filtered =
@@ -454,14 +495,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     };
   }, [effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
 
-  // When opened with initialSelection (slot pre-picked), go to step 4 (details & payment).
-  // Do not overwrite payment phase if user has already proceeded to Stripe or completed payment.
+  // When opened with initialSelection (slot pre-picked) and boat was also pre-picked, go to step 4.
+  // When opened from listing calendar (date + slot, no boatId), stay at step 3 so user picks boat first.
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
+    if (!initialSelection?.boatId) return;
     if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "success") return;
     setStep(4);
     setPaymentPhase("form");
-  }, [open, initialSelection?.slotId, selectedSlot, selectedRateId, paymentPhase]);
+  }, [open, initialSelection?.slotId, initialSelection?.boatId, selectedSlot, selectedRateId, paymentPhase]);
 
   // When opened with initialSelection (date but no slot), go to step 3 (pick time)
   useEffect(() => {
@@ -486,20 +528,26 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch(() => setEffectiveRateCents(null));
   }, [selectedExperience?.id, selectedRateId, selectedDate]);
 
+  /** Calendar-first flow: date + slot chosen on listing, so modal only shows boat → details (no step 1 or 3). */
+  const isCalendarFirstFlow = !!initialSelection?.slotId;
+
   const handleBack = () => {
-    if (step === 2) setStep(1);
-    else if (step === 3) setStep(2);
+    if (step === 2) {
+      if (isCalendarFirstFlow) onOpenChange(false);
+      else setStep(1);
+    } else if (step === 3) setStep(2);
     else if (step === 4) {
-      setStep(3);
-    setPaymentPhase("form");
-    setClientSecret(null);
-    setHoldId(null);
-    setPaymentIntentId(null);
-    setPaymentError(null);
-    setTipChoice(null);
-    setTipLaterMessageOpen(false);
-  }
-};
+      if (isCalendarFirstFlow) setStep(2);
+      else setStep(3);
+      setPaymentPhase("form");
+      setClientSecret(null);
+      setHoldId(null);
+      setPaymentIntentId(null);
+      setPaymentError(null);
+      setTipChoice(null);
+      setTipLaterMessageOpen(false);
+    }
+  };
 
   const handleSelectCategory = (exp: ExperienceItem) => {
     setSelectedExperience(exp);
@@ -507,7 +555,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   };
 
   const handleStep2Next = () => {
-    if (boats.length === 0 || selectedBoat) setStep(3);
+    if (boats.length === 0 || selectedBoat) {
+      // Calendar-first: date + duration + time chosen on listing → go straight to details (step 4)
+      if (initialSelection?.slotId) {
+        setStep(4);
+        setPaymentPhase("form");
+      } else setStep(3);
+    }
   };
 
   const canGoToStep4 =
@@ -619,6 +673,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   };
 
   const stepTitles = ["Pick category", "Choose your boat", "Pick date & time", "Details & payment"];
+  const stepCount = isCalendarFirstFlow ? 2 : 4;
+  const stepIndex = isCalendarFirstFlow ? (step === 2 ? 1 : 2) : step;
+  const stepTitle = isCalendarFirstFlow ? (step === 2 ? "Choose your boat" : "Details & payment") : stepTitles[step - 1];
 
   // Smart modal: min-height per step to fit content (step 2 compact when no boats; step 4 content-fitting)
   // Only the active panel contributes to height so the modal grows per step
@@ -655,7 +712,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {([1, 2, 3, 4] as const).map((s) => (
+            {(isCalendarFirstFlow ? [2, 4] : [1, 2, 3, 4]).map((s) => (
               <span
                 key={s}
                 className={cn(
@@ -669,9 +726,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           <div className="w-14" aria-hidden />
         </div>
         <p className="text-xs font-medium text-brand-muted uppercase tracking-wider mb-3 shrink-0">
-          Step {step} of 4
+          Step {stepIndex} of {stepCount}
         </p>
-        <h2 className="text-lg font-semibold text-brand-dark mb-4 shrink-0">{stepTitles[step - 1]}</h2>
+        <h2 className="text-lg font-semibold text-brand-dark mb-4 shrink-0">{stepTitle}</h2>
 
         {paymentError && (
           <div className="mb-4 shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-3 flex items-start justify-between gap-3">
@@ -834,9 +891,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         );
                       })}
                     </div>
+                    {!selectedRateIdForCalendar && (
+                      <p className="mt-2 text-xs text-brand-muted">Select a duration to see available dates and prices.</p>
+                    )}
                   </div>
                 )}
-                <div>
+                {selectedRateIdForCalendar && (
+                  <>
+                  <div>
                   <div className="flex items-center justify-between gap-2 mb-1.5 md:mb-2">
                     <p className="text-xs font-semibold text-brand-dark">Date</p>
                     <div className="flex items-center gap-0.5">
@@ -882,24 +944,46 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <div className="grid grid-cols-5 gap-1.5 md:gap-2">
                     {dateOptions.map(({ dateStr, label, weekday }) => {
                       const isSelected = selectedDate === dateStr;
-                      const isPast = dateStr < new Date().toISOString().slice(0, 10);
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const isPast = dateStr < todayStr;
+                      const entry = slotsByDate.get(dateStr);
+                      const openForDuration =
+                        rateForCalendar?.durationHours != null
+                          ? monthSlots.filter(
+                              (s) =>
+                                s.startAt.startsWith(dateStr) &&
+                                s.status === "open" &&
+                                parseSlotId(s.id)?.durationHours === rateForCalendar.durationHours
+                            ).length
+                          : entry?.open ?? 0;
+                      const isAvailable = !isPast && openForDuration > 0;
+                      const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                      const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                      const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const priceCents = datePrices[dateStr];
                       return (
                         <button
                           key={dateStr}
                           type="button"
-                          disabled={isPast}
-                          onClick={() => setSelectedDate(dateStr)}
+                          disabled={isPast || !isAvailable}
+                          onClick={() => isAvailable && setSelectedDate(dateStr)}
                           className={cn(
                             "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-[10px] md:text-xs min-h-[52px] md:min-h-[58px] flex flex-col justify-center",
                             isPast && "opacity-50 cursor-not-allowed",
-                            isSelected ? "border-brand-primary bg-brand-primary/10 font-semibold" : !isPast && "border-brand-dark/15 hover:border-brand-dark/30"
+                            isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
+                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                            isAvailable &&
+                              "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >
                           <span className="block text-[9px] md:text-[10px] text-brand-muted uppercase">{weekday}</span>
                           <span className="block font-medium mt-0.5">{label}</span>
-                          {typeof priceCents === "number" && (
-                            <span className="block text-[10px] font-semibold text-brand-primary mt-0.5">${(priceCents / 100).toFixed(0)}</span>
+                          {typeof priceCents === "number" && isAvailable && (
+                            <span className="block text-xs font-semibold text-brand-primary mt-0.5">${(priceCents / 100).toFixed(0)}</span>
+                          )}
+                          {isFullyBooked && (
+                            <span className="block text-[9px] font-medium text-amber-700 mt-0.5">Full</span>
                           )}
                         </button>
                       );
@@ -934,6 +1018,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       </div>
                     )}
                   </div>
+                )}
+                </>
                 )}
               </div>
               <button

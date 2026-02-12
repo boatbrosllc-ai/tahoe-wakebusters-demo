@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Calendar, Phone } from "lucide-react";
+import { Calendar, Phone, User, LayoutDashboard, ChevronDown } from "lucide-react";
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
@@ -22,9 +22,20 @@ const navLinks = [
 
 export function Header() {
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
   const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection } = useBookingModal();
 
   const handleCallClick = () => analytics.callClick("header", "global");
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    const close = (e: MouseEvent) => {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) setAccountOpen(false);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [accountOpen]);
 
   return (
     <header
@@ -91,6 +102,33 @@ export function Header() {
             <Calendar className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
           </button>
           <CalendarModal open={calendarOpen} onOpenChange={setCalendarOpen} />
+          <div className="relative shrink-0" ref={accountRef}>
+            <button
+              type="button"
+              onClick={() => setAccountOpen((o) => !o)}
+              className="shrink-0 flex items-center justify-center p-3.5 lg:p-3 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
+              aria-label="Account menu"
+              aria-haspopup="true"
+            >
+              <User className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
+              <ChevronDown className={cn("ml-0.5 h-4 w-4 opacity-80 transition-transform", accountOpen && "rotate-180")} aria-hidden />
+            </button>
+            {accountOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 min-w-[180px] rounded-xl border border-white/20 bg-brand-primary shadow-lg py-1 z-50"
+                aria-label="Account menu"
+              >
+                <Link
+                  href="/admin"
+                  className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white/90 hover:bg-white/15 hover:text-white transition-colors"
+                  onClick={() => setAccountOpen(false)}
+                >
+                  <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
+                  Dashboard
+                </Link>
+              </div>
+            )}
+          </div>
           <Button
             type="button"
             variant="secondary"

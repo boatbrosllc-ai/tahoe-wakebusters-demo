@@ -32,21 +32,23 @@ export function Hero() {
 
       <div className="relative z-10 w-full px-5 py-12 sm:py-14 lg:py-20 xl:py-24">
         <div className="mx-auto w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl text-center">
-          {/* Logo – pop in: scale up with a satisfying spring overshoot */}
+          {/* Logo – pop in: scale up with a satisfying spring overshoot; hover: cartoonish enlarge */}
           <motion.div
-            className="relative flex justify-center mb-4 sm:mb-5 lg:mb-8"
+            className="relative flex justify-center mb-4 sm:mb-5 lg:mb-8 cursor-pointer"
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
+            whileHover={{ scale: 1.08 }}
             transition={{
               type: "spring",
               stiffness: 380,
               damping: 19,
               opacity: { duration: 0.25 },
+              scale: { type: "spring", stiffness: 400, damping: 12 },
             }}
           >
             <Link
               href="/"
-              className="group block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px] transition-transform duration-300 ease-out drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)] hover:rotate-2"
+              className="group block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
               aria-label={`${brand.logoAlt} home`}
             >
               <Image
