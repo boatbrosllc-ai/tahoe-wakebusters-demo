@@ -51,15 +51,16 @@ export function Hero() {
               className="group block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
               aria-label={`${brand.logoAlt} home`}
             >
-              <Image
-                src={brand.logoHeroPath ?? brand.logoDarkPath}
-                alt={brand.logoAlt}
-                width={1000}
-                height={312}
-                className="object-contain object-center w-full max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] group-hover:hero-logo-hover-pink"
-                style={{ width: "100%", height: "auto" }}
-                priority
-              />
+              <span className="relative block w-full max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] aspect-[1000/312] max-w-full">
+                <Image
+                  src={brand.logoHeroPath ?? brand.logoDarkPath}
+                  alt={brand.logoAlt}
+                  fill
+                  className="object-contain object-center group-hover:hero-logo-hover-pink"
+                  sizes="(max-width: 1024px) 90vw, 1000px"
+                  priority
+                />
+              </span>
             </Link>
           </motion.div>
 

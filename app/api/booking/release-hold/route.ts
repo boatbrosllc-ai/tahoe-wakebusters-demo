@@ -48,9 +48,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
     }
 
-    const slotRef = experienceId
-      ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
-      : db.collection("boats").doc(boatId!).collection("slots").doc(slotId);
+    const slotRef = boatId
+      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+      : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
 
     await db.runTransaction(async (tx) => {
       const slotSnap = await tx.get(slotRef);
@@ -104,9 +104,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
   }
 
-  const slotRef = experienceId
-    ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
-    : db.collection("boats").doc(boatId!).collection("slots").doc(slotId);
+  const slotRef = boatId
+    ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+    : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
 
   await db.runTransaction(async (tx) => {
     const slotSnap = await tx.get(slotRef);

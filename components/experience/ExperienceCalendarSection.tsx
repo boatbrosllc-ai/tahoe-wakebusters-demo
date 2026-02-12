@@ -54,6 +54,7 @@ export interface ExperienceCalendarOpenModalSelection {
   experienceSlug?: string;
   date: string;
   slotId: string;
+  boatId?: string;
 }
 
 interface ExperienceCalendarSectionProps {
@@ -93,6 +94,7 @@ export function ExperienceCalendarSection({
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [selectedDurationForModal, setSelectedDurationForModal] = useState<number | null>(null);
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
+  const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -156,6 +158,27 @@ export function ExperienceCalendarSection({
     fetchSlots();
   }, [experienceId, fetchSlots]);
 
+  // Fetch admin-configured day pricing (weekend/holiday/weekday) for the visible calendar range
+  useEffect(() => {
+    if (!experienceId) {
+      setDatePrices({});
+      return;
+    }
+    const start = new Date(dateRange.start + "T00:00:00");
+    const end = new Date(dateRange.end + "T00:00:00");
+    const days = Math.min(90, Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1));
+    fetch(
+      `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&days=${days}`
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.prices && typeof data.prices === "object") setDatePrices(data.prices);
+        else setDatePrices({});
+      })
+      .catch(() => setDatePrices({}));
+  }, [experienceId, dateRange.start, dateRange.end]);
+
+  /** Aggregates slots by date across all boats (no boatId in fetch = all boats). Full only when no open slots on that day. */
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -554,7 +577,14 @@ export function ExperienceCalendarSection({
                             </span>
                           )}
                           {!isToday && isAvailable && cell.openCount > 0 && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden />
+                            <>
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden />
+                              {typeof datePrices[cell.dateStr] === "number" && (
+                                <span className="text-[9px] font-semibold text-brand-primary leading-none">
+                                  ${(datePrices[cell.dateStr] / 100).toFixed(0)}
+                                </span>
+                              )}
+                            </>
                           )}
                           {!isToday && isFullyBooked && (
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" aria-hidden title="Booked / full" />
@@ -609,6 +639,11 @@ export function ExperienceCalendarSection({
                                       </span>
                                     )}
                                   </div>
+                                )}
+                                {isAvailable && typeof datePrices[cell.dateStr] === "number" && (
+                                  <span className="text-[10px] lg:text-xs font-semibold text-brand-primary leading-tight mt-0.5">
+                                    ${(datePrices[cell.dateStr] / 100).toFixed(0)}
+                                  </span>
                                 )}
                                 {hasBooked && (
                                   <span className="text-[10px] lg:text-xs font-medium text-amber-700 bg-amber-100/80 rounded px-1 py-0.5 w-fit leading-tight">
@@ -726,6 +761,7 @@ export function ExperienceCalendarSection({
                               experienceSlug: experienceSlug ?? undefined,
                               date: selectedDate,
                               slotId: slot.id,
+                              boatId: (slot as { boatId?: string }).boatId,
                             });
                             setSlotModalOpen(false);
                           }}

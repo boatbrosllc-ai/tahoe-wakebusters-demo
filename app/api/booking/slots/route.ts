@@ -31,8 +31,8 @@ export async function GET(request: NextRequest) {
     const { Timestamp } = getFirestoreExports();
 
     if (experienceId) {
-      // Experiences: all dates available until booked or blocked. Return grid of slots;
-      // use Firestore only for held/booked/blocked; otherwise synthetic "open".
+      // Experiences with listing boats: slots are per boat so one boat booked doesn't block others.
+      // Optional boatId: return only that boat's slots. Otherwise return slots for all boats (each slot has boatId).
       const expRef = db.collection("experiences").doc(experienceId);
       const expDoc = await expRef.get();
       if (!expDoc.exists) {
@@ -44,44 +44,84 @@ export async function GET(request: NextRequest) {
       if (durationsUnique.length === 0) {
         return NextResponse.json({ slots: [] });
       }
-      const slotsRef = expRef.collection("slots");
-      const snap = await slotsRef
-        .where("startAt", ">=", Timestamp.fromDate(start))
-        .where("startAt", "<=", Timestamp.fromDate(end))
+      const boatIdParam = request.nextUrl.searchParams.get("boatId");
+      let boatIds: string[] = [];
+      const boatsSnap = await db
+        .collection("boats")
+        .where("isListingBoat", "==", true)
+        .where("active", "==", true)
+        .where("experienceIds", "array-contains", experienceId)
         .get();
-      const existingByKey = new Map<string, { id: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null }>();
-      snap.docs.forEach((doc) => {
-        const data = doc.data() as Slot;
-        const startAt = (data.startAt as { toDate(): Date }).toDate();
-        const endAt = (data.endAt as { toDate(): Date }).toDate();
-        const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
-        existingByKey.set(doc.id, {
-          id: doc.id,
-          startAt: startAt.toISOString(),
-          endAt: endAt.toISOString(),
-          status: data.status,
-          holdId: data.holdId,
-          bookingId: data.bookingId,
-          updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
-        });
-      });
+      boatIds = boatsSnap.docs.map((d) => d.id);
+      if (boatIdParam) {
+        if (!boatIds.includes(boatIdParam)) {
+          return NextResponse.json({ error: "Boat not found or not assigned to this experience" }, { status: 404 });
+        }
+        boatIds = [boatIdParam];
+      }
+      if (boatIds.length === 0) {
+        return NextResponse.json({ slots: [] });
+      }
+      type SlotRow = { id: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string };
+      const existingByBoatAndKey = new Map<string, SlotRow>();
+      await Promise.all(
+        boatIds.map(async (bid) => {
+          const snap = await db
+            .collection("boats")
+            .doc(bid)
+            .collection("slots")
+            .where("startAt", ">=", Timestamp.fromDate(start))
+            .where("startAt", "<=", Timestamp.fromDate(end))
+            .get();
+          snap.docs.forEach((doc) => {
+            const data = doc.data() as Slot;
+            const startAt = (data.startAt as { toDate(): Date }).toDate();
+            const endAt = (data.endAt as { toDate(): Date }).toDate();
+            const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
+            const key = `${bid}:${doc.id}`;
+            existingByBoatAndKey.set(key, {
+              id: doc.id,
+              startAt: startAt.toISOString(),
+              endAt: endAt.toISOString(),
+              status: data.status,
+              holdId: data.holdId,
+              bookingId: data.bookingId,
+              updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
+              boatId: bid,
+            });
+          });
+        })
+      );
       const grid = getSlotGrid(start, end, durationsUnique);
-      const slots = grid.map(({ dateStr, startHour, durationHours }) => {
-        const slotId = buildSlotId(dateStr, startHour, durationHours);
-        const existing = existingByKey.get(slotId);
-        if (existing) return existing;
-        const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, durationHours);
-        return {
-          id: slotId,
-          startAt: slotStart.toISOString(),
-          endAt: slotEnd.toISOString(),
-          status: "open" as const,
-          holdId: null,
-          bookingId: null,
-          updatedAt: null,
-        };
-      });
-      // Enrich held slots with hold expiry (for admin calendar countdown)
+      const slots: SlotRow[] = [];
+      for (const bid of boatIds) {
+        const takenRanges = Array.from(existingByBoatAndKey.values())
+          .filter((s) => s.boatId === bid && s.status !== "open")
+          .map((s) => ({ start: new Date(s.startAt).getTime(), end: new Date(s.endAt).getTime() }));
+        for (const { dateStr, startHour, durationHours } of grid) {
+          const slotId = buildSlotId(dateStr, startHour, durationHours);
+          const key = `${bid}:${slotId}`;
+          const existing = existingByBoatAndKey.get(key);
+          if (existing) {
+            slots.push(existing);
+            continue;
+          }
+          const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, durationHours);
+          const slotStartMs = slotStart.getTime();
+          const slotEndMs = slotEnd.getTime();
+          const overlapsTaken = takenRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
+          slots.push({
+            id: slotId,
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+            status: overlapsTaken ? "blocked" : "open",
+            holdId: null,
+            bookingId: null,
+            updatedAt: null,
+            boatId: bid,
+          });
+        }
+      }
       const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
       if (heldHoldIds.length > 0) {
         const holdSnap = await Promise.all(heldHoldIds.map((id) => db.collection("holds").doc(id).get()));

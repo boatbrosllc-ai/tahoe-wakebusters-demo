@@ -24,9 +24,9 @@ export async function POST(request: NextRequest) {
       const experienceId = hold.experienceId as string | undefined;
       const slotId = hold.slotId as string;
       if (!slotId || (!boatId && !experienceId)) continue;
-      const slotRef = experienceId
-        ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
-        : db.collection("boats").doc(boatId!).collection("slots").doc(slotId);
+      const slotRef = boatId
+        ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+        : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
       await db.runTransaction(async (tx) => {
         const slotSnap = await tx.get(slotRef);
         if (!slotSnap.exists) return;

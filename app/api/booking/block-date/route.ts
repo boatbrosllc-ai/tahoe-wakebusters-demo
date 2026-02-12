@@ -9,8 +9,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import {
   buildSlotId,
-  EXPERIENCE_START_HOURS,
+  getLatestStartHourForDuration,
   getSlotStartEnd,
+  OPERATING_START_HOUR,
 } from "@/lib/booking/experience-slots";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import type { ExperienceRate } from "@/lib/booking/types";
@@ -36,29 +37,40 @@ export async function POST(request: NextRequest) {
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
-    const slotsRef = db.collection("experiences").doc(experienceId).collection("slots");
+
+    const boatsSnap = await db
+      .collection("boats")
+      .where("isListingBoat", "==", true)
+      .where("experienceIds", "array-contains", experienceId)
+      .get();
+    const boatIds = boatsSnap.docs.map((d) => d.id);
 
     if (action === "unblock") {
       const dayStart = new Date(dateStr + "T00:00:00");
       const dayEnd = new Date(dateStr + "T23:59:59.999");
-      const snap = await slotsRef
-        .where("startAt", ">=", Timestamp.fromDate(dayStart))
-        .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-        .get();
-      const BATCH_SIZE = 500;
-      let batch = db.batch();
-      let batchCount = 0;
-      for (const doc of snap.docs) {
-        batch.delete(doc.ref);
-        batchCount++;
-        if (batchCount >= BATCH_SIZE) {
-          await batch.commit();
-          batch = db.batch();
-          batchCount = 0;
+      let totalUnblocked = 0;
+      for (const bid of boatIds) {
+        const slotsRefBoat = db.collection("boats").doc(bid).collection("slots");
+        const snap = await slotsRefBoat
+          .where("startAt", ">=", Timestamp.fromDate(dayStart))
+          .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+          .get();
+        const BATCH_SIZE = 500;
+        let batch = db.batch();
+        let batchCount = 0;
+        for (const doc of snap.docs) {
+          batch.delete(doc.ref);
+          batchCount++;
+          totalUnblocked++;
+          if (batchCount >= BATCH_SIZE) {
+            await batch.commit();
+            batch = db.batch();
+            batchCount = 0;
+          }
         }
+        if (batchCount > 0) await batch.commit();
       }
-      if (batchCount > 0) await batch.commit();
-      return NextResponse.json({ ok: true, date: dateStr, action: "unblock", slotsUnblocked: snap.size });
+      return NextResponse.json({ ok: true, date: dateStr, action: "unblock", slotsUnblocked: totalUnblocked });
     }
 
     const ratesSnap = await db
@@ -72,31 +84,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Experience has no rates" }, { status: 400 });
     }
     const BATCH_SIZE = 500;
-    let batch = db.batch();
-    let batchCount = 0;
     let totalSlots = 0;
-    for (const startHour of EXPERIENCE_START_HOURS) {
+    for (const bid of boatIds) {
+      const slotsRefBoat = db.collection("boats").doc(bid).collection("slots");
+      let batch = db.batch();
+      let batchCount = 0;
       for (const durationHours of durations) {
-        const slotId = buildSlotId(dateStr, startHour, durationHours);
-        const { start, end } = getSlotStartEnd(dateStr, startHour, durationHours);
-        batch.set(slotsRef.doc(slotId), {
-          startAt: Timestamp.fromDate(start),
-          endAt: Timestamp.fromDate(end),
-          status: "blocked",
-          holdId: null,
-          bookingId: null,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        batchCount++;
-        totalSlots++;
-        if (batchCount >= BATCH_SIZE) {
-          await batch.commit();
-          batch = db.batch();
-          batchCount = 0;
+        const latestStart = getLatestStartHourForDuration(durationHours);
+        for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
+          const slotId = buildSlotId(dateStr, startHour, durationHours);
+          const { start, end } = getSlotStartEnd(dateStr, startHour, durationHours);
+          batch.set(slotsRefBoat.doc(slotId), {
+            startAt: Timestamp.fromDate(start),
+            endAt: Timestamp.fromDate(end),
+            status: "blocked",
+            holdId: null,
+            bookingId: null,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          batchCount++;
+          totalSlots++;
+          if (batchCount >= BATCH_SIZE) {
+            await batch.commit();
+            batch = db.batch();
+            batchCount = 0;
+          }
         }
       }
+      if (batchCount > 0) await batch.commit();
     }
-    if (batchCount > 0) await batch.commit();
     return NextResponse.json({ ok: true, date: dateStr, slotsBlocked: totalSlots });
   } catch (err) {
     console.error("[block-date]", err);

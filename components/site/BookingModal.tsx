@@ -177,6 +177,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
+  const [boatAvailabilitySlots, setBoatAvailabilitySlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   // Step 4 form
@@ -217,6 +218,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => getDaysInMonth(viewMonthYear, viewMonthMonth),
     [viewMonthYear, viewMonthMonth]
   );
+  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). */
+  const step3CalendarGrid = useMemo(() => {
+    const first = new Date(viewMonthYear, viewMonthMonth - 1, 1);
+    const leadingBlanks = first.getDay();
+    return [...Array(leadingBlanks).fill(null), ...dateOptions];
+  }, [viewMonthYear, viewMonthMonth, dateOptions]);
   const viewMonthLabel = useMemo(
     () => new Date(viewMonthYear, viewMonthMonth - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
     [viewMonthYear, viewMonthMonth]
@@ -380,15 +387,36 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch(() => setDatePrices({}));
   }, [selectedExperience?.id, viewMonthStartStr, selectedRateIdForCalendar]);
 
-  // Fetch all slots for the visible month (all statuses) so calendar shows available vs booked
+  // Fetch all boats' slots for next 90 days when on step 2 (no boat selected) — used to grey out fully-booked boats
+  useEffect(() => {
+    if (!selectedExperience || selectedBoat != null || boats.length === 0) {
+      setBoatAvailabilitySlots([]);
+      return;
+    }
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 90);
+    const startStr = start.toISOString().slice(0, 10);
+    const endStr = end.toISOString().slice(0, 10);
+    fetch(
+      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${startStr}&endDate=${endStr}`
+    )
+      .then((res) => res.json())
+      .then((data) => setBoatAvailabilitySlots(data?.slots ?? []))
+      .catch(() => setBoatAvailabilitySlots([]));
+  }, [selectedExperience?.id, selectedBoat, boats.length]);
+
+  // Fetch all slots for the visible month (per-boat: when a boat is selected, only that boat's availability)
   useEffect(() => {
     if (!selectedExperience) {
       setMonthSlots([]);
       return;
     }
     setSlotsLoading(true);
+    const boatQ = selectedBoat?.id ? `&boatId=${encodeURIComponent(selectedBoat.id)}` : "";
     fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}`
+      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}${boatQ}`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -397,7 +425,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .catch(() => setMonthSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
+  }, [selectedExperience?.id, selectedBoat?.id, viewMonthStartStr, viewMonthEndStr]);
 
   // Open slots for the selected date only (for time list) — derived from monthSlots
   useEffect(() => {
@@ -421,6 +449,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
+  /** Open slot count per boat (next 90 days) — used to grey out fully-booked boats in step 2. */
+  const openCountByBoat = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of boatAvailabilitySlots) {
+      const bid = (s as SlotDto & { boatId?: string }).boatId;
+      if (bid && s.status === "open") m.set(bid, (m.get(bid) ?? 0) + 1);
+    }
+    return m;
+  }, [boatAvailabilitySlots]);
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -712,12 +749,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {(isCalendarFirstFlow ? [2, 4] : [1, 2, 3, 4]).map((s) => (
+            {(isCalendarFirstFlow ? [2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
-                key={s}
+                key={`step-dot-${stepIdx}`}
                 className={cn(
                   "h-2 rounded-full transition-all duration-300",
-                  step === s ? "w-6 bg-brand-primary" : "w-2 bg-brand-dark/20"
+                  step === stepNum ? "w-6 bg-brand-primary" : "w-2 bg-brand-dark/20"
                 )}
                 aria-hidden
               />
@@ -827,15 +864,19 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   {boats.map((boat) => {
                     const isSelected = selectedBoat?.id === boat.id;
                     const thumb = boat.photos?.[0];
+                    const openCount = openCountByBoat.get(boat.id) ?? 0;
+                    const isFullyBooked = boatAvailabilitySlots.length > 0 && openCount === 0;
                     return (
                       <button
                         key={boat.id}
                         type="button"
-                        onClick={() => setSelectedBoat(boat)}
+                        disabled={isFullyBooked}
+                        onClick={() => !isFullyBooked && setSelectedBoat(boat)}
                         className={cn(
                           "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all min-h-[140px] sm:min-h-[160px]",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]"
+                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]",
+                          isFullyBooked && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20 hover:scale-100 hover:border-brand-dark/20"
                         )}
                       >
                         <div className="relative w-full aspect-[4/3] min-h-[100px] bg-brand-dark/10 shrink-0">
@@ -844,9 +885,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}
+                          {isFullyBooked && (
+                            <div className="absolute inset-0 bg-brand-dark/40 flex items-center justify-center">
+                              <span className="text-xs font-semibold text-white uppercase tracking-wide px-2 py-1 rounded bg-brand-dark/80">Fully booked</span>
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-col justify-center p-3 md:p-4 flex-1 min-w-0">
-                          <span className="text-base md:text-lg font-semibold text-brand-dark truncate">{boat.name}</span>
+                          <span className={cn("text-base md:text-lg font-semibold truncate", isFullyBooked ? "text-brand-muted" : "text-brand-dark")}>{boat.name}</span>
                         </div>
                       </button>
                     );
@@ -874,7 +920,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <div>
                     <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {ratesForSelection.map((r) => {
+                      {[...ratesForSelection]
+                        .sort((a, b) => a.durationHours - b.durationHours)
+                        .map((r) => {
                         const isSelected = selectedRateIdForCalendar === r.id;
                         return (
                           <button
@@ -899,9 +947,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 {selectedRateIdForCalendar && (
                   <>
                   <div>
-                  <div className="flex items-center justify-between gap-2 mb-1.5 md:mb-2">
-                    <p className="text-xs font-semibold text-brand-dark">Date</p>
-                    <div className="flex items-center gap-0.5">
+                  <div className="flex flex-col items-center gap-2 mb-2 md:mb-3">
+                    <p className="text-xs font-semibold text-brand-dark w-full">Date</p>
+                    <div className="flex items-center justify-center gap-1 w-full">
                       <button
                         type="button"
                         disabled={isViewMonthCurrent}
@@ -914,14 +962,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           }
                         }}
                         className={cn(
-                          "rounded p-1.5 text-brand-dark transition-colors",
+                          "rounded-lg p-2 text-brand-dark transition-colors",
                           isViewMonthCurrent ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10"
                         )}
                         aria-label="Previous month"
                       >
-                        <ChevronLeft className="h-4 w-4" />
+                        <ChevronLeft className="h-5 w-5 md:h-6 md:w-6" />
                       </button>
-                      <span className="text-xs font-medium text-brand-dark min-w-[7rem] text-center">
+                      <span className="text-base md:text-lg font-semibold text-brand-dark min-w-[10rem] text-center">
                         {viewMonthLabel}
                       </span>
                       <button
@@ -934,15 +982,26 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setViewMonthMonth((m) => m + 1);
                           }
                         }}
-                        className="rounded p-1.5 text-brand-dark hover:bg-brand-dark/10 transition-colors"
+                        className="rounded-lg p-2 text-brand-dark hover:bg-brand-dark/10 transition-colors"
                         aria-label="Next month"
                       >
-                        <ChevronRight className="h-4 w-4" />
+                        <ChevronRight className="h-5 w-5 md:h-6 md:w-6" />
                       </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-5 gap-1.5 md:gap-2">
-                    {dateOptions.map(({ dateStr, label, weekday }) => {
+                  <div className="grid grid-cols-7 gap-1.5 md:gap-2">
+                    {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, dayIdx) => (
+                      <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] md:text-[10px] font-semibold uppercase text-brand-muted py-0.5 shrink-0 min-w-0">
+                        {dayLabel}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1.5 md:gap-2 mt-0.5">
+                    {step3CalendarGrid.map((cell, idx) => {
+                      if (cell == null) {
+                        return <div key={`empty-${idx}`} className="min-h-[52px] md:min-h-[58px]" />;
+                      }
+                      const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
                       const todayStr = new Date().toISOString().slice(0, 10);
                       const isPast = dateStr < todayStr;
@@ -968,7 +1027,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           disabled={isPast || !isAvailable}
                           onClick={() => isAvailable && setSelectedDate(dateStr)}
                           className={cn(
-                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-[10px] md:text-xs min-h-[52px] md:min-h-[58px] flex flex-col justify-center",
+                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-xs md:text-sm min-h-[52px] md:min-h-[58px] flex flex-col justify-center",
                             isPast && "opacity-50 cursor-not-allowed",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                             isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
@@ -977,13 +1036,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >
-                          <span className="block text-[9px] md:text-[10px] text-brand-muted uppercase">{weekday}</span>
-                          <span className="block font-medium mt-0.5">{label}</span>
+                          <span className="block text-[10px] md:text-xs text-brand-muted uppercase">{weekday}</span>
+                          <span className="block font-medium mt-0.5 text-sm md:text-base">{label}</span>
                           {typeof priceCents === "number" && isAvailable && (
-                            <span className="block text-xs font-semibold text-brand-primary mt-0.5">${(priceCents / 100).toFixed(0)}</span>
+                            <span className={cn(
+                              "block text-sm font-semibold mt-0.5",
+                              isSelected ? "text-brand-primary" : "text-emerald-900"
+                            )}>${(priceCents / 100).toFixed(0)}</span>
                           )}
                           {isFullyBooked && (
-                            <span className="block text-[9px] font-medium text-amber-700 mt-0.5">Full</span>
+                            <span className="block text-xs font-medium text-amber-700 mt-0.5">Full</span>
                           )}
                         </button>
                       );

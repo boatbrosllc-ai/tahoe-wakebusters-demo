@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
-      slotsRef = db.collection("experiences").doc(expId).collection("slots");
+      slotsRef = db.collection("boats").doc(boatId).collection("slots");
       slotRef = slotsRef.doc(input.slotId);
       const slotDoc = await slotRef.get();
       let slotStart: Date;

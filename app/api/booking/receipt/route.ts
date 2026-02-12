@@ -34,10 +34,10 @@ export async function GET(request: NextRequest) {
       experienceName = expSnap.exists ? (expSnap.data() as Experience).title : "Charter";
       const boatSnap = await db.collection("boats").doc(booking.boatId!).get();
       boatName = boatSnap.exists ? (boatSnap.data() as { name?: string }).name ?? experienceName : experienceName;
-      const slotSnap = await db.collection("experiences").doc(booking.experienceId!).collection("slots").doc(booking.slotId).get();
-      const rateSnap = await db.collection("boats").doc(booking.boatId!).collection("rates").doc(booking.rateId).get();
+      const slotSnap = await db.collection("boats").doc(booking.boatId!).collection("slots").doc(booking.slotId).get();
+      const rateSnap = await db.collection("experiences").doc(booking.experienceId!).collection("rates").doc(booking.rateId).get();
       slot = slotSnap.exists ? (slotSnap.data() as Slot) : null;
-      rate = rateSnap.exists ? (rateSnap.data() as BoatRate) : null;
+      rate = rateSnap.exists ? (rateSnap.data() as ExperienceRate) : null;
     } else if (hasExperience) {
       const expSnap = await db.collection("experiences").doc(booking.experienceId!).get();
       experienceName = expSnap.exists ? (expSnap.data() as Experience).title : "Charter";

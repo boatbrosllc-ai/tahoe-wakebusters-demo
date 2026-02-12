@@ -65,7 +65,7 @@ export async function convertHoldToBooking(
     const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
     const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
     const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-    const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
+    const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
     if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
       throw new Error("Experience/boat/rate/slot not found");
     }
@@ -80,7 +80,7 @@ export async function convertHoldToBooking(
     rate = rateSnap.data() as ExperienceRate;
     slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
-    slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+    slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
   } else if (hasExperience) {
     const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
     const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();

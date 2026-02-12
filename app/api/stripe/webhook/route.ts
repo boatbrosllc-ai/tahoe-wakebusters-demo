@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
         const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
         const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
         const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
+        const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
         if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
           await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
           await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
         }
-        slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+        slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
       } else if (hasExperience) {
         const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
         const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
