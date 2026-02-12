@@ -25,6 +25,7 @@ type RateRow = {
   displayName: string;
   priceCents: number;
   priceWeekendCents?: number;
+  priceFriSunCents?: number;
   priceHolidayCents?: number;
 };
 type HolidayDateRow = { label: string; start: string; end: string; recurring?: boolean; priceCents?: number };
