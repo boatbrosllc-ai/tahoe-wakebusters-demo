@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
@@ -44,6 +45,7 @@ export async function GET(request: NextRequest) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     let revenueThisMonthCents = 0;
+    let paidBookingCount = 0;
     const recent: { id: string; createdAt: string; customerEmail: string; totalCents: number; status: string; experienceName: string }[] = [];
     const byExperienceMap = new Map<string, { revenueCents: number; bookingCount: number }>();
 
@@ -65,6 +67,7 @@ export async function GET(request: NextRequest) {
       const include = inRange && matchesExperience;
 
       if (b.status === "paid") {
+        paidBookingCount += 1;
         totalRevenueCents += totalCents;
         if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += totalCents;
         if (include) {
@@ -98,12 +101,59 @@ export async function GET(request: NextRequest) {
       bookingCount,
     }));
 
+    let stripeData: {
+      balanceAvailableCents: number;
+      balancePendingCents: number;
+      currency: string;
+      recentTransactions: { id: string; amount: number; net: number; fee: number; created: number; type: string; description?: string }[];
+      stripeError?: string;
+    } | null = null;
+
+    if (process.env.STRIPE_SECRET_KEY) {
+      try {
+        const stripe = getStripe();
+        const [balance, balanceTransactions] = await Promise.all([
+          stripe.balance.retrieve(),
+          stripe.balanceTransactions.list({ limit: 25 }),
+        ]);
+        const usd = balance.available.find((b) => b.currency === "usd") ?? balance.available[0];
+        const pendingUsd = balance.pending.find((b) => b.currency === "usd") ?? balance.pending[0];
+        stripeData = {
+          balanceAvailableCents: usd?.amount ?? 0,
+          balancePendingCents: pendingUsd?.amount ?? 0,
+          currency: usd?.currency ?? "usd",
+          recentTransactions: balanceTransactions.data.map((t) => ({
+            id: t.id,
+            amount: t.amount,
+            net: t.net,
+            fee: t.fee,
+            created: t.created,
+            type: t.type ?? "unknown",
+            description: t.description ?? undefined,
+          })),
+        };
+      } catch (stripeErr) {
+        const msg = stripeErr instanceof Error ? stripeErr.message : String(stripeErr);
+        console.error("[financials] Stripe fetch failed", stripeErr);
+        stripeData = {
+          balanceAvailableCents: 0,
+          balancePendingCents: 0,
+          currency: "usd",
+          recentTransactions: [],
+          stripeError: msg,
+        };
+      }
+    }
+
     return NextResponse.json({
       totalRevenueCents,
       revenueThisMonthCents,
       revenueInRangeCents: fromDateVal || toDateVal ? revenueInRangeCents : undefined,
+      paidBookingCount,
+      totalBookingCount: snap.docs.length,
       recent: recentSlice,
       byExperience,
+      stripe: stripeData,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

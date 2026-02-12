@@ -51,16 +51,23 @@ function isDateInHolidayRange(
 const DEFAULT_WEEKEND_DAYS = [0, 6]; // Sun, Sat
 
 /**
- * Effective rate price: rates by day type are the default; holidays and custom dates are the final override.
- * Order: if date falls in a holiday/custom range, use that range's price (or holiday default); else weekend or weekday base.
- * weekendDays: day numbers (0=Sun … 6=Sat) that use weekend price. Default [0, 6] = Sat–Sun.
- * When a holiday has priceCentsByDuration and rate has durationHours, per-duration override is used first.
+ * Effective rate price: holidays first, then weekend day, then Fri/Sun tier, then weekday base.
+ * weekendDays: day numbers (0=Sun … 6=Sat) that use weekend price (e.g. [6] = Saturday only).
+ * friSunDays: day numbers that use Fri/Sun price when rate has priceFriSunCents (e.g. [0, 5] = Sun, Fri).
+ * Order: holiday → weekendDays → friSunDays → priceCents (weekday).
  */
 export function getEffectiveRatePriceCents(
-  rate: { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number; durationHours?: number },
+  rate: {
+    priceCents: number;
+    priceWeekendCents?: number;
+    priceFriSunCents?: number;
+    priceHolidayCents?: number;
+    durationHours?: number;
+  },
   date: Date,
   holidayDates?: ExperienceHolidayDate[],
-  weekendDays?: number[]
+  weekendDays?: number[],
+  friSunDays?: number[]
 ): number {
   const iso = toISODate(date);
   if (holidayDates?.length) {
@@ -75,8 +82,8 @@ export function getEffectiveRatePriceCents(
   }
   const day = date.getDay();
   const weekend = weekendDays && weekendDays.length > 0 ? weekendDays : DEFAULT_WEEKEND_DAYS;
-  const isWeekend = weekend.includes(day);
-  if (isWeekend && rate.priceWeekendCents != null) return rate.priceWeekendCents;
+  if (weekend.includes(day) && rate.priceWeekendCents != null) return rate.priceWeekendCents;
+  if (friSunDays?.length && friSunDays.includes(day) && rate.priceFriSunCents != null) return rate.priceFriSunCents;
   return rate.priceCents;
 }
 
@@ -98,12 +105,13 @@ export function getCalendarOverridePriceCents(
  * Pass calendarRates when boat has boatType (fetch from pricingCalendar/{boatType}.rates).
  */
 export function getEffectiveBoatRatePriceCents(
-  rate: { durationHours: number; priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number },
+  rate: { durationHours: number; priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number },
   date: Date,
   holidayDates: ExperienceHolidayDate[] | undefined,
   priceOverrides: BoatPriceOverride[] | undefined,
   calendarRates?: Record<string, number>,
-  weekendDays?: number[]
+  weekendDays?: number[],
+  friSunDays?: number[]
 ): number {
   const iso = toISODate(date);
   const calendarPrice = getCalendarOverridePriceCents(iso, rate.durationHours, calendarRates);
@@ -115,7 +123,7 @@ export function getEffectiveBoatRatePriceCents(
       return o.priceCents;
     }
   }
-  return getEffectiveRatePriceCents(rate, date, holidayDates, weekendDays);
+  return getEffectiveRatePriceCents(rate, date, holidayDates, weekendDays, friSunDays);
 }
 
 export function computePricing(params: {

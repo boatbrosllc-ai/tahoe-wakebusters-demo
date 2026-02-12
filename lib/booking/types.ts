@@ -132,8 +132,10 @@ export interface Experience {
   galleryAltTexts?: string[];
   /** Date ranges when holiday pricing applies (e.g. July 4, Memorial Day) */
   holidayDates?: ExperienceHolidayDate[];
-  /** Day numbers (0=Sun … 6=Sat) that use weekend pricing. Default [0, 6] = Sat–Sun. e.g. [0, 5, 6] = Fri–Sun. */
+  /** Day numbers (0=Sun … 6=Sat) that use weekend pricing (e.g. [6] = Saturday only). */
   weekendDays?: number[];
+  /** Day numbers that use Fri/Sun (mid-tier) pricing when priceFriSunCents is set (e.g. [0, 5] = Sun, Fri). */
+  friSunDays?: number[];
   /** Display order on website (lower = first). Default undefined = last. */
   sortOrder?: number;
 }
@@ -143,8 +145,10 @@ export interface ExperienceRate {
   durationHours: number;
   displayName: string;
   priceCents: number;
-  /** Weekend price (Sat/Sun); falls back to priceCents if unset */
+  /** Weekend price (e.g. Saturday when weekendDays = [6]); falls back to priceCents if unset */
   priceWeekendCents?: number;
+  /** Fri/Sun price when experience.friSunDays includes that day (e.g. [0, 5]); falls back to priceCents if unset */
+  priceFriSunCents?: number;
   /** Holiday price; falls back to priceWeekendCents or priceCents if unset */
   priceHolidayCents?: number;
   active: boolean;

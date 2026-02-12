@@ -263,7 +263,7 @@ export async function POST(request: NextRequest) {
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
     let rateForPricing: typeof rate & { priceCents: number } = rate as typeof rate & { priceCents: number };
     if (experienceForPricing && slotStartForPricing && "priceCents" in rate) {
-      rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number; durationHours?: number }, slotStartForPricing, experienceForPricing.holidayDates, experienceForPricing.weekendDays) } as typeof rate & { priceCents: number };
+      rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number }, slotStartForPricing, experienceForPricing.holidayDates, experienceForPricing.weekendDays, experienceForPricing.friSunDays) } as typeof rate & { priceCents: number };
     }
     const pricing = computePricing({
       rate: rateForPricing,

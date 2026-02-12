@@ -71,6 +71,7 @@ export type ExperienceFormData = {
   galleryAltTexts: string[];
   holidayDates: HolidayDateRow[];
   weekendDays: number[];
+  friSunDays: number[];
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -113,6 +114,7 @@ function getDefaultFormData(): ExperienceFormData {
     galleryAltTexts: [],
     holidayDates: [],
     weekendDays: [0, 6],
+    friSunDays: [],
   };
 }
 
@@ -158,6 +160,7 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
       displayName: typeof r.displayName === "string" ? r.displayName : "",
       priceCents: typeof r.priceCents === "number" ? r.priceCents : 0,
       priceWeekendCents: typeof (r as { priceWeekendCents?: number }).priceWeekendCents === "number" ? (r as { priceWeekendCents: number }).priceWeekendCents : undefined,
+      priceFriSunCents: typeof (r as { priceFriSunCents?: number }).priceFriSunCents === "number" ? (r as { priceFriSunCents: number }).priceFriSunCents : undefined,
       priceHolidayCents: typeof (r as { priceHolidayCents?: number }).priceHolidayCents === "number" ? (r as { priceHolidayCents: number }).priceHolidayCents : undefined,
     })),
     addons: addons.map((a) => ({
@@ -198,6 +201,9 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     weekendDays: Array.isArray(api.weekendDays)
       ? (api.weekendDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
       : [0, 6],
+    friSunDays: Array.isArray(api.friSunDays)
+      ? (api.friSunDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
+      : [],
   };
 }
 
@@ -229,6 +235,7 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
       displayName: r.displayName,
       priceCents: r.priceCents,
       ...(r.priceWeekendCents != null && { priceWeekendCents: r.priceWeekendCents }),
+      ...(r.priceFriSunCents != null && { priceFriSunCents: r.priceFriSunCents }),
       ...(r.priceHolidayCents != null && { priceHolidayCents: r.priceHolidayCents }),
     })),
     addons: d.addons.map((a) => ({
@@ -253,6 +260,7 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     ...(d.galleryAltTexts.length > 0 && { galleryAltTexts: d.galleryAltTexts }),
     ...(d.holidayDates.length > 0 && { holidayDates: d.holidayDates.filter((h) => h.start || h.end) }),
     weekendDays: d.weekendDays.length > 0 ? d.weekendDays : [0, 6],
+    ...(d.friSunDays?.length ? { friSunDays: d.friSunDays } : {}),
   };
 }
 
@@ -331,13 +339,13 @@ export function ExperienceForm({
       ),
     }));
   };
-  const setRateNum = (i: number, field: "durationHours" | "priceCents" | "priceWeekendCents" | "priceHolidayCents", value: number) => {
+  const setRateNum = (i: number, field: "durationHours" | "priceCents" | "priceWeekendCents" | "priceFriSunCents" | "priceHolidayCents", value: number) => {
     setData((prev) => ({
       ...prev,
       rates: prev.rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)),
     }));
   };
-  const setRateOptionalCents = (i: number, field: "priceWeekendCents" | "priceHolidayCents", value: number | undefined) => {
+  const setRateOptionalCents = (i: number, field: "priceWeekendCents" | "priceFriSunCents" | "priceHolidayCents", value: number | undefined) => {
     setData((prev) => ({
       ...prev,
       rates: prev.rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)),
@@ -682,6 +690,8 @@ export function ExperienceForm({
           onHolidayDatesChange={(holidayDates) => setData((prev) => ({ ...prev, holidayDates }))}
           weekendDays={data.weekendDays}
           onWeekendDaysChange={(weekendDays) => setData((prev) => ({ ...prev, weekendDays }))}
+          friSunDays={data.friSunDays}
+          onFriSunDaysChange={(friSunDays) => setData((prev) => ({ ...prev, friSunDays }))}
           boatHint={false}
         />
       </section>

@@ -27,6 +27,12 @@ export interface BookingEmailContext {
 
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
 
+function getSender(): { name: string; email: string } {
+  const email = process.env.BREVO_SENDER_EMAIL?.trim() || "noreply@boatbrosatx.com";
+  const name = process.env.BREVO_SENDER_NAME?.trim() || "Boat Bros ATX";
+  return { name, email };
+}
+
 /**
  * Send booking confirmation email to the customer email from the booking details form.
  * Uses transactional send endpoint. If BREVO_BOOKING_TEMPLATE_ID is set, use template; else send HTML from email-templates.
@@ -68,7 +74,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
         },
       }
     : {
-        sender: { name: "Boat Bros ATX", email: "noreply@boatbrosatx.com" },
+        sender: getSender(),
         to: [{ email: toEmail, name: toName }],
         subject: BOOKING_CONFIRMATION_SUBJECT,
         htmlContent: html,
@@ -86,7 +92,9 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+    const errMsg = `Brevo send failed: ${res.status} ${text}`;
+    console.error("[brevo] sendBookingConfirmationEmail", errMsg);
+    throw new Error(errMsg);
   }
 }
 

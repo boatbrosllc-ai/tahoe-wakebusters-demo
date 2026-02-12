@@ -148,6 +148,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [addons, setAddons] = useState<AddonOption[]>([]);
   const [addonsLoading, setAddonsLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
@@ -171,6 +172,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [cancellationAck, setCancellationAck] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "success">("form");
   const [holdId, setHoldId] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
@@ -188,6 +190,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setExperienceRates([]);
     setAddons([]);
     setSelectedDate(null);
+    setDatePrices({});
     setSlots([]);
     setSelectedSlot(null);
     setPartySize(1);
@@ -204,6 +207,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setCancellationAck(false);
     setPaymentPhase("form");
     setHoldId(null);
+    setPaymentIntentId(null);
     setClientSecret(null);
     setPaymentError(null);
     setExperiencesLoadError(null);
@@ -300,6 +304,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch(() => setExperienceRates([]))
       .finally(() => setExperienceRatesLoading(false));
   }, [selectedExperience, boats.length]);
+
+  useEffect(() => {
+    if (!selectedExperience) {
+      setDatePrices({});
+      return;
+    }
+    fetch(`/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&days=35`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.prices && typeof data.prices === "object") setDatePrices(data.prices);
+        else setDatePrices({});
+      })
+      .catch(() => setDatePrices({}));
+  }, [selectedExperience?.id]);
 
   useEffect(() => {
     if (!selectedExperience || !selectedDate) {
@@ -400,6 +418,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setPaymentPhase("form");
     setClientSecret(null);
     setHoldId(null);
+    setPaymentIntentId(null);
     setPaymentError(null);
     setTipChoice(null);
     setTipLaterMessageOpen(false);
@@ -515,6 +534,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         return;
       }
       setClientSecret(secret);
+      setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (err) {
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
@@ -670,7 +690,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               ) : boats.length === 0 ? (
                 <p className="text-sm text-brand-muted py-4 md:py-6">No boats assigned — continue to pick date.</p>
               ) : (
-                <div className="flex flex-wrap gap-3 md:gap-4 mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6 flex-1 min-h-0 content-start">
                   {boats.map((boat) => {
                     const isSelected = selectedBoat?.id === boat.id;
                     const thumb = boat.photos?.[0];
@@ -680,22 +700,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         type="button"
                         onClick={() => setSelectedBoat(boat)}
                         className={cn(
-                          "inline-flex items-center gap-3 rounded-xl border-2 px-4 py-3 md:px-5 md:py-3.5 text-left transition-all min-w-0",
+                          "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all min-h-[140px] sm:min-h-[160px]",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isSelected ? "border-brand-primary bg-brand-primary/10 font-semibold" : "border-brand-dark/15 bg-white hover:border-brand-dark/30"
+                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]"
                         )}
                       >
-                        {thumb ? (
-                          <span className="relative h-10 w-14 md:h-12 md:w-16 shrink-0 block overflow-hidden rounded-lg">
-                            <Image src={thumb} alt="" width={64} height={48} className="object-cover h-full w-full" />
-                          </span>
-                        ) : (
-                          <span className="h-10 w-14 md:h-12 md:w-16 shrink-0 rounded-lg bg-brand-dark/10" />
-                        )}
-                        <span className="text-sm md:text-base font-medium truncate">{boat.name}</span>
-                        {boat.fromPriceCents != null && (
-                          <span className="text-sm text-brand-muted shrink-0 font-medium">${(boat.fromPriceCents / 100).toFixed(0)}</span>
-                        )}
+                        <div className="relative w-full aspect-[4/3] min-h-[100px] bg-brand-dark/10 shrink-0">
+                          {thumb ? (
+                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, 33vw" />
+                          ) : (
+                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
+                          )}
+                        </div>
+                        <div className="flex flex-col justify-center p-3 md:p-4 flex-1 min-w-0">
+                          <span className="text-base md:text-lg font-semibold text-brand-dark truncate">{boat.name}</span>
+                        </div>
                       </button>
                     );
                   })}
@@ -724,6 +743,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     {dateOptions.map(({ dateStr, label, weekday }) => {
                       const isSelected = selectedDate === dateStr;
                       const isPast = dateStr < new Date().toISOString().slice(0, 10);
+                      const priceCents = datePrices[dateStr];
                       return (
                         <button
                           key={dateStr}
@@ -731,13 +751,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           disabled={isPast}
                           onClick={() => setSelectedDate(dateStr)}
                           className={cn(
-                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-[10px] md:text-xs min-h-[42px] md:min-h-[46px]",
+                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-[10px] md:text-xs min-h-[52px] md:min-h-[58px] flex flex-col justify-center",
                             isPast && "opacity-50 cursor-not-allowed",
                             isSelected ? "border-brand-primary bg-brand-primary/10 font-semibold" : !isPast && "border-brand-dark/15 hover:border-brand-dark/30"
                           )}
                         >
                           <span className="block text-[9px] md:text-[10px] text-brand-muted uppercase">{weekday}</span>
                           <span className="block font-medium mt-0.5">{label}</span>
+                          {typeof priceCents === "number" && (
+                            <span className="block text-[10px] font-semibold text-brand-primary mt-0.5">${(priceCents / 100).toFixed(0)}</span>
+                          )}
                         </button>
                       );
                     })}
@@ -1200,10 +1223,33 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <div className="min-h-[220px] flex flex-col shrink-0">
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingPaymentForm
-                        onSuccess={() => setPaymentPhase("success")}
+                        onSuccess={async () => {
+                          if (!holdId || !paymentIntentId) {
+                            console.error("[BookingModal] complete-after-payment skipped: missing holdId or paymentIntentId", { holdId: !!holdId, paymentIntentId: !!paymentIntentId });
+                            setPaymentError("Your payment succeeded. If you don't see a confirmation email, contact us with your email and we'll confirm your booking.");
+                            setPaymentPhase("success");
+                            return;
+                          }
+                          try {
+                            const res = await fetch("/api/booking/complete-after-payment", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ holdId, paymentIntentId }),
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                              const errMsg = (data as { error?: string }).error ?? "Booking is being created; check your email and Admin in a moment.";
+                              console.error("[BookingModal] complete-after-payment failed", res.status, data);
+                              setPaymentError(errMsg);
+                            }
+                          } catch (e) {
+                            console.error("[BookingModal] complete-after-payment request failed", e);
+                            setPaymentError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
+                          }
+                          setPaymentPhase("success");
+                        }}
                         onError={(msg) => {
                           setPaymentError(msg);
-                          setPaymentPhase("form");
                         }}
                       />
                     </Elements>

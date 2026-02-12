@@ -8,6 +8,7 @@ export type AdminBookingCalendarItem = {
   id: string;
   experienceName: string;
   customer: { name: string; email: string; phone: string };
+  partySize?: number | null;
   pricing: { totalCents: number; currency: string };
   status: string;
   createdAt: string | null;
@@ -116,7 +117,7 @@ export function AdminBookingCalendar({
           <button
             type="button"
             onClick={previousMonth}
-            className="p-2 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-brand-bg/50 transition-colors"
+            className="p-2 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-brand-bg/50 hover:scale-105 active:scale-95 transition-all duration-200"
             aria-label="Previous month"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -124,7 +125,7 @@ export function AdminBookingCalendar({
           <button
             type="button"
             onClick={nextMonth}
-            className="p-2 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-brand-bg/50 transition-colors"
+            className="p-2 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-brand-bg/50 hover:scale-105 active:scale-95 transition-all duration-200"
             aria-label="Next month"
           >
             <ChevronRight className="w-5 h-5" />
@@ -132,7 +133,7 @@ export function AdminBookingCalendar({
           <button
             type="button"
             onClick={goToToday}
-            className="px-3 py-2 text-sm font-medium rounded-lg bg-brand-dark/10 text-brand-dark hover:bg-brand-dark/15 transition-colors"
+            className="px-3 py-2 text-sm font-medium rounded-lg bg-brand-dark/10 text-brand-dark hover:bg-brand-dark/15 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
           >
             Today
           </button>
@@ -157,8 +158,8 @@ export function AdminBookingCalendar({
             <div
               key={cell.dateStr + cell.day}
               className={cn(
-                "h-[160px] flex flex-col rounded-xl border border-brand-dark/10 p-2 overflow-hidden transition-all duration-200",
-                "bg-white hover:shadow-lg hover:ring-1 hover:ring-brand-primary/30",
+                "h-[160px] flex flex-col rounded-xl border border-brand-dark/10 p-2 overflow-hidden transition-all duration-200 ease-out",
+                "bg-white hover:shadow-lg hover:ring-1 hover:ring-brand-primary/30 hover:-translate-y-0.5",
                 !cell.isCurrentMonth && "bg-brand-bg/20 text-brand-muted/70",
                 cell.isToday && "ring-2 ring-brand-primary/40 bg-brand-primary/5"
               )}
@@ -181,13 +182,16 @@ export function AdminBookingCalendar({
                       type="button"
                       onClick={() => onBookingClick?.(booking)}
                       className={cn(
-                        "text-left rounded-lg border px-2 py-1.5 text-xs leading-tight transition-all hover:shadow-md shrink-0",
-                        "bg-brand-primary/15 text-brand-dark hover:bg-brand-primary/25",
+                        "text-left rounded-lg border px-2 py-1.5 text-xs leading-tight transition-all duration-200 ease-out shrink-0",
+                        "bg-brand-primary/15 text-brand-dark hover:bg-brand-primary/25 hover:scale-[1.02] hover:shadow-md active:scale-[0.98]",
                         "border-brand-primary/20"
                       )}
                     >
                       <div className="font-semibold truncate">{booking.customer?.name ?? "—"}</div>
                       <div className="truncate text-brand-muted">{booking.experienceName}</div>
+                      {booking.partySize != null && (
+                        <div className="text-[10px] text-brand-muted">{booking.partySize} guest{booking.partySize !== 1 ? "s" : ""}</div>
+                      )}
                       {(booking.startTime ?? booking.endTime) && (
                         <div className="text-[10px] text-brand-muted mt-0.5">
                           {[booking.startTime, booking.endTime].filter(Boolean).join(" – ")}

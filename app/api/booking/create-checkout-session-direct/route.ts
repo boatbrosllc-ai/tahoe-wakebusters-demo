@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
     const addonsById = new Map<string, ExperienceAddon>();
     addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     const addonsForPricing = buildAddonSelectionsForPricing([], addonsById);
-    const rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate, slotStart, experience.holidayDates, experience.weekendDays) };
+    const rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
     const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
 
     const holdId = db.collection("holds").doc().id;

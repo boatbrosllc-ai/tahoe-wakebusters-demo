@@ -10,6 +10,22 @@ import type {
   ExperienceSeasonal,
 } from "@/lib/booking/types";
 
+/** Remove undefined from object so Firestore update/set accepts it. Leaves null and other values. */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    out[k] =
+      v !== null &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      Object.getPrototypeOf(v) === Object.prototype
+        ? stripUndefined(v as Record<string, unknown>)
+        : v;
+  }
+  return out as T;
+}
+
 function parseBody(
   body: unknown
 ): Partial<{
@@ -46,6 +62,7 @@ function parseBody(
   galleryAltTexts: string[];
   holidayDates: { label?: string; start: string; end: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<number, number> }[];
   weekendDays: number[];
+  friSunDays: number[];
   sortOrder: number;
 }> | null {
   if (!body || typeof body !== "object") return null;
@@ -108,8 +125,12 @@ function parseBody(
         displayName: typeof x.displayName === "string" ? x.displayName : "",
         priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
         priceWeekendCents: typeof x.priceWeekendCents === "number" ? x.priceWeekendCents : undefined,
+        priceFriSunCents: typeof x.priceFriSunCents === "number" ? x.priceFriSunCents : undefined,
         priceHolidayCents: typeof x.priceHolidayCents === "number" ? x.priceHolidayCents : undefined,
       }));
+  }
+  if (Array.isArray(b.friSunDays)) {
+    out.friSunDays = (b.friSunDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b);
   }
   if (Array.isArray(b.holidayDates)) {
     out.holidayDates = (b.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<string, number> }[])
@@ -204,6 +225,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // #region agent log
+  fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:PATCH", message: "PATCH started", data: {}, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
+  // #endregion
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
   const { id } = await params;
@@ -220,23 +244,47 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
+  // #region agent log
+  const { rates: parsedRates, addons: parsedAddons, ...expFields } = parsed;
+  const firstRate = Array.isArray(parsedRates) && parsedRates[0];
+  const rateHasUndefined = firstRate ? Object.entries(firstRate).some(([, v]) => v === undefined) : false;
+  fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:parsed", message: "parsed body", data: { expFieldsKeys: Object.keys(expFields), ratesLen: Array.isArray(parsedRates) ? parsedRates.length : 0, firstRateKeys: firstRate ? Object.keys(firstRate) : [], rateHasUndefined }, timestamp: Date.now(), hypothesisId: "B" }) }).catch(() => {});
+  // #endregion
+
   try {
     const db = getDb();
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:getDb", message: "getDb done", data: {}, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
+    // #endregion
     const expRef = db.collection("experiences").doc(id);
     const expSnap = await expRef.get();
     if (!expSnap.exists) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const { rates, addons, ...expFields } = parsed;
-    if (Object.keys(expFields).length > 0) {
-      await expRef.update(expFields as Partial<Experience>);
+    const { rates, addons, ...expFieldsInner } = parsed;
+    if (Object.keys(expFieldsInner).length > 0) {
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:beforeUpdate", message: "about to expRef.update", data: {}, timestamp: Date.now(), hypothesisId: "C" }) }).catch(() => {});
+      // #endregion
+      const expPayload = stripUndefined(expFieldsInner as Record<string, unknown>) as Partial<Experience>;
+      await expRef.update(expPayload);
+      // #region agent log
+      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:afterUpdate", message: "expRef.update done", data: {}, timestamp: Date.now(), hypothesisId: "C" }) }).catch(() => {});
+      // #endregion
     }
     if (Array.isArray(rates)) {
       const ratesRef = expRef.collection("rates");
       const existing = await ratesRef.get();
       for (const d of existing.docs) await d.ref.delete();
-      for (const r of rates) {
-        await ratesRef.doc().set({ ...r, active: true });
+      for (let ri = 0; ri < rates.length; ri++) {
+        const r = rates[ri];
+        // #region agent log
+        if (ri === 0) {
+          const hasUndef = Object.entries(r).some(([, v]) => v === undefined);
+          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:beforeRateSet", message: "before ratesRef.doc().set", data: { rateKeys: Object.keys(r), hasUndefined: hasUndef }, timestamp: Date.now(), hypothesisId: "B" }) }).catch(() => {});
+        }
+        // #endregion
+        await ratesRef.doc().set({ ...stripUndefined(r as Record<string, unknown>), active: true });
       }
     }
     if (Array.isArray(addons)) {
@@ -244,11 +292,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const existing = await addonsRef.get();
       for (const d of existing.docs) await d.ref.delete();
       for (const a of addons) {
-        await addonsRef.doc().set({ ...a, active: true });
+        await addonsRef.doc().set({ ...stripUndefined(a as Record<string, unknown>), active: true });
       }
     }
     return NextResponse.json({ id });
   } catch (err) {
+    // #region agent log
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errName = err instanceof Error ? err.name : "";
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:catch", message: "PATCH error", data: { errMsg, errName }, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
+    // #endregion
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(

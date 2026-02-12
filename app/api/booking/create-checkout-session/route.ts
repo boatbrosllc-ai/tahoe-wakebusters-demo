@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
         const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
         const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
         if (experience) {
-          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays) };
+          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
         }
       }
     }

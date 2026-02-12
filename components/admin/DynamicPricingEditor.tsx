@@ -70,9 +70,11 @@ function isDateInAnyRange(dateStr: string, ranges: HolidayDateRow[]): boolean {
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-function getDayType(date: Date, weekendDays: number[]): "weekday" | "weekend" {
+function getDayType(date: Date, weekendDays: number[], friSunDays: number[]): "weekday" | "weekend" | "friSun" {
   const d = date.getDay();
-  return weekendDays.includes(d) ? "weekend" : "weekday";
+  if (weekendDays.includes(d)) return "weekend";
+  if (friSunDays.includes(d)) return "friSun";
+  return "weekday";
 }
 
 /** Format day indices (0=Sun..6=Sat) as "Mon–Fri" or "Fri–Sun" when contiguous (incl. wrap), else "Mon, Wed, Fri" */
@@ -98,19 +100,21 @@ function MonthCalendar({
   month,
   holidayRanges,
   weekendDays = [0, 6],
+  friSunDays = [],
   showTitle = true,
 }: {
   year: number;
   month: number;
   holidayRanges: HolidayDateRow[];
   weekendDays?: number[];
+  friSunDays?: number[];
   showTitle?: boolean;
 }) {
   const first = new Date(year, month, 1);
   const last = new Date(year, month + 1, 0);
   const startPad = first.getDay();
   const daysInMonth = last.getDate();
-  const cells: { date: Date; dateStr: string; isHoliday: boolean; dayType: "weekday" | "weekend" }[] = [];
+  const cells: { date: Date; dateStr: string; isHoliday: boolean; dayType: "weekday" | "weekend" | "friSun" }[] = [];
   for (let i = 0; i < startPad; i++)
     cells.push({ date: new Date(0), dateStr: "", isHoliday: false, dayType: "weekday" });
   for (let d = 1; d <= daysInMonth; d++) {
@@ -120,7 +124,7 @@ function MonthCalendar({
       date,
       dateStr,
       isHoliday: isDateInAnyRange(dateStr, holidayRanges),
-      dayType: getDayType(date, weekendDays),
+      dayType: getDayType(date, weekendDays, friSunDays),
     });
   }
   const WEEKDAYS = DAY_NAMES;
@@ -141,7 +145,7 @@ function MonthCalendar({
               <th
                 key={w}
                 scope="col"
-                className="w-12 min-w-[3rem] py-2 text-center text-xs font-medium text-brand-muted bg-brand-bg/60 border border-brand-dark/10"
+                className="w-20 min-w-[5rem] py-3.5 text-center text-base font-medium text-brand-muted bg-brand-bg/60 border border-brand-dark/10"
               >
                 {w}
               </th>
@@ -155,17 +159,18 @@ function MonthCalendar({
                 const c = row[ci];
                 if (!c || !c.dateStr) {
                   return (
-                    <td key={ci} className="min-w-[3rem] w-12 h-12 border border-brand-dark/10 bg-brand-bg/30" />
+                    <td key={ci} className="min-w-[5rem] w-20 h-20 border border-brand-dark/10 bg-brand-bg/30" />
                   );
                 }
                 let bg = "bg-white";
                 if (c.isHoliday) bg = "bg-amber-200/90 text-amber-900";
                 else if (c.dayType === "weekend") bg = "bg-sky-100/80 text-sky-800";
+                else if (c.dayType === "friSun") bg = "bg-violet-100/80 text-violet-800";
                 return (
                   <td
                     key={ci}
-                    className={`min-w-[3rem] w-12 h-12 border border-brand-dark/10 text-center text-sm font-medium ${bg}`}
-                    title={`${c.dateStr}${c.isHoliday ? " (holiday)" : c.dayType === "weekend" ? " (weekend)" : " (weekday)"}`}
+                    className={`min-w-[5rem] w-20 h-20 border border-brand-dark/10 text-center text-xl font-medium ${bg}`}
+                    title={`${c.dateStr}${c.isHoliday ? " (holiday)" : c.dayType === "weekend" ? " (weekend)" : c.dayType === "friSun" ? " (Fri/Sun)" : " (weekday)"}`}
                   >
                     {c.date.getDate()}
                   </td>
@@ -185,6 +190,7 @@ interface DynamicPricingEditorProps {
     displayName: string;
     priceCents: number;
     priceWeekendCents?: number;
+    priceFriSunCents?: number;
     priceHolidayCents?: number;
   }[];
   onRatesChange: (rates: DynamicPricingEditorProps["rates"]) => void;
@@ -192,6 +198,8 @@ interface DynamicPricingEditorProps {
   onHolidayDatesChange: (ranges: HolidayDateRow[]) => void;
   weekendDays?: number[];
   onWeekendDaysChange?: (days: number[]) => void;
+  friSunDays?: number[];
+  onFriSunDaysChange?: (days: number[]) => void;
   boatHint?: boolean;
 }
 
@@ -202,18 +210,29 @@ export function DynamicPricingEditor({
   onHolidayDatesChange,
   weekendDays: weekendDaysProp = [0, 6],
   onWeekendDaysChange,
+  friSunDays: friSunDaysProp = [],
+  onFriSunDaysChange,
   boatHint = false,
 }: DynamicPricingEditorProps) {
   const weekendDays = weekendDaysProp.length > 0 ? weekendDaysProp : [0, 6];
-  const weekdayDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !weekendDays.includes(d));
+  const friSunDays = Array.isArray(friSunDaysProp) ? friSunDaysProp : [];
+  const weekdayDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !weekendDays.includes(d) && !friSunDays.includes(d));
   const weekdayLabel = formatDayRange(weekdayDays);
   const weekendLabel = formatDayRange(weekendDays);
+  const friSunLabel = formatDayRange(friSunDays);
   const toggleWeekendDay = (day: number) => {
     if (!onWeekendDaysChange) return;
     const next = weekendDays.includes(day)
       ? weekendDays.filter((d) => d !== day)
       : [...weekendDays, day].sort((a, b) => a - b);
     onWeekendDaysChange(next.length > 0 ? next : [0, 6]);
+  };
+  const toggleFriSunDay = (day: number) => {
+    if (!onFriSunDaysChange) return;
+    const next = friSunDays.includes(day)
+      ? friSunDays.filter((d) => d !== day)
+      : [...friSunDays, day].sort((a, b) => a - b);
+    onFriSunDaysChange(next);
   };
   const [addCustomOpen, setAddCustomOpen] = useState(false);
   const [customLabel, setCustomLabel] = useState("");
@@ -267,7 +286,7 @@ export function DynamicPricingEditor({
   };
   const setRateOptionalCents = (
     i: number,
-    field: "priceWeekendCents" | "priceHolidayCents",
+    field: "priceWeekendCents" | "priceFriSunCents" | "priceHolidayCents",
     value: number | undefined
   ) => {
     onRatesChange(rates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
@@ -371,6 +390,32 @@ export function DynamicPricingEditor({
               </div>
             </div>
           )}
+          {onFriSunDaysChange && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-brand-dark">Which days use Fri/Sun price?</span>
+              <div className="flex flex-wrap gap-1">
+                {DAY_NAMES.map((name, dayIndex) => (
+                  <label
+                    key={dayIndex}
+                    className={`inline-flex items-center rounded-md border px-2 py-1 text-xs cursor-pointer transition-colors ${
+                      friSunDays.includes(dayIndex)
+                        ? "border-violet-300 bg-violet-100 text-violet-900 font-medium"
+                        : "border-brand-dark/15 bg-white text-brand-muted hover:bg-brand-bg/50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={friSunDays.includes(dayIndex)}
+                      onChange={() => toggleFriSunDay(dayIndex)}
+                      className="sr-only"
+                      aria-label={`${name} uses Fri/Sun price`}
+                    />
+                    {name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Charter durations */}
           <div>
             <p className="text-sm font-medium text-brand-dark mb-1.5">Charter lengths</p>
@@ -455,6 +500,18 @@ export function DynamicPricingEditor({
                           return (
                             <td key={i} className="py-3 px-3 border-l border-sky-200/80">
                               <input type="text" inputMode="decimal" className={`${inputClass} w-full min-w-0 max-w-[6rem] py-1.5 min-h-0 text-sm bg-white/80`} placeholder="—" value={p.value} onFocus={p.onFocus} onChange={p.onChange} onBlur={p.onBlur} aria-label={`Weekend ${r.displayName || i + 1}`} />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      <tr className="border-b border-brand-dark/10 bg-violet-50/50">
+                        <td className="py-3 px-3 font-medium text-brand-dark">Fri/Sun</td>
+                        <td className="py-3 px-3 text-brand-muted text-sm">{friSunLabel}</td>
+                        {rates.map((r, i) => {
+                          const p = priceField(`frisun-${i}`, r.priceFriSunCents, (v) => setRateOptionalCents(i, "priceFriSunCents", v), true);
+                          return (
+                            <td key={i} className="py-3 px-3 border-l border-violet-200/80">
+                              <input type="text" inputMode="decimal" className={`${inputClass} w-full min-w-0 max-w-[6rem] py-1.5 min-h-0 text-sm bg-white/80`} placeholder="—" value={p.value} onFocus={p.onFocus} onChange={p.onChange} onBlur={p.onBlur} aria-label={`Fri/Sun ${r.displayName || i + 1}`} />
                             </td>
                           );
                         })}
@@ -598,7 +655,7 @@ export function DynamicPricingEditor({
                       {rates.map((r, ri) => {
                         const durationHours = r.durationHours ?? 0;
                         const perDurCents = h.priceCentsByDuration?.[durationHours];
-                        const effective = perDurCents ?? (r.priceHolidayCents ?? r.priceWeekendCents ?? r.priceCents);
+                        const effective = perDurCents ?? (r.priceHolidayCents ?? r.priceWeekendCents ?? r.priceFriSunCents ?? r.priceCents);
                         const p = priceField(`range-${i}-${ri}`, perDurCents, (v) => setHolidayDurationPrice(i, durationHours, v), true);
                         return (
                           <td key={ri} className="py-2.5 px-2 border-l border-brand-dark/10 align-top">
@@ -634,10 +691,11 @@ export function DynamicPricingEditor({
                     <ChevronRight className="w-4 h-4" />
                   </Button>
                 </div>
-                <MonthCalendar year={viewYear} month={viewMonth} holidayRanges={holidayDates} weekendDays={weekendDays} showTitle={false} />
+                <MonthCalendar year={viewYear} month={viewMonth} holidayRanges={holidayDates} weekendDays={weekendDays} friSunDays={friSunDays} showTitle={false} />
                 <div className="flex items-center gap-3 text-xs text-brand-muted">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-white border border-brand-dark/20" /> Weekday</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-sky-100" /> Weekend</span>
+                  {friSunDays.length > 0 && <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-violet-100" /> Fri/Sun</span>}
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-amber-200/90" /> Holiday</span>
                 </div>
               </div>

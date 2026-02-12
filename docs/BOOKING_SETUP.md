@@ -6,7 +6,7 @@ This document covers local development and deployment for the custom booking flo
 
 1. **Environment** — Copy `.env.example` to `.env.local` and fill in the variables below (Firebase, Stripe, Brevo, `APP_BASE_URL`).
 2. **Firebase** — Create a Firebase project, enable Firestore (Blaze plan enables it; you still need a **service account** for the server). Create a service account and set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` (or the individual Firebase env vars). Admin and booking APIs use the server-side Firebase Admin SDK; without this, admin pages and booking will return 503 with a setup hint. For **boat photo uploads** in admin, enable **Firebase Storage** in the Console (Build → Storage → Get started); uploads go to the default bucket and are stored under `boats/`.
-3. **Stripe** — Create a Stripe account, add test keys (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`), and configure the webhook to point to `APP_BASE_URL/api/stripe/webhook`.
+3. **Stripe** — Create a Stripe account and add `STRIPE_SECRET_KEY`. **You must also create a Stripe webhook** (see [Stripe webhook](#stripe-webhook-required-for-bookings-and-confirmation-email) below); without it, payments succeed in Stripe but **no booking is created** and **no confirmation email is sent**.
 4. **Brevo** — Create a Brevo account and set `BREVO_API_KEY` (for booking confirmation emails).
 5. **App URL** — Set `APP_BASE_URL` (e.g. `http://localhost:3000` for local dev).
 6. **Run the app** — `npm run dev`, then open **[/admin](http://localhost:3000/admin)** in the browser.
@@ -30,6 +30,8 @@ Create a `.env.local` (or set in your host) with:
 | `BREVO_API_KEY` | Yes | Brevo API key for transactional email |
 | `BREVO_TEMPLATE_ID_BOOKING_CONFIRMATION` or `BREVO_BOOKING_TEMPLATE_ID` | No | Brevo template ID for confirmation email (optional; falls back to HTML) |
 | `BREVO_LIST_ID_MARKETING` or `BREVO_MARKETING_LIST_ID` | No | Brevo list ID for marketing opt-in (optional) |
+| `BREVO_SENDER_EMAIL` | No | Sender email for transactional emails (default: `noreply@boatbrosatx.com`). **Must be verified in Brevo** (Senders & IP → Senders). |
+| `BREVO_SENDER_NAME` | No | Sender display name (default: `Boat Bros ATX`) |
 | `APP_BASE_URL` | Yes | Base URL of the app (e.g. `http://localhost:3000` or `https://boatbrosatx.com`) |
 | `CRON_SECRET` | No | Secret for cleanup-holds and seed (Bearer token) |
 | `SEED_SECRET` | No | Same as CRON_SECRET for seeding |
@@ -41,6 +43,51 @@ Create a `.env.local` (or set in your host) with:
 **Required when using admin sign-in (when `ADMIN_EMAIL` is set).
 
 See `.env.example` for a template.
+
+## Stripe webhook (required for bookings and confirmation email)
+
+When a customer pays, Stripe sends a **webhook** to your app. The webhook creates the booking in Firestore and sends the confirmation email (Brevo). **If the webhook is not set up or Stripe cannot reach it**, the charge appears in Stripe but no booking appears in Admin and the customer does not get an email.
+
+### Production: create the webhook in Stripe Dashboard
+
+1. **Stripe Dashboard** → **Developers** → **Webhooks** → **Add endpoint**.
+2. **Endpoint URL:** `https://YOUR_DOMAIN.com/api/stripe/webhook` (use your real domain, e.g. `https://boatbrosatx.com/api/stripe/webhook`). No trailing slash.
+3. **Events to send:** Click **Select events** and enable:
+   - **payment_intent.succeeded** (required — this creates the booking and sends the email)
+   - **checkout.session.completed** (optional — used if you use Stripe Checkout redirect flow)
+4. **Add endpoint**. On the new endpoint page, open **Signing secret** → **Reveal** and copy the value (starts with `whsec_`).
+5. Set that value in your production environment as **`STRIPE_WEBHOOK_SECRET`** (e.g. in Netlify/Vercel env vars). Redeploy so the new secret is applied.
+
+### Local development
+
+Stripe cannot call `localhost`. Use the Stripe CLI to forward events:
+
+```bash
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+```
+
+Use the **webhook signing secret** printed by the CLI (`whsec_...`) in `.env.local` as `STRIPE_WEBHOOK_SECRET`. Complete a test payment on the same app so the hold exists in the same Firestore the webhook uses.
+
+### Troubleshooting
+
+If you paid but see no booking and no email: check [STRIPE_WEBHOOK_DEBUG.md](./STRIPE_WEBHOOK_DEBUG.md). In Admin → Bookings, open **Webhook events** to see recent Stripe events and any errors (e.g. "Hold not found", "Missing holdId").
+
+## Why am I not getting confirmation emails?
+
+The confirmation email is sent by Brevo **after** the booking is created (by the Stripe webhook or by the client calling `POST /api/booking/complete-after-payment`). If the booking appears in Admin but the customer never gets an email, the send is failing and the error is logged on the server.
+
+**Check the following:**
+
+1. **Server logs** — Look for `[brevo] sendBookingConfirmationEmail` or `[convert-hold-to-booking] Brevo send failed` or `[stripe-webhook] Brevo send failed`. The log now includes Brevo’s response (status code and body), e.g.:
+   - **401** — Invalid API key. Confirm `BREVO_API_KEY` is correct (SMTP & API → API Keys in Brevo). No extra spaces; use the full key.
+   - **400 "Sender not allowed" / "Invalid sender"** — The “From” email is not verified in Brevo. Go to **Senders & IP** → **Senders**, add the sender email (e.g. `noreply@boatbrosatx.com` or the value of `BREVO_SENDER_EMAIL`), and complete verification. Then redeploy or restart the app.
+   - **400 other** — Check the response body (e.g. template ID not found, missing params).
+
+2. **Sender email** — The app sends from `BREVO_SENDER_EMAIL` if set, otherwise `noreply@boatbrosatx.com`. That address (or its domain) must be **verified** in Brevo (Senders & IP → Senders). If you use a different domain, set `BREVO_SENDER_EMAIL` to a verified sender.
+
+3. **API key scope** — In Brevo, the API key must have **Send transactional emails** (and optionally **Contacts** if you use the marketing list). Create a new key with the right permissions if needed.
+
+4. **Booking created but email path not run** — If the booking is created via the Stripe webhook, the email is sent right after. If the webhook never runs (e.g. wrong URL or secret), the client may call `complete-after-payment` instead; that path also sends the email. Ensure at least one of these runs (check Webhook events in Admin → Bookings for errors).
 
 ## Production deployment (Netlify / Vercel / etc.)
 
@@ -130,8 +177,9 @@ When you’re done with local dev, remove or comment out `FIRESTORE_EMULATOR_HOS
 
 ### 3. Brevo
 
-- Create an API key in Brevo (SMTP & API → API Keys).
+- Create an API key in Brevo (SMTP & API → API Keys). The key must have **Send transactional emails** permission.
 - Set `BREVO_API_KEY`. Optionally create a transactional template and set `BREVO_BOOKING_TEMPLATE_ID`, and a list for `BREVO_MARKETING_LIST_ID`.
+- **Verify the sender:** In Brevo go to **Senders & IP** → **Senders** and add/verify the email you use as the “From” address. By default the app uses `noreply@boatbrosatx.com`; if that domain is not verified, Brevo will reject sends. Set `BREVO_SENDER_EMAIL` (and optionally `BREVO_SENDER_NAME`) to a verified sender if you use a different address.
 
 ### 4. App URL
 

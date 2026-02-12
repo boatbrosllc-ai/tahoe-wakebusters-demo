@@ -6,6 +6,7 @@ import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
+import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
@@ -172,7 +173,7 @@ export async function POST(request: NextRequest) {
       let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
       if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
         const slotStart = (slot.startAt as { toDate(): Date }).toDate();
-        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays) };
+        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays, experienceForPricing.friSunDays) };
       }
       const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
@@ -272,182 +273,22 @@ export async function POST(request: NextRequest) {
         await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
-      const holdRef = db.collection("holds").doc(holdId);
-      const holdSnap = await holdRef.get();
-      if (!holdSnap.exists) {
-        console.error("[stripe-webhook] payment_intent.succeeded hold not found", { holdId });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-        return NextResponse.json({ received: true });
-      }
-      const hold = holdSnap.data() as Hold;
-      if (hold.status !== "active") {
-        console.error("[stripe-webhook] payment_intent.succeeded hold not active", { holdId, status: hold.status });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold already converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-        return NextResponse.json({ received: true });
-      }
-      const hasExperience = !!hold.experienceId;
-      const hasBoat = !!hold.boatId;
-      const isListingBoatFlow = hasExperience && hasBoat;
-      let slotRef: import("firebase-admin").firestore.DocumentReference;
-      let experienceName: string;
-      let boatNameForEmail: string;
-      let locationText: string;
-      let cancellationPolicyText: string;
-      let rate: Rate | ExperienceRate | BoatRate;
-      let slot: Slot;
-      let experienceForPricing: Experience | null = null;
-      let boatForPricing: ListingBoat | null = null;
-      if (isListingBoatFlow) {
-        const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
-        if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        const exp = expSnap.data() as Experience;
-        experienceForPricing = exp;
-        boatForPricing = boatSnap.data() as ListingBoat;
-        const boat = boatForPricing as { name?: string };
-        experienceName = exp.title;
-        boatNameForEmail = boat.name ?? exp.title;
-        locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
-        rate = rateSnap.data() as ExperienceRate;
-        slot = slotSnap.data() as Slot;
-        if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
-      } else if (hasExperience) {
-        const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
-        if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        const exp = expSnap.data() as Experience;
-        experienceForPricing = exp;
-        experienceName = exp.title;
-        boatNameForEmail = exp.title;
-        locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
-        rate = rateSnap.data() as ExperienceRate;
-        slot = slotSnap.data() as Slot;
-        if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
-      } else {
-        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
-        if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        const boat = boatSnap.data() as Boat;
-        experienceName = boat.name;
-        boatNameForEmail = boat.name;
-        locationText = boat.defaultLocationText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = boat.cancellationPolicyText ?? "Cancel 24h before for full refund. See terms for details.";
-        rate = rateSnap.data() as Rate;
-        slot = slotSnap.data() as Slot;
-        if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
-        }
-        slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
-      }
-      const addonsRef = hasExperience
-        ? db.collection("experiences").doc(hold.experienceId!).collection("addons")
-        : db.collection("boats").doc(hold.boatId!).collection("addons");
-      const addonsSnap = await addonsRef.get();
-      const addonsById = new Map<string, Addon | ExperienceAddon>();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
-      const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-      if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
-        const slotStart = (slot.startAt as { toDate(): Date }).toDate();
-        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays) };
-      }
-      const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
-      const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
-      const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
-      // Use the email from the booking details form for the confirmation email.
-      const customer = hold.customerDraft;
-      const specialNotes = hold.answers?.comments?.trim() || undefined;
-      const bookingId = db.collection("bookings").doc().id;
-      const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
-        ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
-        ...(hold.boatId ? { boatId: hold.boatId } : {}),
-        slotId: hold.slotId,
-        rateId: hold.rateId,
-        addonSelections: hold.addonSelections,
-        partySize: hold.partySize,
-        petsCount: hold.petsCount,
-        answers: hold.answers,
-        customer,
-        marketingOptIn: hold.marketingOptIn,
-        ...(specialNotes ? { specialNotes } : {}),
-        pricing: finalPricing,
-        status: "paid",
-        stripe: {
-          paymentIntentId: pi.id,
-          ...(piAmountTotal != null && { amountTotalCents: piAmountTotal }),
-          ...(piCurrency && { currency: piCurrency }),
-        },
-        createdAt: Timestamp.now(),
-      };
-      await db.runTransaction(async (tx) => {
-        const s = await tx.get(slotRef);
-        if (!s.exists) throw new Error("Slot not found");
-        const slotData = s.data() as Slot;
-        if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
-        tx.update(slotRef, {
-          status: "booked",
-          bookingId,
-          holdId: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        tx.set(db.collection("bookings").doc(bookingId), booking);
-        tx.update(holdRef, { status: "converted" });
-      });
-      console.log("[stripe-webhook] payment_intent.succeeded booking created", { bookingId, holdId });
-      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-      const startTs = slot.startAt as { toDate(): Date };
-      const endTs = slot.endAt as { toDate(): Date };
-      const emailContext = {
-        boatName: boatNameForEmail ?? experienceName,
-        startAt: formatSlotDateTime(startTs),
-        endAt: formatSlotDateTime(endTs),
-        durationHours: rate.durationHours,
-        locationText,
-        cancellationPolicyText,
-      };
       try {
-        await sendBookingConfirmationEmail(booking as Booking, emailContext);
-        await logEmailSent({
-          to: customer.email,
-          toName: customer.name,
-          templateId: "booking_confirmation",
-          subject: "Booking Confirmation – Boat Bros ATX",
-          bookingId,
+        const result = await convertHoldToBooking(db, holdId, {
+          paymentIntentId: piId,
+          amountTotalCents: piAmountTotal,
+          currency: piCurrency,
         });
-      } catch (emailErr) {
-        console.error("[stripe-webhook] Brevo send failed", emailErr);
-      }
-      if (hold.marketingOptIn) {
-        const listId = bookingEnv.brevoMarketingListId;
-        try {
-          await upsertBrevoContact(customer.email, customer.name, customer.phone, listId ?? undefined);
-        } catch (listErr) {
-          console.error("[stripe-webhook] Brevo list subscribe failed", listErr);
+        if ("alreadyConverted" in result) {
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        } else {
+          console.log("[stripe-webhook] payment_intent.succeeded booking created", { bookingId: result.bookingId, holdId });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
+      } catch (convertErr) {
+        const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+        console.error("[stripe-webhook] payment_intent.succeeded convert failed", convertErr);
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
       }
     }
     await writeEventResult(eventId, { processedAt: Timestamp.now() });

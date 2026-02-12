@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Fragment } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -24,12 +24,32 @@ type StripeEventItem = {
   currency: string | null;
 };
 
+type AddonWithName = { addonId: string; name: string; qty: number };
+
 type BookingItem = {
   id: string;
   experienceId?: string;
   experienceName: string;
+  boatId?: string | null;
+  boatName?: string | null;
   customer: { name: string; email: string; phone: string };
-  pricing: { totalCents: number; currency: string };
+  partySize: number | null;
+  petsCount: number;
+  specialNotes: string | null;
+  answers: Record<string, string>;
+  addonSelections: { addonId: string; qty: number }[];
+  addonsWithNames: AddonWithName[];
+  durationHours: number | null;
+  slotId: string | null;
+  rateId: string | null;
+  pricing: {
+    subtotalCents?: number;
+    taxCents?: number;
+    feesCents?: number;
+    totalCents: number;
+    currency: string;
+  };
+  stripe?: { paymentIntentId?: string; checkoutSessionId?: string; amountTotalCents?: number; currency?: string };
   status: string;
   createdAt: string | null;
   startDate?: string | null;
@@ -94,13 +114,19 @@ export default function AdminBookingsPage() {
   }, [webhookEventsOpen]);
 
   function exportCsv() {
-    const headers = ["Date", "Experience", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
+    const headers = ["Date", "Trip date", "Experience", "Party", "Pets", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
     const rows = list.map((b) => {
       const date = b.createdAt ? new Date(b.createdAt).toISOString() : "";
+      const tripDate = b.startDate ?? "";
+      const party = b.partySize != null ? String(b.partySize) : "";
+      const pets = b.petsCount != null ? String(b.petsCount) : "";
       const amount = b.pricing ? (b.pricing.totalCents / 100).toFixed(2) : "";
       return [
         date,
+        tripDate,
         b.experienceName ?? "",
+        party,
+        pets,
         b.customer?.name ?? "",
         b.customer?.email ?? "",
         b.customer?.phone ?? "",
@@ -141,6 +167,7 @@ export default function AdminBookingsPage() {
     id: b.id,
     experienceName: b.experienceName,
     customer: b.customer,
+    partySize: b.partySize ?? undefined,
     pricing: b.pricing,
     status: b.status,
     createdAt: b.createdAt ?? null,
@@ -150,13 +177,15 @@ export default function AdminBookingsPage() {
   }));
 
   const inputClass =
-    "rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary min-h-[40px] sm:min-h-[36px]";
+    "rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary min-h-[40px] sm:min-h-[36px] transition-colors duration-200";
 
   return (
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Bookings</h1>
-        <p className="mt-1 text-sm text-brand-muted">Upcoming and past reservations.</p>
+        <p className="mt-1 text-sm text-brand-muted">
+          Trip date, party size, and full details. Click a row to open booking details (customer, add-ons, payment breakdown).
+        </p>
       </div>
 
       {/* Filters */}
@@ -169,10 +198,10 @@ export default function AdminBookingsPage() {
                 type="button"
                 onClick={() => setViewMode("list")}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ease-out",
                   viewMode === "list"
                     ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
-                    : "text-brand-muted hover:text-brand-dark"
+                    : "text-brand-muted hover:text-brand-dark hover:bg-white/60"
                 )}
               >
                 <List className="w-4 h-4" />
@@ -182,14 +211,15 @@ export default function AdminBookingsPage() {
                 type="button"
                 onClick={() => setViewMode("calendar")}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ease-out",
                   viewMode === "calendar"
                     ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10"
-                    : "text-brand-muted hover:text-brand-dark"
+                    : "text-brand-muted hover:text-brand-dark hover:bg-white/60"
                 )}
+                aria-label="View bookings by day (calendar)"
               >
                 <CalendarDays className="w-4 h-4" />
-                Calendar
+                By day
               </button>
             </div>
           </div>
@@ -257,7 +287,7 @@ export default function AdminBookingsPage() {
               />
             </div>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="ml-auto">
+          <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="ml-auto transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]">
             Export CSV
           </Button>
         </div>
@@ -279,6 +309,9 @@ export default function AdminBookingsPage() {
       {!loading && !error && list.length === 0 && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
           <p className="text-brand-muted text-sm">No bookings yet.</p>
+          <p className="mt-2 text-brand-muted text-xs max-w-md mx-auto">
+            When you have bookings, the list shows <strong>Trip</strong> (date & time), <strong>Party</strong> (guests & pets), and more. Click any row to see full details (add-ons, notes, payment breakdown).
+          </p>
           <p className="mt-3 text-brand-muted text-xs max-w-md mx-auto">
             If you have payments in Stripe but don&apos;t see them here, open <strong>Webhook events</strong> below and look for that payment&apos;s event — the <strong>error</strong> field explains why (e.g. Hold not found, Hold already converted).
           </p>
@@ -286,13 +319,14 @@ export default function AdminBookingsPage() {
       )}
 
       {!loading && !error && list.length > 0 && viewMode === "list" && (
-        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
+        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
           <div className="overflow-x-auto -mx-px">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[720px] text-sm">
               <thead>
                 <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Date</th>
+                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Trip</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
+                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Party</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Amount</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
@@ -300,9 +334,39 @@ export default function AdminBookingsPage() {
               </thead>
               <tbody>
                 {list.map((b) => (
-                  <tr key={b.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap">{formatDate(b.createdAt)}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">{b.experienceName}</td>
+                  <tr
+                    key={b.id}
+                    onClick={() => {
+                      setSelectedBooking(b);
+                      setDetailOpen(true);
+                    }}
+                    className="border-b border-brand-dark/5 hover:bg-brand-primary/5 cursor-pointer transition-all duration-200 ease-out hover:shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
+                  >
+                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark whitespace-nowrap">
+                      {b.startDate
+                        ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                        : "—"}
+                      {(b.startTime ?? b.endTime) && (
+                        <span className="block text-brand-muted text-xs mt-0.5">
+                          {[b.startTime, b.endTime].filter(Boolean).join(" – ")}
+                          {b.durationHours != null && ` (${b.durationHours}h)`}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                      {b.experienceName}
+                      {b.boatName && <span className="block text-brand-muted text-xs">{b.boatName}</span>}
+                    </td>
+                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                      {b.partySize != null ? (
+                        <>
+                          {b.partySize} guest{b.partySize !== 1 ? "s" : ""}
+                          {b.petsCount > 0 && <span className="block text-brand-muted text-xs">{b.petsCount} pet{b.petsCount !== 1 ? "s" : ""}</span>}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="px-3 py-3 sm:px-4 sm:py-4">
                       <span className="font-medium text-brand-dark">{b.customer?.name || "—"}</span>
                       <span className="block text-brand-muted text-xs truncate max-w-[180px] sm:max-w-none">{b.customer?.email}</span>
@@ -332,18 +396,24 @@ export default function AdminBookingsPage() {
       )}
 
       {!loading && !error && list.length > 0 && viewMode === "calendar" && (
-        <AdminBookingCalendar
-          bookings={calendarBookings}
-          onBookingClick={handleBookingClick}
-        />
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-brand-dark">Bookings by day</h2>
+            <p className="text-sm text-brand-muted mt-0.5">View reservations on a calendar. Click any booking to open details (customer, party, payment).</p>
+          </div>
+          <AdminBookingCalendar
+            bookings={calendarBookings}
+            onBookingClick={handleBookingClick}
+          />
+        </div>
       )}
 
       {/* Webhook events – diagnose why Stripe charges don't create bookings */}
-      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
+      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
         <button
           type="button"
           onClick={() => setWebhookEventsOpen((o) => !o)}
-          className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-brand-dark hover:bg-brand-bg/50"
+          className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-brand-dark hover:bg-brand-bg/50 transition-colors duration-200"
         >
           <span>Webhook events (Stripe → booking)</span>
           {webhookEventsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -421,14 +491,36 @@ export default function AdminBookingsPage() {
         title={selectedBooking ? `Booking — ${selectedBooking.customer?.name ?? "Customer"}` : undefined}
       >
         {selectedBooking && (
-          <div className="space-y-4 text-sm">
-            <dl className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <dt className="text-brand-muted font-medium">Experience</dt>
-                <dd className="text-brand-dark font-medium">{selectedBooking.experienceName}</dd>
-              </div>
-              <div>
-                <dt className="text-brand-muted font-medium">Date & time</dt>
+          <div className="space-y-6 text-sm max-h-[80vh] overflow-y-auto">
+            {/* Status + Trip */}
+            <div className="flex flex-wrap items-center gap-3 border-b border-brand-dark/10 pb-4">
+              <span
+                className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                  selectedBooking.status === "paid"
+                    ? "bg-green-100 text-green-800"
+                    : selectedBooking.status === "canceled"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-gray-100 text-gray-800"
+                }`}
+              >
+                {selectedBooking.status}
+              </span>
+              <span className="text-brand-muted">
+                Booked {selectedBooking.createdAt ? formatDate(selectedBooking.createdAt) : "—"}
+              </span>
+            </div>
+
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Trip</h3>
+              <dl className="grid gap-2 sm:grid-cols-2">
+                <dt className="text-brand-muted">Experience</dt>
+                <dd className="text-brand-dark font-medium">
+                  {selectedBooking.experienceName}
+                  {selectedBooking.boatName && (
+                    <span className="block text-brand-muted text-xs mt-0.5">Boat: {selectedBooking.boatName}</span>
+                  )}
+                </dd>
+                <dt className="text-brand-muted">Date & time</dt>
                 <dd className="text-brand-dark">
                   {selectedBooking.startDate
                     ? new Date(selectedBooking.startDate).toLocaleDateString("en-US", {
@@ -441,55 +533,129 @@ export default function AdminBookingsPage() {
                   {(selectedBooking.startTime ?? selectedBooking.endTime) && (
                     <span className="block text-brand-muted text-xs mt-0.5">
                       {[selectedBooking.startTime, selectedBooking.endTime].filter(Boolean).join(" – ")}
+                      {selectedBooking.durationHours != null && ` · ${selectedBooking.durationHours}h`}
                     </span>
                   )}
                 </dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-brand-muted font-medium">Customer</dt>
+              </dl>
+            </section>
+
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Party</h3>
+              <dl className="grid gap-2 sm:grid-cols-2">
+                <dt className="text-brand-muted">Guests</dt>
                 <dd className="text-brand-dark">
-                  <span className="font-medium">{selectedBooking.customer?.name ?? "—"}</span>
-                  {selectedBooking.customer?.email && (
-                    <a
-                      href={`mailto:${selectedBooking.customer.email}`}
-                      className="block text-brand-primary hover:underline truncate"
-                    >
-                      {selectedBooking.customer.email}
-                    </a>
+                  {selectedBooking.partySize != null ? `${selectedBooking.partySize} guest${selectedBooking.partySize !== 1 ? "s" : ""}` : "—"}
+                </dd>
+                <dt className="text-brand-muted">Pets</dt>
+                <dd className="text-brand-dark">
+                  {selectedBooking.petsCount != null && selectedBooking.petsCount > 0
+                    ? `${selectedBooking.petsCount} pet${selectedBooking.petsCount !== 1 ? "s" : ""}`
+                    : "None"}
+                </dd>
+              </dl>
+            </section>
+
+            {selectedBooking.addonsWithNames && selectedBooking.addonsWithNames.length > 0 && (
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Add-ons</h3>
+                <ul className="space-y-1">
+                  {selectedBooking.addonsWithNames.map((a) => (
+                    <li key={a.addonId} className="flex justify-between text-brand-dark">
+                      <span>{a.name}</span>
+                      <span className="text-brand-muted">×{a.qty}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Customer</h3>
+              <dl className="space-y-1">
+                <div>
+                  <dt className="text-brand-muted">Name</dt>
+                  <dd className="text-brand-dark font-medium">{selectedBooking.customer?.name ?? "—"}</dd>
+                </div>
+                {selectedBooking.customer?.email && (
+                  <div>
+                    <dt className="text-brand-muted">Email</dt>
+                    <dd>
+                      <a href={`mailto:${selectedBooking.customer.email}`} className="text-brand-primary hover:underline">
+                        {selectedBooking.customer.email}
+                      </a>
+                    </dd>
+                  </div>
+                )}
+                {selectedBooking.customer?.phone && (
+                  <div>
+                    <dt className="text-brand-muted">Phone</dt>
+                    <dd>
+                      <a href={`tel:${selectedBooking.customer.phone}`} className="text-brand-dark">
+                        {selectedBooking.customer.phone}
+                      </a>
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Payment</h3>
+              {selectedBooking.pricing && (
+                <dl className="space-y-1">
+                  {selectedBooking.pricing.subtotalCents != null && (
+                    <div className="flex justify-between">
+                      <dt className="text-brand-muted">Subtotal</dt>
+                      <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.subtotalCents)}</dd>
+                    </div>
                   )}
-                  {selectedBooking.customer?.phone && (
-                    <a
-                      href={`tel:${selectedBooking.customer.phone}`}
-                      className="block text-brand-muted hover:text-brand-dark"
-                    >
-                      {selectedBooking.customer.phone}
-                    </a>
+                  {selectedBooking.pricing.taxCents != null && selectedBooking.pricing.taxCents > 0 && (
+                    <div className="flex justify-between">
+                      <dt className="text-brand-muted">Tax</dt>
+                      <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.taxCents)}</dd>
+                    </div>
                   )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-brand-muted font-medium">Amount</dt>
-                <dd className="text-brand-dark font-medium">
-                  {selectedBooking.pricing ? formatCents(selectedBooking.pricing.totalCents) : "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-brand-muted font-medium">Status</dt>
-                <dd>
-                  <span
-                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                      selectedBooking.status === "paid"
-                        ? "bg-green-100 text-green-800"
-                        : selectedBooking.status === "canceled"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-gray-100 text-gray-800"
-                    }`}
-                  >
-                    {selectedBooking.status}
-                  </span>
-                </dd>
-              </div>
-            </dl>
+                  {selectedBooking.pricing.feesCents != null && selectedBooking.pricing.feesCents > 0 && (
+                    <div className="flex justify-between">
+                      <dt className="text-brand-muted">Fees</dt>
+                      <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.feesCents)}</dd>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-medium pt-2 border-t border-brand-dark/10">
+                    <dt className="text-brand-dark">Total</dt>
+                    <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.totalCents)}</dd>
+                  </div>
+                </dl>
+              )}
+              {selectedBooking.stripe?.paymentIntentId && (
+                <p className="mt-2 text-brand-muted text-xs font-mono truncate" title={selectedBooking.stripe.paymentIntentId}>
+                  Stripe: {selectedBooking.stripe.paymentIntentId}
+                </p>
+              )}
+            </section>
+
+            {(selectedBooking.specialNotes || (selectedBooking.answers && Object.keys(selectedBooking.answers).length > 0)) && (
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Notes & answers</h3>
+                <dl className="space-y-2">
+                  {selectedBooking.specialNotes && (
+                    <>
+                      <dt className="text-brand-muted text-xs">Special requests</dt>
+                      <dd className="text-brand-dark mt-0.5 rounded-lg bg-brand-bg/50 px-3 py-2">{selectedBooking.specialNotes}</dd>
+                    </>
+                  )}
+                  {selectedBooking.answers && Object.entries(selectedBooking.answers).map(([key, value]) =>
+                    value ? (
+                      <Fragment key={key}>
+                        <dt className="text-brand-muted text-xs capitalize">{key.replace(/_/g, " ")}</dt>
+                        <dd className="text-brand-dark mt-0.5">{value}</dd>
+                      </Fragment>
+                    ) : null
+                  )}
+                </dl>
+              </section>
+            )}
           </div>
         )}
       </Dialog>

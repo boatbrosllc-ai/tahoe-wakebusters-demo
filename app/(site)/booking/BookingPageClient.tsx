@@ -180,7 +180,7 @@ export function BookingPageClient() {
                     No boats assigned — you can still pick a date and use experience pricing.
                   </p>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-4">
                     {boats.map((boat) => {
                       const isSelected = selectedBoat?.id === boat.id;
                       const thumb = boat.photos?.[0];
@@ -190,7 +190,7 @@ export function BookingPageClient() {
                           type="button"
                           onClick={() => setSelectedBoat(boat)}
                           className={cn(
-                            "inline-flex items-center gap-2 rounded-xl border-2 px-3 py-2.5 text-left transition-all min-w-0",
+                            "inline-flex items-center gap-4 rounded-xl border-2 px-4 py-4 sm:px-5 sm:py-5 text-left transition-all min-w-0",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
                             isSelected
                               ? "border-brand-primary bg-brand-primary/10 text-brand-dark font-semibold"
@@ -198,15 +198,15 @@ export function BookingPageClient() {
                           )}
                         >
                           {thumb ? (
-                            <span className="relative h-9 w-12 shrink-0 block overflow-hidden rounded-lg bg-brand-dark/5">
-                              <Image src={thumb} alt="" width={48} height={36} className="object-cover h-full w-full" />
+                            <span className="relative h-14 w-20 sm:h-16 sm:w-24 shrink-0 block overflow-hidden rounded-lg bg-brand-dark/5">
+                              <Image src={thumb} alt="" width={96} height={64} className="object-cover h-full w-full" />
                             </span>
                           ) : (
-                            <span className="h-9 w-12 shrink-0 rounded-lg bg-brand-dark/10" aria-hidden />
+                            <span className="h-14 w-20 sm:h-16 sm:w-24 shrink-0 rounded-lg bg-brand-dark/10" aria-hidden />
                           )}
-                          <span className="text-sm font-medium truncate">{boat.name}</span>
+                          <span className="text-base sm:text-lg font-medium truncate">{boat.name}</span>
                           {boat.fromPriceCents != null && (
-                            <span className="text-xs text-brand-muted shrink-0">${(boat.fromPriceCents / 100).toFixed(0)}</span>
+                            <span className="text-sm text-brand-muted shrink-0 font-medium">${(boat.fromPriceCents / 100).toFixed(0)}</span>
                           )}
                         </button>
                       );
