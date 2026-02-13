@@ -11,6 +11,7 @@ import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, Bookin
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { parseSlotId } from "@/lib/booking/experience-slots";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 
 function formatSlotDateTime(ts: { toDate(): Date }): string {
@@ -196,10 +197,12 @@ export async function POST(request: NextRequest) {
           typeof v === "string" ? v.trim() || undefined : typeof v === "object" && v?.value != null ? String(v.value).trim() || undefined : undefined;
       }
       const bookingId = db.collection("bookings").doc().id;
+      const parsedSlot = parseSlotId(hold.slotId);
       const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
         ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
         ...(hold.boatId ? { boatId: hold.boatId } : {}),
         slotId: hold.slotId,
+        ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
         rateId: hold.rateId,
         addonSelections: hold.addonSelections,
         partySize: hold.partySize,

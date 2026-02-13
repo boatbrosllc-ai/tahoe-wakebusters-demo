@@ -37,10 +37,10 @@ This doc describes how we keep a single source of truth for what’s booked, whe
 
 2. **Create-hold** (and **create-checkout-session-direct** for direct calendar checkout)
    - **Experience with listing boats**: `boatId` is required; we use `boats/{boatId}/slots`. If omitted, we return 400.
-   - **Existing slot doc**: In a transaction we read the slot. If it’s not `open` (and not the same extendable hold), we throw and return 409. Before taking an open slot we also query **paid bookings** for that boat/experience and reject if any overlap (defense in depth).
+   - **Existing slot doc**: In a transaction we read the slot. If it’s not `open` (and not the same extendable hold), we throw and return 409. Before taking an open slot we also query **bookings with status in BOOKING_STATUSES_SLOT_TAKEN** (paid, deposit_paid, final_due, final_paid, final_processing) for that boat/experience and reject if any overlap (defense in depth).
    - **New slot doc** (slot doesn’t exist yet): Before creating it we run an **overlap check** inside the same transaction:
-     - **Listing-boat**: Query `boats/{boatId}/slots` for the same day; if any doc is not `open` and its [start, end] overlaps the requested [start, end], we throw. We also query **paid bookings** for that experience+boat and reject if any overlap.
-     - **Experience-only**: Same idea for `experiences/{experienceId}/slots` and paid bookings for that experience.
+     - **Listing-boat**: Query `boats/{boatId}/slots` for the same day; if any doc is not `open` and its [start, end] overlaps the requested [start, end], we throw. We also query **bookings with status in BOOKING_STATUSES_SLOT_TAKEN** for that experience+boat and reject if any overlap.
+     - **Experience-only**: Same idea for `experiences/{experienceId}/slots` and bookings (status in BOOKING_STATUSES_SLOT_TAKEN) for that experience.
    - So we never create or claim a slot that overlaps an existing hold, booking, or blocked slot.
 
 3. **Convert-hold-to-booking**
@@ -85,3 +85,14 @@ No need to touch the slots API or run a script; clear `bookings` and `holds` (an
 - **Cancel** always frees the correct slot (boat or experience) so that time can be rebooked.
 
 This gives a single, consistent view of “what’s booked, when, what boat” and prevents double bookings across all flows.
+
+## Slots API: experience id vs slug
+
+- The admin calendar (and site) call the slots API with the experience **Firestore document id**. Some data may be stored by **slug** (e.g. boats linked with `experienceIds: ["lake-austin-pontoon-charter"]`, or bookings with `experienceId: "lake-austin-pontoon-charter"`).
+- The slots API handles both: it looks up boats by `experienceIds array-contains experienceId` first; if **no boats** are found, it tries `experienceIds array-contains experienceSlug` (from the experience doc). For **bookings**, it queries by experience id and also by experience slug and merges results. So the admin calendar shows slots and booked times even when boats or bookings use the slug.
+
+## Checkout consistency (site + mobile)
+
+- **Experience ID required**: BookingModal and CalendarModal **never** call the slots, boats, rates, addons, or date-prices APIs with an undefined experience id. All effects that use `experienceId` are guarded on `selectedExperience?.id`. If the experience is resolved by slug only (e.g. FALLBACK_EXPERIENCES in CalendarModal), we fetch `/api/experiences/{slug}` first to get the doc and set `id`, then fetch slots. This avoids `experienceId=undefined` requests that would return wrong or empty data and cause boats to appear greyed out when they are available.
+
+- **Timezone**: The slots API builds the grid using the server's "today" and skips past slots only for that day. Slot `startAt` is sent as ISO; the client compares by the same ISO for boat availability (same slot, same ms). If "today" or "past" seem wrong (e.g. late-night or cross-timezone), consider normalizing slot date/time to a single timezone (e.g. experience TZ or America/Chicago) in both `getSlotGrid` and the client.

@@ -30,10 +30,23 @@ export function Dialog({
       if (e.key === "Escape") close();
     };
     document.addEventListener("keydown", handleEscape);
+    const scrollY = window.scrollY;
+    const html = document.documentElement;
+    html.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
     return () => {
       document.removeEventListener("keydown", handleEscape);
+      html.style.overflow = "";
       document.body.style.overflow = "";
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.left = "";
+      document.body.style.right = "";
+      window.scrollTo(0, scrollY);
     };
   }, [open, close]);
 
@@ -41,7 +54,7 @@ export function Dialog({
 
   const overlay = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] overscroll-contain"
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? "dialog-title" : undefined}
@@ -56,7 +69,7 @@ export function Dialog({
       {/* Panel – centered on mobile and desktop, max height so inner content scrolls */}
       <div
         className={cn(
-          "relative z-10 w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 rounded-2xl bg-white shadow-premium my-auto",
+          "relative z-10 w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 overflow-hidden rounded-2xl bg-white shadow-premium my-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}

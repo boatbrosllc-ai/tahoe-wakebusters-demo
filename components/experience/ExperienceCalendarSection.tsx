@@ -428,7 +428,7 @@ export function ExperienceCalendarSection({
               ))}
             </div>
             <div className="grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
-              {(["S", "M", "T", "W", "T", "F", "S"] as const).map((label, i) => (
+              {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, i) => (
                 <div
                   key={`weekday-${i}`}
                   className="py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase text-brand-muted/50"
@@ -522,7 +522,7 @@ export function ExperienceCalendarSection({
 
                 {/* Calendar grid – minimal on mobile (day + dot), full detail on desktop */}
                 <div className="mt-3 sm:mt-4 grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
-                  {(["S", "M", "T", "W", "T", "F", "S"] as const).map((label, i) => (
+                  {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, i) => (
                     <div
                       key={`weekday-${i}`}
                       className="py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted"

@@ -83,11 +83,8 @@ function toLocalDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Weekday labels in locale order (Sun–Sat in en-US). Derived, not hardcoded. */
-const WEEKDAY_LABELS = Array.from(
-  { length: 7 },
-  (_, i) => new Date(Date.UTC(2024, 0, 7 + i)).toLocaleDateString(undefined, { weekday: "short" })
-);
+/** Weekday labels: always Sunday first so headers match the calendar grid (getDay() 0 = Sunday). */
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 /** All days in a given calendar month (1-based). */
 function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
@@ -220,6 +217,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [discountCode, setDiscountCode] = useState("");
+  const [appliedDiscount, setAppliedDiscount] = useState<{ discountCents: number; code: string } | null>(null);
+  const [appliedDiscountError, setAppliedDiscountError] = useState<string | null>(null);
+  const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "success">("form");
@@ -289,6 +289,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setHowDidYouHear("");
     setComments("");
     setDiscountCode("");
+    setAppliedDiscount(null);
+    setAppliedDiscountError(null);
     setMarketingOptIn(false);
     setCancellationAck(false);
     setPaymentPhase("form");
@@ -348,7 +350,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [open, initialSelection, openSlotsForDate]);
 
   useEffect(() => {
-    if (!selectedExperience) {
+    if (!selectedExperience?.id) {
       setBoats([]);
       setSelectedBoat(null);
       return;
@@ -366,7 +368,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [selectedExperience]);
 
   useEffect(() => {
-    if (!selectedExperience) {
+    if (!selectedExperience?.id) {
       setAddons([]);
       return;
     }
@@ -383,7 +385,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
 
   // Load experience rates whenever experience is selected (for step 2 date/time before boat is chosen)
   useEffect(() => {
-    if (!selectedExperience) {
+    if (!selectedExperience?.id) {
       setExperienceRates([]);
       return;
     }
@@ -408,7 +410,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     [viewMonthYear, viewMonthMonth]
   );
   useEffect(() => {
-    if (!selectedExperience || !selectedRateIdForCalendar) {
+    if (!selectedExperience?.id || !selectedRateIdForCalendar) {
       setDatePrices({});
       return;
     }
@@ -427,7 +429,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
 
   // Fetch all slots for the visible month (all boats) so step 3 can show real availability; never filter by boat so "Booked" is only for real bookings.
   useEffect(() => {
-    if (!selectedExperience) {
+    if (!selectedExperience?.id) {
       setMonthSlots([]);
       return;
     }
@@ -550,7 +552,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     [addons]
   );
 
-  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") → total (use effective price for selected date so it matches checkout)
+  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
   const priceSummary = useMemo(() => {
     const rateCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
     const addonLines = displayAddons
@@ -566,16 +568,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
     const pct = Math.min(35, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
-    const totalCents = subtotalAfterTax + tipCents;
+    const discountCents = appliedDiscount?.discountCents ?? 0;
+    const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
     return {
       rateLabel: selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental"),
       rateCents,
       addonLines,
       salesTaxCents,
       tipCents,
+      discountCents,
       totalCents,
     };
-  }, [effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent]);
+  }, [effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
 
   // When opened with initialSelection (slot pre-picked) and boat was also pre-picked, go to step 4.
   // When opened from listing calendar (date + slot, no boatId), stay at step 3 so user picks boat first.
@@ -601,7 +605,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [tipLaterMessageOpen]);
 
   useEffect(() => {
-    if (!selectedExperience || !selectedRateId || !selectedDate) {
+    if (!selectedExperience?.id || !selectedRateId || !selectedDate) {
       setEffectiveRateCents(null);
       return;
     }
@@ -636,6 +640,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError(null);
       setTipChoice(null);
       setTipLaterMessageOpen(false);
+      setAppliedDiscount(null);
+      setAppliedDiscountError(null);
     }
   };
 
@@ -725,7 +731,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           marketingOptIn: marketingOptIn,
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
-          ...(discountCode.trim() && { discountCode: discountCode.trim() }),
+          ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
         }),
       });
       const holdData = await holdRes.json();
@@ -1264,6 +1270,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             </span>
                           </div>
                         )}
+                        {priceSummary.discountCents > 0 && appliedDiscount && (
+                          <div className="flex justify-between items-center gap-2 text-sm group">
+                            <span className="text-brand-muted">Discount ({appliedDiscount.code})</span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="font-medium text-emerald-600">−${(priceSummary.discountCents / 100).toFixed(2)}</span>
+                              <button
+                                type="button"
+                                onClick={() => { setAppliedDiscount(null); setAppliedDiscountError(null); setDiscountCode(""); }}
+                                className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
+                                aria-label="Remove discount code"
+                                title="Remove"
+                              >
+                                <span className="text-[10px] font-semibold uppercase">Remove</span>
+                              </button>
+                            </span>
+                          </div>
+                        )}
                         <div className="border-t border-brand-dark/10 pt-3 mt-3 space-y-1.5">
                           <div className="flex justify-between items-baseline text-sm">
                             <span className="text-brand-muted">Total</span>
@@ -1561,17 +1584,63 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                   </div>
 
-                  {/* Optional */}
+                  {/* Discount code */}
+                  <div className="space-y-2 pt-1">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Discount or promo code</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        id="booking-discount"
+                        type="text"
+                        value={discountCode}
+                        onChange={(e) => {
+                          setDiscountCode(e.target.value);
+                          setAppliedDiscount(null);
+                          setAppliedDiscountError(null);
+                        }}
+                        placeholder="Enter code"
+                        className="flex-1 min-w-[120px] rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                        aria-label="Discount code"
+                      />
+                      <button
+                        type="button"
+                        disabled={!discountCode.trim() || appliedDiscountLoading}
+                        onClick={async () => {
+                          const code = discountCode.trim();
+                          if (!code) return;
+                          setAppliedDiscountError(null);
+                          setAppliedDiscountLoading(true);
+                          try {
+                            const totalBeforeDiscount = (priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)) + priceSummary.salesTaxCents + priceSummary.tipCents;
+                            const res = await fetch("/api/booking/validate-discount", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ code, totalCents: totalBeforeDiscount }),
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (data.valid && typeof data.discountCents === "number" && data.code) {
+                              setAppliedDiscount({ discountCents: data.discountCents, code: data.code });
+                            } else {
+                              setAppliedDiscount(null);
+                              setAppliedDiscountError(data.error ?? "Invalid or expired code");
+                            }
+                          } catch {
+                            setAppliedDiscount(null);
+                            setAppliedDiscountError("Could not validate code");
+                          } finally {
+                            setAppliedDiscountLoading(false);
+                          }
+                        }}
+                        className="shrink-0 rounded-xl border-2 border-brand-primary bg-brand-primary text-white font-semibold px-4 py-2 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {appliedDiscountLoading ? "Checking…" : "Apply"}
+                      </button>
+                    </div>
+                    {appliedDiscountError && <p className="text-xs text-red-600">{appliedDiscountError}</p>}
+                    {appliedDiscount && <p className="text-xs text-emerald-600 font-medium">Discount applied: −${(appliedDiscount.discountCents / 100).toFixed(2)}</p>}
+                  </div>
+                  {/* Optional (other) */}
                   <div className="space-y-2 pt-1">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Optional</p>
-                    <input
-                      id="booking-discount"
-                      type="text"
-                      value={discountCode}
-                      onChange={(e) => setDiscountCode(e.target.value)}
-                      placeholder="Discount code"
-                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
-                    />
                     <input
                       id="booking-how-hear"
                       type="text"
@@ -1804,9 +1873,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 }}
                 className="max-w-sm"
               >
-                <h3 className="text-lg font-bold text-brand-dark mb-2">We encourage tipping</h3>
-                <p className="text-sm text-brand-muted leading-relaxed mb-4">
-                  Our crew works hard to make your trip great. Tips go directly to your captain and crew and are a meaningful way to show appreciation. You can add a tip when you pay or tip your captain directly.
+                <h3 className="text-lg font-bold text-brand-dark mb-2">Captain gratuity</h3>
+                <p className="text-sm text-brand-dark leading-relaxed mb-2">
+                  To ensure exceptional service, a 20% gratuity is required for all private charters. Gratuity is paid directly to your captain at the end of the trip via Venmo, Zelle, Cash App, or cash.
+                </p>
+                <p className="text-xs text-brand-muted leading-relaxed mb-4">
+                  If any part of your experience does not meet expectations, contact us immediately and we&apos;ll take care of it.
                 </p>
                 <button
                   type="button"

@@ -225,6 +225,24 @@ export interface Slot {
 }
 
 // ---------------------------------------------------------------------------
+// Blocks (top-level collection blocks/{blockId}) — admin-only unavailability
+// ---------------------------------------------------------------------------
+
+export interface Block {
+  experienceId: string;
+  /** Omit for "all boats" (experience-level block); set for one boat. */
+  boatId: string | null;
+  startAt: FirestoreTimestamp;
+  endAt: FirestoreTimestamp;
+  /** Optional label (e.g. "Maintenance", "Private"). */
+  note?: string | null;
+  /** When created from "block slot" UI, stored for easy unblock lookup. */
+  slotId?: string | null;
+  createdAt: FirestoreTimestamp;
+  createdBy?: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Holds (top-level collection holds/{holdId})
 // ---------------------------------------------------------------------------
 
@@ -288,6 +306,15 @@ export type BookingStatus =
   | "final_paid"
   | "final_requires_action"
   | "final_failed";
+
+/** Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct). */
+export const BOOKING_STATUSES_SLOT_TAKEN: readonly BookingStatus[] = [
+  "paid",
+  "deposit_paid",
+  "final_due",
+  "final_paid",
+  "final_processing",
+];
 
 /** Display-only card info (never store raw card data). */
 export interface BookingCardDisplay {

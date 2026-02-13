@@ -7,6 +7,7 @@ import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 const HOLD_EXPIRY_MINUTES = 10;
 
@@ -378,7 +379,7 @@ export async function POST(request: NextRequest) {
         const parsedForCheck = parseSlotId(input.slotId);
         if (parsedForCheck && isListingBoatFlow && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -391,7 +392,7 @@ export async function POST(request: NextRequest) {
           }
         } else if (parsedForCheck && isExperienceOnly && input.experienceId) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };
@@ -458,7 +459,7 @@ export async function POST(request: NextRequest) {
         // Also reject if a paid booking already exists for this boat/experience and time (slot doc may be missing)
         if (isListingBoatFlow && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -471,7 +472,7 @@ export async function POST(request: NextRequest) {
           }
         } else if (isExperienceOnly && input.experienceId) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };

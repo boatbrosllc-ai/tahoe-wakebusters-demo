@@ -1,7 +1,7 @@
 /**
- * Block a single slot (admin). Creates the slot doc if it doesn't exist.
+ * Block a single slot (admin). Creates a block doc (Google Calendar–style); slots API respects blocks.
  * POST body: { experienceId, slotId, boatId?: string }
- * When boatId is provided (required for listing experiences), writes to boats/{boatId}/slots.
+ * When boatId is provided (required for listing experiences), block applies to that boat only.
  * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
  */
 
@@ -36,14 +36,6 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-    const payload = {
-      startAt: Timestamp.fromDate(start),
-      endAt: Timestamp.fromDate(end),
-      status: "blocked" as const,
-      holdId: null,
-      bookingId: null,
-      updatedAt: FieldValue.serverTimestamp(),
-    };
 
     if (boatId) {
       const boatRef = db.collection("boats").doc(boatId);
@@ -55,13 +47,19 @@ export async function POST(request: NextRequest) {
       if (!boat.experienceIds?.includes(experienceId)) {
         return NextResponse.json({ error: "Boat not assigned to this experience" }, { status: 400 });
       }
-      await boatRef.collection("slots").doc(slotId).set(payload);
-      return NextResponse.json({ ok: true, slotId, boatId });
     }
 
-    const slotRef = db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
-    await slotRef.set(payload);
-    return NextResponse.json({ ok: true, slotId });
+    const docRef = await db.collection("blocks").add({
+      experienceId,
+      boatId: boatId ?? null,
+      startAt: Timestamp.fromDate(start),
+      endAt: Timestamp.fromDate(end),
+      note: null,
+      slotId,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: null,
+    });
+    return NextResponse.json({ ok: true, blockId: docRef.id, slotId, boatId });
   } catch (err) {
     console.error("[block-slot]", err);
     return NextResponse.json({ error: "Failed to block slot" }, { status: 500 });

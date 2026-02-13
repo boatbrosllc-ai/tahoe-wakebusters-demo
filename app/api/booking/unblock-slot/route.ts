@@ -1,8 +1,7 @@
 /**
- * Unblock a single slot (admin). Deletes the slot doc so it becomes available again.
- * Only allowed when slot status is "blocked". For held slots use release-hold; for booked use cancel booking.
+ * Unblock a single slot (admin). Deletes the block doc that was created for this slot.
  * POST body: { experienceId, slotId, boatId?: string }
- * When boatId is provided, deletes from boats/{boatId}/slots.
+ * Finds block where experienceId, boatId, slotId match and deletes it.
  * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
  */
 
@@ -35,37 +34,15 @@ export async function POST(request: NextRequest) {
     }
     const db = getDb();
 
-    if (boatId) {
-      const slotRef = db.collection("boats").doc(boatId).collection("slots").doc(slotId);
-      const slotSnap = await slotRef.get();
-      if (!slotSnap.exists) {
-        return NextResponse.json({ ok: true, message: "Slot already open", slotId, boatId });
-      }
-      const slot = slotSnap.data() as { status?: string };
-      if (slot.status !== "blocked") {
-        return NextResponse.json(
-          { error: "Only blocked slots can be unblocked. Release hold or cancel booking for held/booked slots." },
-          { status: 400 }
-        );
-      }
-      await slotRef.delete();
-      return NextResponse.json({ ok: true, slotId, boatId });
+    const blocksRef = db.collection("blocks");
+    const snap = boatId
+      ? await blocksRef.where("experienceId", "==", experienceId).where("slotId", "==", slotId).where("boatId", "==", boatId).get()
+      : await blocksRef.where("experienceId", "==", experienceId).where("slotId", "==", slotId).get();
+    if (snap.empty) {
+      return NextResponse.json({ ok: true, message: "No block found for this slot" });
     }
-
-    const slotRef = db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
-    const slotSnap = await slotRef.get();
-    if (!slotSnap.exists) {
-      return NextResponse.json({ ok: true, message: "Slot already open" });
-    }
-    const slot = slotSnap.data() as { status?: string };
-    if (slot.status !== "blocked") {
-      return NextResponse.json(
-        { error: "Only blocked slots can be unblocked. Release hold or cancel booking for held/booked slots." },
-        { status: 400 }
-      );
-    }
-    await slotRef.delete();
-    return NextResponse.json({ ok: true, slotId });
+    await snap.docs[0].ref.delete();
+    return NextResponse.json({ ok: true, slotId, boatId });
   } catch (err) {
     console.error("[unblock-slot]", err);
     return NextResponse.json({ error: "Failed to unblock slot" }, { status: 500 });

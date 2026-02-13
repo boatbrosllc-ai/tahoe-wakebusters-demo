@@ -117,6 +117,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     };
   }, [experienceId]);
 
+  // Only fetch slots when we have experience id (resolve by slug first when using FALLBACK_EXPERIENCES).
   useEffect(() => {
     if (!selectedExperience) return;
     if (selectedExperience.id) {
@@ -281,9 +282,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
             </button>
           </div>
 
-          {/* Weekday headers */}
+          {/* Weekday headers — Sunday first to match grid (getDay() 0 = Sunday) */}
           <div className="grid grid-cols-7 gap-0.5 text-center mb-1">
-            {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+            {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((d, i) => (
               <span key={`wd-${i}`} className="text-[10px] font-medium text-brand-muted py-0.5">
                 {d}
               </span>

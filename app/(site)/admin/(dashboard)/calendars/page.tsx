@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink } from "lucide-react";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays } from "lucide-react";
+import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
 
@@ -31,14 +33,8 @@ interface SlotDto {
   expiresAt?: string;
   bookingSummary?: BookingSummary | null;
   boatId?: string;
-}
-
-interface ExperienceItem {
-  id: string;
-  slug: string;
-  title: string;
-  active: boolean;
-  heroUrl?: string;
+  /** Experience (listing) id — used for block actions and "listing" label in modal. */
+  experienceId?: string;
 }
 
 function toDateStr(d: Date): string {
@@ -85,9 +81,31 @@ const SLOT_LABELS: Record<SlotStatus, string> = {
   blocked: "Blocked",
 };
 
-export default function AdminCalendarsPage() {
-  const [experiences, setExperiences] = useState<ExperienceItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+/** Colors for boat chips and event bars (cycle by boat index). */
+const BOAT_COLORS = [
+  "rgb(59 130 246)",   // blue
+  "rgb(16 185 129)",   // emerald
+  "rgb(245 158 11)",   // amber
+  "rgb(139 92 246)",   // violet
+  "rgb(244 63 94)",   // rose
+  "rgb(6 182 212)",    // cyan
+];
+function getBoatColor(boatIndex: number): string {
+  return BOAT_COLORS[boatIndex % BOAT_COLORS.length] ?? BOAT_COLORS[0];
+}
+
+/** Boat with experienceIds for block-by-experience logic. */
+interface BoatItem {
+  id: string;
+  name: string;
+  experienceIds: string[];
+}
+
+export default function CalendarsPage() {
+  /** Map from experience slug or doc id to Firestore document id (so we always call slots API with doc id). */
+  const [experienceDocIdBySlugOrId, setExperienceDocIdBySlugOrId] = useState<Map<string, string>>(new Map());
+  const [boatList, setBoatList] = useState<BoatItem[]>([]);
+  const [experienceNames, setExperienceNames] = useState<Map<string, string>>(new Map());
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [bookingsBySlotId, setBookingsBySlotId] = useState<Map<string, BookingSummary>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -107,8 +125,16 @@ export default function AdminCalendarsPage() {
   const [rangeSectionOpen, setRangeSectionOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
-  const [boatList, setBoatList] = useState<{ id: string; name: string }[]>([]);
   const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
+  const [calendarView, setCalendarView] = useState<"month" | "week">("month");
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - d.getDay());
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+  /** When empty, show all boats; when non-empty, show only these boats. */
+  const [selectedBoatIds, setSelectedBoatIds] = useState<Set<string>>(new Set());
   const [bookingDetailId, setBookingDetailId] = useState<string | null>(null);
   const [bookingDetailOpen, setBookingDetailOpen] = useState(false);
   const [bookingDetail, setBookingDetail] = useState<{
@@ -130,67 +156,108 @@ export default function AdminCalendarsPage() {
   } | null>(null);
   const [bookingDetailLoading, setBookingDetailLoading] = useState(false);
 
-  const fetchExperiences = useCallback(async () => {
+  /** Unique experience Firestore document ids — resolve slug to id so slots API finds the experience. */
+  const uniqueExperienceIds = useMemo(() => {
+    const docIds = new Set<string>();
+    boatList.forEach((b) => {
+      (b.experienceIds ?? []).forEach((slugOrId) => {
+        const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+        docIds.add(docId);
+      });
+    });
+    return Array.from(docIds);
+  }, [boatList, experienceDocIdBySlugOrId]);
+
+  const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
+
+  const fetchBoatsAndExperiences = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/experiences", { credentials: "include" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? "Failed to load listings");
+      const [boatsRes, experiencesRes] = await Promise.all([
+        fetch("/api/admin/boats", { credentials: "include" }),
+        fetch("/api/admin/experiences", { credentials: "include" }),
+      ]);
+      if (!boatsRes.ok) {
+        const data = await boatsRes.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to load boats");
       }
-      const list = await res.json();
-      setExperiences(list);
-      setSelectedId((prev) => (prev && list.some((e: ExperienceItem) => e.id === prev) ? prev : list[0]?.id ?? null));
+      const boatsData = await boatsRes.json();
+      const boats = Array.isArray(boatsData.boats) ? boatsData.boats : [];
+      const boatItems: BoatItem[] = boats.map((b: { id: string; name?: string; experienceIds?: string[] }) => ({
+        id: b.id,
+        name: b.name ?? b.id,
+        experienceIds: Array.isArray(b.experienceIds) ? b.experienceIds : [],
+      }));
+      setBoatList(boatItems);
+      const boatNameMap = new Map<string, string>();
+      boatItems.forEach((b) => boatNameMap.set(b.id, b.name));
+      setBoatNames(boatNameMap);
+
+      if (experiencesRes.ok) {
+        const expList = await experiencesRes.json();
+        const expNameMap = new Map<string, string>();
+        const slugOrIdToDocId = new Map<string, string>();
+        (Array.isArray(expList) ? expList : []).forEach((e: { id: string; title?: string; slug?: string }) => {
+          expNameMap.set(e.id, e.title ?? e.slug ?? e.id);
+          slugOrIdToDocId.set(e.id, e.id);
+          if (e.slug && e.slug.trim()) slugOrIdToDocId.set(e.slug.trim(), e.id);
+        });
+        setExperienceNames(expNameMap);
+        setExperienceDocIdBySlugOrId(slugOrIdToDocId);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load listings");
+      setError(e instanceof Error ? e.message : "Failed to load boats");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchExperiences();
-  }, [fetchExperiences]);
-
-  const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
+    fetchBoatsAndExperiences();
+  }, [fetchBoatsAndExperiences]);
 
   const fetchSlots = useCallback(async () => {
-    if (!selectedId) return;
+    if (uniqueExperienceIds.length === 0) {
+      setSlots([]);
+      return;
+    }
     setSlotsLoading(true);
     try {
-      const res = await fetch(
-        `/api/booking/slots?experienceId=${encodeURIComponent(selectedId)}&startDate=${dateRange.start}&endDate=${dateRange.end}`,
-        { credentials: "include" }
+      const all = await Promise.all(
+        uniqueExperienceIds.map((experienceId) =>
+          fetch(
+            `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&endDate=${dateRange.end}`,
+            { credentials: "include" }
+          ).then((res) => (res.ok ? res.json() : { slots: [] }))
+        )
       );
-      if (!res.ok) throw new Error("Failed to load slots");
-      const data = await res.json();
-      setSlots(Array.isArray(data.slots) ? data.slots : []);
+      const merged = all.flatMap((data) => (Array.isArray(data.slots) ? data.slots : []));
+      setSlots(merged);
     } catch {
       setSlots([]);
     } finally {
       setSlotsLoading(false);
     }
-  }, [selectedId, dateRange.start, dateRange.end]);
+  }, [uniqueExperienceIds, dateRange.start, dateRange.end]);
 
   useEffect(() => {
-    if (!selectedId) return;
     fetchSlots();
-  }, [selectedId, fetchSlots]);
+  }, [fetchSlots]);
 
   const fetchBookings = useCallback(async () => {
-    if (!selectedId) return;
     setBookingsLoading(true);
     try {
       const res = await fetch(
-        `/api/admin/bookings?experienceId=${encodeURIComponent(selectedId)}&fromTripDate=${dateRange.start}&toTripDate=${dateRange.end}&limit=500`,
+        `/api/admin/bookings?fromTripDate=${dateRange.start}&toTripDate=${dateRange.end}&limit=500`,
         { credentials: "include" }
       );
       if (!res.ok) throw new Error("Failed to load bookings");
       const list = await res.json();
       const map = new Map<string, BookingSummary>();
+      const statuses = [...BOOKING_STATUSES_SLOT_TAKEN];
       (Array.isArray(list) ? list : [])
-        .filter((b: { status?: string }) => b.status === "paid")
+        .filter((b: { status?: string }) => typeof b.status === "string" && (statuses as readonly string[]).includes(b.status))
         .forEach((b: { id: string; customer?: { name?: string; email?: string }; boatName?: string | null; pricing?: { totalCents?: number }; status?: string }) => {
           map.set(b.id, {
             bookingId: b.id,
@@ -207,12 +274,11 @@ export default function AdminCalendarsPage() {
     } finally {
       setBookingsLoading(false);
     }
-  }, [selectedId, dateRange.start, dateRange.end]);
+  }, [dateRange.start, dateRange.end]);
 
   useEffect(() => {
-    if (!selectedId) return;
     fetchBookings();
-  }, [selectedId, fetchBookings]);
+  }, [fetchBookings]);
 
   useEffect(() => {
     if (!bookingDetailOpen || !bookingDetailId) {
@@ -231,26 +297,6 @@ export default function AdminCalendarsPage() {
       .finally(() => setBookingDetailLoading(false));
   }, [bookingDetailOpen, bookingDetailId]);
 
-  useEffect(() => {
-    if (!selectedId) {
-      setBoatNames(new Map());
-      return;
-    }
-    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(selectedId)}`, { credentials: "include" })
-      .then((res) => res.json())
-      .then((data: { boats?: { id: string; name?: string }[] }) => {
-        const boats = data.boats ?? [];
-        const map = new Map<string, string>();
-        boats.forEach((b) => map.set(b.id, b.name ?? b.id));
-        setBoatNames(map);
-        setBoatList(boats.map((b) => ({ id: b.id, name: b.name ?? b.id })));
-      })
-      .catch(() => {
-        setBoatNames(new Map());
-        setBoatList([]);
-      });
-  }, [selectedId]);
-
   const enrichedSlots = useMemo(() => {
     return slots.map((s) => ({
       ...s,
@@ -258,9 +304,14 @@ export default function AdminCalendarsPage() {
     }));
   }, [slots, bookingsBySlotId]);
 
+  const filteredSlots = useMemo(() => {
+    if (selectedBoatIds.size === 0) return enrichedSlots;
+    return enrichedSlots.filter((s) => s.boatId && selectedBoatIds.has(s.boatId));
+  }, [enrichedSlots, selectedBoatIds]);
+
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number; held: number; booked: number; blocked: number; slots: SlotDto[] }>();
-    for (const s of enrichedSlots) {
+    for (const s of filteredSlots) {
       const day = getSlotCalendarDate(s);
       if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0, slots: [] });
       const entry = map.get(day)!;
@@ -272,7 +323,7 @@ export default function AdminCalendarsPage() {
     }
     map.forEach((entry) => entry.slots.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
-  }, [enrichedSlots]);
+  }, [filteredSlots]);
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -326,7 +377,7 @@ export default function AdminCalendarsPage() {
 
   const bookedSlotsByDay = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
-    for (const s of enrichedSlots) {
+    for (const s of filteredSlots) {
       if (s.status !== "booked") continue;
       const day = getSlotCalendarDate(s);
       if (!map.has(day)) map.set(day, []);
@@ -334,25 +385,31 @@ export default function AdminCalendarsPage() {
     }
     map.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
-  }, [enrichedSlots]);
+  }, [filteredSlots]);
 
   const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate)?.slots ?? [] : [];
 
   const blockDate = async (dateStr: string) => {
-    if (!selectedId) return;
+    if (uniqueExperienceIds.length === 0) return;
     const key = `date-${dateStr}`;
     setBlocking(key);
     setError(null);
     const boatIdsPayload = blockDayBoatIds.size > 0 ? Array.from(blockDayBoatIds) : undefined;
     try {
-      const res = await fetch("/api/booking/block-date", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block", boatIds: boatIdsPayload }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to block date");
+      for (const experienceId of uniqueExperienceIds) {
+        const boatIds = boatIdsPayload != null
+          ? boatList.filter((b) => b.experienceIds?.includes(experienceId) && blockDayBoatIds.has(b.id)).map((b) => b.id)
+          : undefined;
+        if (boatIdsPayload != null && boatIds?.length === 0) continue;
+        const res = await fetch("/api/booking/block-date", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds: boatIds ?? undefined }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to block date");
+      }
       await fetchSlots();
       setDayDetailOpen(false);
     } catch (e) {
@@ -363,19 +420,21 @@ export default function AdminCalendarsPage() {
   };
 
   const unblockDate = async (dateStr: string) => {
-    if (!selectedId) return;
+    if (uniqueExperienceIds.length === 0) return;
     const key = `date-${dateStr}`;
     setBlocking(key);
     setError(null);
     try {
-      const res = await fetch("/api/booking/block-date", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "unblock" }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
+      for (const experienceId of uniqueExperienceIds) {
+        const res = await fetch("/api/booking/block-date", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ experienceId, date: dateStr, action: "unblock" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
+      }
       await fetchSlots();
       setDayDetailOpen(false);
     } catch (e) {
@@ -386,7 +445,8 @@ export default function AdminCalendarsPage() {
   };
 
   const blockSlot = async (slot: SlotDto) => {
-    if (!selectedId) return;
+    const experienceId = slot.experienceId ?? uniqueExperienceIds[0];
+    if (!experienceId) return;
     setBlocking(slot.id);
     setError(null);
     try {
@@ -394,7 +454,7 @@ export default function AdminCalendarsPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
+        body: JSON.stringify({ experienceId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to block slot");
@@ -407,7 +467,8 @@ export default function AdminCalendarsPage() {
   };
 
   const unblockSlot = async (slot: SlotDto) => {
-    if (!selectedId) return;
+    const experienceId = slot.experienceId ?? uniqueExperienceIds[0];
+    if (!experienceId) return;
     setActionLoading(slot.id);
     setError(null);
     try {
@@ -415,7 +476,7 @@ export default function AdminCalendarsPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
+        body: JSON.stringify({ experienceId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to unblock slot");
@@ -488,12 +549,12 @@ export default function AdminCalendarsPage() {
   const handleDateCellClick = (cell: (typeof calendarDays)[0], e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (cell.isPast || !selectedId) return;
+    if (cell.isPast) return;
     openDayDetail(cell.dateStr);
   };
 
   const blockRange = async () => {
-    if (!selectedId || !rangeStart || !rangeEnd) return;
+    if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd) return;
     const start = new Date(rangeStart + "T00:00:00");
     const end = new Date(rangeEnd + "T00:00:00");
     if (start > end) {
@@ -506,12 +567,14 @@ export default function AdminCalendarsPage() {
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dateStr = toDateStr(d);
         if (dateStr < todayStr) continue;
-        await fetch("/api/booking/block-date", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block" }),
-        });
+        for (const experienceId of uniqueExperienceIds) {
+          await fetch("/api/booking/block-date", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ experienceId, date: dateStr, action: "block" }),
+          });
+        }
       }
       await fetchSlots();
     } catch (e) {
@@ -522,7 +585,7 @@ export default function AdminCalendarsPage() {
   };
 
   const unblockRange = async () => {
-    if (!selectedId || !rangeStart || !rangeEnd) return;
+    if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd) return;
     const start = new Date(rangeStart + "T00:00:00");
     const end = new Date(rangeEnd + "T00:00:00");
     if (start > end) {
@@ -534,12 +597,14 @@ export default function AdminCalendarsPage() {
     try {
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dateStr = toDateStr(d);
-        await fetch("/api/booking/block-date", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "unblock" }),
-        });
+        for (const experienceId of uniqueExperienceIds) {
+          await fetch("/api/booking/block-date", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ experienceId, date: dateStr, action: "unblock" }),
+          });
+        }
       }
       await fetchSlots();
     } catch (e) {
@@ -549,23 +614,6 @@ export default function AdminCalendarsPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
-        Loading listings…
-      </div>
-    );
-  }
-
-  if (experiences.length === 0) {
-    return (
-      <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
-        No listings yet. Create one under Listings to manage calendars.
-      </div>
-    );
-  }
-
-  const selectedExperience = experiences.find((e) => e.id === selectedId);
   const formatCents = (cents: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(cents / 100);
 
@@ -590,34 +638,131 @@ export default function AdminCalendarsPage() {
         </Button>
       </div>
 
-      {/* Listing selector */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-brand-muted">Listing:</span>
-        {experiences.map((exp) => (
-          <button
-            key={exp.id}
-            type="button"
-            onClick={() => setSelectedId(exp.id)}
-            className={cn(
-              "rounded-xl px-4 py-2.5 text-sm font-medium transition-all",
-              selectedId === exp.id
-                ? "bg-brand-primary text-white shadow-sm"
-                : "bg-white border border-brand-dark/15 text-brand-dark hover:border-brand-primary/30 hover:bg-brand-bg/50"
-            )}
-          >
-            {exp.title || exp.slug || exp.id}
-          </button>
-        ))}
-      </div>
-
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {error}
         </div>
       )}
 
-      {selectedId && (
+      {loading && (
+        <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
+          Loading…
+        </div>
+      )}
+      {!loading && boatList.length === 0 && (
+        <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
+          <CalendarIcon className="h-12 w-12 mx-auto mb-3 text-brand-muted/50" />
+          <p className="font-medium text-brand-dark">Add boats to see the calendar</p>
+          <p className="text-sm text-brand-muted mt-1 max-w-sm mx-auto">
+            Create and assign boats in <strong>Boats</strong>. Bookings from your site will appear here by boat, date, and time.
+          </p>
+        </div>
+      )}
+      {!loading && boatList.length > 0 && (
         <>
+          {/* View toggle: Month | Week (Google Calendar–style) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-brand-muted">View</span>
+            <div className="flex rounded-lg p-0.5 bg-brand-bg/50 border border-brand-dark/15">
+              <button
+                type="button"
+                onClick={() => setCalendarView("month")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all",
+                  calendarView === "month" ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10" : "text-brand-muted hover:text-brand-dark"
+                )}
+              >
+                <LayoutGrid className="h-4 w-4" />
+                Month
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCalendarView("week");
+                  const d = new Date(calendarMonth);
+                  d.setDate(d.getDate() - d.getDay());
+                  d.setHours(0, 0, 0, 0);
+                  setWeekStart(d);
+                }}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-all",
+                  calendarView === "week" ? "bg-white text-brand-dark shadow-sm border border-brand-dark/10" : "text-brand-muted hover:text-brand-dark"
+                )}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Week
+              </button>
+            </div>
+          </div>
+
+          {/* Boat filter: multi-select with color coding */}
+          {boatList.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-brand-muted">Boats:</span>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBoatIds(new Set())}
+                  className={cn(
+                    "rounded-lg px-3 py-1.5 text-sm font-medium border transition-all",
+                    selectedBoatIds.size === 0
+                      ? "bg-brand-primary/15 text-brand-primary border-brand-primary/40"
+                      : "bg-white border-brand-dark/15 text-brand-dark hover:border-brand-dark/30"
+                  )}
+                >
+                  All
+                </button>
+                {boatList.map((boat, idx) => {
+                  const color = getBoatColor(idx);
+                  const isSelected = selectedBoatIds.size === 0 || selectedBoatIds.has(boat.id);
+                  return (
+                    <button
+                      key={boat.id}
+                      type="button"
+                      onClick={() => {
+                        if (selectedBoatIds.size === 0) {
+                          setSelectedBoatIds(new Set([boat.id]));
+                        } else {
+                          setSelectedBoatIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(boat.id)) {
+                              next.delete(boat.id);
+                              return next.size === 0 ? new Set() : next;
+                            }
+                            next.add(boat.id);
+                            return next;
+                          });
+                        }
+                      }}
+                      className={cn(
+                        "rounded-lg px-3 py-1.5 text-sm font-medium border transition-all flex items-center gap-1.5",
+                        isSelected ? "border-current" : "bg-white border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                      )}
+                      style={isSelected ? { borderColor: color, color, backgroundColor: `${color}12` } : undefined}
+                    >
+                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} aria-hidden />
+                      {boat.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {calendarView === "week" ? (
+            <AdminCalendarWeekView
+              experienceId={uniqueExperienceIds[0] ?? ""}
+              boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
+              weekStart={weekStart}
+              selectedBoatIds={selectedBoatIds.size === 0 ? undefined : Array.from(selectedBoatIds)}
+              boatColorByIndex={boatList.reduce<Record<number, string>>((acc, _, i) => ({ ...acc, [i]: getBoatColor(i) }), {})}
+              onPrevWeek={() => setWeekStart((w) => { const d = new Date(w); d.setDate(d.getDate() - 7); return d; })}
+              onNextWeek={() => setWeekStart((w) => { const d = new Date(w); d.setDate(d.getDate() + 7); return d; })}
+              onBookingClick={(bookingId) => { setBookingDetailId(bookingId); setBookingDetailOpen(true); }}
+              onRefresh={() => { fetchSlots(); fetchBookings(); }}
+            />
+          ) : (
+          <>
           {/* Quick actions: block range (collapsible) */}
           <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
             <button
@@ -662,7 +807,7 @@ export default function AdminCalendarsPage() {
           <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
             <div className="sticky top-0 z-10 px-4 py-4 sm:px-6 sm:py-4 border-b border-brand-dark/10 bg-white/95 backdrop-blur-sm flex flex-wrap items-center justify-between gap-4">
               <h2 className="text-lg font-semibold text-brand-dark">
-                {selectedExperience?.title ?? selectedExperience?.slug ?? selectedId}
+                Calendar
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -694,7 +839,7 @@ export default function AdminCalendarsPage() {
 
             <div className="p-4 sm:p-6 space-y-4">
               {/* Legend */}
-              <div className="flex flex-wrap items-center gap-4 text-xs">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                 <span className="inline-flex items-center gap-1.5 text-emerald-700 font-medium">
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Available
                 </span>
@@ -707,26 +852,34 @@ export default function AdminCalendarsPage() {
                 <span className="inline-flex items-center gap-1.5 text-brand-muted font-medium">
                   <span className="h-2.5 w-2.5 rounded-full bg-brand-muted" /> Blocked
                 </span>
+                {boatList.length > 1 && (
+                  <>
+                    <span className="w-px h-4 bg-brand-dark/15" aria-hidden />
+                    {boatList.map((boat, idx) => (
+                      <span key={boat.id} className="inline-flex items-center gap-1.5 font-medium" style={{ color: getBoatColor(idx) }}>
+                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: getBoatColor(idx) }} /> {boat.name}
+                      </span>
+                    ))}
+                  </>
+                )}
               </div>
 
               {slotsLoading ? (
                 <div className="grid min-h-[380px] place-items-center text-brand-muted text-sm">Loading calendar…</div>
-              ) : slots.length === 0 ? (
-                <div className="min-h-[380px] flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-brand-dark/10 bg-brand-bg/20 p-8 text-center">
-                  <CalendarIcon className="h-12 w-12 text-brand-muted/50" />
-                  <p className="text-sm font-medium text-brand-dark">Connect boats to see availability</p>
-                  <p className="text-xs text-brand-muted max-w-sm">
-                    Assign boats to this listing in <strong>Boats</strong>. Then paid bookings will appear here in the correct time slots.
-                  </p>
-                </div>
               ) : (
-                <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                    <div key={d} className="py-2 text-center text-xs font-semibold text-brand-muted uppercase tracking-wide">
-                      {d}
-                    </div>
-                  ))}
-                  {calendarDays.map((cell) => {
+                <>
+                  {slots.length === 0 && (
+                    <p className="text-xs text-brand-muted mb-3 text-center">
+                      No time slots in this date range. Assign boats to listings and add rates to see availability, or pick another month.
+                    </p>
+                  )}
+                  <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                      <div key={d} className="py-2 text-center text-xs font-semibold text-brand-muted uppercase tracking-wide">
+                        {d}
+                      </div>
+                    ))}
+                    {calendarDays.map((cell) => {
                     const daySlots = slotsByDate.get(cell.dateStr)?.slots ?? [];
                     const bookedForDay = bookedSlotsByDay.get(cell.dateStr) ?? [];
                     const isPast = cell.isPast;
@@ -766,20 +919,25 @@ export default function AdminCalendarsPage() {
                         <div className="flex flex-col gap-1 flex-1 min-h-0">
                           {bookedForDay.length > 0 ? (
                             <>
-                              {bookedForDay.slice(0, 3).map((slot) => (
-                                <div
-                                  key={slot.id}
-                                  className="rounded-md border border-blue-200 bg-blue-50 px-1.5 py-1 text-[10px] leading-tight shrink-0"
-                                >
-                                  <span className="font-semibold text-blue-800">{formatTime(slot.startAt)}</span>
-                                  {slot.bookingSummary?.boatName && (
-                                    <span className="block truncate text-blue-700">{slot.bookingSummary.boatName}</span>
-                                  )}
-                                  {slot.bookingSummary?.customerName && (
-                                    <span className="block truncate text-blue-600/90">{slot.bookingSummary.customerName}</span>
-                                  )}
-                                </div>
-                              ))}
+                              {bookedForDay.slice(0, 3).map((slot) => {
+                                const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
+                                const boatColor = boatIdx >= 0 ? getBoatColor(boatIdx) : "rgb(59 130 246)";
+                                return (
+                                  <div
+                                    key={slot.id}
+                                    className="rounded-md border px-1.5 py-1 text-[10px] leading-tight shrink-0"
+                                    style={{ borderColor: `${boatColor}99`, backgroundColor: `${boatColor}18`, borderLeftWidth: 3 }}
+                                  >
+                                    <span className="font-semibold" style={{ color: boatColor }}>{formatTime(slot.startAt)}</span>
+                                    {(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name) && (
+                                      <span className="block truncate opacity-90">{(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name)}</span>
+                                    )}
+                                    {slot.bookingSummary?.customerName && (
+                                      <span className="block truncate opacity-80">{slot.bookingSummary.customerName}</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
                               {bookedForDay.length > 3 && (
                                 <span className="text-[10px] text-blue-600 font-medium">+{bookedForDay.length - 3} more</span>
                               )}
@@ -800,14 +958,13 @@ export default function AdminCalendarsPage() {
                     );
                   })}
                 </div>
+                </>
               )}
             </div>
           </div>
-        </>
-      )}
 
-      {/* Day detail modal: timeline of time slots + bookings + actions */}
-      <Dialog
+          {/* Day detail modal: timeline of time slots + bookings + actions */}
+          <Dialog
         open={dayDetailOpen}
         onOpenChange={setDayDetailOpen}
         title={
@@ -923,6 +1080,11 @@ export default function AdminCalendarsPage() {
                                     <Ship className="h-3.5 w-3.5 text-brand-muted shrink-0" />
                                     {boatLabel}
                                   </span>
+                                  {slot.experienceId && experienceNames.has(slot.experienceId) && (
+                                    <span className="text-xs text-brand-muted">
+                                      {experienceNames.get(slot.experienceId)}
+                                    </span>
+                                  )}
                                   <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium shrink-0", SLOT_STATUS_CLASS[slot.status])}>
                                     {SLOT_LABELS[slot.status]}
                                   </span>
@@ -1004,9 +1166,11 @@ export default function AdminCalendarsPage() {
           )}
         </div>
       </Dialog>
+        </>
+      )}
 
-      {/* Booking detail modal — full info + actions */}
-      <Dialog
+          {/* Booking detail modal — full info + actions */}
+          <Dialog
         open={bookingDetailOpen}
         onOpenChange={(open) => {
           setBookingDetailOpen(open);
@@ -1110,6 +1274,8 @@ export default function AdminCalendarsPage() {
           )}
         </div>
       </Dialog>
+        </>
+      )}
     </div>
   );
 }

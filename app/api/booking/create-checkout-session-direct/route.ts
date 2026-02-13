@@ -7,6 +7,7 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 const HOLD_EXPIRY_MINUTES = 10;
 
@@ -187,7 +188,7 @@ export async function POST(request: NextRequest) {
         const slotEndMs = (slot.endAt as { toDate(): Date }).toDate().getTime();
         if (useBoatSlots && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -200,7 +201,7 @@ export async function POST(request: NextRequest) {
           }
         } else {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };
@@ -263,7 +264,7 @@ export async function POST(request: NextRequest) {
         // Reject if a paid booking already exists for this boat/experience and time
         if (useBoatSlots && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -276,7 +277,7 @@ export async function POST(request: NextRequest) {
           }
         } else if (!useBoatSlots) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };
