@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
@@ -101,6 +101,12 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Sort key: time of day in minutes (0 = midnight, 420 = 7 AM, 1080 = 6 PM). Use for morning→night order. */
+function timeOfDayMinutes(iso: string): number {
+  const d = new Date(iso);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
 function BookingPaymentForm({
   onSuccess,
   onError,
@@ -195,6 +201,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [tipModalPercent, setTipModalPercent] = useState(20); // value while tip-amount modal is open
   const [tipNowModalOpen, setTipNowModalOpen] = useState(false);
   const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
+  const tipLaterWasOpenRef = useRef(false);
+  const tipLaterIntendedRef = useRef(false);
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [discountCode, setDiscountCode] = useState("");
@@ -263,6 +271,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setAddonSelections({});
     setTipChoice(null);
     setTipLaterMessageOpen(false);
+    tipLaterIntendedRef.current = false;
+    tipLaterWasOpenRef.current = false;
     setHowDidYouHear("");
     setComments("");
     setDiscountCode("");
@@ -485,7 +495,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return map;
   }, [monthSlots]);
-  // One row per start time (multiple boats can have same slot); use first slot per time for selection
+  // One row per start time (multiple boats can have same slot); use first slot per time for selection. Sorted chronologically by time of day.
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
     const filtered =
@@ -495,7 +505,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             return parsed?.durationHours === durationHours;
           })
         : slots;
-    const sorted = [...filtered].sort((a, b) => a.startAt.localeCompare(b.startAt));
+    const sorted = [...filtered].sort(
+      (a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt)
+    );
     const withLabel = sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
     const seen = new Set<string>();
     return withLabel.filter((s) => {
@@ -566,6 +578,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     if (!selectedExperience || !selectedDate) return;
     setStep(2);
   }, [open, initialSelection?.date, initialSelection?.slotId, selectedExperience, selectedDate]);
+
+  // When tip-later popup closes (Got it, overlay, or Escape), ensure "Tip later" stays selected
+  useEffect(() => {
+    if (tipLaterWasOpenRef.current && !tipLaterMessageOpen) setTipChoice("later");
+    tipLaterWasOpenRef.current = tipLaterMessageOpen;
+  }, [tipLaterMessageOpen]);
 
   useEffect(() => {
     if (!selectedExperience || !selectedRateId || !selectedDate) {
@@ -764,11 +782,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       <div
         className={cn(
           "flex flex-col overflow-hidden max-h-[90vh] md:max-h-[88vh] min-h-[260px]",
-          step === 4 ? "h-[85vh] min-h-[500px]" : "flex-1 min-h-0"
+          step === 4 && paymentPhase === "success"
+            ? "h-auto min-h-0 max-h-[90vh] md:max-h-[88vh]"
+            : step === 4
+              ? "h-[70dvh] min-h-[320px] sm:h-[80vh] sm:min-h-[420px] md:h-[85vh] md:min-h-[500px]"
+              : "flex-1 min-h-0"
         )}
       >
         {/* Step indicator + back */}
-        <div className="flex items-center justify-between gap-3 mb-4 shrink-0">
+        <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-2 sm:mb-4" : "mb-4")}>
           <button
             type="button"
             onClick={step > 1 ? handleBack : () => onOpenChange(false)}
@@ -792,10 +814,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           </div>
           <div className="w-14" aria-hidden />
         </div>
-        <p className="text-xs font-medium text-brand-muted uppercase tracking-wider mb-3 shrink-0">
+        <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-1 sm:mb-3" : "mb-3")}>
           Step {stepIndex} of {stepCount}
         </p>
-        <h2 className="text-lg font-semibold text-brand-dark mb-4 shrink-0">{stepTitle}</h2>
+        <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-2 sm:mb-4" : "mb-4")}>{stepTitle}</h2>
 
         {paymentError && (
           <div className="mb-4 shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-3 flex items-start justify-between gap-3">
@@ -887,7 +909,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 {ratesForSelection.length > 0 && (
                   <div>
                     <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
-                    <div className="flex flex-wrap gap-2 md:gap-3">
+                    <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:gap-2 md:gap-3">
                       {[...ratesForSelection]
                         .sort((a, b) => a.durationHours - b.durationHours)
                         .map((r) => {
@@ -898,7 +920,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             type="button"
                             onClick={() => setSelectedRateIdForCalendar(r.id)}
                             className={cn(
-                              "rounded-xl border-2 px-4 py-3 text-sm font-semibold min-h-[48px] transition-all",
+                              "rounded-xl border-2 px-2 py-2.5 sm:px-4 sm:py-3 text-[11px] sm:text-sm font-semibold min-h-[44px] sm:min-h-[48px] transition-all text-center",
                               isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
                             )}
                           >
@@ -915,9 +937,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 {selectedRateIdForCalendar && (
                   <>
                   <div>
-                  <div className="flex flex-col items-center gap-2 mb-2 md:mb-3">
+                  <div className="flex flex-col items-center gap-2 mb-3 md:mb-3">
                     <p className="text-xs font-semibold text-brand-dark w-full">Date</p>
-                    <div className="flex items-center justify-center gap-1 w-full">
+                    <div className="flex items-center justify-center gap-2 w-full">
                       <button
                         type="button"
                         disabled={isViewMonthCurrent}
@@ -930,14 +952,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           }
                         }}
                         className={cn(
-                          "rounded-lg p-2 text-brand-dark transition-colors",
-                          isViewMonthCurrent ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10"
+                          "rounded-xl p-2.5 text-brand-dark transition-colors touch-manipulation",
+                          isViewMonthCurrent ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
                         )}
                         aria-label="Previous month"
                       >
-                        <ChevronLeft className="h-5 w-5 md:h-6 md:w-6" />
+                        <ChevronLeft className="h-6 w-6 md:h-6 md:w-6" />
                       </button>
-                      <span className="text-base md:text-lg font-semibold text-brand-dark min-w-[10rem] text-center">
+                      <span className="text-sm sm:text-base md:text-lg font-semibold text-brand-dark min-w-[9rem] sm:min-w-[10rem] text-center">
                         {viewMonthLabel}
                       </span>
                       <button
@@ -950,24 +972,24 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setViewMonthMonth((m) => m + 1);
                           }
                         }}
-                        className="rounded-lg p-2 text-brand-dark hover:bg-brand-dark/10 transition-colors"
+                        className="rounded-xl p-2.5 text-brand-dark hover:bg-brand-dark/10 active:bg-brand-dark/15 transition-colors touch-manipulation"
                         aria-label="Next month"
                       >
-                        <ChevronRight className="h-5 w-5 md:h-6 md:w-6" />
+                        <ChevronRight className="h-6 w-6 md:h-6 md:w-6" />
                       </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-7 gap-1.5 md:gap-2">
+                  <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
                     {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, dayIdx) => (
-                      <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] md:text-[10px] font-semibold uppercase text-brand-muted py-0.5 shrink-0 min-w-0">
+                      <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">
                         {dayLabel}
                       </div>
                     ))}
                   </div>
-                  <div className="grid grid-cols-7 gap-1.5 md:gap-2 mt-0.5">
+                  <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 mt-0.5 sm:mt-1">
                     {step3CalendarGrid.map((cell, idx) => {
                       if (cell == null) {
-                        return <div key={`empty-${idx}`} className="min-h-[52px] md:min-h-[58px]" />;
+                        return <div key={`empty-${idx}`} className="aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px]" />;
                       }
                       const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
@@ -995,25 +1017,25 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           disabled={isPast || !isAvailable}
                           onClick={() => isAvailable && setSelectedDate(dateStr)}
                           className={cn(
-                            "rounded-lg border-2 py-2 px-1.5 md:py-2.5 md:px-2 text-center transition-all text-xs md:text-sm min-h-[52px] md:min-h-[58px] flex flex-col justify-center",
-                            isPast && "opacity-50 cursor-not-allowed",
+                            "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
+                            isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                             isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
                             isAvailable &&
-                              "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                              "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >
-                          <span className="block text-[10px] md:text-xs text-brand-muted uppercase">{weekday}</span>
-                          <span className="block font-medium mt-0.5 text-sm md:text-base">{label}</span>
+                          <span className="block text-[8px] sm:text-[10px] md:text-xs text-brand-muted uppercase leading-none">{weekday}</span>
+                          <span className="block font-semibold text-[10px] sm:text-sm md:text-base leading-none mt-0.5">{label}</span>
                           {typeof priceCents === "number" && isAvailable && (
                             <span className={cn(
-                              "block text-sm font-semibold mt-0.5",
-                              isSelected ? "text-brand-primary" : "text-emerald-900"
+                              "block text-[11px] sm:text-sm font-bold leading-none mt-0.5",
+                              isSelected ? "text-brand-primary" : "text-emerald-800"
                             )}>${(priceCents / 100).toFixed(0)}</span>
                           )}
                           {isFullyBooked && (
-                            <span className="block text-xs font-medium text-amber-700 mt-0.5">Full</span>
+                            <span className="block text-[8px] sm:text-xs font-semibold text-amber-700 leading-none mt-0.5">Full</span>
                           )}
                         </button>
                       );
@@ -1025,11 +1047,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
                     {slotsLoading ? (
                       <p className="text-xs text-brand-muted">Loading times…</p>
-                    ) : openSlotsByTime.length === 0 ? (
-                      <p className="text-xs text-brand-muted">No open slots this day.</p>
-                    ) : (
+                    ) : (() => {
+                      const slotsForDay = openSlotsByTime
+                        .filter((s) => s.startAt.startsWith(selectedDate))
+                        .sort((a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt));
+                      return slotsForDay.length === 0 ? (
+                        <p className="text-xs text-brand-muted">No open slots this day.</p>
+                      ) : (
                       <div className="flex flex-wrap gap-1.5 md:gap-2">
-                        {openSlotsByTime.map((slot) => {
+                        {slotsForDay.map((slot) => {
                           const isSelected = selectedSlot?.startAt === slot.startAt;
                           return (
                             <button
@@ -1046,7 +1072,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           );
                         })}
                       </div>
-                    )}
+                    );
+                    })()}
                   </div>
                 )}
                 </>
@@ -1081,7 +1108,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               ) : boats.length > 0 && availableBoatIdsForSelectedSlot.size === 0 ? (
                 <p className="text-sm text-amber-700 py-4 md:py-6">No boats available for this time. Please go back and choose another date or time.</p>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6 flex-1 min-h-0 content-start">
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 md:gap-4 mb-6">
                   {boats.map((boat) => {
                     const isAvailable =
                       availableBoatIdsForSelectedSlot.has(boat.id) &&
@@ -1095,26 +1122,27 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         disabled={!isAvailable}
                         onClick={() => isAvailable && setSelectedBoat(boat)}
                         className={cn(
-                          "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all min-h-[140px] sm:min-h-[160px]",
+                          "flex flex-col overflow-hidden rounded-lg sm:rounded-xl border-2 text-left transition-all min-h-0",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]",
-                          !isAvailable && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20 hover:scale-100 hover:border-brand-dark/20"
+                          "touch-manipulation",
+                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
+                          !isAvailable && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20"
                         )}
                       >
-                        <div className="relative w-full aspect-[4/3] min-h-[100px] bg-brand-dark/10 shrink-0">
+                        <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t-[6px] sm:rounded-t-[10px]">
                           {thumb ? (
-                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, 33vw" />
+                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, (max-width: 768px) 50vw, 33vw" />
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}
                           {!isAvailable && (
                             <div className="absolute inset-0 bg-brand-dark/50 flex items-center justify-center">
-                              <span className="text-xs font-semibold text-white uppercase tracking-wide px-2 py-1.5 rounded bg-brand-dark/90">Booked</span>
+                              <span className="text-[10px] sm:text-xs font-semibold text-white uppercase tracking-wide px-1.5 py-1 sm:px-2 sm:py-1.5 rounded bg-brand-dark/90">Booked</span>
                             </div>
                           )}
                         </div>
-                        <div className="flex flex-col justify-center p-3 md:p-4 flex-1 min-w-0">
-                          <span className={cn("text-base md:text-lg font-semibold truncate", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                        <div className="flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0">
+                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
                         </div>
                       </button>
                     );
@@ -1142,7 +1170,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               {paymentPhase === "form" && (
                 <>
                 <div
-                  className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-8 scroll-smooth overscroll-y-contain touch-pan-y"
+                  className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y"
                   role="region"
                   aria-label="Booking details form"
                 >
@@ -1168,15 +1196,32 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           <span className="text-brand-muted">{priceSummary.rateLabel}</span>
                           <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
                         </div>
-                        {priceSummary.addonLines.map((line) => (
-                          <div key={line.name} className="flex justify-between items-baseline text-sm">
-                            <span className="text-brand-muted">
-                              {line.name}
-                              {line.qty > 1 ? ` × ${line.qty}` : ""}
-                            </span>
-                            <span className="font-medium text-brand-dark">+${(line.priceCents / 100).toFixed(2)}</span>
-                          </div>
-                        ))}
+                        {displayAddons
+                          .filter((a) => (addonSelections[a.id] ?? 0) > 0)
+                          .map((addon) => {
+                            const qty = addonSelections[addon.id] ?? 0;
+                            const lineCents = addon.priceCents * qty;
+                            return (
+                              <div key={addon.id} className="flex justify-between items-center gap-2 text-sm group">
+                                <span className="text-brand-muted min-w-0">
+                                  {addon.name}
+                                  {qty > 1 ? ` × ${qty}` : ""}
+                                </span>
+                                <span className="flex items-center gap-1.5 shrink-0">
+                                  <span className="font-medium text-brand-dark">+${(lineCents / 100).toFixed(2)}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAddonSelections((prev) => ({ ...prev, [addon.id]: 0 }))}
+                                    className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
+                                    aria-label={`Remove ${addon.name} from booking`}
+                                    title="Remove"
+                                  >
+                                    <span className="text-[10px] font-semibold uppercase">Remove</span>
+                                  </button>
+                                </span>
+                              </div>
+                            );
+                          })}
                         {priceSummary.salesTaxCents > 0 && (
                           <div className="flex justify-between items-baseline text-sm">
                             <span className="text-brand-muted">Sales tax (8.25%)</span>
@@ -1184,9 +1229,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           </div>
                         )}
                         {priceSummary.tipCents > 0 && (
-                          <div className="flex justify-between items-baseline text-sm">
+                          <div className="flex justify-between items-center gap-2 text-sm group">
                             <span className="text-brand-muted">Tip ({Math.min(35, Math.max(20, tipPercent))}%)</span>
-                            <span className="font-medium text-brand-dark">+${(priceSummary.tipCents / 100).toFixed(2)}</span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="font-medium text-brand-dark">+${(priceSummary.tipCents / 100).toFixed(2)}</span>
+                              <button
+                                type="button"
+                                onClick={() => setTipChoice("later")}
+                                className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
+                                aria-label="Remove tip (tip crew later instead)"
+                                title="Remove tip"
+                              >
+                                <span className="text-[10px] font-semibold uppercase">Remove</span>
+                              </button>
+                            </span>
                           </div>
                         )}
                         <div className="border-t border-brand-dark/10 pt-3 mt-3 flex justify-between items-baseline">
@@ -1390,10 +1446,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           setTipNowModalOpen(true);
                         }}
                         className={cn(
-                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-brand-primary/50",
+                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-transparent",
                           tipChoice === "now"
-                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary"
-                            : "border-brand-primary bg-white text-brand-dark hover:bg-brand-primary/10 hover:border-brand-primary"
+                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary/50"
+                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
                         )}
                         title="Choose tip amount (20–35%)"
                       >
@@ -1402,13 +1458,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       <button
                         type="button"
                         onClick={() => {
+                          tipLaterIntendedRef.current = true;
                           setTipChoice("later");
                           setTipLaterMessageOpen(true);
                         }}
                         className={cn(
-                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center",
+                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-transparent",
                           tipChoice === "later"
-                            ? "border-brand-primary/40 bg-brand-primary/5 text-brand-dark"
+                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary/50"
                             : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
                         )}
                         title="Tip your crew later"
@@ -1514,17 +1571,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 </div>
 
                   {/* Sticky pay block — always visible at bottom of step 4 */}
-                  <div className="shrink-0 pt-4 pb-2 mt-2 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-                    <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-brand-dark">
+                  <div className="shrink-0 pt-3 pb-1 sm:pt-4 sm:pb-2 mt-2 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+                    <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-semibold text-brand-dark">
                           {payFullAmount ? "Total due" : "Deposit due"}
                         </p>
-                        <p className="text-2xl font-bold text-brand-primary">
+                        <p className="text-xl sm:text-2xl font-bold text-brand-primary">
                           ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
                         </p>
                         {!payFullAmount && (
-                          <p className="text-[11px] text-brand-muted mt-0.5">
+                          <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
                             Remaining 50% charged 48 hours before your trip
                           </p>
                         )}
@@ -1532,12 +1589,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       <button
                         type="button"
                         onClick={handleProceedToPayment}
-                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20"
+                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base"
                       >
                         Proceed to payment
                       </button>
                     </div>
-                    <p className="text-center text-[11px] text-brand-muted mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
+                    <p className="text-center text-[10px] sm:text-[11px] text-brand-muted mt-1.5 sm:mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
                   </div>
                 </>
               )}
@@ -1548,7 +1605,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 </div>
               )}
               {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
-                <div className="flex flex-col gap-4 min-h-0">
+                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
                   <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 shrink-0 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -1604,7 +1662,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       </div>
                     </div>
                   </div>
-                  <div className="min-h-[220px] flex flex-col shrink-0">
+                  <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingPaymentForm
                         onSuccess={async () => {
@@ -1637,6 +1695,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         }}
                       />
                     </Elements>
+                  </div>
                   </div>
                 </div>
               )}
@@ -1700,7 +1759,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 open={tipLaterMessageOpen}
                 onOpenChange={(open) => {
                   setTipLaterMessageOpen(open);
-                  if (!open) setTipChoice("later");
+                  if (!open && tipLaterIntendedRef.current) {
+                    setTipChoice("later");
+                    setTimeout(() => setTipChoice("later"), 0);
+                  }
                 }}
                 className="max-w-sm"
               >
@@ -1713,6 +1775,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   onClick={() => {
                     setTipLaterMessageOpen(false);
                     setTipChoice("later");
+                    setTimeout(() => setTipChoice("later"), 0);
                   }}
                   className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                 >
@@ -1720,15 +1783,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 </button>
               </Dialog>
               {paymentPhase === "success" && (
-                <div className="py-8 flex flex-col items-center gap-5 text-center">
-                  <div className="w-14 h-14 rounded-full bg-brand-primary/15 flex items-center justify-center">
-                    <svg className="w-7 h-7 text-brand-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <div className="py-4 sm:py-8 flex flex-col items-center gap-3 sm:gap-5 text-center">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-brand-primary/15 flex items-center justify-center shrink-0">
+                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-brand-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
-                    <p className="text-sm text-brand-muted mt-1.5 max-w-[280px] mx-auto">
+                  <div className="min-w-0">
+                    <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
+                    <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && priceSummary.totalCents > 0 ? (
                         <>We&apos;ve received your payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
                       ) : (
@@ -1739,7 +1802,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <button
                     type="button"
                     onClick={() => onOpenChange(false)}
-                    className="rounded-xl bg-brand-primary text-white font-semibold py-3 px-6 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+                    className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
                   >
                     Close
                   </button>

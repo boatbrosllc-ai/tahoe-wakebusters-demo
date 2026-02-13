@@ -23,10 +23,18 @@ const navLinks = [
 export function Header() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection } = useBookingModal();
 
   const handleCallClick = () => analytics.callClick("header", "global");
+
+  useEffect(() => {
+    fetch("/api/admin/session", { credentials: "include" })
+      .then((res) => res.json().catch(() => ({})))
+      .then((data: { signedIn?: boolean }) => setIsAdmin(data.signedIn === true))
+      .catch(() => setIsAdmin(false));
+  }, []);
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -40,16 +48,25 @@ export function Header() {
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 w-full border-b border-brand-primary backdrop-blur-md",
-        "bg-brand-primary"
+        "sticky top-0 z-40 w-full border-b border-brand-primary/80 backdrop-blur-md",
+        "bg-brand-primary",
+        "pt-[env(safe-area-inset-top)]"
       )}
     >
-      <div className="container-wide relative flex h-[4.5rem] lg:h-20 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 sm:px-6 lg:px-8">
-        {/* Left: logo – flex-1 so nav (absolute center) stays centered */}
-        <div className="flex flex-1 items-center min-w-0">
+      {/* Single row on mobile (flex-nowrap); overflow-visible so account dropdown isn't clipped */}
+      <div
+        className={cn(
+          "container-wide relative flex items-center justify-between",
+          "h-16 sm:h-[4.25rem] lg:h-20",
+          "flex-nowrap overflow-visible",
+          "gap-2 px-3 sm:px-4 lg:px-8"
+        )}
+      >
+        {/* Left: logo – constrained on mobile so it never bleeds */}
+        <div className="flex shrink-0 items-center min-w-0 max-w-[45%] lg:max-w-none">
           <Link
             href="/"
-            className="flex items-center gap-2 shrink-0 rounded-xl overflow-hidden transition-transform duration-200 hover:scale-105 active:scale-[0.98]"
+            className="flex items-center min-w-0 rounded-lg overflow-hidden transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
             aria-label="Boat Bros ATX home"
           >
             <Image
@@ -57,8 +74,9 @@ export function Header() {
               alt={brand.logoAlt}
               width={64}
               height={64}
-              className="h-14 w-14 lg:h-16 lg:w-16 object-contain rounded-xl"
+              className="h-10 w-10 sm:h-11 sm:w-11 lg:h-14 lg:w-14 object-contain object-left"
               priority
+              sizes="(max-width: 1023px) 40px, 56px"
             />
           </Link>
         </div>
@@ -83,57 +101,62 @@ export function Header() {
           </button>
         </nav>
 
-        {/* Right: icons + account + CTA */}
-        <div className="flex flex-1 justify-end items-center gap-2 sm:gap-3 min-w-0 flex-wrap">
+        {/* Right: icons + CTA – compact on mobile, no wrap */}
+        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1 lg:gap-2 min-w-0">
           <a
             href={`tel:${siteConfig.phoneTel}`}
             onClick={handleCallClick}
-            className="shrink-0 flex items-center justify-center p-3.5 lg:p-3 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
+            className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 lg:w-12 lg:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
             aria-label={`Call ${siteConfig.phone}`}
           >
-            <Phone className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
+            <Phone className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
           </a>
           <button
             type="button"
             onClick={() => setCalendarOpen(true)}
-            className="shrink-0 flex items-center justify-center p-3.5 lg:p-3 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
+            className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 lg:w-12 lg:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
             aria-label="Open calendar"
           >
-            <Calendar className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
+            <Calendar className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
           </button>
           <CalendarModal open={calendarOpen} onOpenChange={setCalendarOpen} />
-          <div className="relative shrink-0" ref={accountRef}>
-            <button
-              type="button"
-              onClick={() => setAccountOpen((o) => !o)}
-              className="shrink-0 flex items-center justify-center p-3.5 lg:p-3 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
-              aria-label="Account menu"
-              aria-haspopup="true"
-            >
-              <User className="h-7 w-7 lg:h-7 lg:w-7" aria-hidden />
-              <ChevronDown className={cn("ml-0.5 h-4 w-4 opacity-80 transition-transform", accountOpen && "rotate-180")} aria-hidden />
-            </button>
-            {accountOpen && (
-              <div
-                className="absolute right-0 top-full mt-1 min-w-[180px] rounded-xl border border-white/20 bg-brand-primary shadow-lg py-1 z-50"
+          {isAdmin && (
+            <div className="relative shrink-0" ref={accountRef}>
+              <button
+                type="button"
+                onClick={() => setAccountOpen((o) => !o)}
+                className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 lg:w-12 lg:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
                 aria-label="Account menu"
+                aria-haspopup="true"
               >
-                <Link
-                  href="/admin"
-                  className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white/90 hover:bg-white/15 hover:text-white transition-colors"
-                  onClick={() => setAccountOpen(false)}
+                <User className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
+                <ChevronDown className={cn("hidden lg:block ml-0.5 h-4 w-4 opacity-80 transition-transform", accountOpen && "rotate-180")} aria-hidden />
+              </button>
+              {accountOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 min-w-[180px] rounded-xl border border-white/20 bg-brand-primary shadow-lg py-1 z-[100]"
+                  aria-label="Account menu"
                 >
-                  <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
-                  Dashboard
-                </Link>
-              </div>
-            )}
-          </div>
+                  <Link
+                    href="/admin"
+                    className="flex items-center gap-2 px-4 py-3 text-sm font-medium text-white/90 hover:bg-white/15 hover:text-white transition-colors touch-manipulation"
+                    onClick={() => setAccountOpen(false)}
+                  >
+                    <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden />
+                    Dashboard
+                  </Link>
+                </div>
+              )}
+            </div>
+          )}
           <Button
             type="button"
             variant="secondary"
             size="lg"
-            className="inline-flex shrink-0 rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)]"
+            className={cn(
+              "shrink-0 rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] touch-manipulation",
+              "h-11 min-w-[4rem] px-3 text-sm font-semibold sm:h-12 sm:min-w-[5rem] sm:px-4 lg:h-12 lg:min-w-[7rem] lg:px-5 lg:text-base"
+            )}
             onClick={() => setBookingModalOpen(true)}
           >
             Book now
