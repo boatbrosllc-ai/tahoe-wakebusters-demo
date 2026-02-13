@@ -9,27 +9,9 @@ export interface ExperienceWithDetails {
   addons: { id: string; name: string; description?: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
 }
 
-async function debugLog(message: string, data: Record<string, unknown>) {
-  try {
-    await fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location: "get-experience-by-slug.ts", message, data, timestamp: Date.now() }),
-    });
-  } catch {
-    // ignore
-  }
-}
-
 export async function getExperienceBySlug(slug: string): Promise<ExperienceWithDetails | null> {
-  // #region agent log
-  await debugLog("getExperienceBySlug entry", { slug, hypothesisId: "H1" });
-  // #endregion
   const db = getDb();
   const snap = await db.collection("experiences").where("slug", "==", slug).where("active", "==", true).limit(1).get();
-  // #region agent log
-  await debugLog("Firestore query result", { empty: snap.empty, size: snap.size, hypothesisId: "H2" });
-  // #endregion
   if (snap.empty) return null;
   const doc = snap.docs[0];
   const experience = doc.data() as Experience;

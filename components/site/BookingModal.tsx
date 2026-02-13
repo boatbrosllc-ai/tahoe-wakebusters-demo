@@ -7,7 +7,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 
@@ -810,7 +810,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0 max-h-[90vh] md:max-h-[88vh]"
             : step === 4
-              ? "h-[78dvh] min-h-[380px] sm:h-[75dvh] sm:min-h-[400px] md:h-[46vh] md:min-h-[280px] lg:h-[48vh] lg:min-h-[300px]"
+              ? "h-[78dvh] min-h-[380px] sm:h-[75dvh] sm:min-h-[400px] md:h-[70vh] md:min-h-[420px] lg:h-[75vh] lg:min-h-[480px]"
               : "flex-1 min-h-0"
         )}
       >
@@ -897,7 +897,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       >
                         <div className="absolute inset-0 bg-brand-dark/5">
                           {hasImage ? (
-                            <Image src={exp.heroMedia.url} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
+                            <Image src={getDisplayImageUrl(exp.heroMedia.url)} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}

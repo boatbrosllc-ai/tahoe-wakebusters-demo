@@ -7,7 +7,7 @@ import type { Experience } from "@/content/experiences";
 import { BookingCTA } from "./BookingCTA";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useBookingModal } from "@/components/site/BookingModalContext";
-import { cn } from "@/lib/utils";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
 
 export interface ExperienceCardProps {
   experience: Experience;
@@ -61,7 +61,7 @@ export function ExperienceCard({
             )}
           >
             <Image
-              src={experience.heroImage}
+              src={getDisplayImageUrl(experience.heroImage)}
               alt=""
               fill
               className={cn(
