@@ -5,12 +5,10 @@ import { ExperienceCard } from "./ExperienceCard";
 import { cn } from "@/lib/utils";
 
 const experienceTypes = [
-  "Pontoon parties",
-  "Wake & surf",
-  "Sunset cruises",
-  "Family days",
-  "Corporate outings",
-  "Bach & bachelorette",
+  "Pontoon",
+  "Watersports",
+  "Sunset Cruise",
+  "Holiday Tour",
 ];
 
 export function ExperienceChooser() {
@@ -25,7 +23,7 @@ export function ExperienceChooser() {
         </p>
         <ul
           className={cn(
-            "grid grid-cols-3 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-14 sm:mb-16 lg:mb-20",
+            "grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-14 sm:mb-16 lg:mb-20",
             "list-none p-0 m-0"
           )}
           aria-hidden

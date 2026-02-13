@@ -8,6 +8,14 @@
         { "fieldPath": "active", "order": "ASCENDING" },
         { "fieldPath": "experienceIds", "arrayConfig": "CONTAINS" }
       ]
+    },
+    {
+      "collectionGroup": "blocks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "experienceId", "order": "ASCENDING" },
+        { "fieldPath": "startAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

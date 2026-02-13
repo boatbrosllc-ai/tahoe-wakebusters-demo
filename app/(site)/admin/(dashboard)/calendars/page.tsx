@@ -68,10 +68,10 @@ function getSlotCalendarDate(slot: SlotDto): string {
 }
 
 const SLOT_STATUS_CLASS: Record<SlotStatus, string> = {
-  open: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  held: "bg-amber-100 text-amber-800 border-amber-200",
-  booked: "bg-blue-100 text-blue-800 border-blue-200",
-  blocked: "bg-brand-dark/10 text-brand-muted border-brand-dark/20",
+  open: "bg-emerald-100 text-emerald-800 border-emerald-300",
+  held: "bg-amber-100 text-amber-800 border-amber-300",
+  booked: "bg-sky-100 text-sky-800 border-sky-300",
+  blocked: "bg-slate-100 text-slate-600 border-slate-200",
 };
 
 const SLOT_LABELS: Record<SlotStatus, string> = {
@@ -81,14 +81,22 @@ const SLOT_LABELS: Record<SlotStatus, string> = {
   blocked: "Blocked",
 };
 
-/** Colors for boat chips and event bars (cycle by boat index). */
+/** Status colors for legend and calendar. */
+const STATUS_COLORS = {
+  open: { bg: "rgb(16 185 129)", text: "rgb(5 46 22)", label: "Available" },
+  booked: { bg: "rgb(14 165 233)", text: "rgb(3 7 18)", label: "Booked" },
+  held: { bg: "rgb(245 158 11)", text: "rgb(120 53 15)", label: "Held" },
+  blocked: { bg: "rgb(100 116 139)", text: "rgb(30 41 59)", label: "Blocked" },
+} as const;
+
+/** Rich, distinct boat colors for chips, bars, and calendar (cycle by boat index). */
 const BOAT_COLORS = [
-  "rgb(59 130 246)",   // blue
-  "rgb(16 185 129)",   // emerald
-  "rgb(245 158 11)",   // amber
-  "rgb(139 92 246)",   // violet
+  "rgb(20 184 166)",   // teal – brand-aligned
   "rgb(244 63 94)",   // rose
-  "rgb(6 182 212)",    // cyan
+  "rgb(245 158 11)",  // amber
+  "rgb(139 92 246)",  // violet
+  "rgb(14 165 233)",  // sky
+  "rgb(16 185 129)",  // emerald
 ];
 function getBoatColor(boatIndex: number): string {
   return BOAT_COLORS[boatIndex % BOAT_COLORS.length] ?? BOAT_COLORS[0];
@@ -488,20 +496,6 @@ export default function CalendarsPage() {
     }
   };
 
-  /** Group slots for selected day by time range (start–end + duration) so we show each window once with boats underneath. */
-  const selectedDateTimeGroups = useMemo(() => {
-    if (!selectedDate || selectedDateSlots.length === 0) return [];
-    const byKey = new Map<string, SlotDto[]>();
-    for (const s of selectedDateSlots) {
-      const key = `${s.startAt}-${s.endAt}`;
-      if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push(s);
-    }
-    return Array.from(byKey.entries())
-      .map(([key, slots]) => ({ key, slots, startAt: slots[0].startAt }))
-      .sort((a, b) => a.startAt.localeCompare(b.startAt));
-  }, [selectedDate, selectedDateSlots]);
-
   const releaseHold = async (holdId: string) => {
     setActionLoading(holdId);
     setError(null);
@@ -695,18 +689,18 @@ export default function CalendarsPage() {
             </div>
           </div>
 
-          {/* Boat filter: multi-select with color coding */}
+          {/* Boat filter: multi-select with strong color coding */}
           {boatList.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-brand-muted">Boats:</span>
-              <div className="flex flex-wrap gap-1.5">
+              <span className="text-sm font-semibold text-brand-muted">Boats</span>
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setSelectedBoatIds(new Set())}
                   className={cn(
-                    "rounded-lg px-3 py-1.5 text-sm font-medium border transition-all",
+                    "rounded-full px-4 py-2 text-sm font-medium border-2 transition-all",
                     selectedBoatIds.size === 0
-                      ? "bg-brand-primary/15 text-brand-primary border-brand-primary/40"
+                      ? "bg-brand-primary/20 text-brand-primary border-brand-primary shadow-sm"
                       : "bg-white border-brand-dark/15 text-brand-dark hover:border-brand-dark/30"
                   )}
                 >
@@ -735,12 +729,20 @@ export default function CalendarsPage() {
                         }
                       }}
                       className={cn(
-                        "rounded-lg px-3 py-1.5 text-sm font-medium border transition-all flex items-center gap-1.5",
-                        isSelected ? "border-current" : "bg-white border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                        "rounded-full pl-2 pr-4 py-2 text-sm font-medium border-2 transition-all flex items-center gap-2",
+                        isSelected ? "shadow-md" : "bg-white border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
                       )}
-                      style={isSelected ? { borderColor: color, color, backgroundColor: `${color}12` } : undefined}
+                      style={
+                        isSelected
+                          ? { borderColor: color, color, backgroundColor: `${color}22`, boxShadow: `0 0 0 1px ${color}40` }
+                          : undefined
+                      }
                     >
-                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} aria-hidden />
+                      <span
+                        className="h-3 w-3 rounded-full shrink-0 ring-2 ring-white"
+                        style={{ backgroundColor: color }}
+                        aria-hidden
+                      />
                       {boat.name}
                     </button>
                   );
@@ -838,30 +840,48 @@ export default function CalendarsPage() {
             </div>
 
             <div className="p-4 sm:p-6 space-y-4">
-              {/* Legend */}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-                <span className="inline-flex items-center gap-1.5 text-emerald-700 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Available
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-blue-700 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-blue-500" /> Booked
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-amber-700 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Held
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-brand-muted font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-brand-muted" /> Blocked
-                </span>
-                {boatList.length > 1 && (
-                  <>
-                    <span className="w-px h-4 bg-brand-dark/15" aria-hidden />
-                    {boatList.map((boat, idx) => (
-                      <span key={boat.id} className="inline-flex items-center gap-1.5 font-medium" style={{ color: getBoatColor(idx) }}>
-                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: getBoatColor(idx) }} /> {boat.name}
-                      </span>
-                    ))}
-                  </>
-                )}
+              {/* Legend: status pills + boat swatches */}
+              <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-brand-muted shrink-0">Status</span>
+                  {(Object.keys(STATUS_COLORS) as (keyof typeof STATUS_COLORS)[]).map((status) => (
+                    <span
+                      key={status}
+                      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border border-black/10 shadow-sm"
+                      style={{
+                        backgroundColor: `${STATUS_COLORS[status].bg}20`,
+                        color: STATUS_COLORS[status].text,
+                        borderColor: `${STATUS_COLORS[status].bg}60`,
+                      }}
+                    >
+                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS[status].bg }} aria-hidden />
+                      {STATUS_COLORS[status].label}
+                    </span>
+                  ))}
+                  {boatList.length > 1 && (
+                    <>
+                      <span className="w-px h-5 bg-brand-dark/20 shrink-0" aria-hidden />
+                      <span className="text-xs font-semibold uppercase tracking-wide text-brand-muted shrink-0">Boats</span>
+                      {boatList.map((boat, idx) => {
+                        const c = getBoatColor(idx);
+                        return (
+                          <span
+                            key={boat.id}
+                            className="inline-flex items-center gap-1.5 rounded-full pl-1.5 pr-2.5 py-1 text-xs font-medium border border-black/10 shadow-sm"
+                            style={{
+                              backgroundColor: `${c}18`,
+                              color: c,
+                              borderColor: `${c}50`,
+                            }}
+                          >
+                            <span className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-white/80" style={{ backgroundColor: c }} aria-hidden />
+                            {boat.name}
+                          </span>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
               </div>
 
               {slotsLoading ? (
@@ -890,22 +910,20 @@ export default function CalendarsPage() {
                     const heldCount = cell.heldCount;
                     const blockedCount = cell.blockedCount;
                     return (
-                      <button
+                      <div
                         key={cell.dateStr + cell.day}
-                        type="button"
                         onClick={(e) => {
                           if (isPast || cellBusy) return;
                           handleDateCellClick(cell, e);
                         }}
-                        disabled={isPast || cellBusy}
-                        title={isPast ? "Past" : "View time slots"}
+                        title={isPast ? "Past" : "View day"}
                         className={cn(
-                          "min-h-[140px] sm:min-h-[160px] flex flex-col rounded-xl border p-2 text-left transition-all overflow-hidden",
-                          "hover:shadow-md hover:ring-1 hover:ring-brand-primary/20",
+                          "min-h-[140px] sm:min-h-[160px] flex flex-col rounded-xl border p-2 text-left transition-all overflow-hidden relative",
+                          "hover:shadow-md hover:ring-1 hover:ring-brand-primary/30",
                           cell.isCurrentMonth ? "text-brand-dark" : "text-brand-muted/70",
-                          isPast && "cursor-not-allowed bg-brand-bg/40 opacity-80 border-brand-dark/5",
+                          isPast && "cursor-not-allowed bg-slate-50 opacity-85 border-slate-200",
                           !isPast && "cursor-pointer bg-white border-brand-dark/10",
-                          isToday && !isPast && "ring-2 ring-brand-primary/50 bg-brand-primary/5",
+                          isToday && !isPast && "ring-2 ring-brand-primary bg-brand-primary/8",
                           cellBusy && "opacity-70 pointer-events-none"
                         )}
                       >
@@ -913,48 +931,100 @@ export default function CalendarsPage() {
                           <span className={cn("text-sm font-bold tabular-nums", isToday ? "text-brand-primary" : "text-brand-dark")}>
                             {cell.day}
                           </span>
-                          {isToday && !isPast && <span className="text-[10px] font-medium text-brand-primary">Today</span>}
+                          {isToday && !isPast && (
+                            <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/15 px-1.5 py-0.5 rounded">Today</span>
+                          )}
                         </div>
                         {/* Bookings first — what matters most */}
                         <div className="flex flex-col gap-1 flex-1 min-h-0">
                           {bookedForDay.length > 0 ? (
                             <>
-                              {bookedForDay.slice(0, 3).map((slot) => {
+                              {bookedForDay.slice(0, 3).map((slot, idx) => {
                                 const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
-                                const boatColor = boatIdx >= 0 ? getBoatColor(boatIdx) : "rgb(59 130 246)";
+                                const boatColor = boatIdx >= 0 ? getBoatColor(boatIdx) : STATUS_COLORS.booked.bg;
+                                const cellKey = `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}-${slot.bookingId ?? "n"}-${idx}`;
+                                const bookingId = slot.bookingId ?? slot.bookingSummary?.bookingId;
                                 return (
-                                  <div
-                                    key={slot.id}
-                                    className="rounded-md border px-1.5 py-1 text-[10px] leading-tight shrink-0"
-                                    style={{ borderColor: `${boatColor}99`, backgroundColor: `${boatColor}18`, borderLeftWidth: 3 }}
+                                  <button
+                                    key={cellKey}
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (bookingId) {
+                                        setBookingDetailId(bookingId);
+                                        setBookingDetailOpen(true);
+                                      }
+                                    }}
+                                    className="w-full text-left rounded-lg border-l-4 px-2 py-1.5 text-[10px] leading-tight shrink-0 font-medium shadow-sm hover:opacity-90 transition-opacity"
+                                    style={{
+                                      borderLeftColor: boatColor,
+                                      backgroundColor: `${boatColor}15`,
+                                      color: "rgb(15 23 42)",
+                                    }}
+                                    title={bookingId ? "View booking details" : undefined}
                                   >
-                                    <span className="font-semibold" style={{ color: boatColor }}>{formatTime(slot.startAt)}</span>
+                                    <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatTime(slot.startAt)}</span>
                                     {(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name) && (
-                                      <span className="block truncate opacity-90">{(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name)}</span>
+                                      <span className="block truncate opacity-90 text-brand-dark">{(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name)}</span>
                                     )}
                                     {slot.bookingSummary?.customerName && (
-                                      <span className="block truncate opacity-80">{slot.bookingSummary.customerName}</span>
+                                      <span className="block truncate opacity-80 text-brand-muted">{slot.bookingSummary.customerName}</span>
                                     )}
-                                  </div>
+                                  </button>
                                 );
                               })}
                               {bookedForDay.length > 3 && (
-                                <span className="text-[10px] text-blue-600 font-medium">+{bookedForDay.length - 3} more</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); openDayDetail(cell.dateStr); }}
+                                  className="text-[10px] font-semibold text-left w-full"
+                                  style={{ color: STATUS_COLORS.booked.bg }}
+                                >
+                                  +{bookedForDay.length - 3} more — view day
+                                </button>
                               )}
                             </>
                           ) : null}
-                          {/* Summary line */}
+                          {/* Summary line — colored by status */}
                           {daySlots.length > 0 && (
-                            <div className="mt-auto pt-1 flex flex-wrap gap-x-1.5 gap-y-0.5 text-[10px] text-brand-muted">
-                              {bookedCount > 0 && <span className="text-blue-600 font-medium">{bookedCount} booked</span>}
-                              {openCount > 0 && <span>{openCount} available</span>}
-                              {heldCount > 0 && <span className="text-amber-600">{heldCount} held</span>}
-                              {blockedCount > 0 && <span>{blockedCount} blocked</span>}
+                            <div className="mt-auto pt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
+                              {bookedCount > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
+                                  style={{ backgroundColor: `${STATUS_COLORS.booked.bg}25`, color: STATUS_COLORS.booked.text }}
+                                >
+                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.booked.bg }} /> {bookedCount} booked
+                                </span>
+                              )}
+                              {openCount > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
+                                  style={{ backgroundColor: `${STATUS_COLORS.open.bg}25`, color: STATUS_COLORS.open.text }}
+                                >
+                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.open.bg }} /> {openCount} available
+                                </span>
+                              )}
+                              {heldCount > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
+                                  style={{ backgroundColor: `${STATUS_COLORS.held.bg}25`, color: STATUS_COLORS.held.text }}
+                                >
+                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.held.bg }} /> {heldCount} held
+                                </span>
+                              )}
+                              {blockedCount > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium text-slate-600"
+                                  style={{ backgroundColor: `${STATUS_COLORS.blocked.bg}25` }}
+                                >
+                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.blocked.bg }} /> {blockedCount} blocked
+                                </span>
+                              )}
                             </div>
                           )}
                           {daySlots.length === 0 && !isPast && <span className="text-[10px] italic text-brand-muted mt-auto">No slots</span>}
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -978,16 +1048,113 @@ export default function CalendarsPage() {
             : undefined
         }
         description={
-          selectedDate && selectedDateSlots.length > 0
-            ? `${selectedDateSlots.filter((s) => s.status === "booked").length} booked · ${selectedDateSlots.filter((s) => s.status === "open").length} available · ${selectedDateSlots.filter((s) => s.status === "held").length} held · ${selectedDateSlots.filter((s) => s.status === "blocked").length} blocked`
+          selectedDate
+            ? (() => {
+                const booked = bookedSlotsByDay.get(selectedDate) ?? [];
+                const daySlots = slotsByDate.get(selectedDate);
+                const open = daySlots?.open ?? 0;
+                const held = daySlots?.held ?? 0;
+                const blocked = daySlots?.blocked ?? 0;
+                return `${booked.length} booked${open > 0 ? ` · ${open} available` : ""}${held > 0 ? ` · ${held} held` : ""}${blocked > 0 ? ` · ${blocked} blocked` : ""}`;
+              })()
             : undefined
         }
       >
         <div className="space-y-4">
           {selectedDate && (
             <>
-              {/* Block / unblock day */}
-              <div className="space-y-3">
+              {/* Bookings on this day — click to open full details */}
+              <div className="border-t border-brand-dark/10 pt-4">
+                <p className="mb-3 text-xs font-semibold text-brand-dark uppercase tracking-wide flex items-center gap-1.5">
+                  <CalendarIcon className="h-3.5 w-3.5" />
+                  Bookings on this day
+                </p>
+                {(() => {
+                  const dayBookings = bookedSlotsByDay.get(selectedDate) ?? [];
+                  if (dayBookings.length === 0) {
+                    return (
+                      <p className="py-4 text-center text-sm text-brand-muted rounded-xl bg-brand-bg/30 border border-brand-dark/10">
+                        No bookings yet. Use &quot;Add booking&quot; below or block the day if needed.
+                      </p>
+                    );
+                  }
+                  return (
+                    <ul className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+                      {dayBookings.map((slot) => {
+                        const summary = slot.bookingSummary;
+                        const bookingId = slot.bookingId ?? summary?.bookingId;
+                        const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
+                        const boatColor = boatIdx >= 0 ? getBoatColor(boatIdx) : STATUS_COLORS.booked.bg;
+                        const expName = slot.experienceId && experienceNames.has(slot.experienceId) ? experienceNames.get(slot.experienceId) : null;
+                        return (
+                          <li
+                            key={bookingId ?? `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}`}
+                            className={cn(
+                              "rounded-xl border-2 border-brand-dark/10 bg-white overflow-hidden transition-colors",
+                              bookingId && "hover:border-brand-primary/30 hover:shadow-sm cursor-pointer"
+                            )}
+                          >
+                            <button
+                              type="button"
+                              className="w-full text-left px-3 py-2.5 flex flex-wrap items-center gap-2 sm:gap-3"
+                              onClick={() => {
+                                if (bookingId) {
+                                  setBookingDetailId(bookingId);
+                                  setBookingDetailOpen(true);
+                                }
+                              }}
+                            >
+                              <span className="shrink-0 h-2 w-2 rounded-full" style={{ backgroundColor: boatColor }} aria-hidden />
+                              <span className="font-semibold text-brand-dark tabular-nums text-sm">{formatTime(slot.startAt)}</span>
+                              {expName && <span className="text-xs text-brand-muted">{expName}</span>}
+                              <span className="text-sm text-brand-dark">
+                                {summary?.boatName ?? (slot.boatId ? boatNames.get(slot.boatId) ?? slot.boatId : "—")}
+                              </span>
+                              {summary && (
+                                <>
+                                  <span className="text-xs text-brand-muted flex items-center gap-1">
+                                    <User className="h-3 w-3" /> {summary.customerName || summary.customerEmail || "—"}
+                                  </span>
+                                  {summary.totalCents > 0 && (
+                                    <span className="text-xs font-medium text-brand-primary ml-auto">{formatCents(summary.totalCents)}</span>
+                                  )}
+                                </>
+                              )}
+                            </button>
+                            {bookingId && summary && (
+                              <div className="px-3 pb-2 pt-0 flex items-center gap-2 border-t border-brand-dark/5">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setBookingDetailId(bookingId);
+                                    setBookingDetailOpen(true);
+                                  }}
+                                >
+                                  View details
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => cancelBooking(bookingId)}
+                                  disabled={!!actionLoading}
+                                  className="border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400"
+                                >
+                                  {actionLoading === bookingId ? "Cancelling…" : "Cancel booking"}
+                                </Button>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  );
+                })()}
+              </div>
+
+              {/* Block day / Add booking */}
+              <div className="border-t border-brand-dark/10 pt-4 space-y-3">
+                <p className="text-xs font-semibold text-brand-dark uppercase tracking-wide">Actions</p>
                 <div className="flex flex-wrap items-center gap-2">
                   {selectedDateSlots.some((s) => s.status === "open") && (
                     <Button
@@ -1012,6 +1179,15 @@ export default function CalendarsPage() {
                       {blocking === `date-${selectedDate}` ? "Saving…" : "Unblock day"}
                     </Button>
                   )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open(`/admin/bookings?date=${selectedDate}`, "_blank")}
+                    className="gap-1.5"
+                  >
+                    <CalendarIcon className="h-3.5 w-3.5" />
+                    Add booking
+                  </Button>
                 </div>
                 {selectedDateSlots.some((s) => s.status === "open") && boatList.length > 1 && (
                   <div className="rounded-lg border border-brand-dark/10 bg-brand-bg/20 px-3 py-2">
@@ -1037,129 +1213,6 @@ export default function CalendarsPage() {
                       ))}
                     </div>
                   </div>
-                )}
-              </div>
-
-              {/* Time slots grouped by window, then by boat — cleaner than one row per slot */}
-              <div className="border-t border-brand-dark/10 pt-4">
-                <p className="mb-3 text-xs font-semibold text-brand-dark uppercase tracking-wide flex items-center gap-1.5">
-                  <Clock className="h-3.5 w-3.5" />
-                  Time slots
-                </p>
-                <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-1">
-                  {selectedDateTimeGroups.map(({ key, slots, startAt }) => {
-                    const parsed = parseSlotId(slots[0].id);
-                    const duration = parsed ? `${parsed.durationHours}h` : "";
-                    const timeLabel = `${formatTime(startAt)} – ${formatTime(slots[0].endAt)}${duration ? ` (${duration})` : ""}`;
-                    return (
-                      <div key={key} className="rounded-xl border border-brand-dark/10 bg-white overflow-hidden">
-                        <div className="px-3 py-2 bg-brand-bg/50 border-b border-brand-dark/10">
-                          <span className="font-semibold text-brand-dark tabular-nums text-sm">{timeLabel}</span>
-                        </div>
-                        <ul className="divide-y divide-brand-dark/5">
-                          {slots.map((slot) => {
-                            const isOpen = slot.status === "open";
-                            const isBooked = slot.status === "booked";
-                            const isHeld = slot.status === "held";
-                            const isBlocked = slot.status === "blocked";
-                            const summary = slot.bookingSummary;
-                            const boatLabel = slot.boatId ? (boatNames.get(slot.boatId) ?? slot.boatId) : "—";
-                            return (
-                              <li
-                                key={slot.boatId ? `${slot.id}-${slot.boatId}` : slot.id}
-                                className={cn(
-                                  "flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 py-2.5 text-sm",
-                                  isOpen && "bg-emerald-50/40",
-                                  isHeld && "bg-amber-50/40",
-                                  isBooked && "bg-blue-50/40",
-                                  isBlocked && "bg-brand-bg/30"
-                                )}
-                              >
-                                <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
-                                  <span className="font-medium text-brand-dark flex items-center gap-1.5">
-                                    <Ship className="h-3.5 w-3.5 text-brand-muted shrink-0" />
-                                    {boatLabel}
-                                  </span>
-                                  {slot.experienceId && experienceNames.has(slot.experienceId) && (
-                                    <span className="text-xs text-brand-muted">
-                                      {experienceNames.get(slot.experienceId)}
-                                    </span>
-                                  )}
-                                  <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium shrink-0", SLOT_STATUS_CLASS[slot.status])}>
-                                    {SLOT_LABELS[slot.status]}
-                                  </span>
-                                  {isBooked && summary && (
-                                    <>
-                                      <span className="text-xs text-brand-muted flex items-center gap-1">
-                                        <User className="h-3 w-3" /> {summary.customerName || summary.customerEmail || "—"}
-                                      </span>
-                                      {summary.totalCents > 0 && (
-                                        <span className="text-xs font-medium text-brand-primary">{formatCents(summary.totalCents)}</span>
-                                      )}
-                                    </>
-                                  )}
-                                  {isHeld && slot.expiresAt && (
-                                    <span className="text-xs text-amber-700 tabular-nums">
-                                      <HoldCountdown expiresAt={slot.expiresAt} label="Expires " compact />
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="shrink-0 flex items-center gap-2">
-                                  {isOpen && (
-                                    <Button variant="outline" size="sm" onClick={() => blockSlot(slot)} disabled={!!blocking}>
-                                      {blocking === slot.id ? "Saving…" : "Block"}
-                                    </Button>
-                                  )}
-                                  {isBlocked && (
-                                    <Button size="sm" onClick={() => unblockSlot(slot)} disabled={!!actionLoading}>
-                                      {actionLoading === slot.id ? "Saving…" : "Unblock"}
-                                    </Button>
-                                  )}
-                                  {isHeld && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => releaseHold(slot.holdId!)}
-                                      disabled={!!actionLoading || !slot.holdId}
-                                      className="border-amber-300 text-amber-800 hover:bg-amber-50"
-                                    >
-                                      {actionLoading === slot.holdId ? "Releasing…" : "Release"}
-                                    </Button>
-                                  )}
-                                  {isBooked && summary && (
-                                    <>
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => {
-                                          setBookingDetailId(summary.bookingId);
-                                          setBookingDetailOpen(true);
-                                        }}
-                                      >
-                                        View
-                                      </Button>
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => cancelBooking(summary.bookingId)}
-                                        disabled={!!actionLoading}
-                                        className="border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400"
-                                      >
-                                        {actionLoading === summary.bookingId ? "Cancelling…" : "Cancel"}
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
-                {selectedDateTimeGroups.length === 0 && (
-                  <p className="py-8 text-center text-sm text-brand-muted">No time slots for this day.</p>
                 )}
               </div>
             </>

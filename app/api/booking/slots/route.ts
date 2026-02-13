@@ -35,9 +35,6 @@ export async function GET(request: NextRequest) {
     const { Timestamp } = getFirestoreExports();
 
     if (experienceId) {
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:entry", message: "slots API experience path", data: { experienceId, startDate, endDate }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {});
-      // #endregion
       // Experiences with listing boats: slots are per boat so one boat booked doesn't block others.
       // Optional boatId: return only that boat's slots. Otherwise return slots for all boats (each slot has boatId).
       const expRef = db.collection("experiences").doc(experienceId);
@@ -75,24 +72,39 @@ export async function GET(request: NextRequest) {
         }
         boatIds = [boatIdParam];
       }
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:boatIds", message: "boats for experience", data: { boatIdsLength: boatIds.length, boatIds: boatIds.slice(0, 5) }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {});
-      // #endregion
       // If no boats linked to this experience (e.g. boats use slug and experience has different id), still show booked slots by using boatIds from bookings.
+      let bookingsFromFallback: { id: string; data: () => Record<string, unknown> }[] = [];
       if (boatIds.length === 0) {
-        const bookingsForExp = await db
+        const byIdSnap = await db
           .collection("bookings")
-          .where("experienceId", "in", [experienceId, ...(experienceSlug ? [experienceSlug] : [])])
+          .where("experienceId", "==", experienceId)
           .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           .limit(500)
           .get();
+        const seenIds = new Set(byIdSnap.docs.map((d) => d.id));
+        const mergedDocs = [...byIdSnap.docs];
+        if (experienceSlug && experienceSlug !== experienceId) {
+          const bySlugSnap = await db
+            .collection("bookings")
+            .where("experienceId", "==", experienceSlug)
+            .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            .limit(500)
+            .get();
+          bySlugSnap.docs.forEach((d) => {
+            if (!seenIds.has(d.id)) {
+              seenIds.add(d.id);
+              mergedDocs.push(d);
+            }
+          });
+        }
         const fromBookings = new Set<string>();
-        bookingsForExp.docs.forEach((d) => {
+        mergedDocs.forEach((d) => {
           const boatId = (d.data() as { boatId?: string }).boatId;
           if (typeof boatId === "string" && boatId.trim()) fromBookings.add(boatId.trim());
         });
         boatIds = Array.from(fromBookings);
         if (boatIds.length === 0) return NextResponse.json({ slots: [] });
+        bookingsFromFallback = mergedDocs;
       }
       type SlotRow = { id: string; dateStr: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string; experienceId: string };
       const existingByBoatAndKey = new Map<string, SlotRow>();
@@ -127,24 +139,12 @@ export async function GET(request: NextRequest) {
       };
       const mergeBookingSlot = (doc: { id: string; data: () => Record<string, unknown> }) => {
         const b = doc.data() as { boatId?: string; slotId?: string; slot_id?: string; status?: string; experienceId?: string };
-        if (!isSlotTakenStatus(b.status)) {
-          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:mergeBookingSlot", message: "skip", data: { reason: "statusNotTaken", bookingId: doc.id, status: b.status }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {});
-          return;
-        }
+        if (!isSlotTakenStatus(b.status)) return;
         const slotIdRaw = normalizeSlotId(b.slotId ?? b.slot_id);
-        if (!slotIdRaw) {
-          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:mergeBookingSlot", message: "skip", data: { reason: "noSlotId", bookingId: doc.id }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {});
-          return;
-        }
+        if (!slotIdRaw) return;
         const parsed = parseSlotIdRelaxed(slotIdRaw);
-        if (!parsed) {
-          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:mergeBookingSlot", message: "skip", data: { reason: "parseFailed", bookingId: doc.id, slotIdRaw }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {});
-          return;
-        }
-        if (parsed.dateStr < startDate || parsed.dateStr > endDate) {
-          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:mergeBookingSlot", message: "skip", data: { reason: "dateOutOfRange", bookingId: doc.id, dateStr: parsed.dateStr, startDate, endDate }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {});
-          return;
-        }
+        if (!parsed) return;
+        if (parsed.dateStr < startDate || parsed.dateStr > endDate) return;
         const { start: slotStart, end: slotEnd } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours);
         // Only mark the specific boat that has the booking; fallback to first boat if boatId missing or not in list.
@@ -187,17 +187,9 @@ export async function GET(request: NextRequest) {
           }
         });
       }
-      // #region agent log
-      const bookingDocsSummary = bookingsSnap.docs.map((doc) => {
-        const b = doc.data() as { experienceId?: string; boatId?: string; slotId?: string; status?: string };
-        return { id: doc.id, experienceId: b.experienceId, boatId: b.boatId, slotId: b.slotId, status: b.status };
-      });
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:bookingsSnap", message: "bookings for experience", data: { count: bookingsSnap.docs.length, experienceSlug, bookings: bookingDocsSummary }, timestamp: Date.now(), hypothesisId: "H2" }) }).catch(() => {});
-      // #endregion
       bookingsSnap.docs.forEach((doc) => mergeBookingSlot(doc));
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:afterMerge", message: "after mergeBookingSlot", data: { existingByBoatAndKeySize: existingByBoatAndKey.size, sampleKeys: Array.from(existingByBoatAndKey.keys()).slice(0, 5) }, timestamp: Date.now(), hypothesisId: "H3" }) }).catch(() => {});
-      // #endregion
+      // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
+      bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -235,29 +227,34 @@ export async function GET(request: NextRequest) {
       );
 
       const grid = getSlotGrid(start, end, durationsUnique);
-      const blocksSnap = await db
-        .collection("blocks")
-        .where("experienceId", "==", experienceId)
-        .where("startAt", "<=", Timestamp.fromDate(end))
-        .get();
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
-      blocksSnap.docs.forEach((doc) => {
-        const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
-        const blockStart = b.startAt?.toDate?.()?.getTime();
-        const blockEnd = b.endAt?.toDate?.()?.getTime();
-        if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
-        const range = { start: blockStart, end: blockEnd };
-        const boatId = typeof b.boatId === "string" ? b.boatId : null;
-        if (boatId) {
-          if (!blockRangesByBoat.has(boatId)) blockRangesByBoat.set(boatId, []);
-          blockRangesByBoat.get(boatId)!.push(range);
-        } else {
-          boatIds.forEach((bid) => {
-            if (!blockRangesByBoat.has(bid)) blockRangesByBoat.set(bid, []);
-            blockRangesByBoat.get(bid)!.push(range);
-          });
-        }
-      });
+      try {
+        const blocksSnap = await db
+          .collection("blocks")
+          .where("experienceId", "==", experienceId)
+          .where("startAt", "<=", Timestamp.fromDate(end))
+          .get();
+        blocksSnap.docs.forEach((doc) => {
+          const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
+          const blockStart = b.startAt?.toDate?.()?.getTime();
+          const blockEnd = b.endAt?.toDate?.()?.getTime();
+          if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+          const range = { start: blockStart, end: blockEnd };
+          const boatId = typeof b.boatId === "string" ? b.boatId : null;
+          if (boatId) {
+            if (!blockRangesByBoat.has(boatId)) blockRangesByBoat.set(boatId, []);
+            blockRangesByBoat.get(boatId)!.push(range);
+          } else {
+            boatIds.forEach((bid) => {
+              if (!blockRangesByBoat.has(bid)) blockRangesByBoat.set(bid, []);
+              blockRangesByBoat.get(bid)!.push(range);
+            });
+          }
+        });
+      } catch (blocksErr) {
+        // Index may still be building or missing; continue without blocks so bookings still show
+        console.warn("[slots] blocks query failed (index may be building):", blocksErr instanceof Error ? blocksErr.message : blocksErr);
+      }
       const slots: SlotRow[] = [];
       for (const bid of boatIds) {
         const takenRanges = [
@@ -349,9 +346,6 @@ export async function GET(request: NextRequest) {
             return byDate;
           })()
         : undefined;
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "slots/route.ts:return", message: "final slots count", data: { slotsLength: slots.length, durationsUniqueLength: durationsUnique.length }, timestamp: Date.now(), hypothesisId: "H4" }) }).catch(() => {});
-      // #endregion
       return NextResponse.json(
         debugByDate != null ? { slots, byDate: debugByDate } : { slots },
         { headers: { "Cache-Control": "no-store, max-age=0" } }

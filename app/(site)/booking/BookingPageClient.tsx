@@ -158,7 +158,9 @@ export function BookingPageClient() {
                       <div className="relative flex flex-1 flex-col justify-end p-3 sm:p-4 bg-gradient-to-t from-black/70 via-black/20 to-transparent">
                         <span className="text-sm font-semibold text-white drop-shadow-sm">{exp.title}</span>
                         {exp.fromPriceCents != null && (
-                          <span className="text-xs text-white/90 mt-0.5">From ${(exp.fromPriceCents / 100).toFixed(0)}</span>
+                          <span className="text-xs text-white/90 mt-0.5">
+                            {/holiday/i.test(exp.slug ?? "") ? `From $${(exp.fromPriceCents / 100).toFixed(0)} per ticket` : `From $${(exp.fromPriceCents / 100).toFixed(0)}`}
+                          </span>
                         )}
                       </div>
                     </button>

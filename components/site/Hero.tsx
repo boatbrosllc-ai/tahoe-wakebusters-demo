@@ -8,9 +8,11 @@ import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
+const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
+
 const bullets = [
   "Lake Travis & Lake Austin",
-  "Pontoon, wake, and party boats",
+  "Pontoon · Watersports · Sunset · Holiday",
   "Captain included · Same-day availability",
   "Licensed & insured",
 ];
@@ -19,17 +21,20 @@ export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   return (
     <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
-      {/* Background image */}
+      {/* Background video + dark overlay so text pops */}
       <div className="absolute inset-0">
-        <Image
-          src="/photos/DSC09354.webp"
-          alt=""
-          fill
-          className="object-cover opacity-30 sm:opacity-35 lg:opacity-38"
-          priority
-          sizes="100vw"
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/88 via-brand-dark/70 to-brand-dark" />
+        <video
+          autoPlay
+          muted
+          loop
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+          aria-hidden
+        >
+          <source src={HERO_VIDEO_SRC} type="video/webm" />
+        </video>
+        <div className="absolute inset-0 bg-black/50 sm:bg-black/45" />
+        <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/75 via-brand-dark/50 to-brand-dark/90" />
       </div>
 
       <div className="relative z-10 w-full px-5 py-12 sm:py-14 lg:py-20 xl:py-24">
@@ -83,7 +88,7 @@ export function Hero() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, delay: 0.18 }}
             >
-              Pontoon party, wake & surf, sunset cruise, or corporate outing on the water. Local crew, easy booking.
+              Pontoon, Watersports, Sunset Cruise, or Holiday Tour on the water. Local crew, easy booking.
             </motion.p>
           </motion.div>
 

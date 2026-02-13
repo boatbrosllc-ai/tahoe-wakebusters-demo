@@ -4,6 +4,49 @@ This doc describes how we keep a single source of truth for what’s booked, whe
 
 **Book Now calendar:** Availability is **backend-only**. The calendar never hardcodes availability; it calls the slots API, which uses only real data: the **bookings** collection for "booked," the **holds** collection for active holds, and per-boat slot docs for "blocked" (e.g. maintenance). No other source can mark a slot unavailable.
 
+## Simple mental model (what you'd expect)
+
+In theory, **all calendars could just read from bookings** and show each booking on the right date, time, and boat:
+
+- **Bookings** have: `boatId`, `slotId` (or start/end), `experienceId`, `status`.
+- Calendar: "For this boat/experience and date range, show every booking that's paid (or deposit/final_due/etc.)."  
+  That's one query and a simple map to (date, time, boat) — no slot grid in the DB, no blocks, no per-boat slot docs.
+
+So: **"Calendars read from bookings → put each on the right date, time, and boat"** is the right idea and is how we treat **booked** today (bookings are the only source of truth for "booked").
+
+## Why it's more complex today
+
+The current slots API does more than "list bookings" because of history and extra features:
+
+1. **Grid of possible slots**  
+   The UI needs "these times exist and these are available/taken," not just "these are the bookings." So we build a **grid** (date × time × duration × boat) from config (rates/durations) and then mark which grid cells are taken. That grid can come from code only (no slot docs), but we also use slot docs for **held** and **blocked**.
+
+2. **Two code paths**  
+   - **Legacy boat calendar**: `boatId` + `boats/{boatId}/slots` subcollection + bookings.  
+   - **Experience calendar**: `experienceId` + multiple boats + bookings + **blocks** + boat slot docs + a computed grid.  
+   So "calendar" is implemented twice and merges several sources.
+
+3. **Extra sources besides bookings**  
+   - **Holds**: "Held" = in cart, not paid yet. We need holds (or slot docs with `status: held`) so the same slot doesn't show as open.  
+   - **Blocks**: Maintenance / private use — not a booking, but must show on the calendar. Hence the `blocks` collection (and its composite index).  
+   - **Per-boat slot docs**: Used for held/blocked and for the legacy path; for experience we still read them so we don't overwrite with stale "booked" and to get holds.
+
+4. **Firestore limits**  
+   Composite indexes (e.g. `blocks` by `experienceId` + `startAt`) and "query by experienceId then by slug" fallbacks add moving parts. One simple "bookings only" query would need fewer indexes.
+
+**Bottom line:** "Booked" already comes only from bookings. The complexity is: generating the slot grid, merging holds and blocks, and supporting both boat-centric and experience-centric flows with the same API.
+
+## Possible simplification (later)
+
+A simpler design could be:
+
+- **One source for "what's on the calendar":** Query **bookings** (and optionally **holds**) by date range + experience/boat. Optionally a second query for **blocks**.
+- **Grid:** Generated in code from rates/durations (no reading `boats/{id}/slots` for the experience path).  
+  Mark a slot as taken if it overlaps any booking/hold (and blocked if it overlaps a block).
+- **Single code path:** One way to get "slots" for both admin and site calendars (e.g. always by experienceId or boatId + date range), without legacy vs experience branching.
+
+That would make "calendars read from bookings (and holds/blocks) and put each on the right date, time, and boat" the only flow, with minimal extra state.
+
 ## Single source of truth
 
 - **Bookings** (`bookings` collection) are the **only** source of truth for whether a slot is **booked**.  

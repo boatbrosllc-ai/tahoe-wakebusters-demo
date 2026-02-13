@@ -222,7 +222,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "success">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
   const [payFullAmount, setPayFullAmount] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
@@ -586,7 +586,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
     if (!initialSelection?.boatId) return;
-    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "success") return;
+    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success") return;
     setStep(4);
     setPaymentPhase("form");
   }, [open, initialSelection?.slotId, initialSelection?.boatId, selectedSlot, selectedRateId, paymentPhase]);
@@ -806,12 +806,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0 max-h-[90vh] md:max-h-[88vh]"
             : step === 4
-              ? "h-[70dvh] min-h-[320px] sm:h-[80vh] sm:min-h-[420px] md:h-[85vh] md:min-h-[500px]"
+              ? "h-[42dvh] min-h-[240px] sm:h-[44dvh] sm:min-h-[260px] md:h-[46vh] md:min-h-[280px] lg:h-[48vh] lg:min-h-[300px]"
               : "flex-1 min-h-0"
         )}
       >
         {/* Step indicator + back */}
-        <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-2 sm:mb-4" : "mb-4")}>
+        <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-1 sm:mb-2" : "mb-4")}>
           <button
             type="button"
             onClick={step > 1 ? handleBack : () => onOpenChange(false)}
@@ -835,10 +835,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           </div>
           <div className="w-14" aria-hidden />
         </div>
-        <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-1 sm:mb-3" : "mb-3")}>
+        <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-0.5 sm:mb-1.5" : "mb-3")}>
           Step {stepIndex} of {stepCount}
         </p>
-        <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-2 sm:mb-4" : "mb-4")}>{stepTitle}</h2>
+        <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-1.5 sm:mb-2" : "mb-4")}>{stepTitle}</h2>
 
         {paymentError && (
           <div className="mb-4 shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-3 flex items-start justify-between gap-3">
@@ -904,7 +904,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             <span className="text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">{exp.subtitle}</span>
                           ) : null}
                           {exp.fromPriceCents != null && (
-                            <span className="text-sm font-medium text-white/95 mt-1">From ${(exp.fromPriceCents / 100).toFixed(0)}</span>
+                            <span className="text-sm font-medium text-white/95 mt-1">
+                              {/holiday/i.test(exp.slug ?? "") ? `From $${(exp.fromPriceCents / 100).toFixed(0)} per ticket` : `From $${(exp.fromPriceCents / 100).toFixed(0)}`}
+                            </span>
                           )}
                         </div>
                       </button>
@@ -1194,14 +1196,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             >
               {paymentPhase === "form" && (
                 <>
-                <div
-                  className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y"
-                  role="region"
-                  aria-label="Booking details form"
-                >
-                  {/* Order summary: what you're booking + price breakdown */}
-                  {selectedExperience && selectedDate && selectedSlot && selectedRate && (
-                    <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden">
+                <div className="flex flex-col flex-1 min-h-0">
+                  <div
+                    className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-6 scroll-smooth overscroll-y-contain touch-pan-y"
+                    role="region"
+                    aria-label="Booking details form"
+                  >
+                    {/* Order summary — always at top so user sees what they're booking */}
+                    {selectedExperience && selectedDate && selectedSlot && selectedRate && (
+                      <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden shrink-0">
                       <div className="p-4 bg-gradient-to-br from-brand-primary/8 to-brand-primary/4 border-b border-brand-dark/5">
                         <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
                         <h3 className="font-bold text-brand-dark text-lg leading-tight">{selectedExperience.title}</h3>
@@ -1677,8 +1680,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   </div>
                 </div>
 
-                  {/* Sticky pay block — always visible at bottom of step 4 */}
-                  <div className="shrink-0 pt-3 pb-1 sm:pt-4 sm:pb-2 mt-2 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+                  {/* Pay block — fixed at bottom, always visible */}
+                  <div className="shrink-0 pt-1 pb-1 mt-0.5 sm:pt-1.5 sm:pb-1 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
                     <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
                       <div className="min-w-0">
                         <p className="text-xs sm:text-sm font-semibold text-brand-dark">
@@ -1703,12 +1706,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                     <p className="text-center text-[10px] sm:text-[11px] text-brand-muted mt-1.5 sm:mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
                   </div>
+                </div>
                 </>
               )}
               {paymentPhase === "loading" && (
                 <div className="py-8 flex flex-col items-center justify-center gap-3">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
                   <p className="text-sm text-brand-muted">Preparing checkout…</p>
+                </div>
+              )}
+              {paymentPhase === "completing" && (
+                <div className="py-12 flex flex-col items-center justify-center gap-4">
+                  <div className="h-12 w-12 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                  <p className="text-sm font-medium text-brand-dark">Completing your booking…</p>
+                  <p className="text-xs text-brand-muted">Please don&apos;t close this window.</p>
                 </div>
               )}
               {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
@@ -1773,6 +1784,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingPaymentForm
                         onSuccess={async () => {
+                          setPaymentPhase("completing");
                           if (!holdId || !paymentIntentId) {
                             console.error("[BookingModal] complete-after-payment skipped: missing holdId or paymentIntentId", { holdId: !!holdId, paymentIntentId: !!paymentIntentId });
                             setPaymentError("Your payment succeeded. If you don't see a confirmation email, contact us with your email and we'll confirm your booking.");
