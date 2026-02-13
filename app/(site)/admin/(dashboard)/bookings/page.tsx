@@ -49,7 +49,26 @@ type BookingItem = {
     totalCents: number;
     currency: string;
   };
-  stripe?: { paymentIntentId?: string; checkoutSessionId?: string; amountTotalCents?: number; currency?: string };
+  stripe?: {
+    paymentIntentId?: string;
+    checkoutSessionId?: string;
+    amountTotalCents?: number;
+    currency?: string;
+    customerId?: string;
+    paymentMethodId?: string;
+    depositPaymentIntentId?: string;
+    finalPaymentIntentId?: string;
+    depositAmountCents?: number;
+    finalAmountCents?: number;
+    totalAmountCents?: number;
+    depositPaidAt?: unknown;
+    finalChargedAt?: unknown;
+    finalChargeAttemptedAt?: unknown;
+    finalChargeLockAt?: unknown;
+    finalError?: { code?: string; message?: string };
+  };
+  card?: { brand?: string; last4?: string; expMonth?: number; expYear?: number };
+  finalChargeAt?: string | null;
   status: string;
   createdAt: string | null;
   startDate?: string | null;
@@ -232,7 +251,13 @@ export default function AdminBookingsPage() {
               className={inputClass}
             >
               <option value="">All</option>
-              <option value="paid">Paid</option>
+              <option value="paid">Paid (full)</option>
+              <option value="deposit_paid">Deposit paid</option>
+              <option value="final_due">Final due</option>
+              <option value="final_processing">Final processing</option>
+              <option value="final_paid">Final paid</option>
+              <option value="final_requires_action">Final requires action</option>
+              <option value="final_failed">Final failed</option>
               <option value="canceled">Canceled</option>
               <option value="refunded">Refunded</option>
             </select>
@@ -496,11 +521,17 @@ export default function AdminBookingsPage() {
             <div className="flex flex-wrap items-center gap-3 border-b border-brand-dark/10 pb-4">
               <span
                 className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
-                  selectedBooking.status === "paid"
+                  selectedBooking.status === "paid" || selectedBooking.status === "final_paid"
                     ? "bg-green-100 text-green-800"
                     : selectedBooking.status === "canceled"
                       ? "bg-amber-100 text-amber-800"
-                      : "bg-gray-100 text-gray-800"
+                      : selectedBooking.status === "final_failed" || selectedBooking.status === "final_requires_action"
+                        ? "bg-red-100 text-red-800"
+                        : selectedBooking.status === "final_due" || selectedBooking.status === "deposit_paid"
+                          ? "bg-blue-100 text-blue-800"
+                          : selectedBooking.status === "final_processing"
+                            ? "bg-yellow-100 text-yellow-800"
+                            : "bg-gray-100 text-gray-800"
                 }`}
               >
                 {selectedBooking.status}
@@ -630,8 +661,52 @@ export default function AdminBookingsPage() {
               )}
               {selectedBooking.stripe?.paymentIntentId && (
                 <p className="mt-2 text-brand-muted text-xs font-mono truncate" title={selectedBooking.stripe.paymentIntentId}>
-                  Stripe: {selectedBooking.stripe.paymentIntentId}
+                  Stripe PI: {selectedBooking.stripe.paymentIntentId}
                 </p>
+              )}
+              {(selectedBooking.stripe?.depositPaymentIntentId ?? selectedBooking.stripe?.depositAmountCents != null) && (
+                <div className="mt-3 pt-3 border-t border-brand-dark/10 space-y-1">
+                  <p className="text-xs font-semibold text-brand-muted uppercase tracking-wide">50/50 deposit flow</p>
+                  {selectedBooking.stripe?.customerId && (
+                    <p className="text-brand-muted text-xs font-mono truncate" title={selectedBooking.stripe.customerId}>
+                      Customer: {selectedBooking.stripe.customerId}
+                    </p>
+                  )}
+                  {selectedBooking.stripe?.paymentMethodId && (
+                    <p className="text-brand-muted text-xs font-mono truncate" title={selectedBooking.stripe.paymentMethodId}>
+                      PM: {selectedBooking.stripe.paymentMethodId.slice(0, 20)}…
+                    </p>
+                  )}
+                  {selectedBooking.card && (
+                    <p className="text-brand-dark text-xs">
+                      Card: {selectedBooking.card.brand ?? "Card"} •••• {selectedBooking.card.last4 ?? ""}
+                      {selectedBooking.card.expMonth != null && selectedBooking.card.expYear != null && (
+                        <span> exp {selectedBooking.card.expMonth}/{selectedBooking.card.expYear}</span>
+                      )}
+                    </p>
+                  )}
+                  {selectedBooking.stripe?.depositAmountCents != null && (
+                    <p className="text-brand-dark text-xs">Deposit: {formatCents(selectedBooking.stripe.depositAmountCents)}</p>
+                  )}
+                  {selectedBooking.stripe?.finalAmountCents != null && (
+                    <p className="text-brand-dark text-xs">Final: {formatCents(selectedBooking.stripe.finalAmountCents)}</p>
+                  )}
+                  {selectedBooking.finalChargeAt && (
+                    <p className="text-brand-muted text-xs">
+                      Final charge at: {new Date(selectedBooking.finalChargeAt).toLocaleString()}
+                    </p>
+                  )}
+                  {selectedBooking.stripe?.finalPaymentIntentId && (
+                    <p className="text-brand-muted text-xs font-mono truncate" title={selectedBooking.stripe.finalPaymentIntentId}>
+                      Final PI: {selectedBooking.stripe.finalPaymentIntentId}
+                    </p>
+                  )}
+                  {selectedBooking.stripe?.finalError && (
+                    <p className="text-red-700 text-xs" title={selectedBooking.stripe.finalError.message}>
+                      Final error: {selectedBooking.stripe.finalError.code ?? "—"} {selectedBooking.stripe.finalError.message ?? ""}
+                    </p>
+                  )}
+                </div>
               )}
             </section>
 

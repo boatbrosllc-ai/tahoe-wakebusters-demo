@@ -253,6 +253,10 @@ export interface Hold {
   checkoutSessionId?: string;
   /** Optional tip (20% when "Tip now" selected). In cents. */
   tipCents?: number;
+  /** Discount code applied at checkout (uppercase). */
+  discountCode?: string;
+  /** Discount amount in cents (saved for record). */
+  discountCents?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +277,47 @@ export interface BookingPricing {
   currency: string;
 }
 
-export type BookingStatus = "paid" | "canceled" | "refunded";
+/** Legacy: full payment in one charge. New 50/50 flow uses deposit_* and final_* statuses. */
+export type BookingStatus =
+  | "paid"
+  | "canceled"
+  | "refunded"
+  | "deposit_paid"
+  | "final_due"
+  | "final_processing"
+  | "final_paid"
+  | "final_requires_action"
+  | "final_failed";
+
+/** Display-only card info (never store raw card data). */
+export interface BookingCardDisplay {
+  brand?: string;
+  last4?: string;
+  expMonth?: number;
+  expYear?: number;
+}
+
+export interface BookingStripe {
+  checkoutSessionId?: string;
+  paymentIntentId?: string;
+  /** Amount charged in Stripe (cents) – for reconciliation; legacy full payment */
+  amountTotalCents?: number;
+  currency?: string;
+  /** 50/50 deposit flow */
+  customerId?: string;
+  paymentMethodId?: string;
+  depositPaymentIntentId?: string;
+  finalPaymentIntentId?: string;
+  depositAmountCents?: number;
+  finalAmountCents?: number;
+  totalAmountCents?: number;
+  depositPaidAt?: FirestoreTimestamp;
+  finalChargedAt?: FirestoreTimestamp;
+  finalChargeAttemptedAt?: FirestoreTimestamp;
+  finalChargeLockAt?: FirestoreTimestamp;
+  /** When final charge failed (code/message for admin). */
+  finalError?: { code?: string; message?: string };
+}
 
 export interface Booking {
   boatId?: string;
@@ -290,13 +334,19 @@ export interface Booking {
   specialNotes?: string;
   pricing: BookingPricing;
   status: BookingStatus;
-  stripe: {
-    checkoutSessionId?: string;
-    paymentIntentId?: string;
-    /** Amount charged in Stripe (cents) – for reconciliation with Stripe dashboard */
-    amountTotalCents?: number;
-    currency?: string;
-  };
+  stripe: BookingStripe;
+  /** Trip date YYYY-MM-DD from slotId; used for admin calendar query by trip date range */
+  startDateStr?: string;
+  /** Discount code applied at checkout (if any). */
+  discountCode?: string;
+  /** Discount amount in cents (if any). */
+  discountCents?: number;
+  /** When to run final charge (bookingStartAt - 48h). Firestore Timestamp or ISO string. */
+  finalChargeAt?: FirestoreTimestamp | string;
+  /** When heads-up reminder email was sent (optional). */
+  finalReminderSentAt?: FirestoreTimestamp;
+  /** Display-only card (brand, last4, exp). */
+  card?: BookingCardDisplay;
   createdAt: FirestoreTimestamp;
 }
 
@@ -317,6 +367,8 @@ export interface CreateHoldInput {
   marketingOptIn: boolean;
   /** Optional tip in cents (e.g. 20% when "Tip now" selected). */
   tipCents?: number;
+  /** Optional discount code (validated at hold creation). */
+  discountCode?: string;
 }
 
 export interface CreateHoldResponse {
@@ -332,4 +384,31 @@ export interface CreateCheckoutSessionInput {
 export interface CreateCheckoutSessionResponse {
   url: string;
   sessionId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Discounts (top-level collection discounts/{discountId})
+// ---------------------------------------------------------------------------
+
+export type DiscountType = "percent" | "fixed";
+
+export interface Discount {
+  /** Code customers enter (stored uppercase). */
+  code: string;
+  type: DiscountType;
+  /** For type "percent": 1–100. For type "fixed": not used. */
+  percent?: number;
+  /** For type "fixed": amount off in cents. For type "percent": not used. */
+  valueCents?: number;
+  /** Optional expiry (Firestore Timestamp). */
+  expiresAt?: FirestoreTimestamp;
+  /** Max number of times this code can be used (optional). */
+  maxRedemptions?: number;
+  /** Number of times applied (incremented on successful payment). */
+  usedCount: number;
+  active: boolean;
+  /** Optional description for admin. */
+  description?: string;
+  createdAt: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
 }

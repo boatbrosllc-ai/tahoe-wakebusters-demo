@@ -19,7 +19,10 @@ export const EXPERIENCE_START_HOURS = Array.from(
 export function parseSlotId(slotId: string): { dateStr: string; startHour: number; durationHours: number } | null {
   const parts = slotId.split("-");
   if (parts.length < 5) return null;
-  const dateStr = `${parts[0]}-${parts[1]}-${parts[2]}`;
+  const y = parts[0];
+  const m = parts[1].padStart(2, "0");
+  const d = parts[2].padStart(2, "0");
+  const dateStr = `${y}-${m}-${d}`;
   const startHour = parseInt(parts[3], 10);
   const durationHours = parseInt(parts[4], 10);
   if (Number.isNaN(startHour) || Number.isNaN(durationHours)) return null;
@@ -58,7 +61,7 @@ export function getSlotGrid(
   const end = new Date(endDate);
   end.setHours(23, 59, 59, 999);
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     for (const durationHours of durationHoursList) {
       const latestStart = getLatestStartHourForDuration(durationHours);
       for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {

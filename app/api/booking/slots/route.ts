@@ -4,9 +4,12 @@ import {
   buildSlotId,
   getSlotGrid,
   getSlotStartEnd,
+  parseSlotId,
 } from "@/lib/booking/experience-slots";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
@@ -62,8 +65,91 @@ export async function GET(request: NextRequest) {
       if (boatIds.length === 0) {
         return NextResponse.json({ slots: [] });
       }
-      type SlotRow = { id: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string };
+      type SlotRow = { id: string; dateStr: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string };
       const existingByBoatAndKey = new Map<string, SlotRow>();
+
+      /** Calendar date YYYY-MM-DD from slot id — use for grouping so bookings show on the correct day regardless of server timezone. */
+      const dateStrFromSlotId = (slotId: string): string => {
+        const parsed = parseSlotIdRelaxed(slotId);
+        return parsed?.dateStr ?? slotId.slice(0, 10);
+      };
+
+      // 1) Paid bookings are source of truth — merge FIRST so we never overwrite with stale slot docs.
+      // Use a single query for all paid bookings, then filter in memory. This guarantees we never miss
+      // a booking due to wrong experienceId, missing boatId, or missing composite index.
+      const isPaidStatus = (s: unknown): boolean => {
+        if (s === "paid" || s === "confirmed") return true;
+        if (typeof s === "string" && s.toLowerCase() === "paid") return true;
+        return false;
+      };
+      const normalizeSlotId = (raw: unknown): string | null => {
+        if (raw == null) return null;
+        const s = String(raw).trim();
+        if (s.length === 0) return null;
+        return s;
+      };
+      const parseSlotIdRelaxed = (slotIdRaw: string): ReturnType<typeof parseSlotId> => {
+        let parsed = parseSlotId(slotIdRaw);
+        if (parsed) return parsed;
+        const cleaned = slotIdRaw.replace(/\s/g, "");
+        if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+          const parts = cleaned.split("-");
+          const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+          return parseSlotId(normalized);
+        }
+        return null;
+      };
+      const mergePaidBooking = (doc: { id: string; data: () => Record<string, unknown> }) => {
+        const b = doc.data() as { boatId?: string; slotId?: string; slot_id?: string; status?: string; experienceId?: string };
+        if (!isPaidStatus(b.status)) return;
+        const slotIdRaw = normalizeSlotId(b.slotId ?? b.slot_id);
+        if (!slotIdRaw) return;
+        const parsed = parseSlotIdRelaxed(slotIdRaw);
+        if (!parsed) return;
+        if (parsed.dateStr < startDate || parsed.dateStr > endDate) return;
+        const { start: slotStart, end: slotEnd } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        const bid = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
+        if (bid && boatIds.includes(bid)) {
+          const key = `${bid}:${slotIdNorm}`;
+          existingByBoatAndKey.set(key, {
+            id: slotIdNorm,
+            dateStr: parsed.dateStr,
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+            status: "booked",
+            holdId: null,
+            bookingId: doc.id,
+            updatedAt: null,
+            boatId: bid,
+          });
+          return;
+        }
+        for (const boatId of boatIds) {
+          const key = `${boatId}:${slotIdNorm}`;
+          existingByBoatAndKey.set(key, {
+            id: slotIdNorm,
+            dateStr: parsed.dateStr,
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+            status: "booked",
+            holdId: null,
+            bookingId: doc.id,
+            updatedAt: null,
+            boatId,
+          });
+        }
+      };
+
+      const paidSnap = await db.collection("bookings").where("status", "==", "paid").get();
+      paidSnap.docs.forEach((doc) => {
+        const b = doc.data() as { experienceId?: string; boatId?: string };
+        const matchesExperience = b.experienceId === experienceId;
+        const matchesBoat = typeof b.boatId === "string" && boatIds.includes(b.boatId);
+        if (matchesExperience || matchesBoat) mergePaidBooking(doc);
+      });
+
+      // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
         boatIds.map(async (bid) => {
           const snap = await db
@@ -74,13 +160,15 @@ export async function GET(request: NextRequest) {
             .where("startAt", "<=", Timestamp.fromDate(end))
             .get();
           snap.docs.forEach((doc) => {
+            const key = `${bid}:${doc.id}`;
+            if (existingByBoatAndKey.has(key)) return;
             const data = doc.data() as Slot;
             const startAt = (data.startAt as { toDate(): Date }).toDate();
             const endAt = (data.endAt as { toDate(): Date }).toDate();
             const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
-            const key = `${bid}:${doc.id}`;
             existingByBoatAndKey.set(key, {
               id: doc.id,
+              dateStr: dateStrFromSlotId(doc.id),
               startAt: startAt.toISOString(),
               endAt: endAt.toISOString(),
               status: data.status,
@@ -112,6 +200,7 @@ export async function GET(request: NextRequest) {
           const overlapsTaken = takenRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
           slots.push({
             id: slotId,
+            dateStr,
             startAt: slotStart.toISOString(),
             endAt: slotEnd.toISOString(),
             status: overlapsTaken ? "blocked" : "open",
@@ -122,6 +211,17 @@ export async function GET(request: NextRequest) {
           });
         }
       }
+      // Include booked/held slots that are in range but not in the grid (e.g. past) so the admin calendar shows all bookings.
+      const slotsKeySet = new Set(slots.map((s) => `${s.boatId}:${s.id}`));
+      for (const row of Array.from(existingByBoatAndKey.values())) {
+        if (row.status !== "booked" && row.status !== "held") continue;
+        if (row.dateStr < startDate || row.dateStr > endDate) continue;
+        const key = `${row.boatId}:${row.id}`;
+        if (slotsKeySet.has(key)) continue;
+        slots.push(row);
+        slotsKeySet.add(key);
+      }
+      slots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
       const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
       if (heldHoldIds.length > 0) {
         const holdSnap = await Promise.all(heldHoldIds.map((id) => db.collection("holds").doc(id).get()));
@@ -140,7 +240,10 @@ export async function GET(request: NextRequest) {
           }
         });
       }
-      return NextResponse.json({ slots });
+      return NextResponse.json(
+        { slots },
+        { headers: { "Cache-Control": "no-store, max-age=0" } }
+      );
     }
 
     // Boats: legacy – only return existing Firestore slots
@@ -155,8 +258,10 @@ export async function GET(request: NextRequest) {
       const startAt = data.startAt as { toDate(): Date };
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
+      const parsed = parseSlotId(doc.id);
       return {
         id: doc.id,
+        dateStr: parsed?.dateStr ?? doc.id.slice(0, 10),
         startAt: startAt.toDate().toISOString(),
         endAt: endAt.toDate().toISOString(),
         status: data.status,
@@ -165,7 +270,10 @@ export async function GET(request: NextRequest) {
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
       };
     });
-    return NextResponse.json({ slots });
+    return NextResponse.json(
+      { slots },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (err) {
     console.error("[slots]", err);
     return NextResponse.json({ error: "Failed to load slots" }, { status: 500 });

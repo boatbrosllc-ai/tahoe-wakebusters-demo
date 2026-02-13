@@ -16,6 +16,7 @@ import {
   LogOut,
   Menu,
   X,
+  Tag,
 } from "lucide-react";
 import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
       { href: "/admin/calendars", label: "Calendar", icon: Calendar },
       { href: "/admin/pricing-calendar", label: "Pricing calendar", icon: DollarSign },
       { href: "/admin/bookings", label: "Bookings", icon: BookOpen },
+      { href: "/admin/discounts", label: "Discounts", icon: Tag },
       { href: "/admin/customers", label: "Customers", icon: Users },
       { href: "/admin/financials", label: "Financials", icon: DollarSign },
       { href: "/admin/emails", label: "Email notifications", icon: Mail },

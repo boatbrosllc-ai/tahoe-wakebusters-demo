@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/brevo";
+import { sendBookingConfirmationEmail, sendFinalChargeFailedEmail, upsertBrevoContact } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
-import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
+import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
+import { signManageToken } from "@/lib/booking/manageToken";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 
 function formatSlotDateTime(ts: { toDate(): Date }): string {
   const d = ts.toDate();
@@ -113,7 +116,7 @@ export async function POST(request: NextRequest) {
         experienceName = exp.title;
         boatNameForEmail = boat.name ?? exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
+        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
         rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
@@ -134,7 +137,7 @@ export async function POST(request: NextRequest) {
         experienceName = exp.title;
         boatNameForEmail = exp.title;
         locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
+        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
         rate = rateSnap.data() as ExperienceRate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
@@ -154,7 +157,7 @@ export async function POST(request: NextRequest) {
         experienceName = boat.name;
         boatNameForEmail = boat.name;
         locationText = boat.defaultLocationText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = boat.cancellationPolicyText ?? "Cancel 24h before for full refund. See terms for details.";
+        cancellationPolicyText = boat.cancellationPolicyText ?? DEFAULT_CANCELLATION_POLICY;
         rate = rateSnap.data() as Rate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
@@ -262,23 +265,88 @@ export async function POST(request: NextRequest) {
       await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
     }
     if (event.type === "payment_intent.succeeded") {
-      const pi = event.data.object as Stripe.PaymentIntent;
-      const piId = pi.id;
-      const piAmountTotal = pi.amount ?? undefined;
-      const piCurrency = pi.currency ?? undefined;
-      const holdId = pi.metadata?.holdId;
-      console.log("[stripe-webhook] payment_intent.succeeded", { eventId, holdId, paymentIntentId: piId });
+      const piRaw = event.data.object as Stripe.PaymentIntent;
+      const piId = piRaw.id;
+      const piAmountTotal = piRaw.amount ?? undefined;
+      const piCurrency = piRaw.currency ?? undefined;
+      const paymentStage = piRaw.metadata?.payment_stage;
+      console.log("[stripe-webhook] payment_intent.succeeded", { eventId, paymentStage, paymentIntentId: piId });
+
+      if (paymentStage === "final") {
+        const bookingId = piRaw.metadata?.bookingId;
+        if (!bookingId) {
+          console.error("[stripe-webhook] payment_intent.succeeded final missing bookingId");
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing bookingId for final", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          return NextResponse.json({ received: true });
+        }
+        const bookingRef = db.collection("bookings").doc(bookingId);
+        const bookingSnap = await bookingRef.get();
+        if (!bookingSnap.exists) {
+          console.error("[stripe-webhook] payment_intent.succeeded final booking not found", { bookingId });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Booking not found", bookingId, paymentIntentId: piId });
+          return NextResponse.json({ received: true });
+        }
+        await bookingRef.update({
+          status: "final_paid",
+          "stripe.finalPaymentIntentId": piId,
+          "stripe.finalChargedAt": Timestamp.now(),
+          "stripe.finalError": FieldValue.delete(),
+        });
+        console.log("[stripe-webhook] payment_intent.succeeded final_paid", { bookingId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "final_paid", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        return NextResponse.json({ received: true });
+      }
+
+      const holdId = piRaw.metadata?.holdId;
       if (!holdId) {
         console.error("[stripe-webhook] payment_intent.succeeded missing holdId in metadata");
         await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
+
+      const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
+      const pm = pi.payment_method as Stripe.PaymentMethod | null;
+      let card: BookingCardDisplay | undefined;
+      if (pm && typeof pm === "object" && pm.card && typeof pm.card === "object") {
+        const c = pm.card as { brand?: string; last4?: string; exp_month?: number; exp_year?: number };
+        card = {
+          brand: c.brand,
+          last4: c.last4,
+          expMonth: c.exp_month,
+          expYear: c.exp_year,
+        };
+      }
+      const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+      const paymentMethodId = typeof pm === "object" && pm?.id ? pm.id : undefined;
+
+      const totalCents = (parseInt(pi.metadata?.totalCents ?? "0", 10) || piAmountTotal) ?? 0;
+      const depositCents = (parseInt(pi.metadata?.depositCents ?? "0", 10) || piAmountTotal) ?? 0;
+      const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - depositCents);
+
+      const convertInput: ConvertHoldInput =
+        paymentStage === "deposit" && customerId
+          ? ({
+              paymentStage: "deposit",
+              paymentIntentId: piId,
+              amountTotalCents: piAmountTotal,
+              currency: piCurrency,
+              stripe: {
+                customerId,
+                paymentMethodId,
+                card,
+                totalCents,
+                depositCents,
+                finalCents,
+              },
+            } as ConvertHoldInputDeposit)
+          : {
+              paymentIntentId: piId,
+              amountTotalCents: piAmountTotal,
+              currency: piCurrency,
+            };
+
       try {
-        const result = await convertHoldToBooking(db, holdId, {
-          paymentIntentId: piId,
-          amountTotalCents: piAmountTotal,
-          currency: piCurrency,
-        });
+        const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("alreadyConverted" in result) {
           await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
@@ -291,6 +359,50 @@ export async function POST(request: NextRequest) {
         await writeEventResult(eventId, { processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
       }
     }
+
+    if (event.type === "payment_intent.payment_failed") {
+      const pi = event.data.object as Stripe.PaymentIntent;
+      const piId = pi.id;
+      const paymentStage = pi.metadata?.payment_stage;
+      const lastError = pi.last_payment_error as { code?: string; message?: string } | null;
+      console.log("[stripe-webhook] payment_intent.payment_failed", { eventId, paymentStage, code: lastError?.code });
+      if (paymentStage === "final") {
+        const bookingId = pi.metadata?.bookingId;
+        if (bookingId) {
+          const requiresAction =
+            lastError?.code === "authentication_required" ||
+            lastError?.code === "card_authentication_required" ||
+            (typeof lastError?.message === "string" && lastError.message.toLowerCase().includes("authenticate"));
+          const newStatus = requiresAction ? "final_requires_action" : "final_failed";
+          await db.collection("bookings").doc(bookingId).update({
+            status: newStatus,
+            "stripe.finalError": { code: lastError?.code ?? undefined, message: lastError?.message ?? undefined },
+            "stripe.finalChargeAttemptedAt": Timestamp.now(),
+          });
+          console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
+          try {
+            const bookingSnap = await db.collection("bookings").doc(bookingId).get();
+            if (bookingSnap.exists) {
+              const b = bookingSnap.data() as Booking;
+              let manageLink: string | undefined;
+              if (bookingEnv.manageBookingSecret) {
+                try {
+                  const token = signManageToken({ bookingId });
+                  manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
+                } catch (_) {
+                  // MANAGE_BOOKING_SECRET not set
+                }
+              }
+              await sendFinalChargeFailedEmail(b.customer.email, b.customer.name, manageLink, requiresAction);
+            }
+          } catch (emailErr) {
+            console.error("[stripe-webhook] final charge failed email error", emailErr);
+          }
+        }
+      }
+      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "payment_failed_handled" });
+    }
+
     await writeEventResult(eventId, { processedAt: Timestamp.now() });
     return NextResponse.json({ received: true });
   } catch (err) {

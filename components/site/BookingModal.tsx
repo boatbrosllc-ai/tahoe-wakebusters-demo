@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -38,6 +39,7 @@ interface SlotDto {
   startAt: string;
   endAt: string;
   status: string;
+  boatId?: string;
 }
 
 interface RateOption {
@@ -177,7 +179,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
-  const [boatAvailabilitySlots, setBoatAvailabilitySlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   // Step 4 form
@@ -196,9 +197,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
+  const [discountCode, setDiscountCode] = useState("");
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "success">("form");
+  const [payFullAmount, setPayFullAmount] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
@@ -233,10 +236,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    // When opening with pre-selection: date+slot but no boat → step 2 (pick boat); date+boat+slot → step 4 later when slot loads; date only → step 3
+    // When opening with pre-selection: date only → step 2 (pick time); date+slot → step 3 (pick boat)
     if (initialSelection?.date) {
-      if (initialSelection?.boatId) setStep(3);
-      else setStep(2);
+      setStep(initialSelection?.slotId ? 3 : 2);
     } else setStep(1);
     setSelectedExperience(null);
     setBoats([]);
@@ -263,9 +265,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setTipLaterMessageOpen(false);
     setHowDidYouHear("");
     setComments("");
+    setDiscountCode("");
     setMarketingOptIn(false);
     setCancellationAck(false);
     setPaymentPhase("form");
+    setPayFullAmount(false);
     setHoldId(null);
     setPaymentIntentId(null);
     setClientSecret(null);
@@ -299,7 +303,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     );
     if (exp) {
       setSelectedExperience(exp);
-      if (initialSelection.date) setSelectedDate(initialSelection.date);
+      if (initialSelection.date) {
+        setSelectedDate(initialSelection.date);
+        const d = new Date(initialSelection.date + "T12:00:00");
+        setViewMonthYear(d.getFullYear());
+        setViewMonthMonth(d.getMonth() + 1);
+      }
     }
   }, [open, initialSelection, initialSelection?.date, experiences]);
 
@@ -349,8 +358,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .finally(() => setAddonsLoading(false));
   }, [selectedExperience]);
 
+  // Load experience rates whenever experience is selected (for step 2 date/time before boat is chosen)
   useEffect(() => {
-    if (!selectedExperience || boats.length > 0) {
+    if (!selectedExperience) {
       setExperienceRates([]);
       return;
     }
@@ -363,7 +373,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .catch(() => setExperienceRates([]))
       .finally(() => setExperienceRatesLoading(false));
-  }, [selectedExperience, boats.length]);
+  }, [selectedExperience]);
 
   const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
   const viewMonthEndStr = useMemo(() => {
@@ -387,25 +397,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch(() => setDatePrices({}));
   }, [selectedExperience?.id, viewMonthStartStr, selectedRateIdForCalendar]);
 
-  // Fetch all boats' slots for next 90 days when on step 2 (no boat selected) — used to grey out fully-booked boats
-  useEffect(() => {
-    if (!selectedExperience || selectedBoat != null || boats.length === 0) {
-      setBoatAvailabilitySlots([]);
-      return;
-    }
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 90);
-    const startStr = start.toISOString().slice(0, 10);
-    const endStr = end.toISOString().slice(0, 10);
-    fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${startStr}&endDate=${endStr}`
-    )
-      .then((res) => res.json())
-      .then((data) => setBoatAvailabilitySlots(data?.slots ?? []))
-      .catch(() => setBoatAvailabilitySlots([]));
-  }, [selectedExperience?.id, selectedBoat, boats.length]);
 
   // Fetch all slots for the visible month (per-boat: when a boat is selected, only that boat's availability)
   useEffect(() => {
@@ -449,15 +440,35 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
-  /** Open slot count per boat (next 90 days) — used to grey out fully-booked boats in step 2. */
-  const openCountByBoat = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const s of boatAvailabilitySlots) {
-      const bid = (s as SlotDto & { boatId?: string }).boatId;
-      if (bid && s.status === "open") m.set(bid, (m.get(bid) ?? 0) + 1);
+  /** Boat IDs that have the selected date/time slot OPEN — for step 3. */
+  const availableBoatIdsForSelectedSlot = useMemo(() => {
+    if (!selectedSlot?.startAt) return new Set<string>();
+    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of monthSlots) {
+      if (!s.boatId || s.status !== "open") continue;
+      const slotStartMs = new Date(s.startAt).getTime();
+      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
     }
-    return m;
-  }, [boatAvailabilitySlots]);
+    return ids;
+  }, [selectedSlot?.startAt, monthSlots]);
+  /** Boat IDs that have ANY non-open slot (booked/held/blocked) at the selected time — must be greyed. */
+  const unavailableBoatIdsForSelectedSlot = useMemo(() => {
+    if (!selectedSlot?.startAt) return new Set<string>();
+    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of monthSlots) {
+      if (!s.boatId || s.status === "open") continue;
+      const slotStartMs = new Date(s.startAt).getTime();
+      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
+    }
+    return ids;
+  }, [selectedSlot?.startAt, monthSlots]);
+  /** On step 3, show all boats; available = has open slot and not in unavailable set. */
+  const boatsToShowOnStep3 = useMemo(() => {
+    if (!selectedSlot) return boats;
+    return boats;
+  }, [boats, selectedSlot]);
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -474,6 +485,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return map;
   }, [monthSlots]);
+  // One row per start time (multiple boats can have same slot); use first slot per time for selection
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
     const filtered =
@@ -484,7 +496,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           })
         : slots;
     const sorted = [...filtered].sort((a, b) => a.startAt.localeCompare(b.startAt));
-    return sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
+    const withLabel = sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
+    const seen = new Set<string>();
+    return withLabel.filter((s) => {
+      if (seen.has(s.startAt)) return false;
+      seen.add(s.startAt);
+      return true;
+    });
   }, [slots, rateForCalendar?.durationHours]);
   const selectedRateId = useMemo(() => {
     if (!selectedSlot || ratesForSelection.length === 0) return null;
@@ -542,11 +560,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setPaymentPhase("form");
   }, [open, initialSelection?.slotId, initialSelection?.boatId, selectedSlot, selectedRateId, paymentPhase]);
 
-  // When opened with initialSelection (date but no slot), go to step 3 (pick time)
+  // When opened with initialSelection (date but no slot), go to step 2 (pick time)
   useEffect(() => {
     if (!open || !initialSelection?.date || initialSelection?.slotId) return;
     if (!selectedExperience || !selectedDate) return;
-    setStep(3);
+    setStep(2);
   }, [open, initialSelection?.date, initialSelection?.slotId, selectedExperience, selectedDate]);
 
   useEffect(() => {
@@ -569,13 +587,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const isCalendarFirstFlow = !!initialSelection?.slotId;
 
   const handleBack = () => {
-    if (step === 2) {
+    if (step === 2) setStep(1);
+    else if (step === 3) {
       if (isCalendarFirstFlow) onOpenChange(false);
-      else setStep(1);
-    } else if (step === 3) setStep(2);
-    else if (step === 4) {
-      if (isCalendarFirstFlow) setStep(2);
-      else setStep(3);
+      else {
+        setSelectedBoat(null);
+        setStep(2);
+      }
+    } else if (step === 4) {
+      setStep(3);
       setPaymentPhase("form");
       setClientSecret(null);
       setHoldId(null);
@@ -591,13 +611,22 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setStep(2);
   };
 
+  /** Step 2 (date & time): continue to boat selection when date and slot are chosen. */
+  const canGoFromStep2 = !!(selectedDate && selectedSlot);
   const handleStep2Next = () => {
-    if (boats.length === 0 || selectedBoat) {
-      // Calendar-first: date + duration + time chosen on listing → go straight to details (step 4)
-      if (initialSelection?.slotId) {
-        setStep(4);
-        setPaymentPhase("form");
-      } else setStep(3);
+    if (canGoFromStep2) setStep(3);
+  };
+
+  /** Step 3 (boat): continue only when an available boat is chosen (or experience has no boats). */
+  const canGoFromStep3 =
+    boats.length === 0 ||
+    (!!selectedBoat &&
+      availableBoatIdsForSelectedSlot.has(selectedBoat.id) &&
+      !unavailableBoatIdsForSelectedSlot.has(selectedBoat.id));
+  const handleStep3Next = () => {
+    if (canGoFromStep3) {
+      setStep(4);
+      setPaymentPhase("form");
     }
   };
 
@@ -663,6 +692,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           marketingOptIn: marketingOptIn,
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
+          ...(discountCode.trim() && { discountCode: discountCode.trim() }),
         }),
       });
       const holdData = await holdRes.json();
@@ -679,7 +709,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: newHoldId }),
+        body: JSON.stringify({ holdId: newHoldId, payFullAmount }),
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
@@ -709,10 +739,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
   };
 
-  const stepTitles = ["Pick category", "Choose your boat", "Pick date & time", "Details & payment"];
+  const stepTitles = ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
   const stepCount = isCalendarFirstFlow ? 2 : 4;
-  const stepIndex = isCalendarFirstFlow ? (step === 2 ? 1 : 2) : step;
-  const stepTitle = isCalendarFirstFlow ? (step === 2 ? "Choose your boat" : "Details & payment") : stepTitles[step - 1];
+  const stepIndex = isCalendarFirstFlow ? (step === 3 ? 1 : 2) : step;
+  const stepTitle = isCalendarFirstFlow ? (step === 3 ? "Choose your boat" : "Details & payment") : stepTitles[step - 1];
 
   // Smart modal: min-height per step to fit content (step 2 compact when no boats; step 4 content-fitting)
   // Only the active panel contributes to height so the modal grows per step
@@ -749,7 +779,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {(isCalendarFirstFlow ? [2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
+            {(isCalendarFirstFlow ? [3, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
                 key={`step-dot-${stepIdx}`}
                 className={cn(
@@ -846,80 +876,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               <p className="text-center text-xs text-brand-muted mt-4">Select a category to continue</p>
             </div>
 
-            {/* Step 2: Boat */}
+            {/* Step 2: Date & time — duration, calendar, time; then continue to boat */}
             <div
               className={cn(
-                "w-1/4 shrink-0 px-1 overflow-y-auto flex flex-col transition-[min-height] duration-300",
+                "w-1/4 shrink-0 px-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
                 panel2Collapsed && "!min-h-0 !h-0 overflow-hidden"
-              )}
-            >
-              {boatsLoading ? (
-                <div className="py-8 flex justify-center">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-                </div>
-              ) : boats.length === 0 ? (
-                <p className="text-sm text-brand-muted py-4 md:py-6">No boats assigned — continue to pick date.</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6 flex-1 min-h-0 content-start">
-                  {boats.map((boat) => {
-                    const isSelected = selectedBoat?.id === boat.id;
-                    const thumb = boat.photos?.[0];
-                    const openCount = openCountByBoat.get(boat.id) ?? 0;
-                    const isFullyBooked = boatAvailabilitySlots.length > 0 && openCount === 0;
-                    return (
-                      <button
-                        key={boat.id}
-                        type="button"
-                        disabled={isFullyBooked}
-                        onClick={() => !isFullyBooked && setSelectedBoat(boat)}
-                        className={cn(
-                          "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all min-h-[140px] sm:min-h-[160px]",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]",
-                          isFullyBooked && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20 hover:scale-100 hover:border-brand-dark/20"
-                        )}
-                      >
-                        <div className="relative w-full aspect-[4/3] min-h-[100px] bg-brand-dark/10 shrink-0">
-                          {thumb ? (
-                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, 33vw" />
-                          ) : (
-                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
-                          )}
-                          {isFullyBooked && (
-                            <div className="absolute inset-0 bg-brand-dark/40 flex items-center justify-center">
-                              <span className="text-xs font-semibold text-white uppercase tracking-wide px-2 py-1 rounded bg-brand-dark/80">Fully booked</span>
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-col justify-center p-3 md:p-4 flex-1 min-w-0">
-                          <span className={cn("text-base md:text-lg font-semibold truncate", isFullyBooked ? "text-brand-muted" : "text-brand-dark")}>{boat.name}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={handleStep2Next}
-                className="mt-auto w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 md:py-3.5 hover:bg-brand-primary/90 transition-colors"
-              >
-                Continue
-              </button>
-            </div>
-
-            {/* Step 3: Date & time — compact panel; expands when date selected (time slots show) */}
-            <div
-              className={cn(
-                "w-1/4 shrink-0 pl-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
-                panel3Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
               <div className="space-y-3 md:space-y-4">
                 {ratesForSelection.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
-                    <div className="flex flex-wrap gap-1.5">
+                    <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
+                    <div className="flex flex-wrap gap-2 md:gap-3">
                       {[...ratesForSelection]
                         .sort((a, b) => a.durationHours - b.durationHours)
                         .map((r) => {
@@ -930,7 +898,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             type="button"
                             onClick={() => setSelectedRateIdForCalendar(r.id)}
                             className={cn(
-                              "rounded-lg border-2 px-2.5 py-1.5 text-xs font-medium transition-all",
+                              "rounded-xl border-2 px-4 py-3 text-sm font-semibold min-h-[48px] transition-all",
                               isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
                             )}
                           >
@@ -1062,10 +1030,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     ) : (
                       <div className="flex flex-wrap gap-1.5 md:gap-2">
                         {openSlotsByTime.map((slot) => {
-                          const isSelected = selectedSlot?.id === slot.id;
+                          const isSelected = selectedSlot?.startAt === slot.startAt;
                           return (
                             <button
-                              key={slot.id}
+                              key={slot.startAt}
                               type="button"
                               onClick={() => setSelectedSlot(slot)}
                               className={cn(
@@ -1086,16 +1054,84 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               </div>
               <button
                 type="button"
-                onClick={handleContinueToCheckout}
-                disabled={!canGoToStep4}
+                onClick={handleStep2Next}
+                disabled={!canGoFromStep2}
                 className="mt-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+              >
+                Continue
+              </button>
+              <p className="text-center text-[11px] text-brand-muted mt-2">Then choose your boat</p>
+            </div>
+
+            {/* Step 3: Boat — only boats available for the selected date/time */}
+            <div
+              className={cn(
+                "w-1/4 shrink-0 pl-1 overflow-y-auto flex flex-col transition-[min-height] duration-300",
+                panel3Collapsed && "!min-h-0 !h-0 overflow-hidden"
+              )}
+            >
+              {boatsLoading ? (
+                <div className="py-8 flex justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+                </div>
+              ) : boats.length === 0 ? (
+                <p className="text-sm text-brand-muted py-4 md:py-6">No boats assigned — continue to details.</p>
+              ) : !selectedSlot ? (
+                <p className="text-sm text-brand-muted py-4 md:py-6">Pick a date and time first.</p>
+              ) : boats.length > 0 && availableBoatIdsForSelectedSlot.size === 0 ? (
+                <p className="text-sm text-amber-700 py-4 md:py-6">No boats available for this time. Please go back and choose another date or time.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6 flex-1 min-h-0 content-start">
+                  {boats.map((boat) => {
+                    const isAvailable =
+                      availableBoatIdsForSelectedSlot.has(boat.id) &&
+                      !unavailableBoatIdsForSelectedSlot.has(boat.id);
+                    const isSelected = selectedBoat?.id === boat.id;
+                    const thumb = boat.photos?.[0];
+                    return (
+                      <button
+                        key={boat.id}
+                        type="button"
+                        disabled={!isAvailable}
+                        onClick={() => isAvailable && setSelectedBoat(boat)}
+                        className={cn(
+                          "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all min-h-[140px] sm:min-h-[160px]",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]",
+                          !isAvailable && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20 hover:scale-100 hover:border-brand-dark/20"
+                        )}
+                      >
+                        <div className="relative w-full aspect-[4/3] min-h-[100px] bg-brand-dark/10 shrink-0">
+                          {thumb ? (
+                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, 33vw" />
+                          ) : (
+                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
+                          )}
+                          {!isAvailable && (
+                            <div className="absolute inset-0 bg-brand-dark/50 flex items-center justify-center">
+                              <span className="text-xs font-semibold text-white uppercase tracking-wide px-2 py-1.5 rounded bg-brand-dark/90">Booked</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col justify-center p-3 md:p-4 flex-1 min-w-0">
+                          <span className={cn("text-base md:text-lg font-semibold truncate", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleStep3Next}
+                disabled={!canGoFromStep3}
+                className="mt-auto w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 Continue to checkout
               </button>
-              <p className="text-center text-[11px] text-brand-muted mt-2">Details & payment in next step</p>
             </div>
 
-            {/* Step 4: Details & payment — scroll area has explicit max-height so it always scrolls */}
+            {/* Step 4: Details & payment — scrollable form area + sticky pay block */}
             <div
               className={cn(
                 "w-1/4 shrink-0 pl-1 min-h-0 flex flex-col transition-[min-height] duration-300",
@@ -1106,7 +1142,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               {paymentPhase === "form" && (
                 <>
                 <div
-                  className="booking-step4-scroll overflow-x-hidden pr-1 space-y-5 pb-8 scroll-smooth overscroll-y-contain touch-pan-y min-h-0 max-h-[55vh] md:max-h-[58vh]"
+                  className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-8 scroll-smooth overscroll-y-contain touch-pan-y"
                   role="region"
                   aria-label="Booking details form"
                 >
@@ -1391,9 +1427,56 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     )}
                   </div>
 
+                  {/* Pay deposit or full */}
+                  <div className="pb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
+                      Payment amount
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPayFullAmount(false)}
+                        className={cn(
+                          "flex-1 rounded-xl border-2 py-3 px-4 text-left text-sm font-medium transition-all",
+                          !payFullAmount
+                            ? "border-brand-primary bg-brand-primary/10 text-brand-dark ring-2 ring-brand-primary/30"
+                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+                        )}
+                      >
+                        <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
+                        <span className="block mt-0.5 text-brand-muted font-normal">
+                          ${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now — we&apos;ll charge the remaining 50% 48 hours before your trip
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPayFullAmount(true)}
+                        className={cn(
+                          "flex-1 rounded-xl border-2 py-3 px-4 text-left text-sm font-medium transition-all",
+                          payFullAmount
+                            ? "border-brand-primary bg-brand-primary/10 text-brand-dark ring-2 ring-brand-primary/30"
+                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+                        )}
+                      >
+                        <span className="font-semibold text-brand-dark">Pay full amount</span>
+                        <span className="block mt-0.5 text-brand-muted font-normal">
+                          ${(priceSummary.totalCents / 100).toFixed(2)} now — all set, no later charge
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Optional */}
                   <div className="space-y-2 pt-1">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Optional</p>
+                    <input
+                      id="booking-discount"
+                      type="text"
+                      value={discountCode}
+                      onChange={(e) => setDiscountCode(e.target.value)}
+                      placeholder="Discount code"
+                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                    />
                     <input
                       id="booking-how-hear"
                       type="text"
@@ -1416,7 +1499,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <div className="rounded-xl border-2 border-amber-200/60 bg-amber-50/50 p-4">
                     <p className="text-xs font-semibold text-brand-dark mb-1.5">Cancellation policy</p>
                     <p className="text-[11px] text-brand-muted leading-relaxed">
-                      Free cancel until 30 days before · 50% refund 15–30 days · No refund within 14 days · Full refund if we cancel (e.g. weather).
+                      {DEFAULT_CANCELLATION_POLICY}
                     </p>
                     <label className="mt-3 flex items-start gap-2.5 cursor-pointer">
                       <input
@@ -1434,8 +1517,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <div className="shrink-0 pt-4 pb-2 mt-2 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
                     <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
                       <div>
-                        <p className="text-sm font-semibold text-brand-dark">Total due</p>
-                        <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
+                        <p className="text-sm font-semibold text-brand-dark">
+                          {payFullAmount ? "Total due" : "Deposit due"}
+                        </p>
+                        <p className="text-2xl font-bold text-brand-primary">
+                          ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                        </p>
+                        {!payFullAmount && (
+                          <p className="text-[11px] text-brand-muted mt-0.5">
+                            Remaining 50% charged 48 hours before your trip
+                          </p>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -1471,8 +1563,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-2xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
-                        <p className="text-[11px] text-brand-muted">Total due</p>
+                        <p className="text-2xl font-bold text-brand-primary">
+                          ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                        </p>
+                        <p className="text-[11px] text-brand-muted">
+                          {payFullAmount ? "Total due" : "Deposit due now"}
+                        </p>
                       </div>
                     </div>
                     {/* Itemized list */}
@@ -1503,8 +1599,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         </div>
                       )}
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
-                        <span>Total due</span>
-                        <span>${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                        <span>{payFullAmount ? "Total due" : "Deposit due now"}</span>
+                        <span>${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span>
                       </div>
                     </div>
                   </div>
@@ -1599,15 +1695,25 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   Apply {tipModalPercent}% tip
                 </button>
               </Dialog>
-              {/* Tip later message dialog */}
-              <Dialog open={tipLaterMessageOpen} onOpenChange={setTipLaterMessageOpen} className="max-w-sm">
+              {/* Tip later message dialog — when closing, keep "Tip later" selected */}
+              <Dialog
+                open={tipLaterMessageOpen}
+                onOpenChange={(open) => {
+                  setTipLaterMessageOpen(open);
+                  if (!open) setTipChoice("later");
+                }}
+                className="max-w-sm"
+              >
                 <h3 className="text-lg font-bold text-brand-dark mb-2">We encourage tipping</h3>
                 <p className="text-sm text-brand-muted leading-relaxed mb-4">
                   Our crew works hard to make your trip great. Tips go directly to your captain and crew and are a meaningful way to show appreciation. You can add a tip when you pay or tip your captain directly.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setTipLaterMessageOpen(false)}
+                  onClick={() => {
+                    setTipLaterMessageOpen(false);
+                    setTipChoice("later");
+                  }}
                   className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                 >
                   Got it

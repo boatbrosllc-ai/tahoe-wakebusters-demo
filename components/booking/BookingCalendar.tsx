@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
+import { DEFAULT_CANCELLATION_SUMMARY } from "@/lib/booking/cancellation-policy";
 import { cn } from "@/lib/utils";
 
 const SLOTS_POLL_MS = 60000;
@@ -82,6 +83,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
   const [selectedRateId, setSelectedRateId] = useState<string | null>(null);
   const [addonSelections, setAddonSelections] = useState<{ addonId: string; qty: number }[]>([]);
   const [customer, setCustomer] = useState({ name: "", email: "", phone: "" });
+  const [discountCode, setDiscountCode] = useState("");
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -246,6 +248,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
+          ...(discountCode.trim() && { discountCode: discountCode.trim() }),
         }),
       });
       const holdData = await createHoldRes.json();
@@ -549,6 +552,16 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         placeholder="(512) 555-0123"
                       />
                     </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-1.5 block text-sm font-medium text-brand-dark">Discount code (optional)</label>
+                      <input
+                        type="text"
+                        value={discountCode}
+                        onChange={(e) => setDiscountCode(e.target.value)}
+                        className="w-full rounded-xl border border-brand-dark/15 bg-white px-4 py-3 text-brand-dark placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20"
+                        placeholder="e.g. SAVE20"
+                      />
+                    </div>
                     <div>
                       <label htmlFor="booking-party-size" className="mb-1.5 block text-sm font-medium text-brand-dark">Party size</label>
                       <input
@@ -597,7 +610,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                       className="mt-1 h-4 w-4 rounded border-brand-dark/30 text-brand-primary focus:ring-brand-primary"
                     />
                     <span className="text-sm text-brand-dark">
-                      I agree to the cancellation policy: {detail.boat.cancellationPolicyText || "Cancel 24h before for full refund."}
+                      I agree to the cancellation policy: {detail.boat.cancellationPolicyText || DEFAULT_CANCELLATION_SUMMARY}
                     </span>
                   </label>
                   {error && (

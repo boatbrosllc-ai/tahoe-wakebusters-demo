@@ -145,12 +145,24 @@ export async function POST(request: NextRequest) {
       }
     }
     const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
-    const lineItems = buildLineItems({
+    let lineItems = buildLineItems({
       pricing,
       rate: rateForPricing as Rate | ExperienceRate,
       addons: addonsForPricing,
       hold,
     });
+    const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
+    const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
+    if (holdDiscountCode && holdDiscountCents > 0) {
+      lineItems = [...lineItems, {
+        price_data: {
+          currency: pricing.currency,
+          unit_amount: -holdDiscountCents,
+          product_data: { name: `Discount (${holdDiscountCode})` },
+        },
+        quantity: 1,
+      }];
+    }
     // #region agent log
     await debugLog("create-checkout before Stripe", {
       lineItemsCount: lineItems?.length ?? 0,

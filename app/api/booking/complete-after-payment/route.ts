@@ -8,7 +8,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
+import { convertHoldToBooking, type ConvertHoldInput, type ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
+import type { BookingCardDisplay } from "@/lib/booking/types";
 
 function parseBody(body: unknown): { holdId: string; paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -30,11 +31,11 @@ export async function POST(request: NextRequest) {
     console.log("[complete-after-payment] request", { holdId: input.holdId, paymentIntentId: input.paymentIntentId?.slice(0, 20) + "..." });
 
     const stripe = getStripe();
-    let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId);
+    let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
     if (pi.status !== "succeeded") {
       if (pi.status === "processing") {
         await new Promise((r) => setTimeout(r, 2500));
-        pi = await stripe.paymentIntents.retrieve(input.paymentIntentId);
+        pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
       }
       if (pi.status !== "succeeded") {
         console.error("[complete-after-payment] payment not succeeded", { status: pi.status });
@@ -53,12 +54,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const paymentStage = pi.metadata?.payment_stage;
+    const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+    const pm = pi.payment_method as { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | null;
+    let card: BookingCardDisplay | undefined;
+    if (pm?.card) {
+      card = { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year };
+    }
+    const totalCents = (parseInt(pi.metadata?.totalCents ?? "0", 10) || pi.amount) ?? 0;
+    const depositCents = (parseInt(pi.metadata?.depositCents ?? "0", 10) || pi.amount) ?? 0;
+    const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - depositCents);
+
+    const convertInput: ConvertHoldInput =
+      paymentStage === "deposit" && customerId
+        ? ({
+            paymentStage: "deposit",
+            paymentIntentId: pi.id,
+            amountTotalCents: pi.amount ?? undefined,
+            currency: pi.currency ?? undefined,
+            stripe: {
+              customerId,
+              paymentMethodId: pm?.id,
+              card,
+              totalCents,
+              depositCents,
+              finalCents,
+            },
+          } as ConvertHoldInputDeposit)
+        : {
+            paymentIntentId: pi.id,
+            amountTotalCents: pi.amount ?? undefined,
+            currency: pi.currency ?? undefined,
+          };
+
     const db = getDb();
-    const result = await convertHoldToBooking(db, input.holdId, {
-      paymentIntentId: pi.id,
-      amountTotalCents: pi.amount ?? undefined,
-      currency: pi.currency ?? undefined,
-    });
+    const result = await convertHoldToBooking(db, input.holdId, convertInput);
 
     if ("alreadyConverted" in result) {
       console.log("[complete-after-payment] already converted", { holdId: input.holdId });

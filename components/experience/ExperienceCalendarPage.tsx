@@ -96,6 +96,7 @@ export function ExperienceCalendarPage({
     addons.map((a) => ({ addonId: a.id, qty: 0 }))
   );
   const [customer, setCustomer] = useState({ name: "", email: "", phone: "" });
+  const [discountCode, setDiscountCode] = useState("");
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [partySize, setPartySize] = useState(2);
@@ -296,6 +297,7 @@ export function ExperienceCalendarPage({
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
+          ...(discountCode.trim() && { discountCode: discountCode.trim() }),
         }),
       });
       const holdData = await createHoldRes.json();
@@ -395,6 +397,13 @@ export function ExperienceCalendarPage({
                         placeholder="Phone"
                         value={customer.phone}
                         onChange={(e) => setCustomer((c) => ({ ...c, phone: e.target.value }))}
+                        className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Discount code (optional)"
+                        value={discountCode}
+                        onChange={(e) => setDiscountCode(e.target.value)}
                         className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
                       />
                       <div className="grid grid-cols-2 gap-2">
@@ -673,6 +682,13 @@ export function ExperienceCalendarPage({
                       placeholder="Phone"
                       value={customer.phone}
                       onChange={(e) => setCustomer((c) => ({ ...c, phone: e.target.value }))}
+                      className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Discount code (optional)"
+                      value={discountCode}
+                      onChange={(e) => setDiscountCode(e.target.value)}
                       className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
                     />
                     <div className="grid grid-cols-2 gap-2">

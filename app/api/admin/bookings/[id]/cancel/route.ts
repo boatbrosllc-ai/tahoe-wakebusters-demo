@@ -33,12 +33,22 @@ export async function POST(
     }
 
     const experienceId = booking.experienceId;
+    const boatId = booking.boatId;
     const slotId = booking.slotId;
-    if (!experienceId || !slotId) {
-      return NextResponse.json({ error: "Booking has no experience or slot" }, { status: 400 });
+    if (!slotId) {
+      return NextResponse.json({ error: "Booking has no slot" }, { status: 400 });
     }
 
-    const slotRef = db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
+    // Listing-boat flow: slot lives under boats/{boatId}/slots. Else: experiences/{experienceId}/slots.
+    const slotRef = boatId
+      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+      : experienceId
+        ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
+        : null;
+    if (!slotRef) {
+      await bookingRef.update({ status: "canceled" });
+      return NextResponse.json({ ok: true, slotReleased: false });
+    }
     const slotSnap = await slotRef.get();
     if (!slotSnap.exists) {
       await bookingRef.update({ status: "canceled" });

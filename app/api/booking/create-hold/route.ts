@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
@@ -22,6 +23,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   const petsCount = typeof o.petsCount === "number" ? o.petsCount : null;
   const marketingOptIn = typeof o.marketingOptIn === "boolean" ? o.marketingOptIn : false;
   const tipCents = typeof o.tipCents === "number" && o.tipCents >= 0 ? o.tipCents : undefined;
+  const discountCode = typeof o.discountCode === "string" ? o.discountCode.trim().toUpperCase() : undefined;
   const missing: string[] = [];
   if (!boatId && !experienceId) missing.push("experienceId or boatId");
   if (!slotId) missing.push("slotId");
@@ -62,6 +64,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       },
       marketingOptIn,
       tipCents,
+      discountCode: discountCode || undefined,
     },
   };
 }
@@ -98,6 +101,22 @@ export async function POST(request: NextRequest) {
     const { FieldValue, Timestamp } = getFirestoreExports();
     const hasExperience = !!input.experienceId;
     const hasBoat = !!input.boatId;
+    // When the experience has listing boats, slots live under boats/{boatId}/slots. We must have boatId.
+    if (hasExperience && !hasBoat) {
+      const listingBoatsSnap = await db
+        .collection("boats")
+        .where("isListingBoat", "==", true)
+        .where("active", "==", true)
+        .where("experienceIds", "array-contains", input.experienceId)
+        .limit(1)
+        .get();
+      if (!listingBoatsSnap.empty) {
+        return NextResponse.json(
+          { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
+          { status: 400 }
+        );
+      }
+    }
     const isListingBoatFlow = hasExperience && hasBoat; // experience slots + boat rates
     const isExperienceOnly = hasExperience && !hasBoat;
     const isLegacyBoat = !hasExperience && hasBoat;
@@ -271,7 +290,19 @@ export async function POST(request: NextRequest) {
       currency: "usd",
     });
     const tipCents = input.tipCents ?? 0;
-    const totalCentsWithTip = pricing.totalCents + tipCents;
+    let discountCents = 0;
+    let discountCodeApplied: string | undefined;
+    if (input.discountCode) {
+      const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
+      const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
+      const result = validateAndApplyDiscount(discountDoc, pricing.totalCents + tipCents);
+      if (!result.valid) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      discountCents = result.discountCents;
+      discountCodeApplied = result.discount.code;
+    }
+    const totalCentsWithTip = Math.max(0, pricing.totalCents + tipCents - discountCents);
     const holdId = db.collection("holds").doc().id;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
@@ -292,6 +323,10 @@ export async function POST(request: NextRequest) {
     if (input.experienceId) holdPayload.experienceId = input.experienceId;
     if (input.boatId) holdPayload.boatId = input.boatId;
     if (tipCents > 0) holdPayload.tipCents = tipCents;
+    if (discountCodeApplied && discountCents > 0) {
+      holdPayload.discountCode = discountCodeApplied;
+      holdPayload.discountCents = discountCents;
+    }
 
     let reusedHoldId: string | null = null;
     let reusedExpiresAt: Date | null = null;
@@ -337,6 +372,37 @@ export async function POST(request: NextRequest) {
           }
           throw new Error("Slot no longer available");
         }
+        // Defense in depth: ensure no paid booking already exists for this boat/experience and time
+        const slotStartMs = (slot.startAt as { toDate(): Date }).toDate().getTime();
+        const slotEndMs = (slot.endAt as { toDate(): Date }).toDate().getTime();
+        const parsedForCheck = parseSlotId(input.slotId);
+        if (parsedForCheck && isListingBoatFlow && input.boatId) {
+          const paidForBoat = await tx.get(
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+          );
+          for (const doc of paidForBoat.docs) {
+            const b = doc.data() as { slotId?: string };
+            const p = b.slotId ? parseSlotId(b.slotId) : null;
+            if (!p || p.dateStr !== parsedForCheck.dateStr) continue;
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        } else if (parsedForCheck && isExperienceOnly && input.experienceId) {
+          const paidForExp = await tx.get(
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+          );
+          for (const doc of paidForExp.docs) {
+            const b = doc.data() as { slotId?: string };
+            const p = b.slotId ? parseSlotId(b.slotId) : null;
+            if (!p || p.dateStr !== parsedForCheck.dateStr) continue;
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        }
         tx.update(slotRef, {
           status: "held",
           holdId,
@@ -351,6 +417,72 @@ export async function POST(request: NextRequest) {
           parsed.startHour,
           parsed.durationHours
         );
+        const slotStartMs = slotStartDate.getTime();
+        const slotEndMs = slotEndDate.getTime();
+        // Prevent double-booking: reject if any existing held/booked/blocked slot overlaps this time
+        const dayStart = new Date(parsed.dateStr + "T00:00:00");
+        const dayEnd = new Date(parsed.dateStr + "T23:59:59.999");
+        if (isListingBoatFlow && input.boatId) {
+          const boatSlotsRef = db.collection("boats").doc(input.boatId).collection("slots");
+          const sameDaySnap = await tx.get(
+            boatSlotsRef
+              .where("startAt", ">=", Timestamp.fromDate(dayStart))
+              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+          );
+          for (const doc of sameDaySnap.docs) {
+            const data = doc.data() as Slot;
+            if (data.status === "open") continue;
+            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
+            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
+            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        } else if (isExperienceOnly && input.experienceId) {
+          const expSlotsRef = db.collection("experiences").doc(input.experienceId).collection("slots");
+          const sameDaySnap = await tx.get(
+            expSlotsRef
+              .where("startAt", ">=", Timestamp.fromDate(dayStart))
+              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+          );
+          for (const doc of sameDaySnap.docs) {
+            const data = doc.data() as Slot;
+            if (data.status === "open") continue;
+            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
+            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
+            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        }
+        // Also reject if a paid booking already exists for this boat/experience and time (slot doc may be missing)
+        if (isListingBoatFlow && input.boatId) {
+          const paidForBoat = await tx.get(
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "==", "paid")
+          );
+          for (const doc of paidForBoat.docs) {
+            const b = doc.data() as { slotId?: string };
+            const p = b.slotId ? parseSlotId(b.slotId) : null;
+            if (!p || p.dateStr !== parsed.dateStr) continue;
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        } else if (isExperienceOnly && input.experienceId) {
+          const paidForExp = await tx.get(
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "==", "paid")
+          );
+          for (const doc of paidForExp.docs) {
+            const b = doc.data() as { slotId?: string };
+            const p = b.slotId ? parseSlotId(b.slotId) : null;
+            if (!p || p.dateStr !== parsed.dateStr) continue;
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+              throw new Error("Slot no longer available");
+            }
+          }
+        }
         tx.set(slotRef, {
           startAt: Timestamp.fromDate(slotStartDate),
           endAt: Timestamp.fromDate(slotEndDate),

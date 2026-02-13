@@ -140,7 +140,7 @@ export default function AdminHomePage() {
     const lastDate = new Date(year, month + 1, 0);
     const lastDay = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDate.getDate()).padStart(2, "0")}`;
     setCalendarLoading(true);
-    fetch(`/api/admin/bookings?fromTripDate=${firstDay}&toTripDate=${lastDay}&limit=500`, { credentials: "include" })
+    fetch(`/api/admin/bookings?fromTripDate=${firstDay}&toTripDate=${lastDay}&status=paid&limit=500`, { credentials: "include" })
       .then(async (res) => {
         const data = await res.json().catch(() => []);
         if (!res.ok) return [];

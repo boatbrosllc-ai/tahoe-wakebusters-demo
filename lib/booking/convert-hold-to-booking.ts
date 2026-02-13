@@ -2,6 +2,7 @@
  * Converts a paid hold into a booking in Firestore and sends confirmation email.
  * Used by: Stripe webhook (payment_intent.succeeded) and complete-after-payment API (client-triggered).
  * Idempotent: if hold is already converted, returns { alreadyConverted: true } and does nothing.
+ * Supports full payment (legacy) or deposit-only (50/50) via paymentStage.
  */
 
 import type { Firestore, DocumentReference } from "firebase-admin/firestore";
@@ -10,7 +11,10 @@ import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
-import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
+import { parseSlotId } from "@/lib/booking/experience-slots";
+import { signManageToken } from "@/lib/booking/manageToken";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
 function formatSlotDateTime(ts: { toDate(): Date }): string {
@@ -24,13 +28,37 @@ function formatSlotDateTime(ts: { toDate(): Date }): string {
   });
 }
 
-export interface ConvertHoldInput {
+/** Legacy: full payment in one charge. */
+export interface ConvertHoldInputFull {
+  paymentStage?: "full";
   paymentIntentId: string;
   amountTotalCents?: number;
   currency?: string;
 }
 
+/** 50/50: deposit paid; booking created with final_due and finalChargeAt. */
+export interface ConvertHoldInputDeposit {
+  paymentStage: "deposit";
+  paymentIntentId: string;
+  amountTotalCents?: number;
+  currency?: string;
+  stripe: {
+    customerId: string;
+    paymentMethodId?: string;
+    card?: BookingCardDisplay;
+    totalCents: number;
+    depositCents: number;
+    finalCents: number;
+  };
+}
+
+export type ConvertHoldInput = ConvertHoldInputFull | ConvertHoldInputDeposit;
+
 export type ConvertHoldResult = { bookingId: string } | { alreadyConverted: true };
+
+function isDepositInput(input: ConvertHoldInput): input is ConvertHoldInputDeposit {
+  return input.paymentStage === "deposit";
+}
 
 export async function convertHoldToBooking(
   db: Firestore,
@@ -76,7 +104,7 @@ export async function convertHoldToBooking(
     experienceName = exp.title;
     boatNameForEmail = boat.name ?? exp.title;
     locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
+    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
     rate = rateSnap.data() as ExperienceRate;
     slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
@@ -93,7 +121,7 @@ export async function convertHoldToBooking(
     experienceName = exp.title;
     boatNameForEmail = exp.title;
     locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? "Cancel 24h before for full refund. See terms for details.";
+    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
     rate = rateSnap.data() as ExperienceRate;
     slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
@@ -109,7 +137,7 @@ export async function convertHoldToBooking(
     experienceName = boat.name;
     boatNameForEmail = boat.name;
     locationText = boat.defaultLocationText ?? "We'll send exact meeting point after booking.";
-    cancellationPolicyText = boat.cancellationPolicyText ?? "Cancel 24h before for full refund. See terms for details.";
+    cancellationPolicyText = boat.cancellationPolicyText ?? DEFAULT_CANCELLATION_POLICY;
     rate = rateSnap.data() as Rate;
     slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
@@ -139,14 +167,42 @@ export async function convertHoldToBooking(
   }
   const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
   const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
-  const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
+  const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
+  const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
   const customer = hold.customerDraft;
   const specialNotes = hold.answers?.comments?.trim() || undefined;
   const bookingId = db.collection("bookings").doc().id;
+  const parsedSlot = parseSlotId(hold.slotId);
+  const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
+
+  const slotStart = (slot.startAt as { toDate(): Date }).toDate();
+  const finalChargeAtDate = new Date(slotStart.getTime() - 48 * 60 * 60 * 1000);
+  const finalChargeAtTimestamp = Timestamp.fromDate(finalChargeAtDate);
+
+  const isDeposit = isDepositInput(input);
+  const stripeBlock: Booking["stripe"] = isDeposit
+    ? {
+        depositPaymentIntentId: input.paymentIntentId,
+        customerId: input.stripe.customerId,
+        paymentMethodId: input.stripe.paymentMethodId,
+        depositAmountCents: input.stripe.depositCents,
+        finalAmountCents: input.stripe.finalCents,
+        totalAmountCents: input.stripe.totalCents,
+        depositPaidAt: Timestamp.now(),
+        ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
+        ...(input.currency && { currency: input.currency }),
+      }
+    : {
+        paymentIntentId: input.paymentIntentId,
+        ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
+        ...(input.currency && { currency: input.currency }),
+      };
+
   const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
     ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
     ...(hold.boatId ? { boatId: hold.boatId } : {}),
     slotId: hold.slotId,
+    ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
     rateId: hold.rateId,
     addonSelections: hold.addonSelections,
     partySize: hold.partySize,
@@ -156,12 +212,11 @@ export async function convertHoldToBooking(
     marketingOptIn: hold.marketingOptIn,
     ...(specialNotes ? { specialNotes } : {}),
     pricing: finalPricing,
-    status: "paid",
-    stripe: {
-      paymentIntentId: input.paymentIntentId,
-      ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
-      ...(input.currency && { currency: input.currency }),
-    },
+    status: isDeposit ? "final_due" : "paid",
+    stripe: stripeBlock,
+    ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
+    ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp } : {}),
+    ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
     createdAt: Timestamp.now(),
   };
 
@@ -180,8 +235,31 @@ export async function convertHoldToBooking(
     tx.update(holdRef, { status: "converted" });
   });
 
+  if (holdDiscountCode) {
+    const discountSnap = await db.collection("discounts").where("code", "==", holdDiscountCode).limit(1).get();
+    if (!discountSnap.empty) {
+      const discountRef = discountSnap.docs[0].ref;
+      const current = discountSnap.docs[0].data() as { usedCount?: number };
+      await discountRef.update({
+        usedCount: (current.usedCount ?? 0) + 1,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
   const startTs = slot.startAt as { toDate(): Date };
   const endTs = slot.endAt as { toDate(): Date };
+  let manageLink: string | undefined;
+  if (bookingEnv.manageBookingSecret && isDeposit) {
+    try {
+      const token = signManageToken({ bookingId });
+      manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
+    } catch (_) {
+      // MANAGE_BOOKING_SECRET not set; omit link
+    }
+  } else if (!isDeposit) {
+    manageLink = `${bookingEnv.appBaseUrl}/booking/success?payment_intent=${input.paymentIntentId}`;
+  }
   const emailContext = {
     boatName: boatNameForEmail ?? experienceName,
     startAt: formatSlotDateTime(startTs),
@@ -189,6 +267,8 @@ export async function convertHoldToBooking(
     durationHours: rate.durationHours,
     locationText,
     cancellationPolicyText,
+    isDeposit: !!isDeposit,
+    manageLink,
   };
   try {
     await sendBookingConfirmationEmail(booking as Booking, emailContext);

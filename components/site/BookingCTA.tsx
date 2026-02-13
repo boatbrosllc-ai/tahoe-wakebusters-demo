@@ -20,6 +20,8 @@ export interface BookingCTAProps {
   callPinkOnDark?: boolean;
   primaryHint?: string;
   callHint?: string;
+  /** When set, primary "Book now" opens the booking modal instead of navigating to /booking */
+  onBookNowClick?: () => void;
 }
 
 export function BookingCTA({
@@ -33,6 +35,7 @@ export function BookingCTA({
   callPinkOnDark = false,
   primaryHint = "Instant confirmation · Easy reschedule",
   callHint = "Text or call for same-day questions",
+  onBookNowClick,
 }: BookingCTAProps) {
   const handleBookClick = () => {
     analytics.bookCtaClick(source, page, experience);
@@ -46,14 +49,30 @@ export function BookingCTA({
     ? `/booking?experience=${encodeURIComponent(experience)}`
     : "/booking";
 
+  const primaryButtonLabel = "Book now";
+
   if (variant === "inline") {
     return (
       <div className={cn("flex flex-nowrap items-center justify-center gap-2 sm:gap-3 min-w-0", className)}>
-        <Button asChild variant="default" size="default" className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6">
-          <Link href={bookUrl} onClick={handleBookClick}>
-            Book now
-          </Link>
-        </Button>
+        {onBookNowClick ? (
+          <Button
+            variant="default"
+            size="default"
+            className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6"
+            onClick={() => {
+              handleBookClick();
+              onBookNowClick();
+            }}
+          >
+            {primaryButtonLabel}
+          </Button>
+        ) : (
+          <Button asChild variant="default" size="default" className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6">
+            <Link href={bookUrl} onClick={handleBookClick}>
+              {primaryButtonLabel}
+            </Link>
+          </Button>
+        )}
         {showCall && (
           <a
             href={`tel:${siteConfig.phoneTel}`}
@@ -72,19 +91,36 @@ export function BookingCTA({
   return (
     <div className={cn("space-y-2", className)}>
       <div className="flex flex-row flex-wrap items-center justify-center gap-2 sm:gap-3">
-        <Button
-          asChild
-          variant="default"
-          size={variant === "primary" ? "xl" : "lg"}
-          className={cn(
-            "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
-            variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
-          )}
-        >
-          <Link href={bookUrl} onClick={handleBookClick}>
-            Book now
-          </Link>
-        </Button>
+        {onBookNowClick ? (
+          <Button
+            variant="default"
+            size={variant === "primary" ? "xl" : "lg"}
+            className={cn(
+              "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
+              variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
+            )}
+            onClick={() => {
+              handleBookClick();
+              onBookNowClick();
+            }}
+          >
+            {primaryButtonLabel}
+          </Button>
+        ) : (
+          <Button
+            asChild
+            variant="default"
+            size={variant === "primary" ? "xl" : "lg"}
+            className={cn(
+              "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
+              variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
+            )}
+          >
+            <Link href={bookUrl} onClick={handleBookClick}>
+              {primaryButtonLabel}
+            </Link>
+          </Button>
+        )}
         {showCall && (
           <a
             href={`tel:${siteConfig.phoneTel}`}

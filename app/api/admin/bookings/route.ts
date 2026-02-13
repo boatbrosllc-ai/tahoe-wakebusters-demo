@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
@@ -7,6 +8,22 @@ import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
   if (typeof ts.seconds === "number") return new Date(ts.seconds * 1000).toISOString();
+  return null;
+}
+
+/** Parse slotId (handles "2026-2-27-11-6" and "2026-02-27-11-6") for trip date and times. */
+function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; durationHours: number } | null {
+  if (!slotId || typeof slotId !== "string") return null;
+  const trimmed = slotId.trim();
+  if (!trimmed) return null;
+  let parsed = parseSlotId(trimmed);
+  if (parsed) return parsed;
+  const cleaned = trimmed.replace(/\s/g, "");
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    return parseSlotId(normalized);
+  }
   return null;
 }
 
@@ -34,8 +51,36 @@ export async function GET(request: NextRequest) {
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
-    const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
-    let docs = snap.docs;
+    let docs: QueryDocumentSnapshot[];
+    if (fromTripDate && toTripDate) {
+      const tripLimit = Math.min(limit, 500);
+      const byTripSnap = await db
+        .collection("bookings")
+        .where("startDateStr", ">=", fromTripDate)
+        .where("startDateStr", "<=", toTripDate)
+        .limit(tripLimit)
+        .get();
+      const createdAtSnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
+      const tripDateInRange = (b: Booking) => {
+        const startDateStr = (b as { startDateStr?: string }).startDateStr;
+        if (startDateStr) return startDateStr >= fromTripDate && startDateStr <= toTripDate;
+        const parsed = parseSlotIdForDisplay(b.slotId);
+        const tripDate = parsed?.dateStr ?? null;
+        if (!tripDate) return false;
+        return tripDate >= fromTripDate && tripDate <= toTripDate;
+      };
+      const fromCreatedAt = createdAtSnap.docs.filter((d) => tripDateInRange(d.data() as Booking));
+      const merged = new Map<string, QueryDocumentSnapshot>();
+      byTripSnap.docs.forEach((d) => merged.set(d.id, d));
+      fromCreatedAt.forEach((d) => {
+        if (!merged.has(d.id)) merged.set(d.id, d);
+      });
+      docs = Array.from(merged.values());
+    } else {
+      const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
+      docs = snap.docs;
+    }
+
     if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
     if (experienceIdParam) docs = docs.filter((d) => (d.data() as Booking).experienceId === experienceIdParam);
     if (fromDateVal || toDateVal) {
@@ -98,21 +143,19 @@ export async function GET(request: NextRequest) {
     );
 
     let list = docs.map((d) => {
-      const b = d.data() as Booking;
+      const b = d.data() as Booking & { startDateStr?: string };
       const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-      let startDate: string | null = null;
+      let startDate: string | null = b.startDateStr ?? null;
       let startTime: string | null = null;
       let endTime: string | null = null;
       let durationHours: number | null = null;
-      if (b.slotId) {
-        const parsed = parseSlotId(b.slotId);
-        if (parsed) {
-          startDate = parsed.dateStr;
-          durationHours = parsed.durationHours;
-          const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-          startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-          endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        }
+      const parsed = parseSlotIdForDisplay(b.slotId);
+      if (parsed) {
+        if (!startDate) startDate = parsed.dateStr;
+        durationHours = parsed.durationHours;
+        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
       }
       const addonMap = b.experienceId ? experienceAddons.get(b.experienceId) : undefined;
       const addonsWithNames: AddonWithName[] = (b.addonSelections ?? []).map((sel: AddonSelection) => ({
@@ -121,6 +164,14 @@ export async function GET(request: NextRequest) {
         qty: sel.qty ?? 1,
       }));
 
+      const bWithExt = b as Booking & { card?: { brand?: string; last4?: string; expMonth?: number; expYear?: number }; finalChargeAt?: { seconds?: number; toDate?: () => Date } | string };
+      const finalChargeAt = bWithExt.finalChargeAt;
+      let finalChargeAtStr: string | null = null;
+      if (finalChargeAt) {
+        if (typeof finalChargeAt === "string") finalChargeAtStr = finalChargeAt;
+        else if (typeof finalChargeAt.toDate === "function") finalChargeAtStr = finalChargeAt.toDate().toISOString();
+        else if (typeof (finalChargeAt as { seconds?: number }).seconds === "number") finalChargeAtStr = new Date((finalChargeAt as { seconds: number }).seconds * 1000).toISOString();
+      }
       return {
         id: d.id,
         experienceId: b.experienceId,
@@ -140,6 +191,8 @@ export async function GET(request: NextRequest) {
         pricing: b.pricing,
         status: b.status,
         stripe: b.stripe ?? undefined,
+        card: bWithExt.card ?? undefined,
+        finalChargeAt: finalChargeAtStr,
         createdAt,
         startDate,
         startTime,

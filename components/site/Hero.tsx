@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
+import { useBookingModal } from "./BookingModalContext";
 
 const bullets = [
   "Lake Travis & Lake Austin",
@@ -15,6 +16,7 @@ const bullets = [
 ];
 
 export function Hero() {
+  const { setOpen: setBookingModalOpen } = useBookingModal();
   return (
     <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
       {/* Background image */}
@@ -38,6 +40,7 @@ export function Hero() {
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.08 }}
+            whileTap={{ scale: 0.92 }}
             transition={{
               type: "spring",
               stiffness: 380,
@@ -114,6 +117,7 @@ export function Hero() {
                   variant="primary"
                   onDark
                   callPinkOnDark
+                  onBookNowClick={() => setBookingModalOpen(true)}
                   className="w-full text-center [&>p]:text-center [&>p]:text-xs lg:[&>p]:text-sm"
                   primaryHint="Instant confirmation · Easy reschedule"
                   callHint="Text or call for same-day questions"

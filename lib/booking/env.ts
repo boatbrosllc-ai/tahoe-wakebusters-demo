@@ -140,6 +140,11 @@ export const bookingEnv = {
   get appBaseUrl(): string {
     return requireEnv("APP_BASE_URL").replace(/\/$/, "");
   },
+  /** Secret for signing/verifying manage-booking links (HMAC). Set for 50/50 manage flow. */
+  get manageBookingSecret(): string | undefined {
+    const v = getEnv("MANAGE_BOOKING_SECRET");
+    return v == null || v === "" ? undefined : v;
+  },
 };
 
 export function hasFirebaseConfig(): boolean {

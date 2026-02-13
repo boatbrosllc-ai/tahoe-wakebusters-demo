@@ -13,6 +13,7 @@ interface SlotDto {
   startAt: string;
   endAt: string;
   status: SlotStatus;
+  boatId?: string;
 }
 
 function formatTime(iso: string) {
@@ -94,6 +95,7 @@ export function ExperienceCalendarSection({
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [selectedDurationForModal, setSelectedDurationForModal] = useState<number | null>(null);
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
+  const [directDiscountCode, setDirectDiscountCode] = useState("");
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
@@ -702,6 +704,18 @@ export function ExperienceCalendarSection({
         className="max-w-md w-[calc(100vw-2rem)] sm:w-full"
       >
         <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+          {directCheckout && (
+            <div>
+              <label className="block text-xs font-semibold text-brand-dark mb-1.5">Discount code (optional)</label>
+              <input
+                type="text"
+                value={directDiscountCode}
+                onChange={(e) => setDirectDiscountCode(e.target.value)}
+                placeholder="e.g. SAVE20"
+                className="w-full rounded-xl border border-brand-dark/15 px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none"
+              />
+            </div>
+          )}
           {/* Duration – same as BookingModal step 3 */}
           <div>
             <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
@@ -788,8 +802,10 @@ export function ExperienceCalendarSection({
                                 body: JSON.stringify({
                                   experienceId,
                                   slotId: slot.id,
+                                  ...(slot.boatId && { boatId: slot.boatId }),
                                   partySize: 1,
                                   petsCount: 0,
+                                  ...(directDiscountCode.trim() && { discountCode: directDiscountCode.trim() }),
                                 }),
                               });
                               const data = await res.json().catch(() => ({}));

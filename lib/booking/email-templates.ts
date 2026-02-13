@@ -4,6 +4,7 @@
  */
 
 import { bookingEnv } from "./env";
+import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
 import type { Booking } from "./types";
 import type { BookingEmailContext } from "./brevo";
 
@@ -31,9 +32,13 @@ const MUTED_COLOR = "#196a87";
 const BG_LIGHT = "#f0fafb";
 
 /**
- * Build manage/booking URL (works for Checkout Session or Payment Intent).
+ * Build manage/booking URL (works for Checkout Session or Payment Intent, or use context.manageLink for deposit).
  */
-function bookingManageUrl(booking: { stripe: { checkoutSessionId?: string; paymentIntentId?: string } }): string {
+function bookingManageUrl(
+  booking: { stripe: { checkoutSessionId?: string; paymentIntentId?: string } },
+  contextManageLink?: string
+): string {
+  if (contextManageLink) return contextManageLink;
   const sessionId = booking.stripe.checkoutSessionId;
   const pi = booking.stripe.paymentIntentId;
   if (sessionId) return `${bookingEnv.appBaseUrl}/booking/success?session_id=${sessionId}`;
@@ -45,15 +50,20 @@ function bookingManageUrl(booking: { stripe: { checkoutSessionId?: string; payme
  * Render booking confirmation HTML (beautiful, email-client safe).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink } = context;
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     booking.addonSelections.length > 0
       ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
       : "None";
-  const totalPaid = (booking.pricing.totalCents / 100).toFixed(2);
-  const cancellationPolicy = cancellationPolicyText || "Cancel 24h before for full refund. See terms for details.";
-  const manageUrl = bookingManageUrl(booking);
+  const depositPaidCents = (booking.stripe as { depositAmountCents?: number }).depositAmountCents ?? booking.pricing.totalCents;
+  const totalPaid = (depositPaidCents / 100).toFixed(2);
+  const totalLabel = isDeposit ? "Deposit paid" : "Total paid";
+  const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
+  const manageUrl = bookingManageUrl(booking, manageLink);
+  const depositCopy = isDeposit
+    ? "50% deposit received. Remaining balance will be charged 48 hours before your trip. You can update your card or pay early using the link below."
+    : "";
 
   return `
 <!DOCTYPE html>
@@ -89,19 +99,20 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Date & time</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(startAt)} – ${escapeHtml(endAt)}</td></tr>
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Duration</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${duration}</td></tr>
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Add-ons</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(addonsSummary)}</td></tr>
-                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total paid</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">$${totalPaid}</td></tr>
+                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">${totalLabel}</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">$${totalPaid}</td></tr>
                     </table>
                   </td>
                 </tr>
               </table>
 
+              ${depositCopy ? `<p style="margin: 0 0 16px; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">${escapeHtml(depositCopy)}</p>` : ""}
               <p style="margin: 0 0 8px; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Cancellation:</strong> ${escapeHtml(cancellationPolicy)}</p>
               <p style="margin: 0 0 24px; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Location / meeting:</strong> ${escapeHtml(locationText)}</p>
 
               <table role="presentation" cellspacing="0" cellpadding="0" align="center">
                 <tr>
                   <td style="border-radius: 10px; background: ${PRIMARY_COLOR};">
-                    <a href="${escapeHtml(manageUrl)}" target="_blank" rel="noopener" style="display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;">View booking details</a>
+                    <a href="${escapeHtml(manageUrl)}" target="_blank" rel="noopener" style="display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;">${isDeposit ? "Manage booking" : "View booking details"}</a>
                   </td>
                 </tr>
               </table>
@@ -152,7 +163,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     endAt: "Sat, Mar 15, 2025, 4:00 PM",
     durationHours: 2,
     locationText: "We'll send exact meeting point after booking.",
-    cancellationPolicyText: "Free cancel until 30 days before · 50% refund 15–30 days · No refund within 14 days.",
+    cancellationPolicyText: DEFAULT_CANCELLATION_POLICY,
   };
   return renderBookingConfirmationHtml(sampleBooking, sampleContext);
 }

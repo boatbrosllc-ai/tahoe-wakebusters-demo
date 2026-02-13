@@ -1,17 +1,49 @@
+import type { Firestore } from "firebase-admin/firestore";
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
 import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
-function parseBody(body: unknown): { holdId: string } | null {
+function parseBody(body: unknown): { holdId: string; payFullAmount?: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   if (!holdId) return null;
-  return { holdId };
+  const payFullAmount = o.payFullAmount === true;
+  return { holdId, payFullAmount };
+}
+
+/** Ensure Stripe Customer exists; use stripeCustomerIndex by email (no Stripe list by email). */
+async function getOrCreateStripeCustomer(
+  db: Firestore,
+  stripe: import("stripe").Stripe,
+  email: string,
+  name: string,
+  phone: string
+): Promise<string> {
+  const { FieldValue, Timestamp } = getFirestoreExports();
+  const emailLower = email.trim().toLowerCase();
+  const indexRef = db.collection("stripeCustomerIndex").doc(emailLower);
+  const indexSnap = await indexRef.get();
+  if (indexSnap.exists) {
+    const data = indexSnap.data() as { customerId: string };
+    if (data.customerId) return data.customerId;
+  }
+  const customer = await stripe.customers.create({
+    email: email.trim(),
+    name: name.trim() || undefined,
+    phone: phone.trim() || undefined,
+    metadata: { emailLower },
+  });
+  await indexRef.set({
+    customerId: customer.id,
+    createdAt: Timestamp.now(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return customer.id;
 }
 
 export async function POST(request: NextRequest) {
@@ -76,19 +108,40 @@ export async function POST(request: NextRequest) {
     }
     const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
-    const totalCents = pricing.totalCents + tipCents;
+    const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
+    const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);
+    const depositCents = Math.round(totalCents * 0.5);
+    const finalCents = totalCents - depositCents;
+    const payFullAmount = input.payFullAmount === true;
+    const chargeCents = payFullAmount ? totalCents : depositCents;
+
     const stripe = getStripe();
+    const customerId = await getOrCreateStripeCustomer(
+      db,
+      stripe,
+      hold.customerDraft.email,
+      hold.customerDraft.name,
+      hold.customerDraft.phone
+    );
+
     const metadata: Record<string, string> = {
       holdId: input.holdId,
       slotId: hold.slotId,
       rateId: hold.rateId,
+      payment_stage: payFullAmount ? "full" : "deposit",
+      totalCents: String(totalCents),
+      depositCents: String(depositCents),
+      finalCents: String(finalCents),
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
+
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalCents,
+      amount: chargeCents,
       currency: "usd",
+      customer: customerId,
       automatic_payment_methods: { enabled: true },
+      setup_future_usage: "off_session",
       metadata,
     });
     if (!paymentIntent.client_secret) {
@@ -97,6 +150,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
+      depositCents: payFullAmount ? totalCents : depositCents,
+      finalCents: payFullAmount ? 0 : finalCents,
+      totalCents,
+      payFullAmount,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";

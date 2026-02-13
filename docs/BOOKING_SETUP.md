@@ -252,6 +252,13 @@ The slots API queries `startAt` with a range and `orderBy("startAt")`. If Firest
 
 To release expired holds periodically, call `POST /api/booking/cleanup-holds` with `Authorization: Bearer CRON_SECRET` on a schedule (e.g. every 5–10 minutes via Vercel Cron, GitHub Actions, or a cron job).
 
+## 50/50 deposit flow (Payment Element only)
+
+- **Deposit:** Customer pays 50% via Payment Element; card is saved for off-session use. Booking is created with status `final_due` and `finalChargeAt` = trip start − 48 hours.
+- **Final charge cron:** Call `POST /api/booking/run-final-charges` with `Authorization: Bearer CRON_SECRET` (e.g. every 15–30 minutes). It attempts off-session final charge for bookings where `status === "final_due"` and `finalChargeAt <= now`. Webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) marks the booking `final_paid`.
+- **Manage booking:** Set `MANAGE_BOOKING_SECRET` in env. Confirmation email includes a signed link to `/booking/manage?token=...` where the customer can update card or pay remaining balance.
+- **Firestore index:** For `run-final-charges` you may need a composite index on `bookings`: `status` (Ascending) + `finalChargeAt` (Ascending). If the query fails, use the link in the error to create the index in Firebase Console.
+
 ## Security notes
 
 - Stripe secret key and webhook secret, Brevo API key, and Firebase private key are server-only; never expose them to the client.

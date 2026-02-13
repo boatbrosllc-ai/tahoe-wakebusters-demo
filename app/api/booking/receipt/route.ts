@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       bookingId: doc.id,
       customer: booking.customer,
-      boatName: experienceName,
+      boatName,
       experienceName,
       startAt,
       endAt,
