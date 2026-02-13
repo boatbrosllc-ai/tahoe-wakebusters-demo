@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink } from "lucide-react";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
 
@@ -30,6 +30,7 @@ interface SlotDto {
   bookingId?: string | null;
   expiresAt?: string;
   bookingSummary?: BookingSummary | null;
+  boatId?: string;
 }
 
 interface ExperienceItem {
@@ -105,6 +106,29 @@ export default function AdminCalendarsPage() {
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeSectionOpen, setRangeSectionOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
+  const [boatList, setBoatList] = useState<{ id: string; name: string }[]>([]);
+  const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
+  const [bookingDetailId, setBookingDetailId] = useState<string | null>(null);
+  const [bookingDetailOpen, setBookingDetailOpen] = useState(false);
+  const [bookingDetail, setBookingDetail] = useState<{
+    id: string;
+    experienceName: string;
+    boatName: string | null;
+    customer: { name?: string; email?: string; phone?: string };
+    partySize: number | null;
+    petsCount: number;
+    specialNotes: string | null;
+    addonsWithNames: { addonId: string; name: string; qty: number }[];
+    pricing?: { totalCents?: number; currency?: string };
+    status: string;
+    startDate: string | null;
+    startTime: string | null;
+    endTime: string | null;
+    durationHours: number | null;
+    stripe?: { paymentIntentId?: string };
+  } | null>(null);
+  const [bookingDetailLoading, setBookingDetailLoading] = useState(false);
 
   const fetchExperiences = useCallback(async () => {
     setLoading(true);
@@ -189,6 +213,43 @@ export default function AdminCalendarsPage() {
     if (!selectedId) return;
     fetchBookings();
   }, [selectedId, fetchBookings]);
+
+  useEffect(() => {
+    if (!bookingDetailOpen || !bookingDetailId) {
+      setBookingDetail(null);
+      return;
+    }
+    setBookingDetailLoading(true);
+    setBookingDetail(null);
+    fetch(`/api/admin/bookings/${encodeURIComponent(bookingDetailId)}`, { credentials: "include" })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load booking");
+        return res.json();
+      })
+      .then(setBookingDetail)
+      .catch(() => setBookingDetail(null))
+      .finally(() => setBookingDetailLoading(false));
+  }, [bookingDetailOpen, bookingDetailId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setBoatNames(new Map());
+      return;
+    }
+    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(selectedId)}`, { credentials: "include" })
+      .then((res) => res.json())
+      .then((data: { boats?: { id: string; name?: string }[] }) => {
+        const boats = data.boats ?? [];
+        const map = new Map<string, string>();
+        boats.forEach((b) => map.set(b.id, b.name ?? b.id));
+        setBoatNames(map);
+        setBoatList(boats.map((b) => ({ id: b.id, name: b.name ?? b.id })));
+      })
+      .catch(() => {
+        setBoatNames(new Map());
+        setBoatList([]);
+      });
+  }, [selectedId]);
 
   const enrichedSlots = useMemo(() => {
     return slots.map((s) => ({
@@ -282,12 +343,13 @@ export default function AdminCalendarsPage() {
     const key = `date-${dateStr}`;
     setBlocking(key);
     setError(null);
+    const boatIdsPayload = blockDayBoatIds.size > 0 ? Array.from(blockDayBoatIds) : undefined;
     try {
       const res = await fetch("/api/booking/block-date", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block" }),
+        body: JSON.stringify({ experienceId: selectedId, date: dateStr, action: "block", boatIds: boatIdsPayload }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to block date");
@@ -323,16 +385,16 @@ export default function AdminCalendarsPage() {
     }
   };
 
-  const blockSlot = async (slotId: string) => {
+  const blockSlot = async (slot: SlotDto) => {
     if (!selectedId) return;
-    setBlocking(slotId);
+    setBlocking(slot.id);
     setError(null);
     try {
       const res = await fetch("/api/booking/block-slot", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, slotId }),
+        body: JSON.stringify({ experienceId: selectedId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to block slot");
@@ -344,16 +406,16 @@ export default function AdminCalendarsPage() {
     }
   };
 
-  const unblockSlot = async (slotId: string) => {
+  const unblockSlot = async (slot: SlotDto) => {
     if (!selectedId) return;
-    setActionLoading(slotId);
+    setActionLoading(slot.id);
     setError(null);
     try {
       const res = await fetch("/api/booking/unblock-slot", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId: selectedId, slotId }),
+        body: JSON.stringify({ experienceId: selectedId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to unblock slot");
@@ -364,6 +426,20 @@ export default function AdminCalendarsPage() {
       setActionLoading(null);
     }
   };
+
+  /** Group slots for selected day by time range (start–end + duration) so we show each window once with boats underneath. */
+  const selectedDateTimeGroups = useMemo(() => {
+    if (!selectedDate || selectedDateSlots.length === 0) return [];
+    const byKey = new Map<string, SlotDto[]>();
+    for (const s of selectedDateSlots) {
+      const key = `${s.startAt}-${s.endAt}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(s);
+    }
+    return Array.from(byKey.entries())
+      .map(([key, slots]) => ({ key, slots, startAt: slots[0].startAt }))
+      .sort((a, b) => a.startAt.localeCompare(b.startAt));
+  }, [selectedDate, selectedDateSlots]);
 
   const releaseHold = async (holdId: string) => {
     setActionLoading(holdId);
@@ -404,6 +480,7 @@ export default function AdminCalendarsPage() {
 
   const openDayDetail = (dateStr: string) => {
     setSelectedDate(dateStr);
+    setBlockDayBoatIds(new Set());
     setDayDetailOpen(true);
   };
 
@@ -495,11 +572,22 @@ export default function AdminCalendarsPage() {
   return (
     <div className="space-y-6">
       {/* Header: title + sync message */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Calendar</h1>
-        <p className="text-sm text-brand-muted">
-          Bookings from your site appear here automatically. Click a date to manage time slots, block days, or cancel bookings.
-        </p>
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Calendar</h1>
+          <p className="text-sm text-brand-muted mt-0.5">
+            Bookings from your site appear here. Click a date to manage slots, block days, or open booking details.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open("/admin/bookings", "_blank")}
+          className="shrink-0 gap-1.5"
+        >
+          <CalendarIcon className="h-4 w-4" />
+          Add booking (via Bookings)
+        </Button>
       </div>
 
       {/* Listing selector */}
@@ -742,134 +830,283 @@ export default function AdminCalendarsPage() {
           {selectedDate && (
             <>
               {/* Block / unblock day */}
-              <div className="flex flex-wrap items-center gap-2">
-                {selectedDateSlots.some((s) => s.status === "open") && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => blockDate(selectedDate)}
-                    disabled={!!blocking}
-                    className="gap-1.5"
-                  >
-                    <Lock className="h-3.5 w-3.5" />
-                    {blocking === `date-${selectedDate}` ? "Saving…" : "Block entire day"}
-                  </Button>
-                )}
-                {selectedDateSlots.length > 0 && selectedDateSlots.every((s) => s.status === "blocked") && (
-                  <Button
-                    size="sm"
-                    onClick={() => unblockDate(selectedDate)}
-                    disabled={!!blocking}
-                    className="gap-1.5"
-                  >
-                    <Unlock className="h-3.5 w-3.5" />
-                    {blocking === `date-${selectedDate}` ? "Saving…" : "Unblock day"}
-                  </Button>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedDateSlots.some((s) => s.status === "open") && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => blockDate(selectedDate)}
+                      disabled={!!blocking}
+                      className="gap-1.5"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      {blocking === `date-${selectedDate}` ? "Saving…" : "Block entire day"}
+                    </Button>
+                  )}
+                  {selectedDateSlots.length > 0 && selectedDateSlots.every((s) => s.status === "blocked") && (
+                    <Button
+                      size="sm"
+                      onClick={() => unblockDate(selectedDate)}
+                      disabled={!!blocking}
+                      className="gap-1.5"
+                    >
+                      <Unlock className="h-3.5 w-3.5" />
+                      {blocking === `date-${selectedDate}` ? "Saving…" : "Unblock day"}
+                    </Button>
+                  )}
+                </div>
+                {selectedDateSlots.some((s) => s.status === "open") && boatList.length > 1 && (
+                  <div className="rounded-lg border border-brand-dark/10 bg-brand-bg/20 px-3 py-2">
+                    <p className="text-xs font-medium text-brand-muted mb-1.5">Block only these boats (leave unchecked to block all)</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      {boatList.map((boat) => (
+                        <label key={boat.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={blockDayBoatIds.has(boat.id)}
+                            onChange={(e) => {
+                              setBlockDayBoatIds((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(boat.id);
+                                else next.delete(boat.id);
+                                return next;
+                              });
+                            }}
+                            className="rounded border-brand-dark/20"
+                          />
+                          {boat.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 
-              {/* Timeline: time slots sorted by start */}
+              {/* Time slots grouped by window, then by boat — cleaner than one row per slot */}
               <div className="border-t border-brand-dark/10 pt-4">
                 <p className="mb-3 text-xs font-semibold text-brand-dark uppercase tracking-wide flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5" />
                   Time slots
                 </p>
-                <ul className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-                  {selectedDateSlots.map((slot) => {
-                    const parsed = parseSlotId(slot.id);
+                <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-1">
+                  {selectedDateTimeGroups.map(({ key, slots, startAt }) => {
+                    const parsed = parseSlotId(slots[0].id);
                     const duration = parsed ? `${parsed.durationHours}h` : "";
-                    const isOpen = slot.status === "open";
-                    const isBooked = slot.status === "booked";
-                    const isHeld = slot.status === "held";
-                    const isBlocked = slot.status === "blocked";
-                    const summary = slot.bookingSummary;
+                    const timeLabel = `${formatTime(startAt)} – ${formatTime(slots[0].endAt)}${duration ? ` (${duration})` : ""}`;
                     return (
-                      <li
-                        key={slot.id}
-                        className={cn(
-                          "flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border px-4 py-3 text-sm",
-                          isOpen && "border-emerald-200 bg-emerald-50/60",
-                          isHeld && "border-amber-200 bg-amber-50/60",
-                          isBooked && "border-blue-200 bg-blue-50/60",
-                          isBlocked && "border-brand-dark/10 bg-brand-bg/40"
-                        )}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-semibold text-brand-dark tabular-nums">
-                              {formatTime(slot.startAt)} – {formatTime(slot.endAt)}
-                              {duration && <span className="font-normal text-brand-muted"> ({duration})</span>}
-                            </span>
-                            <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", SLOT_STATUS_CLASS[slot.status])}>
-                              {SLOT_LABELS[slot.status]}
-                            </span>
-                          </div>
-                          {isBooked && summary && (
-                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-brand-muted">
-                              {summary.boatName && (
-                                <span className="flex items-center gap-1 font-medium text-brand-dark">
-                                  <Ship className="h-3 w-3" /> {summary.boatName}
-                                </span>
-                              )}
-                              <span className="flex items-center gap-1">
-                                <User className="h-3 w-3" /> {summary.customerName || summary.customerEmail || "—"}
-                              </span>
-                              {summary.totalCents > 0 && (
-                                <span className="flex items-center gap-1 font-medium text-brand-primary">
-                                  <DollarSign className="h-3 w-3" /> {formatCents(summary.totalCents)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {isHeld && slot.expiresAt && (
-                            <p className="mt-1.5 text-xs text-amber-700 font-medium tabular-nums">
-                              <HoldCountdown expiresAt={slot.expiresAt} label="Expires in " compact />
-                            </p>
-                          )}
+                      <div key={key} className="rounded-xl border border-brand-dark/10 bg-white overflow-hidden">
+                        <div className="px-3 py-2 bg-brand-bg/50 border-b border-brand-dark/10">
+                          <span className="font-semibold text-brand-dark tabular-nums text-sm">{timeLabel}</span>
                         </div>
-                        <div className="shrink-0 flex items-center gap-2">
-                          {isOpen && (
-                            <Button variant="outline" size="sm" onClick={() => blockSlot(slot.id)} disabled={!!blocking}>
-                              {blocking === slot.id ? "Saving…" : "Block"}
-                            </Button>
-                          )}
-                          {isBlocked && (
-                            <Button size="sm" onClick={() => unblockSlot(slot.id)} disabled={!!actionLoading}>
-                              {actionLoading === slot.id ? "Saving…" : "Unblock"}
-                            </Button>
-                          )}
-                          {isHeld && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => releaseHold(slot.holdId!)}
-                              disabled={!!actionLoading || !slot.holdId}
-                              className="border-amber-300 text-amber-800 hover:bg-amber-50"
-                            >
-                              {actionLoading === slot.holdId ? "Releasing…" : "Release hold"}
-                            </Button>
-                          )}
-                          {isBooked && summary && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => cancelBooking(summary.bookingId)}
-                              disabled={!!actionLoading}
-                              className="border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400"
-                            >
-                              {actionLoading === summary.bookingId ? "Cancelling…" : "Cancel booking"}
-                            </Button>
-                          )}
-                        </div>
-                      </li>
+                        <ul className="divide-y divide-brand-dark/5">
+                          {slots.map((slot) => {
+                            const isOpen = slot.status === "open";
+                            const isBooked = slot.status === "booked";
+                            const isHeld = slot.status === "held";
+                            const isBlocked = slot.status === "blocked";
+                            const summary = slot.bookingSummary;
+                            const boatLabel = slot.boatId ? (boatNames.get(slot.boatId) ?? slot.boatId) : "—";
+                            return (
+                              <li
+                                key={slot.boatId ? `${slot.id}-${slot.boatId}` : slot.id}
+                                className={cn(
+                                  "flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 py-2.5 text-sm",
+                                  isOpen && "bg-emerald-50/40",
+                                  isHeld && "bg-amber-50/40",
+                                  isBooked && "bg-blue-50/40",
+                                  isBlocked && "bg-brand-bg/30"
+                                )}
+                              >
+                                <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
+                                  <span className="font-medium text-brand-dark flex items-center gap-1.5">
+                                    <Ship className="h-3.5 w-3.5 text-brand-muted shrink-0" />
+                                    {boatLabel}
+                                  </span>
+                                  <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium shrink-0", SLOT_STATUS_CLASS[slot.status])}>
+                                    {SLOT_LABELS[slot.status]}
+                                  </span>
+                                  {isBooked && summary && (
+                                    <>
+                                      <span className="text-xs text-brand-muted flex items-center gap-1">
+                                        <User className="h-3 w-3" /> {summary.customerName || summary.customerEmail || "—"}
+                                      </span>
+                                      {summary.totalCents > 0 && (
+                                        <span className="text-xs font-medium text-brand-primary">{formatCents(summary.totalCents)}</span>
+                                      )}
+                                    </>
+                                  )}
+                                  {isHeld && slot.expiresAt && (
+                                    <span className="text-xs text-amber-700 tabular-nums">
+                                      <HoldCountdown expiresAt={slot.expiresAt} label="Expires " compact />
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="shrink-0 flex items-center gap-2">
+                                  {isOpen && (
+                                    <Button variant="outline" size="sm" onClick={() => blockSlot(slot)} disabled={!!blocking}>
+                                      {blocking === slot.id ? "Saving…" : "Block"}
+                                    </Button>
+                                  )}
+                                  {isBlocked && (
+                                    <Button size="sm" onClick={() => unblockSlot(slot)} disabled={!!actionLoading}>
+                                      {actionLoading === slot.id ? "Saving…" : "Unblock"}
+                                    </Button>
+                                  )}
+                                  {isHeld && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => releaseHold(slot.holdId!)}
+                                      disabled={!!actionLoading || !slot.holdId}
+                                      className="border-amber-300 text-amber-800 hover:bg-amber-50"
+                                    >
+                                      {actionLoading === slot.holdId ? "Releasing…" : "Release"}
+                                    </Button>
+                                  )}
+                                  {isBooked && summary && (
+                                    <>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          setBookingDetailId(summary.bookingId);
+                                          setBookingDetailOpen(true);
+                                        }}
+                                      >
+                                        View
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => cancelBooking(summary.bookingId)}
+                                        disabled={!!actionLoading}
+                                        className="border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400"
+                                      >
+                                        {actionLoading === summary.bookingId ? "Cancelling…" : "Cancel"}
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
                     );
                   })}
-                </ul>
-                {selectedDateSlots.length === 0 && (
+                </div>
+                {selectedDateTimeGroups.length === 0 && (
                   <p className="py-8 text-center text-sm text-brand-muted">No time slots for this day.</p>
                 )}
               </div>
             </>
+          )}
+        </div>
+      </Dialog>
+
+      {/* Booking detail modal — full info + actions */}
+      <Dialog
+        open={bookingDetailOpen}
+        onOpenChange={(open) => {
+          setBookingDetailOpen(open);
+          if (!open) setBookingDetailId(null);
+        }}
+        title="Booking details"
+        description={bookingDetail ? `${bookingDetail.experienceName} · ${bookingDetail.startDate ?? ""} ${bookingDetail.startTime ?? ""}` : undefined}
+      >
+        <div className="space-y-4">
+          {bookingDetailLoading && (
+            <div className="py-8 text-center text-sm text-brand-muted">Loading…</div>
+          )}
+          {!bookingDetailLoading && bookingDetail && (
+            <>
+              <div className="grid gap-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800">{bookingDetail.status}</span>
+                  {bookingDetail.startDate && (
+                    <span className="text-brand-dark">
+                      {new Date(bookingDetail.startDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                      {bookingDetail.startTime && bookingDetail.endTime && ` · ${bookingDetail.startTime} – ${bookingDetail.endTime}`}
+                      {bookingDetail.durationHours != null && ` (${bookingDetail.durationHours}h)`}
+                    </span>
+                  )}
+                </div>
+                {bookingDetail.boatName && (
+                  <p className="flex items-center gap-1.5 text-brand-dark">
+                    <Ship className="h-4 w-4 text-brand-muted" /> {bookingDetail.boatName}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-brand-dark">
+                  <span className="flex items-center gap-1.5"><User className="h-4 w-4 text-brand-muted" /> {bookingDetail.customer?.name || "—"}</span>
+                  {bookingDetail.customer?.email && (
+                    <a href={`mailto:${bookingDetail.customer.email}`} className="flex items-center gap-1.5 text-brand-primary hover:underline">
+                      <Mail className="h-4 w-4" /> {bookingDetail.customer.email}
+                    </a>
+                  )}
+                  {bookingDetail.customer?.phone && <span className="text-brand-muted">{bookingDetail.customer.phone}</span>}
+                </div>
+                {bookingDetail.partySize != null && (
+                  <p className="text-brand-muted">Party: {bookingDetail.partySize} guest{bookingDetail.partySize !== 1 ? "s" : ""}{bookingDetail.petsCount > 0 ? ` · ${bookingDetail.petsCount} pet${bookingDetail.petsCount !== 1 ? "s" : ""}` : ""}</p>
+                )}
+                {bookingDetail.pricing?.totalCents != null && (
+                  <p className="font-semibold text-brand-dark">{formatCents(bookingDetail.pricing.totalCents)}</p>
+                )}
+                {bookingDetail.addonsWithNames?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-1">Add-ons</p>
+                    <ul className="list-disc list-inside text-brand-muted text-sm">
+                      {bookingDetail.addonsWithNames.map((a) => (
+                        <li key={a.addonId}>{a.name} × {a.qty}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {bookingDetail.specialNotes && (
+                  <div>
+                    <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-1">Notes</p>
+                    <p className="text-sm text-brand-dark whitespace-pre-wrap">{bookingDetail.specialNotes}</p>
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-brand-dark/10 pt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (bookingDetail.stripe?.paymentIntentId) {
+                      window.open(`https://dashboard.stripe.com/payments/${bookingDetail.stripe.paymentIntentId}`, "_blank");
+                    }
+                  }}
+                  disabled={!bookingDetail.stripe?.paymentIntentId}
+                  className="gap-1.5"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" /> Refund in Stripe
+                </Button>
+                <Button variant="outline" size="sm" disabled className="gap-1.5" title="Coming soon">
+                  <Mail className="h-3.5 w-3.5" /> Send email
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (confirm("Cancel this booking? The slot will become available.")) {
+                      cancelBooking(bookingDetail.id);
+                      setBookingDetailOpen(false);
+                      setBookingDetailId(null);
+                      fetchSlots();
+                      fetchBookings();
+                    }
+                  }}
+                  className="border-red-300 text-red-700 hover:bg-red-50 gap-1.5"
+                >
+                  Cancel booking
+                </Button>
+              </div>
+            </>
+          )}
+          {!bookingDetailLoading && !bookingDetail && bookingDetailId && (
+            <p className="py-6 text-center text-sm text-brand-muted">Booking not found.</p>
           )}
         </div>
       </Dialog>

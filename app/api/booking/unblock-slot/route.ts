@@ -1,7 +1,8 @@
 /**
  * Unblock a single slot (admin). Deletes the slot doc so it becomes available again.
  * Only allowed when slot status is "blocked". For held slots use release-hold; for booked use cancel booking.
- * POST body: { experienceId, slotId }
+ * POST body: { experienceId, slotId, boatId?: string }
+ * When boatId is provided, deletes from boats/{boatId}/slots.
  * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
  */
 
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const experienceId = typeof body?.experienceId === "string" ? body.experienceId : null;
     const slotId = typeof body?.slotId === "string" ? body.slotId : null;
+    const boatId = typeof body?.boatId === "string" ? body.boatId.trim() || null : null;
     if (!experienceId || !slotId) {
       return NextResponse.json({ error: "experienceId and slotId required" }, { status: 400 });
     }
@@ -32,6 +34,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid slotId format" }, { status: 400 });
     }
     const db = getDb();
+
+    if (boatId) {
+      const slotRef = db.collection("boats").doc(boatId).collection("slots").doc(slotId);
+      const slotSnap = await slotRef.get();
+      if (!slotSnap.exists) {
+        return NextResponse.json({ ok: true, message: "Slot already open", slotId, boatId });
+      }
+      const slot = slotSnap.data() as { status?: string };
+      if (slot.status !== "blocked") {
+        return NextResponse.json(
+          { error: "Only blocked slots can be unblocked. Release hold or cancel booking for held/booked slots." },
+          { status: 400 }
+        );
+      }
+      await slotRef.delete();
+      return NextResponse.json({ ok: true, slotId, boatId });
+    }
+
     const slotRef = db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
     const slotSnap = await slotRef.get();
     if (!slotSnap.exists) {

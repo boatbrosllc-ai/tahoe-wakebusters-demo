@@ -48,7 +48,15 @@ export function getLatestStartHourForDuration(durationHours: number): number {
   return Math.max(OPERATING_START_HOUR, OPERATING_END_HOUR - durationHours);
 }
 
-/** Generate (dateStr, startHour, durationHours) for the given range; excludes past times. */
+/**
+ * Today's date string in the same timezone as slot dates (server local).
+ * Used so we only filter "past" times when the slot is actually today.
+ */
+function getTodayDateStr(now: Date): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+/** Generate (dateStr, startHour, durationHours) for the given range; excludes past times only for today. */
 export function getSlotGrid(
   startDate: Date,
   endDate: Date,
@@ -56,6 +64,7 @@ export function getSlotGrid(
 ): { dateStr: string; startHour: number; durationHours: number }[] {
   const out: { dateStr: string; startHour: number; durationHours: number }[] = [];
   const now = new Date();
+  const todayStr = getTodayDateStr(now);
   const start = new Date(startDate);
   start.setHours(0, 0, 0, 0);
   const end = new Date(endDate);
@@ -65,8 +74,11 @@ export function getSlotGrid(
     for (const durationHours of durationHoursList) {
       const latestStart = getLatestStartHourForDuration(durationHours);
       for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
-        const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours);
-        if (slotStart >= now) out.push({ dateStr, startHour, durationHours });
+        if (dateStr === todayStr) {
+          const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours);
+          if (slotStart < now) continue;
+        }
+        out.push({ dateStr, startHour, durationHours });
       }
     }
   }

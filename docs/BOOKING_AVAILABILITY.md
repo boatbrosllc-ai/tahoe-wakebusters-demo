@@ -2,6 +2,8 @@
 
 This doc describes how we keep a single source of truth for what’s booked, when, and which boat, and how we prevent double bookings across all calendars and booking flows.
 
+**Book Now calendar:** Availability is **backend-only**. The calendar never hardcodes availability; it calls the slots API, which uses only real data: the **bookings** collection for "booked," the **holds** collection for active holds, and per-boat slot docs for "blocked" (e.g. maintenance). No other source can mark a slot unavailable.
+
 ## Single source of truth
 
 - **Bookings** (`bookings` collection) are the **only** source of truth for whether a slot is **booked**.  
@@ -50,8 +52,30 @@ This doc describes how we keep a single source of truth for what’s booked, whe
 5. **Release-hold / cleanup-holds**
    - Release-hold (and cleanup of expired holds) sets the slot back to `open` and clears `holdId`, so the slot can be chosen again.
 
-6. **Slots API: expired holds**
-   - When returning slots, any slot with `status: "held"` and `expiresAt` in the past is returned as `open` so availability is correct even before cleanup-holds runs.
+6. **Slots API: held slots**
+   - Any slot with `status: "held"` is returned as `open` if the hold document is **missing**, **inactive** (e.g. `status !== "active"`), or **expired**. So after you delete holds (or bookings) in Firestore, calendars show full availability without needing to delete or edit slot docs.
+
+## Why do I only see 2 times (or a few) on a date?
+
+The Book Now calendar shows only slots the API returns as **open**. If you click a date (e.g. Feb 27) and see only two times, it means the rest of that day is marked **held** or **blocked** in the backend.
+
+- **Held** – Slot docs under `boats/{boatId}/slots` with `status: "held"` and a **hold** in the `holds` collection that is still `status: "active"` and not expired. Deleting bookings does **not** remove holds; you must delete or expire documents in **`holds`** (or set `status` to something other than `"active"`) so those slots become open.
+- **Blocked** – Slot docs with `status: "blocked"` (e.g. maintenance). Remove or update those slot docs if you want those times available.
+
+**To see exactly why a date has few open slots:** call the slots API with `debug=1` or `byDate=1`:
+
+`/api/booking/slots?experienceId=...&startDate=2026-02-01&endDate=2026-02-28&debug=1`
+
+The response includes `byDate`, e.g. `"2026-02-27": { "open": 2, "held": 14, "booked": 0, "blocked": 0 }`. High `held` → clear the `holds` collection (or expire those holds). High `blocked` → fix or remove `blocked` slot docs under `boats/{boatId}/slots`.
+
+## Clean slate for testing
+
+**If you deleted all bookings and expect all times to be available:** the Book Now calendar uses only backend data. So:
+
+1. **Delete (or expire) holds** in Firestore: `holds` collection. The slots API treats "held" as open when the hold doc is missing, not active, or expired. If you only deleted bookings, **holds can still be there** and will keep those slots from showing as available until you delete or expire them.
+2. **Optional:** In `boats/{boatId}/slots`, delete slot docs or set `status: "open"` and clear `holdId` / `bookingId`. The API already ignores stale "booked" on slot docs and treats missing/inactive holds as open. Any slot doc with `status: "blocked"` will still block that time (use this for maintenance, etc.).
+
+No need to touch the slots API or run a script; clear `bookings` and `holds` (and optionally reset slot docs), then refresh the calendar.
 
 ## What you can rely on
 

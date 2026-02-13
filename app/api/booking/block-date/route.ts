@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     const experienceId = typeof body?.experienceId === "string" ? body.experienceId : null;
     const dateStr = typeof body?.date === "string" ? body.date : null;
     const action = body?.action === "unblock" ? "unblock" : "block";
+    const bodyBoatIds = Array.isArray(body?.boatIds) ? (body.boatIds as unknown[]).filter((id): id is string => typeof id === "string").filter(Boolean) : null;
     if (!experienceId || !dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       return NextResponse.json({ error: "experienceId and date (YYYY-MM-DD) required" }, { status: 400 });
     }
@@ -43,7 +44,10 @@ export async function POST(request: NextRequest) {
       .where("isListingBoat", "==", true)
       .where("experienceIds", "array-contains", experienceId)
       .get();
-    const boatIds = boatsSnap.docs.map((d) => d.id);
+    const allBoatIds = boatsSnap.docs.map((d) => d.id);
+    const boatIds = bodyBoatIds && bodyBoatIds.length > 0
+      ? bodyBoatIds.filter((id) => allBoatIds.includes(id))
+      : allBoatIds;
 
     if (action === "unblock") {
       const dayStart = new Date(dateStr + "T00:00:00");

@@ -74,7 +74,8 @@ export async function GET(request: NextRequest) {
         return parsed?.dateStr ?? slotId.slice(0, 10);
       };
 
-      // 1) Bookings are the single source of truth for "booked". Merge FIRST so we never overwrite with stale slot docs.
+      // 1) Bookings are the only source of truth for "booked" (Book Now calendar uses real backend data only).
+      // Merge FIRST so we never overwrite with stale slot docs.
       // Only these statuses mean the slot is taken; canceled/refunded are ignored.
       const SLOT_TAKEN_STATUSES = ["paid", "deposit_paid", "final_due", "final_paid", "final_processing"] as const;
       const isSlotTakenStatus = (s: unknown): boolean =>
@@ -168,6 +169,7 @@ export async function GET(request: NextRequest) {
           });
         })
       );
+
       const grid = getSlotGrid(start, end, durationsUnique);
       const slots: SlotRow[] = [];
       for (const bid of boatIds) {
@@ -211,36 +213,53 @@ export async function GET(request: NextRequest) {
       }
       slots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
       const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
+      const holdIdsToRelease = new Set<string>(); // held slots whose hold is missing, inactive, or expired → show as open
       if (heldHoldIds.length > 0) {
         const holdSnap = await Promise.all(heldHoldIds.map((id) => db.collection("holds").doc(id).get()));
-        const expiresByHoldId = new Map<string, string>();
+        const now = new Date();
         holdSnap.forEach((doc, i) => {
-          if (doc.exists) {
-            const data = doc.data();
-            const exp = data?.expiresAt as { toDate(): Date } | undefined;
-            if (exp) expiresByHoldId.set(heldHoldIds[i], exp.toDate().toISOString());
+          const hid = heldHoldIds[i];
+          if (!doc.exists) {
+            holdIdsToRelease.add(hid);
+            return;
           }
+          const data = doc.data() as { status?: string; expiresAt?: { toDate(): Date } };
+          if (data?.status !== "active") {
+            holdIdsToRelease.add(hid);
+            return;
+          }
+          const exp = data?.expiresAt?.toDate?.();
+          if (exp && exp <= now) holdIdsToRelease.add(hid);
         });
         slots.forEach((s) => {
           if (s.status === "held" && s.holdId) {
-            const exp = expiresByHoldId.get(s.holdId);
-            if (exp) (s as Record<string, unknown>).expiresAt = exp;
+            if (holdIdsToRelease.has(s.holdId)) {
+              s.status = "open";
+              (s as Record<string, unknown>).holdId = null;
+            } else {
+              const exp = holdSnap[heldHoldIds.indexOf(s.holdId)]?.data()?.expiresAt as { toDate(): Date } | undefined;
+              if (exp) (s as Record<string, unknown>).expiresAt = exp.toDate().toISOString();
+            }
           }
         });
       }
-      // Expired holds: treat as open so availability is accurate without waiting for cleanup-holds
-      const now = new Date().toISOString();
-      slots.forEach((s) => {
-        if (s.status === "held") {
-          const exp = (s as { expiresAt?: string }).expiresAt;
-          if (exp && exp <= now) {
-            s.status = "open";
-            (s as Record<string, unknown>).holdId = null;
-          }
-        }
-      });
+
+      const debugByDate = request.nextUrl.searchParams.get("debug") === "1" || request.nextUrl.searchParams.get("byDate") === "1"
+        ? (() => {
+            const byDate: Record<string, { open: number; held: number; booked: number; blocked: number }> = {};
+            for (const s of slots) {
+              const day = s.startAt.slice(0, 10);
+              if (!byDate[day]) byDate[day] = { open: 0, held: 0, booked: 0, blocked: 0 };
+              if (s.status === "open") byDate[day].open++;
+              else if (s.status === "held") byDate[day].held++;
+              else if (s.status === "booked") byDate[day].booked++;
+              else byDate[day].blocked++;
+            }
+            return byDate;
+          })()
+        : undefined;
       return NextResponse.json(
-        { slots },
+        debugByDate != null ? { slots, byDate: debugByDate } : { slots },
         { headers: { "Cache-Control": "no-store, max-age=0" } }
       );
     }

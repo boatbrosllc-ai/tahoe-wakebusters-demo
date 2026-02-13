@@ -69,36 +69,44 @@ function getNextDays(days: number): { dateStr: string; label: string; weekday: s
   for (let i = 0; i < days; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().slice(0, 10);
     out.push({
-      dateStr,
-      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
+      dateStr: toLocalDateStr(d),
+      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
     });
   }
   return out;
 }
 
+/** Local YYYY-MM-DD (avoids timezone skew from toISOString). */
+function toLocalDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Weekday labels in locale order (Sun–Sat in en-US). Derived, not hardcoded. */
+const WEEKDAY_LABELS = Array.from(
+  { length: 7 },
+  (_, i) => new Date(Date.UTC(2024, 0, 7 + i)).toLocaleDateString(undefined, { weekday: "short" })
+);
+
 /** All days in a given calendar month (1-based). */
 function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
   const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const first = new Date(year, month - 1, 1);
   const last = new Date(year, month, 0);
   const count = last.getDate();
   for (let day = 1; day <= count; day++) {
     const d = new Date(year, month - 1, day);
-    const dateStr = d.toISOString().slice(0, 10);
     out.push({
-      dateStr,
-      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
+      dateStr: toLocalDateStr(d),
+      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
     });
   }
   return out;
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 /** Sort key: time of day in minutes (0 = midnight, 420 = 7 AM, 1080 = 6 PM). Use for morning→night order. */
@@ -183,8 +191,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
-  const [slots, setSlots] = useState<SlotDto[]>([]);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
+  /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
+  const openSlotsForDate = useMemo(() => {
+    if (!selectedDate) return [];
+    return monthSlots.filter(
+      (s) => s.startAt.startsWith(selectedDate) && s.status === "open"
+    );
+  }, [selectedDate, monthSlots]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   // Step 4 form
@@ -260,7 +274,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setSelectedRateIdForCalendar(null);
     setEffectiveRateCents(null);
     setDatePrices({});
-    setSlots([]);
     setMonthSlots([]);
     setSelectedSlot(null);
     setPartySize(1);
@@ -329,10 +342,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [open, initialSelection, boats]);
 
   useEffect(() => {
-    if (!open || !initialSelection?.slotId || !slots.length) return;
-    const slot = slots.find((s) => s.id === initialSelection.slotId);
+    if (!open || !initialSelection?.slotId || !openSlotsForDate.length) return;
+    const slot = openSlotsForDate.find((s) => s.id === initialSelection.slotId);
     if (slot) setSelectedSlot(slot);
-  }, [open, initialSelection, slots]);
+  }, [open, initialSelection, openSlotsForDate]);
 
   useEffect(() => {
     if (!selectedExperience) {
@@ -388,8 +401,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
   const viewMonthEndStr = useMemo(() => {
     const last = new Date(viewMonthYear, viewMonthMonth, 0);
-    return last.toISOString().slice(0, 10);
+    return toLocalDateStr(last);
   }, [viewMonthYear, viewMonthMonth]);
+  const daysInViewMonth = useMemo(
+    () => new Date(viewMonthYear, viewMonthMonth, 0).getDate(),
+    [viewMonthYear, viewMonthMonth]
+  );
   useEffect(() => {
     if (!selectedExperience || !selectedRateIdForCalendar) {
       setDatePrices({});
@@ -397,7 +414,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     const rateIdQ = `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}`;
     fetch(
-      `/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&days=35${rateIdQ}`
+      `/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&days=${daysInViewMonth}${rateIdQ}`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -405,19 +422,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         else setDatePrices({});
       })
       .catch(() => setDatePrices({}));
-  }, [selectedExperience?.id, viewMonthStartStr, selectedRateIdForCalendar]);
+  }, [selectedExperience?.id, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar]);
 
 
-  // Fetch all slots for the visible month (per-boat: when a boat is selected, only that boat's availability)
+  // Fetch all slots for the visible month (all boats) so step 3 can show real availability; never filter by boat so "Booked" is only for real bookings.
   useEffect(() => {
     if (!selectedExperience) {
       setMonthSlots([]);
       return;
     }
     setSlotsLoading(true);
-    const boatQ = selectedBoat?.id ? `&boatId=${encodeURIComponent(selectedBoat.id)}` : "";
     fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}${boatQ}`
+      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -426,25 +442,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .catch(() => setMonthSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [selectedExperience?.id, selectedBoat?.id, viewMonthStartStr, viewMonthEndStr]);
+  }, [selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
 
-  // Open slots for the selected date only (for time list) — derived from monthSlots
+  // Clear time selection when date is cleared (e.g. modal reset)
   useEffect(() => {
-    if (!selectedDate) {
-      setSlots([]);
-      setSelectedSlot(null);
-      return;
-    }
-    const openForDate = monthSlots.filter(
-      (s) => s.startAt.startsWith(selectedDate) && s.status === "open"
-    );
-    setSlots(openForDate);
-    setSelectedSlot((prev) => {
-      if (!prev) return null;
-      const stillThere = openForDate.some((s) => s.id === prev.id);
-      return stillThere ? prev : null;
-    });
-  }, [selectedDate, monthSlots]);
+    if (!selectedDate) setSelectedSlot(null);
+  }, [selectedDate]);
 
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
@@ -462,13 +465,25 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return ids;
   }, [selectedSlot?.startAt, monthSlots]);
-  /** Boat IDs that have ANY non-open slot (booked/held/blocked) at the selected time — must be greyed. */
+  /** Boat IDs that have ANY non-open slot (booked/held/blocked) at the selected time — greyed and not selectable. */
   const unavailableBoatIdsForSelectedSlot = useMemo(() => {
     if (!selectedSlot?.startAt) return new Set<string>();
     const selectedStartMs = new Date(selectedSlot.startAt).getTime();
     const ids = new Set<string>();
     for (const s of monthSlots) {
       if (!s.boatId || s.status === "open") continue;
+      const slotStartMs = new Date(s.startAt).getTime();
+      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
+    }
+    return ids;
+  }, [selectedSlot?.startAt, monthSlots]);
+  /** Boat IDs with a real booking at the selected time — show "Booked" overlay only for these. */
+  const bookedBoatIdsForSelectedSlot = useMemo(() => {
+    if (!selectedSlot?.startAt) return new Set<string>();
+    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of monthSlots) {
+      if (!s.boatId || s.status !== "booked") continue;
       const slotStartMs = new Date(s.startAt).getTime();
       if (slotStartMs === selectedStartMs) ids.add(s.boatId);
     }
@@ -500,11 +515,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const durationHours = rateForCalendar?.durationHours;
     const filtered =
       durationHours != null
-        ? slots.filter((s) => {
+        ? openSlotsForDate.filter((s) => {
             const parsed = parseSlotId(s.id);
             return parsed?.durationHours === durationHours;
           })
-        : slots;
+        : openSlotsForDate;
     const sorted = [...filtered].sort(
       (a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt)
     );
@@ -515,7 +530,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       seen.add(s.startAt);
       return true;
     });
-  }, [slots, rateForCalendar?.durationHours]);
+  }, [openSlotsForDate, rateForCalendar?.durationHours]);
   const selectedRateId = useMemo(() => {
     if (!selectedSlot || ratesForSelection.length === 0) return null;
     const parsed = parseSlotId(selectedSlot.id);
@@ -980,7 +995,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                   </div>
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
-                    {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, dayIdx) => (
+                    {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
                       <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">
                         {dayLabel}
                       </div>
@@ -993,7 +1008,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       }
                       const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
-                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const todayStr = toLocalDateStr(new Date());
                       const isPast = dateStr < todayStr;
                       const entry = slotsByDate.get(dateStr);
                       const openForDuration =
@@ -1015,7 +1030,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           key={dateStr}
                           type="button"
                           disabled={isPast || !isAvailable}
-                          onClick={() => isAvailable && setSelectedDate(dateStr)}
+                          onClick={() => {
+                            if (!isAvailable) return;
+                            setSelectedDate(dateStr);
+                            setSelectedSlot(null);
+                          }}
                           className={cn(
                             "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
@@ -1043,7 +1062,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   </div>
                 </div>
                 {selectedDate && (
-                  <div>
+                  <div className="min-h-[2.5rem] transition-[opacity] duration-150 ease-out">
                     <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
                     {slotsLoading ? (
                       <p className="text-xs text-brand-muted">Loading times…</p>
@@ -1135,7 +1154,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}
-                          {!isAvailable && (
+                          {!isAvailable && bookedBoatIdsForSelectedSlot.has(boat.id) && (
                             <div className="absolute inset-0 bg-brand-dark/50 flex items-center justify-center">
                               <span className="text-[10px] sm:text-xs font-semibold text-white uppercase tracking-wide px-1.5 py-1 sm:px-2 sm:py-1.5 rounded bg-brand-dark/90">Booked</span>
                             </div>
