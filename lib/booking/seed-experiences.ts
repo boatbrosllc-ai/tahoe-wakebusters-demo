@@ -38,8 +38,8 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     subtitle: "Spacious pontoon for groups. Coolers, Bluetooth, shade.",
     descriptionLong:
       "Our most popular experience. Roomy pontoon with Bluetooth stereo, built-in cooler, and plenty of shade. Perfect for friends, families, or bachelor/bachelorette groups. Captain included.",
-    heroMedia: { type: "image", url: "/photos/DSC00427.webp" },
-    gallery: ["/photos/DSC00452.webp", "/photos/DSC00456.webp", "/photos/DSC00461.webp"],
+    heroMedia: { type: "image", url: "/photos/IMG_3160.webp" },
+    gallery: ["/photos/IMG_3160.webp", "/photos/IMG_9649.webp", "/photos/IMG_8614%202.webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking.", notes: "Parking available nearby." },
     maxGuests: 14,
     petsMax: 4,
@@ -61,8 +61,8 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     subtitle: "Tow boats for wakeboarding, surfing, and tubing.",
     descriptionLong:
       "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Experienced drivers available. Great for thrill-seekers and families who want action on the water.",
-    heroMedia: { type: "image", url: "/photos/DSC00462.webp" },
-    gallery: ["/photos/DSC00484.webp", "/photos/DSC00513.webp"],
+    heroMedia: { type: "image", url: "/photos/Thomas_2.14.1.webp" },
+    gallery: ["/photos/Thomas_2.14.1.webp", "/photos/DSC00513%20(3).webp", "/photos/DSC00539.webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking." },
     maxGuests: 8,
     petsMax: 0,
@@ -83,8 +83,8 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     subtitle: "Chill evening cruise. Best views and golden hour.",
     descriptionLong:
       "Evening cruise timed for sunset over Lake Austin. Relaxed pace, great for couples or small groups. Bring a bottle and enjoy the view.",
-    heroMedia: { type: "image", url: "/photos/DSC09255.webp" },
-    gallery: ["/photos/DSC09270.webp", "/photos/DSC09285.webp"],
+    heroMedia: { type: "image", url: "/photos/IMG_9647%202.webp" },
+    gallery: ["/photos/IMG_9647%202.webp", "/photos/DSC09319%20(4).webp", "/photos/DSC09321%20(2).webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking." },
     maxGuests: 6,
     petsMax: 0,
@@ -103,8 +103,8 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     subtitle: "Seasonal holiday lights and festive cruises.",
     descriptionLong:
       "Seasonal holiday experience: festive lights, hot cocoa, and a relaxed cruise. Available during the holiday season. Perfect for families and small groups.",
-    heroMedia: { type: "image", url: "/photos/DSC09354.webp" },
-    gallery: ["/photos/DSC09378.webp", "/photos/DSC09423.webp"],
+    heroMedia: { type: "image", url: "/photos/DSC09399%20(2).webp" },
+    gallery: ["/photos/IMG_5095.webp", "/photos/IMG_5285.webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking." },
     maxGuests: 10,
     petsMax: 0,

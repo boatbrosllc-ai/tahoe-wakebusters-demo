@@ -20,7 +20,7 @@ export const brand = {
   logoHeroPath: "/logos/Hero Logo white.png",
   logoAlt: "Boat Bros ATX",
   companyName: "Boat Bros ATX",
-  tagline: "Lake Travis & Lake Austin boat rentals. Premium experiences, local crew.",
+  tagline: "Lake Austin boat rentals. Premium experiences, local crew.",
   phone: "+1 (512) 555-0123",
   phoneTel: "+15125550123",
   email: "hello@boatbrosatx.com",

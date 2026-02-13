@@ -8,9 +8,11 @@ import { TrustLine } from "@/components/site/TrustLine";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Clock, Users, Sparkles } from "lucide-react";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 
 export function ExperiencesListClient() {
   const [order, setOrder] = useState<string[] | null>(null);
+  const { setOpen: setBookingModalOpen } = useBookingModal();
 
   useEffect(() => {
     fetch("/api/experiences/order")
@@ -32,74 +34,72 @@ export function ExperiencesListClient() {
   }, [order]);
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Hero – full-width lake/boat vibe */}
-      <section className="relative aspect-[3/2] sm:aspect-[21/9] min-h-[280px] sm:min-h-[320px] lg:min-h-[400px] overflow-hidden bg-brand-dark">
+    <div className="min-h-screen bg-gradient-to-b from-brand-bg via-white to-brand-bg/70">
+      {/* Hero – immersive lake vibe, more personality */}
+      <section className="relative aspect-[3/2] sm:aspect-[21/9] min-h-[300px] sm:min-h-[360px] lg:min-h-[440px] overflow-hidden bg-brand-dark">
         <Image
-          src="/photos/DSC09354.webp"
+          src="/photos/IMG_8520.webp"
           alt=""
           fill
-          className="object-cover"
+          className="object-cover object-center scale-105"
           priority
           sizes="100vw"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/90 via-brand-dark/40 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 via-30% to-transparent" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_60%_at_50%_0%,rgba(80,189,186,0.12),transparent_50%)]" />
         <div className="absolute inset-0 flex flex-col justify-end px-5 py-10 sm:px-8 sm:py-14 lg:px-12 lg:py-20">
           <div className="container-wide mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold text-white tracking-tight drop-shadow-lg">
-              Our experiences
-            </h1>
-            <p className="mt-3 sm:mt-4 text-lg sm:text-xl lg:text-2xl text-white/95 max-w-2xl">
-              From chill pontoon days to wakeboarding and sunset cruises. Pick one and get on the water.
+            <p className="text-brand-primary font-semibold text-sm sm:text-base uppercase tracking-[0.2em] mb-2">
+              Lake Austin · Captain-led
             </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Trust strip – Same-day, Groups, Licensed: one row on all screens */}
-      <section className="border-b border-brand-dark/5 bg-brand-bg/60 py-5 sm:py-8">
-        <div className="container-wide mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-nowrap items-center justify-center gap-4 sm:gap-10 lg:gap-16">
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
-                <Clock className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-extrabold text-white tracking-tight drop-shadow-2xl [text-shadow:0_2px_20px_rgba(0,0,0,0.35)]">
+              Your next adventure on the water
+            </h1>
+            <p className="mt-3 sm:mt-4 text-lg sm:text-xl lg:text-2xl text-white/90 max-w-2xl leading-relaxed">
+              Chill pontoon days, wake sessions, sunset cruises — pick your vibe and we&apos;ll handle the rest.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 px-3 py-1.5 text-sm font-medium text-white">
+                <Clock className="h-4 w-4 text-brand-primary" aria-hidden />
+                Same-day trips
               </span>
-              <span className="text-xs font-medium text-brand-dark sm:text-base">Same-day availability</span>
-            </div>
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
-                <Users className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 px-3 py-1.5 text-sm font-medium text-white">
+                <Users className="h-4 w-4 text-brand-primary" aria-hidden />
+                Groups 2–40+
               </span>
-              <span className="text-xs font-medium text-brand-dark sm:text-base">Groups 2–40+</span>
-            </div>
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3 text-center">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-primary/15 text-brand-primary sm:h-10 sm:w-10 sm:rounded-xl">
-                <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 px-3 py-1.5 text-sm font-medium text-white">
+                <Sparkles className="h-4 w-4 text-brand-primary" aria-hidden />
+                Licensed & insured
               </span>
-              <span className="text-xs font-medium text-brand-dark sm:text-base">Licensed & insured</span>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Experience cards grid */}
+      {/* Intro + cards – editorial feel */}
       <section className="section-padding">
         <div className="container-wide mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 sm:gap-10 lg:gap-12">
+          <p className="text-center text-lg sm:text-xl text-brand-dark/90 max-w-2xl mx-auto mb-12 sm:mb-14">
+            Every trip is captain-led. Just show up, hop on, and enjoy the lake.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-8 sm:gap-10 lg:gap-12">
             {sortedExperiences.map((exp, i) => (
               <ExperienceCard key={exp.slug} experience={exp} index={i} />
             ))}
           </div>
 
-          {/* Bottom CTA – prominent block */}
+          {/* Bottom CTA – warm, inviting */}
           <div className="mt-16 sm:mt-20 lg:mt-24 text-center">
-            <TrustLine variant="default" className="justify-center flex-wrap mb-8" />
+            <TrustLine variant="default" className="justify-center flex-wrap mb-6" />
+            <p className="text-brand-dark/80 text-base sm:text-lg mb-8 max-w-md mx-auto">
+              Ready to get on the water? Book your slot or reach out — we&apos;re here to help.
+            </p>
             <div className="inline-flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Button asChild size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg shadow-soft-lg w-full sm:w-auto">
-                <Link href="/booking">Book now</Link>
+              <Button size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg shadow-soft-lg w-full sm:w-auto bg-brand-primary text-brand-dark hover:bg-brand-primary/90 font-semibold" onClick={() => setBookingModalOpen(true)}>
+                Book your trip
               </Button>
               <span className="text-sm text-brand-muted">or</span>
-              <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg w-full sm:w-auto border-brand-primary text-brand-dark hover:bg-brand-primary/10">
+              <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 text-base sm:text-lg w-full sm:w-auto border-brand-primary text-brand-dark hover:bg-brand-primary/10 font-medium">
                 <Link href="/contact">Contact us</Link>
               </Button>
             </div>

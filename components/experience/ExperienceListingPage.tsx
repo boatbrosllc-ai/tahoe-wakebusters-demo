@@ -37,7 +37,11 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
             src={experience.heroMedia.url}
             alt=""
             fill
-            className="object-cover object-center scale-105"
+            className={
+              (experience.slug === "pontoon" || experience.slug === "sunset")
+                ? "object-cover object-[center_65%] scale-105"
+                : "object-cover object-center scale-105"
+            }
             priority
             sizes="100vw"
           />
@@ -105,7 +109,7 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
         </Button>
       </div>
 
-      {/* Main content */}
+      {/* Main content – editorial flow, less card-heavy */}
       <section className="section-padding pt-12 sm:pt-16 lg:pt-24">
         <div className="container-narrow mx-auto px-4 sm:px-6 lg:px-8">
           <Link
@@ -115,24 +119,46 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
             <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
             Back to experiences
           </Link>
-          <div className="space-y-10 lg:space-y-14">
-            <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary">
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 tracking-tight">Overview</h2>
+          <div className="space-y-14 lg:space-y-20">
+            {/* Overview – editorial, no heavy card */}
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold text-brand-dark/80 mb-4 tracking-tight">What to expect</h2>
               <div className="prose prose-lg max-w-none text-brand-dark leading-relaxed whitespace-pre-line">
                 {experience.descriptionLong}
               </div>
             </div>
 
+            {/* Gallery early – more visual impact */}
+            {experience.gallery?.length > 0 && (
+              <div>
+                <h2 className="sr-only">Gallery</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-5">
+                  {experience.gallery.map((src, i) => (
+                    <div key={src + i} className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-brand-dark/5 ring-1 ring-brand-dark/5 transition-transform duration-300 hover:scale-[1.02]">
+                      <Image
+                        src={src}
+                        alt={experience.galleryAltTexts?.[i]?.trim() || `Gallery image ${i + 1}`}
+                        fill
+                        className={(experience.slug === "pontoon" || experience.slug === "sunset") ? "object-cover object-[center_65%]" : "object-cover"}
+                        sizes="(max-width: 640px) 50vw, 33vw"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* What's included – compact, inline feel */}
             {experience.included?.length > 0 && (
-              <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary">
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 flex items-center gap-3 tracking-tight">
-                  <CheckCircle2 className="h-7 w-7 text-brand-primary shrink-0" aria-hidden />
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6 py-6 border-y border-brand-dark/10">
+                <span className="text-lg font-semibold text-brand-dark shrink-0 flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-brand-primary" aria-hidden />
                   What&apos;s included
-                </h2>
-                <ul className="grid sm:grid-cols-2 gap-4 sm:gap-5">
+                </span>
+                <ul className="flex flex-wrap gap-2 sm:gap-3">
                   {experience.included.map((item) => (
-                    <li key={item} className="flex items-center gap-3 text-brand-dark text-base sm:text-lg">
-                      <span className="h-3 w-3 rounded-full bg-brand-primary shrink-0" aria-hidden />
+                    <li key={item} className="inline-flex items-center gap-2 rounded-full bg-brand-bg px-4 py-2 text-sm font-medium text-brand-dark">
+                      <span className="h-2 w-2 rounded-full bg-brand-primary shrink-0" aria-hidden />
                       {item}
                     </li>
                   ))}
@@ -140,43 +166,42 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
               </div>
             )}
 
+            {/* Location – one compact block */}
             {experience.location && (
-              <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary">
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 flex items-center gap-3 tracking-tight">
-                  <MapPin className="h-7 w-7 text-brand-primary shrink-0" aria-hidden />
-                  Meeting location
-                </h2>
-                <p className="font-bold text-brand-dark text-lg">{experience.location.title}</p>
-                <p className="mt-2 text-brand-muted">{experience.location.addressText}</p>
-                {experience.location.notes && (
-                  <p className="mt-2 text-sm text-brand-muted">{experience.location.notes}</p>
-                )}
+              <div className="flex flex-col sm:flex-row sm:items-start gap-3 py-4">
+                <MapPin className="h-6 w-6 text-brand-primary shrink-0 mt-0.5" aria-hidden />
+                <div>
+                  <p className="font-bold text-brand-dark">{experience.location.title}</p>
+                  <p className="text-brand-muted text-sm sm:text-base">{experience.location.addressText}</p>
+                  {experience.location.notes && (
+                    <p className="mt-1 text-sm text-brand-muted">{experience.location.notes}</p>
+                  )}
+                </div>
               </div>
             )}
 
+            {/* Cancellation – small note */}
             {(cancellationSummary || experience.cancellationPolicy?.fullText) && (
-              <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5">
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 tracking-tight">Cancellation policy</h2>
-                {cancellationSummary && (
-                  <p className="font-bold text-brand-dark mb-2">{cancellationSummary}</p>
-                )}
+              <div className="text-sm text-brand-muted border-l-2 border-brand-dark/10 pl-4 py-2">
+                {cancellationSummary && <p className="font-medium text-brand-dark">{cancellationSummary}</p>}
                 {experience.cancellationPolicy?.fullText && (
-                  <p className="text-brand-muted text-sm leading-relaxed">{experience.cancellationPolicy.fullText}</p>
+                  <p className="mt-1 leading-relaxed">{experience.cancellationPolicy.fullText}</p>
                 )}
               </div>
             )}
 
+            {/* Testimonials – magazine-style block */}
             {testimonials.length > 0 && (
-              <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-secondary">
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-8 flex items-center gap-3 tracking-tight">
-                  <Quote className="h-7 w-7 text-brand-secondary shrink-0" aria-hidden />
+              <div className="bg-gradient-to-br from-brand-bg to-white rounded-2xl p-8 sm:p-10 border border-brand-dark/5">
+                <h2 className="text-xl sm:text-2xl font-bold text-brand-dark mb-6 flex items-center gap-2">
+                  <Quote className="h-6 w-6 text-brand-secondary shrink-0" aria-hidden />
                   What guests say
                 </h2>
-                <div className="space-y-8">
+                <div className="space-y-6">
                   {testimonials.map((t, i) => (
-                    <blockquote key={i} className="border-l-4 border-brand-secondary pl-6 sm:pl-8 py-2">
-                      <p className="text-brand-dark text-lg leading-relaxed">&ldquo;{t.quote}&rdquo;</p>
-                      <footer className="mt-3 text-sm font-medium text-brand-muted">
+                    <blockquote key={i} className="border-l-4 border-brand-secondary/60 pl-5 py-1">
+                      <p className="text-brand-dark leading-relaxed">&ldquo;{t.quote}&rdquo;</p>
+                      <footer className="mt-2 text-sm font-medium text-brand-muted">
                         — {t.name}
                         {t.date && <span className="ml-1 font-normal">({t.date})</span>}
                       </footer>
@@ -186,42 +211,24 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
               </div>
             )}
 
+            {/* FAQs – light accordion */}
             {experience.faqs?.length > 0 && (
-              <div className="rounded-3xl bg-white p-8 sm:p-10 shadow-premium border border-brand-dark/5">
-                <h2 id="faq-heading" className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 tracking-tight">
+              <div>
+                <h2 id="faq-heading" className="text-xl sm:text-2xl font-bold text-brand-dark mb-4">
                   FAQs
                 </h2>
-                <Accordion type="single" collapsible className="w-full">
+                <Accordion type="single" collapsible className="w-full rounded-xl border border-brand-dark/10 overflow-hidden bg-white/50">
                   {experience.faqs.map((item, i) => (
                     <AccordionItem key={i} value={`faq-${i}`} className="border-brand-dark/10">
-                      <AccordionTrigger className="text-left font-semibold text-base sm:text-lg py-6 hover:no-underline">
+                      <AccordionTrigger className="text-left font-semibold text-base py-5 px-5 hover:no-underline hover:bg-brand-bg/50">
                         {item.q}
                       </AccordionTrigger>
-                      <AccordionContent className="text-base text-brand-muted leading-relaxed">
+                      <AccordionContent className="text-base text-brand-muted leading-relaxed px-5 pb-5">
                         {item.a}
                       </AccordionContent>
                     </AccordionItem>
                   ))}
                 </Accordion>
-              </div>
-            )}
-
-            {experience.gallery?.length > 0 && (
-              <div>
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-brand-dark mb-6 tracking-tight">Gallery</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
-                  {experience.gallery.map((src, i) => (
-                    <div key={src + i} className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-brand-dark/5 shadow-premium transition-transform duration-300 hover:scale-[1.02]">
-                      <Image
-                        src={src}
-                        alt={experience.galleryAltTexts?.[i]?.trim() || `Gallery image ${i + 1}`}
-                        fill
-                        className="object-cover"
-                        sizes="(max-width: 640px) 50vw, 33vw"
-                      />
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
 
@@ -232,10 +239,13 @@ export function ExperienceListingPage({ data }: ExperienceListingPageProps) {
               onOpenInModal={(selection) => openWithSelection({ ...selection, experienceId: id, experienceSlug: experience.slug })}
             />
 
-            <div className="rounded-3xl bg-brand-dark p-8 sm:p-12 text-center text-white shadow-premium">
-              <p className="text-base sm:text-lg text-white/90 mb-8 max-w-xl mx-auto">Ready to book? Pick a date and time, then your details — your slot is held for 10 minutes at checkout.</p>
+            {/* Final CTA – warm, inviting */}
+            <div className="rounded-2xl bg-brand-dark p-8 sm:p-12 text-center text-white">
+              <p className="text-base sm:text-lg text-white/90 mb-6 max-w-xl mx-auto">
+                Pick a date and time — your slot is held for 10 minutes at checkout. See you on the water.
+              </p>
               <div className="flex flex-wrap justify-center gap-4">
-                <Button asChild size="lg" className="rounded-xl h-14 px-12 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-premium">
+                <Button asChild size="lg" className="rounded-xl h-14 px-12 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90">
                   <Link href={bookHref}>{ctaText}</Link>
                 </Button>
                 <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-12 border-2 border-white/50 text-white hover:bg-white/15 font-medium">

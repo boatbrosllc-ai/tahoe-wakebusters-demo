@@ -22,6 +22,8 @@ export interface BookingCTAProps {
   callHint?: string;
   /** When set, primary "Book now" opens the booking modal instead of navigating to /booking */
   onBookNowClick?: () => void;
+  /** When true with variant="inline", use smaller button size (e.g. for cards) */
+  dense?: boolean;
 }
 
 export function BookingCTA({
@@ -36,6 +38,7 @@ export function BookingCTA({
   primaryHint = "Instant confirmation · Easy reschedule",
   callHint = "Text or call for same-day questions",
   onBookNowClick,
+  dense = false,
 }: BookingCTAProps) {
   const handleBookClick = () => {
     analytics.bookCtaClick(source, page, experience);
@@ -52,13 +55,16 @@ export function BookingCTA({
   const primaryButtonLabel = "Book now";
 
   if (variant === "inline") {
+    const buttonClass = dense
+      ? "rounded-xl shrink-0 text-sm sm:text-base h-10 min-h-[44px] px-4 py-2.5"
+      : "rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6 py-2";
     return (
       <div className={cn("flex flex-nowrap items-center justify-center gap-2 sm:gap-3 min-w-0", className)}>
         {onBookNowClick ? (
           <Button
             variant="default"
             size="default"
-            className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6"
+            className={buttonClass}
             onClick={() => {
               handleBookClick();
               onBookNowClick();
@@ -67,7 +73,7 @@ export function BookingCTA({
             {primaryButtonLabel}
           </Button>
         ) : (
-          <Button asChild variant="default" size="default" className="rounded-xl shrink-0 text-sm sm:text-base h-11 sm:h-12 px-4 sm:px-6">
+          <Button asChild variant="default" size="default" className={buttonClass}>
             <Link href={bookUrl} onClick={handleBookClick}>
               {primaryButtonLabel}
             </Link>

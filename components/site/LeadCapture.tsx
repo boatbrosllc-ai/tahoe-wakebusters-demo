@@ -37,7 +37,7 @@ export function LeadCapture() {
           Get availability + tips
         </h2>
         <p className="text-white/80 mb-6 sm:mb-6 max-w-md mx-auto text-sm sm:text-base">
-          Drop your email for seasonal availability, last-minute openings, and Lake Travis & Lake Austin tips. No spam.
+          Drop your email for seasonal availability, last-minute openings, and Lake Austin boat rental tips. No spam.
         </p>
         {status === "success" ? (
           <motion.div
@@ -49,7 +49,7 @@ export function LeadCapture() {
             <CheckCircle className="h-14 w-14 text-brand-primary shrink-0" aria-hidden />
             <p className="text-white font-semibold text-lg">You&apos;re in!</p>
             <p className="text-white/80 text-sm max-w-sm">
-              We&apos;ll send availability and Lake Travis & Lake Austin tips. No spam, ever.
+              We&apos;ll send availability and Lake Austin boat rental tips. No spam, ever.
             </p>
           </motion.div>
         ) : (

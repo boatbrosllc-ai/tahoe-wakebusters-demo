@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { Dialog } from "@/components/ui/dialog";
@@ -33,21 +34,28 @@ function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** Days in a calendar month for compact grid (dateStr, label, weekday). Month is 1-based. */
+function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
+  const out: { dateStr: string; label: string; weekday: string }[] = [];
+  const last = new Date(year, month, 0);
+  const count = last.getDate();
+  for (let day = 1; day <= count; day++) {
+    const d = new Date(year, month - 1, day);
+    out.push({
+      dateStr: toDateStr(d),
+      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
+    });
+  }
+  return out;
+}
+
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
 
 function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
-}
-
-function getNextWeekend(today: Date): { sat: string; sun: string } {
-  const day = today.getDay();
-  const satOffset = day === 0 ? 6 : 6 - day;
-  const sunOffset = day === 0 ? 7 : 7 - day;
-  const sat = new Date(today);
-  sat.setDate(sat.getDate() + satOffset);
-  const sun = new Date(today);
-  sun.setDate(sun.getDate() + sunOffset);
-  return { sat: toDateStr(sat), sun: toDateStr(sun) };
 }
 
 export interface ExperienceCalendarOpenModalSelection {
@@ -97,6 +105,8 @@ export function ExperienceCalendarSection({
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
   const [directDiscountCode, setDirectDiscountCode] = useState("");
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  /** When using inline step-2 (onOpenInModal), the slot chosen for "Continue to choose your boat". */
+  const [selectedSlotInline, setSelectedSlotInline] = useState<SlotDto | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -252,6 +262,30 @@ export function ExperienceCalendarSection({
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
+  /** Compact step-2-style calendar grid (leading blanks + days). Used when onOpenInModal. */
+  const step2CompactGrid = useMemo(() => {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth() + 1; // 1-based for getDaysInMonth
+    const dateOptions = getDaysInMonth(year, month);
+    const first = new Date(year, calendarMonth.getMonth(), 1);
+    const leadingBlanks = first.getDay();
+    return [...Array(leadingBlanks).fill(null), ...dateOptions];
+  }, [calendarMonth]);
+
+  /** For compact grid: open slot count per date for the selected duration. */
+  const openCountByDateForDuration = useMemo(() => {
+    if (selectedDurationForModal == null) return new Map<string, number>();
+    const map = new Map<string, number>();
+    for (const s of slots) {
+      if (s.status !== "open") continue;
+      const dur = parseSlotId(s.id)?.durationHours;
+      if (dur !== selectedDurationForModal) continue;
+      const day = s.startAt.slice(0, 10);
+      map.set(day, (map.get(day) ?? 0) + 1);
+    }
+    return map;
+  }, [slots, selectedDurationForModal]);
+
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
     const month = calendarMonth.getMonth();
@@ -270,6 +304,7 @@ export function ExperienceCalendarSection({
       bookedCount: number;
       heldCount: number;
       blockedCount: number;
+      openSlots: SlotDto[];
     }[] = [];
     const pushCell = (
       dateStr: string,
@@ -292,6 +327,7 @@ export function ExperienceCalendarSection({
         bookedCount,
         heldCount,
         blockedCount,
+        openSlots: openSlotsByDate.get(dateStr) ?? [],
       });
     };
     for (let i = 0; i < startPad; i++) {
@@ -308,53 +344,7 @@ export function ExperienceCalendarSection({
       pushCell(toDateStr(d), d.getDate(), false, true);
     }
     return cells;
-  }, [calendarMonth, slotsByDate, todayStr]);
-
-  /** Unique start times for a date (e.g. ["11:00 AM", "2:00 PM"]) – max 4 for display on card. */
-  const getOpenTimesForDate = useCallback(
-    (dateStr: string): string[] => {
-      const list = openSlotsByDate.get(dateStr) ?? [];
-      const seen = new Set<string>();
-      const out: string[] = [];
-      for (const s of list) {
-        const t = formatTime(s.startAt);
-        if (seen.has(t)) continue;
-        seen.add(t);
-        out.push(t);
-        if (out.length >= 4) break;
-      }
-      return out;
-    },
-    [openSlotsByDate]
-  );
-
-  const quickPickOptions = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const { sat, sun } = getNextWeekend(today);
-    const openToday = (slotsByDate.get(todayStr)?.open ?? 0) > 0;
-    const openTomorrow = (slotsByDate.get(toDateStr(tomorrow))?.open ?? 0) > 0;
-    const openSat = (slotsByDate.get(sat)?.open ?? 0) > 0;
-    const openSun = (slotsByDate.get(sun)?.open ?? 0) > 0;
-    let firstInNext7: string | null = null;
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() + i);
-      const ds = toDateStr(d);
-      if ((slotsByDate.get(ds)?.open ?? 0) > 0) {
-        firstInNext7 = ds;
-        break;
-      }
-    }
-    return [
-      { label: "Today", dateStr: todayStr, available: openToday },
-      { label: "Tomorrow", dateStr: toDateStr(tomorrow), available: openTomorrow },
-      { label: "This weekend", dateStr: openSat ? sat : sun, available: openSat || openSun },
-      { label: "Next 7 days", dateStr: firstInNext7 ?? todayStr, available: firstInNext7 !== null },
-    ];
-  }, [slotsByDate, todayStr]);
+  }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr]);
 
   const goPrevMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
   const goNextMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
@@ -365,7 +355,11 @@ export function ExperienceCalendarSection({
 
   const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
-    if (onSelectSlot || onOpenInModal) {
+    if (onOpenInModal) {
+      setSelectedSlotInline(null);
+      return;
+    }
+    if (onSelectSlot) {
       setSelectedDurationForModal(null);
       setSlotModalOpen(true);
       return;
@@ -373,18 +367,6 @@ export function ExperienceCalendarSection({
     if (onSelectDate) onSelectDate(dateStr);
     else document.getElementById("availability")?.scrollIntoView({ behavior: "smooth" });
   };
-
-  const handleQuickPick = (dateStr: string, available: boolean) => {
-    if (!available) return;
-    const d = new Date(dateStr + "T12:00:00");
-    setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
-    setSelectedDate(dateStr);
-    if (onSelectSlot || onOpenInModal) {
-      setSelectedDurationForModal(null);
-      setSlotModalOpen(true);
-    } else if (onSelectDate) onSelectDate(dateStr);
-  };
-
 
   const hasAnyAvailability = useMemo(
     () => Array.from(slotsByDate.entries()).some(([dateStr, v]) => v.open > 0 && dateStr >= todayStr),
@@ -409,145 +391,275 @@ export function ExperienceCalendarSection({
       >
         <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
           <div className="rounded-2xl sm:rounded-3xl bg-white p-4 sm:p-6 lg:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary">
-            <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">
-              Choose your date
-            </h2>
-            <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
-              Green = available, amber = booked/full, gray = unavailable or past. Tap a date to see times and checkout.
-            </p>
-
-        {loading ? (
-          <div className="mt-4 sm:mt-6 space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {[1, 2, 3, 4].map((i) => (
-                <div
-                  key={i}
-                  className="h-9 sm:h-10 w-20 sm:w-24 animate-pulse rounded-lg sm:rounded-xl bg-brand-dark/10"
-                  aria-hidden
-                />
-              ))}
-            </div>
-            <div className="grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
-              {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, i) => (
-                <div
-                  key={`weekday-${i}`}
-                  className="py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase text-brand-muted/50"
-                >
-                  {label}
-                </div>
-              ))}
-              {Array.from({ length: 35 }, (_, i) => (
-                <div
-                  key={i}
-                  className="min-h-[44px] sm:min-h-[88px] lg:min-h-[120px] xl:min-h-[140px] animate-pulse rounded-lg sm:rounded-xl bg-brand-dark/10"
-                  aria-hidden
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
+            {onOpenInModal ? (
+              /* Step 2 of book flow: duration → date → time → Continue to choose your boat */
               <>
-                {/* Quick-pick row – touch-friendly on mobile */}
-                <div className="mt-4 sm:mt-6 flex flex-wrap items-center gap-2">
-                  <span className="w-full sm:w-auto text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted sm:mr-1">
-                    Quick pick:
-                  </span>
-                  {quickPickOptions.map((opt) => (
-                    <button
-                      key={opt.label}
-                      type="button"
-                      onClick={() => handleQuickPick(opt.dateStr, opt.available)}
-                      disabled={!opt.available}
-                      className={cn(
-                        "min-h-[44px] rounded-full px-4 py-2.5 sm:py-2 text-sm font-medium transition-all touch-manipulation",
-                        opt.available
-                          ? "bg-brand-primary/15 text-brand-dark ring-1 ring-brand-primary/30 hover:bg-brand-primary/25 hover:ring-brand-primary/50 active:scale-[0.98]"
-                          : "cursor-not-allowed bg-brand-dark/5 text-brand-muted/60 ring-1 ring-brand-dark/10"
-                      )}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Month nav + legend – stack on mobile */}
-                <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 sm:gap-4">
-                  <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs sm:text-sm order-2 sm:order-1">
-                    <span className="flex items-center gap-1.5 sm:gap-2">
-                      <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-emerald-500/25 ring-2 ring-emerald-500/50 shrink-0" aria-hidden />
-                      <span className="font-medium text-brand-dark">Available</span>
-                    </span>
-                    <span className="flex items-center gap-1.5 sm:gap-2">
-                      <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-amber-100 ring-2 ring-amber-400/60 shrink-0" aria-hidden />
-                      <span className="font-medium text-brand-dark">Booked / full</span>
-                    </span>
-                    <span className="flex items-center gap-1.5 sm:gap-2">
-                      <span className="h-4 w-4 sm:h-5 sm:w-5 rounded bg-brand-dark/10 ring-2 ring-brand-dark/20 shrink-0" aria-hidden />
-                      <span className="font-medium text-brand-dark">Unavailable</span>
-                    </span>
+                <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">
+                  Pick your date & time
+                </h2>
+                <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
+                  Choose a duration, date, and time — then choose your boat and checkout.
+                </p>
+                {loading ? (
+                  <div className="mt-4 sm:mt-6 space-y-4">
+                    <div className="h-10 w-48 animate-pulse rounded-xl bg-brand-dark/10" />
+                    <div className="grid grid-cols-7 gap-1">
+                      {Array.from({ length: 35 }, (_, i) => (
+                        <div key={i} className="aspect-square animate-pulse rounded-lg bg-brand-dark/10" />
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between sm:justify-end gap-2 order-1 sm:order-2">
+                ) : (
+                  <div className="mt-4 sm:mt-6 space-y-4">
+                    {rates.length > 0 && (
+                      <div>
+                        <p className="text-sm font-semibold text-brand-dark mb-2">Duration</p>
+                        <div className="flex flex-wrap gap-2">
+                          {rates.map((r) => {
+                            const isSelected = selectedDurationForModal === r.durationHours;
+                            return (
+                              <button
+                                key={r.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDurationForModal(r.durationHours);
+                                  setSelectedSlotInline(null);
+                                }}
+                                className={cn(
+                                  "rounded-xl border-2 px-3 py-2.5 text-sm font-semibold transition-all",
+                                  isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                                )}
+                              >
+                                {r.displayName ?? `${r.durationHours} hr`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {selectedDurationForModal == null && (
+                          <p className="mt-2 text-xs text-brand-muted">Select a duration to see available dates.</p>
+                        )}
+                      </div>
+                    )}
+                    {selectedDurationForModal != null && (
+                      <>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-brand-dark">Date</p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={goToToday}
+                              className="rounded-xl border border-brand-dark/15 bg-white px-3 py-2 text-sm font-medium text-brand-dark hover:bg-brand-bg transition-colors"
+                            >
+                              Today
+                            </button>
+                            <div className="flex rounded-xl border border-brand-dark/10 bg-brand-bg/50 p-0.5">
+                              <button type="button" onClick={goPrevMonth} className="rounded-lg p-2.5 text-brand-muted hover:bg-white hover:text-brand-dark" aria-label="Previous month">
+                                <ChevronLeft className="h-5 w-5" />
+                              </button>
+                              <span className="min-w-[8rem] text-center text-sm font-semibold text-brand-dark py-2">{monthLabel}</span>
+                              <button type="button" onClick={goNextMonth} className="rounded-lg p-2.5 text-brand-muted hover:bg-white hover:text-brand-dark" aria-label="Next month">
+                                <ChevronRight className="h-5 w-5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
+                          {WEEKDAY_LABELS.map((d) => (
+                            <div key={d} className="py-1 text-center text-[10px] sm:text-xs font-semibold uppercase text-brand-muted">
+                              {d}
+                            </div>
+                          ))}
+                          {step2CompactGrid.map((cell, idx) => {
+                            if (cell == null) {
+                              return <div key={`blank-${idx}`} className="aspect-square sm:min-h-[52px]" />;
+                            }
+                            const { dateStr, label, weekday } = cell;
+                            const isSelected = selectedDate === dateStr;
+                            const isPast = dateStr < todayStr;
+                            const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
+                            const entry = slotsByDate.get(dateStr);
+                            const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                            const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                            const isAvailable = !isPast && openForDuration > 0;
+                            const priceCents = datePrices[dateStr];
+                            return (
+                              <button
+                                key={dateStr}
+                                type="button"
+                                disabled={isPast || !isAvailable}
+                                onClick={() => isAvailable && handleDayClick(dateStr)}
+                                className={cn(
+                                  "rounded-lg border-2 p-0.5 sm:py-2 sm:px-1.5 text-center transition-all aspect-square sm:min-h-[52px] flex flex-col justify-center gap-0.5 min-w-0",
+                                  isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
+                                  !isPast && !isAvailable && !isFullyBooked && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                  isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                  isAvailable && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                  isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                                )}
+                              >
+                                <span className="block text-[8px] sm:text-[10px] text-brand-muted uppercase leading-none">{weekday}</span>
+                                <span className="block font-semibold text-[10px] sm:text-sm leading-none">{label.split(" ")[1] ?? label}</span>
+                                {typeof priceCents === "number" && isAvailable && (
+                                  <span className={cn("block text-[10px] sm:text-xs font-bold leading-none", isSelected ? "text-brand-primary" : "text-emerald-800")}>
+                                    ${(priceCents / 100).toFixed(0)}
+                                  </span>
+                                )}
+                                {isFullyBooked && <span className="block text-[8px] font-semibold text-amber-700 leading-none">Full</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {selectedDate && (
+                          <div className="pt-3 border-t border-brand-dark/10">
+                            <p className="text-sm font-semibold text-brand-dark mb-2">Time</p>
+                            {timeOptionsForModal.length === 0 ? (
+                              <p className="text-xs text-brand-muted">No open slots this day for the selected duration.</p>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                                  const isSelected = selectedSlotInline?.id === slot.id;
+                                  return (
+                                    <button
+                                      key={slot.id}
+                                      type="button"
+                                      onClick={() => setSelectedSlotInline(slot)}
+                                      className={cn(
+                                        "rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all",
+                                        isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 hover:border-brand-dark/30"
+                                      )}
+                                    >
+                                      {timeLabel}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="mt-4 pt-4 border-t border-brand-dark/10">
+                          <button
+                            type="button"
+                            disabled={!selectedDate || !selectedSlotInline}
+                            onClick={() => {
+                              if (!selectedDate || !selectedSlotInline || !onOpenInModal) return;
+                              onOpenInModal({
+                                experienceId: experienceId ?? undefined,
+                                experienceSlug: experienceSlug ?? undefined,
+                                date: selectedDate,
+                                slotId: selectedSlotInline.id,
+                                boatId: selectedSlotInline.boatId,
+                              });
+                            }}
+                            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                          >
+                            Continue to choose your boat
+                          </button>
+                          <p className="text-center text-xs text-brand-muted mt-2">Then pick your boat and complete checkout</p>
+                        </div>
+                        {noAvailabilityBecauseNotSetUp && (
+                          <div className="mt-6 rounded-2xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-4 text-center text-sm text-brand-muted">
+                            <p className="font-medium text-brand-dark">Calendar not loading from Firestore.</p>
+                            <p className="mt-1">Check Firebase config and run setup in <a href="/admin" className="text-brand-primary underline">/admin</a>.</p>
+                          </div>
+                        )}
+                        {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
+                            <p className="font-medium">No availability for the dates shown. Try another month or call us.</p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">
+                  Choose your date
+                </h2>
+                <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
+                  Tap a date to pick a time and continue to checkout.
+                </p>
+                {loading ? (
+                  <div className="mt-4 sm:mt-6 space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div
+                          key={i}
+                          className="h-9 sm:h-10 w-20 sm:w-24 animate-pulse rounded-lg sm:rounded-xl bg-brand-dark/10"
+                          aria-hidden
+                        />
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
+                      {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, i) => (
+                        <div
+                          key={`weekday-${i}`}
+                          className="py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase text-brand-muted/50"
+                        >
+                          {label}
+                        </div>
+                      ))}
+                      {Array.from({ length: 35 }, (_, i) => (
+                        <div
+                          key={i}
+                          className="min-h-[44px] sm:min-h-[88px] lg:min-h-[120px] xl:min-h-[140px] animate-pulse rounded-lg sm:rounded-xl bg-brand-dark/10"
+                          aria-hidden
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                {/* Month nav – same as calendar page */}
+                <div className="mt-4 sm:mt-6 flex flex-wrap items-center justify-between gap-4">
+                  <h2 className="text-2xl font-bold text-brand-dark">{monthLabel}</h2>
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={goToToday}
-                      className="min-h-[44px] rounded-xl px-3 py-2.5 sm:py-2 text-sm font-medium text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors touch-manipulation active:scale-[0.98]"
+                      onClick={() => {
+                        const d = new Date();
+                        setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+                        setSelectedDate(todayStr);
+                      }}
+                      className="rounded-xl border border-brand-dark/15 bg-white px-3 py-2 text-sm font-medium text-brand-dark hover:bg-brand-bg transition-colors"
                     >
                       Today
                     </button>
-                    <div className="flex items-center gap-0.5 rounded-xl bg-brand-bg/50 p-0.5">
+                    <div className="flex rounded-xl border border-brand-dark/10 bg-brand-bg/50 p-0.5">
                       <button
                         type="button"
                         onClick={goPrevMonth}
-                        className="min-h-[44px] min-w-[44px] rounded-lg p-2 text-brand-muted hover:bg-white hover:text-brand-dark transition-all flex items-center justify-center"
+                        className="rounded-lg p-2.5 text-brand-muted hover:bg-white hover:text-brand-dark hover:shadow-sm transition-all"
                         aria-label="Previous month"
                       >
-                        <span className="sr-only">Previous</span>
                         ←
                       </button>
-                      <span className="min-w-[100px] sm:min-w-[140px] text-center text-xs sm:text-sm font-bold text-brand-dark px-1">
-                        {monthLabel}
-                      </span>
                       <button
                         type="button"
                         onClick={goNextMonth}
-                        className="min-h-[44px] min-w-[44px] rounded-lg p-2 text-brand-muted hover:bg-white hover:text-brand-dark transition-all flex items-center justify-center"
+                        className="rounded-lg p-2.5 text-brand-muted hover:bg-white hover:text-brand-dark hover:shadow-sm transition-all"
                         aria-label="Next month"
                       >
-                        <span className="sr-only">Next</span>
                         →
                       </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Calendar grid – minimal on mobile (day + dot), full detail on desktop */}
-                <div className="mt-3 sm:mt-4 grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
-                  {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, i) => (
-                    <div
-                      key={`weekday-${i}`}
-                      className="py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted"
-                    >
-                      {label}
+                {/* Calendar grid – same as calendar page (Google Calendar style) */}
+                <div className="mt-3 sm:mt-4 flex-1 grid grid-cols-7 gap-px sm:gap-1 min-h-[320px] sm:min-h-[400px] lg:min-h-[480px] bg-brand-dark/10 rounded-xl overflow-hidden border border-brand-dark/10 bg-white shadow-soft">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                    <div key={d} className="py-2 px-1 text-center text-xs font-semibold uppercase text-brand-muted bg-brand-bg/50 sm:text-sm">
+                      {d}
                     </div>
                   ))}
                   {calendarDays.map((cell) => {
-                    const isPast = cell.isPast;
-                    const isAvailable = cell.available && !isPast;
-                    const takenCount = cell.bookedCount + cell.heldCount + cell.blockedCount;
-                    const isFullyBooked =
-                      cell.isCurrentMonth &&
-                      !isPast &&
-                      !cell.available &&
-                      takenCount > 0;
-                    const isUnavailable =
-                      cell.isCurrentMonth && !isPast && !cell.available && takenCount === 0;
-                    const isClickable = cell.isCurrentMonth && isAvailable;
-                    const isToday = cell.dateStr === todayStr;
                     const isSelected = selectedDate === cell.dateStr;
-                    const openTimes = getOpenTimesForDate(cell.dateStr);
-                    const moreCount = cell.openCount > openTimes.length ? cell.openCount - openTimes.length : 0;
+                    const hasOpen = cell.openCount > 0;
                     const hasBooked = cell.bookedCount > 0;
-                    const hasHeld = cell.heldCount > 0;
+                    const isPast = cell.isPast;
+                    const isClickable = cell.isCurrentMonth && (hasOpen || hasBooked) && !isPast;
                     return (
                       <button
                         key={cell.dateStr + cell.day}
@@ -555,115 +667,46 @@ export function ExperienceCalendarSection({
                         disabled={!isClickable}
                         onClick={() => isClickable && handleDayClick(cell.dateStr)}
                         className={cn(
-                          "relative flex min-h-[44px] sm:min-h-[88px] lg:min-h-[120px] xl:min-h-[140px] flex-col items-center justify-center sm:items-stretch sm:justify-start rounded-lg sm:rounded-xl text-center sm:text-left p-0.5 sm:p-2 lg:p-2.5 text-sm font-medium transition-all touch-manipulation active:scale-[0.98]",
-                          !cell.isCurrentMonth && "text-brand-muted/40",
-                          cell.isCurrentMonth && isPast && "text-brand-muted/50 bg-brand-dark/5",
-                          isUnavailable && "bg-brand-dark/10 text-brand-muted",
-                          isFullyBooked &&
-                            "bg-amber-100/90 text-amber-900 ring-2 ring-amber-400/50",
-                          isAvailable &&
-                            "bg-emerald-500/15 text-emerald-900 ring-2 ring-emerald-500/40 hover:bg-emerald-500/25 hover:ring-emerald-500/60",
-                          isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1 sm:ring-offset-2 ring-offset-white",
-                          isSelected && "ring-2 ring-brand-primary ring-offset-1 sm:ring-offset-2 ring-offset-white bg-brand-primary/15",
-                          isClickable && "cursor-pointer"
+                          "flex flex-col items-stretch text-left p-1.5 sm:p-2 min-h-[64px] sm:min-h-[80px] lg:min-h-[100px] overflow-hidden rounded-lg transition-all",
+                          !cell.isCurrentMonth && "text-brand-muted/50",
+                          cell.isCurrentMonth && isPast && "text-brand-muted/60",
+                          isClickable && "cursor-pointer hover:ring-2 hover:ring-brand-primary/30",
+                          isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/10",
+                          hasOpen && cell.isCurrentMonth && !isPast && "bg-green-50/80 hover:bg-green-100 text-green-900",
+                          hasBooked && !hasOpen && cell.isCurrentMonth && !isPast && "bg-brand-dark/5 text-brand-muted"
                         )}
                       >
-                        {/* Mobile: day number + tiny availability indicator only */}
-                        <span className="flex flex-col items-center justify-center gap-0.5 sm:hidden">
-                          <span className={cn("text-sm font-bold leading-none", isToday && cell.isCurrentMonth && "text-brand-primary")}>
-                            {cell.day}
-                          </span>
-                          {isToday && cell.isCurrentMonth && (
-                            <span className="rounded bg-brand-primary px-1 py-0.5 text-[8px] font-bold uppercase text-white leading-none">
-                              Today
-                            </span>
+                        <span className="text-sm font-semibold sm:text-base shrink-0">{cell.day}</span>
+                        <div className="flex-1 min-h-0 mt-1 overflow-y-auto space-y-0.5">
+                          {cell.openSlots.slice(0, 4).map((slot) => (
+                            <div
+                              key={slot.id}
+                              className="text-[10px] sm:text-xs font-medium text-green-800 bg-green-200/60 rounded px-1 py-0.5 truncate"
+                              title={formatTime(slot.startAt)}
+                            >
+                              {formatTime(slot.startAt)}
+                            </div>
+                          ))}
+                          {cell.openSlots.length > 4 && (
+                            <div className="text-[10px] text-brand-muted">+{cell.openSlots.length - 4} more</div>
                           )}
-                          {!isToday && isAvailable && cell.openCount > 0 && (
-                            <>
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden />
-                              {typeof datePrices[cell.dateStr] === "number" && (
-                                <span className="text-[9px] font-semibold text-brand-primary leading-none">
-                                  ${(datePrices[cell.dateStr] / 100).toFixed(0)}
-                                </span>
-                              )}
-                            </>
+                          {cell.isCurrentMonth && !cell.isPast && cell.openSlots.length === 0 && cell.bookedCount > 0 && (
+                            <div className="text-[10px] text-brand-muted">Booked</div>
                           )}
-                          {!isToday && isFullyBooked && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" aria-hidden title="Booked / full" />
-                          )}
-                          {!isToday && cell.isCurrentMonth && isPast && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-brand-muted/30 shrink-0" aria-hidden />
-                          )}
-                          {!isToday && isUnavailable && cell.isCurrentMonth && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-brand-muted/20 shrink-0" aria-hidden />
-                          )}
-                        </span>
-                        {/* Desktop: full card with times + booked */}
-                        <span className="hidden sm:flex flex-col items-stretch flex-1 min-h-0 overflow-hidden">
-                          <span className="flex items-center justify-between gap-0.5 shrink-0">
-                            <span className={cn("text-base lg:text-lg font-bold leading-none", isToday && cell.isCurrentMonth && "mt-0.5")}>
-                              {cell.day}
-                            </span>
-                            {isToday && cell.isCurrentMonth && (
-                              <span className="rounded bg-brand-primary px-1.5 py-0.5 text-[10px] font-bold uppercase text-white shrink-0 leading-none">
-                                Today
-                              </span>
-                            )}
-                          </span>
-                          <div className="mt-1 flex-1 min-h-0 overflow-hidden flex flex-col gap-0.5 lg:gap-1">
-                            {isPast ? (
-                              <span className="text-[10px] lg:text-xs text-brand-muted/70 font-normal">Past</span>
-                            ) : (
-                              <>
-                                {isFullyBooked && (
-                                  <span className="text-[10px] lg:text-xs font-semibold text-amber-800 bg-amber-200/60 rounded px-1 py-0.5 w-fit leading-tight">
-                                    Full
-                                  </span>
-                                )}
-                                {openTimes.length > 0 && (
-                                  <div className="flex flex-wrap gap-0.5">
-                                    {openTimes.slice(0, 3).map((t) => (
-                                      <span
-                                        key={t}
-                                        className={cn(
-                                          "inline-block rounded px-1 py-0.5 text-[10px] lg:text-xs font-semibold leading-tight",
-                                          isAvailable
-                                            ? "bg-emerald-500/30 text-emerald-800"
-                                            : "bg-brand-dark/10 text-brand-muted"
-                                        )}
-                                      >
-                                        {t}
-                                      </span>
-                                    ))}
-                                    {((openTimes.length > 3 ? openTimes.length - 3 : 0) + moreCount) > 0 && (
-                                      <span className="inline-block rounded px-1 py-0.5 text-[10px] lg:text-xs font-medium text-brand-muted leading-tight">
-                                        +{(openTimes.length > 3 ? openTimes.length - 3 : 0) + moreCount}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                                {isAvailable && typeof datePrices[cell.dateStr] === "number" && (
-                                  <span className="text-[10px] lg:text-xs font-semibold text-brand-primary leading-tight mt-0.5">
-                                    ${(datePrices[cell.dateStr] / 100).toFixed(0)}
-                                  </span>
-                                )}
-                                {hasBooked && (
-                                  <span className="text-[10px] lg:text-xs font-medium text-amber-700 bg-amber-100/80 rounded px-1 py-0.5 w-fit leading-tight">
-                                    {cell.bookedCount} booked
-                                  </span>
-                                )}
-                                {hasHeld && !hasBooked && (
-                                  <span className="text-[10px] lg:text-xs font-medium text-brand-muted bg-brand-dark/5 rounded px-1 py-0.5 w-fit leading-tight">
-                                    {cell.heldCount} held
-                                  </span>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </span>
+                        </div>
                       </button>
                     );
                   })}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-brand-muted">
+                  <span className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-green-200 border border-green-300" aria-hidden />
+                    Available (times in day)
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-brand-dark/10" aria-hidden />
+                    Booked
+                  </span>
                 </div>
 
                 {noAvailabilityBecauseNotSetUp && (
@@ -686,6 +729,8 @@ export function ExperienceCalendarSection({
                     <p className="font-medium">No availability for the dates shown.</p>
                     <p className="mt-1 text-amber-700/90">Try another month or call us to request a date.</p>
                   </div>
+                )}
+                  </>
                 )}
               </>
             )}

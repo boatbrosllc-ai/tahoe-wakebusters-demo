@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { brand } from "@/content/brand";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 
 const footerLinks = [
   { href: "/experiences", label: "Experiences" },
@@ -10,7 +13,11 @@ const footerLinks = [
   { href: "/blog", label: "Blog" },
 ];
 
+const linkClass =
+  "text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded";
+
 export function Footer() {
+  const { setOpen: setBookingModalOpen } = useBookingModal();
   const address = `${brand.address.line1}, ${brand.address.city}, ${brand.address.state} ${brand.address.zip}`;
 
   return (
@@ -26,12 +33,19 @@ export function Footer() {
             <ul className="space-y-2">
               {footerLinks.map((link) => (
                 <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
-                  >
-                    {link.label}
-                  </Link>
+                  {link.href === "/booking" ? (
+                    <button
+                      type="button"
+                      onClick={() => setBookingModalOpen(true)}
+                      className={linkClass + " bg-transparent border-0 cursor-pointer text-left p-0"}
+                    >
+                      {link.label}
+                    </button>
+                  ) : (
+                    <Link href={link.href} className={linkClass}>
+                      {link.label}
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>
@@ -90,7 +104,7 @@ export function Footer() {
           <p className="mt-1">
             <Link href="/contact" className="hover:text-brand-primary transition-colors">Contact</Link>
             {" · "}
-            Boat rentals on Lake Travis & Lake Austin, Austin TX. Licensed & insured.
+            Lake Austin boat rentals, Austin TX. Licensed & insured.
           </p>
         </div>
       </div>

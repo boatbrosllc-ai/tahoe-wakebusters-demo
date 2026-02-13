@@ -13,12 +13,12 @@ export interface BlogPost {
 
 export const blogPosts: BlogPost[] = [
   {
-    slug: "best-coves-lake-travis",
-    title: "Best Coves on Lake Travis for Boating",
-    excerpt: "Our favorite spots to anchor, swim, and relax on Lake Travis.",
+    slug: "best-coves-lake-austin",
+    title: "Best Coves on Lake Austin for Boating",
+    excerpt: "Our favorite spots to anchor, swim, and relax on Lake Austin.",
     date: "2024-06-01",
     author: "Boat Bros",
-    image: "/photos/DSC09255.webp",
+    image: "/photos/DSC09321%20(2).webp",
   },
   {
     slug: "what-to-bring-boat-day",
@@ -26,7 +26,7 @@ export const blogPosts: BlogPost[] = [
     excerpt: "A simple checklist so you don't forget the essentials.",
     date: "2024-05-15",
     author: "Boat Bros",
-    image: "/photos/DSC00544.webp",
+    image: "/photos/DSC00539.webp",
   },
 ];
 

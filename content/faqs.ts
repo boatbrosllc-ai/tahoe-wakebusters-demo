@@ -31,7 +31,7 @@ export const faqs: FaqItem[] = [
     id: "where-pickup",
     question: "Where do we pick up the boat?",
     answer:
-      "We're on Lake Travis near Austin. Exact address and dock instructions are sent after booking. Plenty of parking available.",
+      "We're on Lake Austin. Exact address and dock instructions are sent after booking. Plenty of parking available.",
   },
   {
     id: "weather",

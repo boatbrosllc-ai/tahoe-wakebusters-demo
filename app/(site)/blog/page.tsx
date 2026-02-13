@@ -5,8 +5,8 @@ import { brand } from "@/content/brand";
 import { blogPosts } from "@/content/blog";
 
 export const metadata: Metadata = {
-  title: "Blog | Lake Travis & Lake Austin Boat Tips & News",
-  description: `Tips, guides, and updates from ${brand.companyName}. Lake Travis and Lake Austin boat rentals, Austin TX.`,
+  title: "Blog | Lake Austin Boat Rental Tips & News",
+  description: `Tips, guides, and updates from ${brand.companyName}. Lake Austin boat rentals, Austin TX.`,
 };
 
 export default function BlogPage() {
@@ -17,7 +17,7 @@ export default function BlogPage() {
           Blog
         </h1>
         <p className="text-lg text-brand-muted mb-10 max-w-2xl">
-          Lake Travis tips, what to bring, and updates from the crew.
+          Lake Austin boat rental tips, what to bring, and updates from the crew.
         </p>
         <div className="grid sm:grid-cols-2 gap-8">
           {blogPosts.map((post) => (

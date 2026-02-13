@@ -11,7 +11,7 @@ import { useBookingModal } from "./BookingModalContext";
 const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
 
 const bullets = [
-  "Lake Travis & Lake Austin",
+  "Lake Austin",
   "Pontoon · Watersports · Sunset · Holiday",
   "Captain included · Same-day availability",
   "Licensed & insured",
@@ -80,7 +80,7 @@ export function Hero() {
             transition={{ duration: 0.45, delay: 0.1 }}
           >
             <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
-              Lake Travis & Lake Austin boat rentals, done right.
+              Lake Austin boat rentals, done right.
             </h1>
             <motion.p
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
@@ -107,12 +107,22 @@ export function Hero() {
             ))}
           </motion.ul>
 
+          {/* Trust – directly under bullets so it reads with the headline */}
+          <motion.div
+            className="mt-3 sm:mt-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.28 }}
+          >
+            <TrustRow className="text-xs sm:text-sm lg:text-base text-white/85" />
+          </motion.div>
+
           {/* CTAs */}
           <motion.div
-            className="mt-6 w-full max-w-sm mx-auto sm:mt-7 lg:mt-10 lg:max-w-xl"
+            className="mt-5 w-full max-w-sm mx-auto sm:mt-6 lg:mt-8 lg:max-w-xl"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.3 }}
+            transition={{ duration: 0.45, delay: 0.35 }}
           >
             <div className="relative rounded-2xl p-[1px] bg-gradient-to-b from-white/20 to-transparent shadow-[0_0_40px_rgba(254,63,147,0.12)] lg:rounded-3xl">
               <div className="rounded-2xl bg-brand-dark/50 backdrop-blur-sm p-4 sm:p-5 lg:p-6 lg:rounded-3xl">
@@ -129,16 +139,6 @@ export function Hero() {
                 />
               </div>
             </div>
-          </motion.div>
-
-          {/* Trust */}
-          <motion.div
-            className="mt-5 sm:mt-6 lg:mt-8"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.45, delay: 0.4 }}
-          >
-            <TrustRow className="text-xs sm:text-sm lg:text-base" />
           </motion.div>
         </div>
       </div>

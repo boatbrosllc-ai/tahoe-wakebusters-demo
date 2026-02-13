@@ -16,8 +16,8 @@ import { Button } from "@/components/ui/button";
 import { CallCard } from "@/components/site/CallCard";
 
 export const metadata: Metadata = {
-  title: "Menu | Lake Travis & Lake Austin Boat Rentals",
-  description: `Browse ${brand.companyName} – experiences, book, story, FAQs, contact. Lake Travis and Lake Austin boat rentals, Austin TX.`,
+  title: "Menu | Lake Austin Boat Rentals",
+  description: `Browse ${brand.companyName} – experiences, book, story, FAQs, contact. Lake Austin boat rentals, Austin TX.`,
 };
 
 const pageLinks = [
@@ -26,7 +26,7 @@ const pageLinks = [
     href: "/experiences",
     label: "Experiences",
     icon: Compass,
-    description: "Browse pontoon, wake, sunset & more on Lake Travis & Lake Austin",
+    description: "Browse pontoon, wake, sunset & more on Lake Austin",
   },
   {
     href: "/booking",

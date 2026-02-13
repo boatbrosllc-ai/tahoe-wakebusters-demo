@@ -3,10 +3,10 @@
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { ChevronRight } from "lucide-react";
 import type { Experience } from "@/content/experiences";
 import { BookingCTA } from "./BookingCTA";
-import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 
 export interface ExperienceCardProps {
@@ -23,6 +23,11 @@ export function ExperienceCard({
   className,
 }: ExperienceCardProps) {
   const href = `/experiences/${experience.slug}`;
+  const { openWithSelection } = useBookingModal();
+
+  const handleBookNow = () => {
+    openWithSelection({ experienceSlug: experience.slug });
+  };
 
   return (
     <motion.article
@@ -38,77 +43,101 @@ export function ExperienceCard({
           "transition-all duration-300",
           "hover:shadow-premium hover:border-brand-primary/20 active:scale-[0.99]",
           "flex flex-col h-full",
-          variant === "compact" && "sm:flex-row"
+          variant === "compact" && "flex-col"
         )}
       >
         <Link
           href={href}
           className={cn(
             "flex flex-col flex-1 min-w-0 group",
-            variant === "compact" && "sm:flex-row sm:flex-1"
+            variant === "compact" && "flex-col"
           )}
           aria-label={`${experience.title} — view details`}
         >
           <div
             className={cn(
               "relative overflow-hidden bg-brand-dark/5 shrink-0",
-              variant === "default" ? "aspect-[16/10] sm:aspect-[5/3]" : "sm:w-48 sm:shrink-0 aspect-[16/10] sm:aspect-auto sm:h-full min-h-[140px] sm:min-h-[160px]"
+              variant === "default" ? "aspect-[16/10] sm:aspect-[5/3]" : "aspect-[16/9] min-h-0"
             )}
           >
             <Image
               src={experience.heroImage}
               alt=""
               fill
-              className="object-cover transition-transform duration-500 group-hover:scale-[1.04]"
-              sizes={variant === "compact" ? "(max-width: 640px) 100vw, 192px" : "(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"}
+              className={cn(
+                "object-cover transition-transform duration-500 group-hover:scale-[1.04]",
+                (experience.slug === "pontoon" || experience.slug === "sunset") && "object-[center_65%]"
+              )}
+              sizes={variant === "compact" ? "(max-width: 1024px) 50vw, 25vw" : "(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/30 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             {/* Duration badge on image */}
             <span
-              className="absolute top-3 right-3 rounded-lg bg-white/95 px-2.5 py-1 text-xs font-semibold text-brand-dark shadow-soft backdrop-blur-sm"
+              className={cn(
+                "absolute top-2 right-2 rounded-lg bg-white/95 font-semibold text-brand-dark shadow-soft backdrop-blur-sm",
+                variant === "compact" ? "px-2.5 py-1 text-xs sm:text-sm" : "top-3 right-3 px-3 py-1.5 text-sm"
+              )}
               aria-hidden
             >
               {experience.duration}
             </span>
           </div>
-          <div className={cn("flex flex-col flex-1 min-w-0", variant === "compact" && "sm:flex-1")}>
-            <CardHeader className="p-5 sm:p-6 lg:p-7 pb-0">
-              <h3 className="text-xl sm:text-2xl font-bold tracking-tight text-brand-dark group-hover:text-brand-primary transition-colors">
+          <div className={cn("flex flex-col flex-1 min-w-0", variant === "compact" && "flex-1 min-h-0")}>
+            <CardHeader className={variant === "compact" ? "p-2 sm:p-3 pb-0" : "p-5 sm:p-6 lg:p-7 pb-0"}>
+              <h3 className={cn(
+                "font-bold tracking-tight text-brand-dark group-hover:text-brand-primary transition-colors",
+                variant === "compact" ? "text-lg sm:text-xl" : "text-2xl sm:text-3xl"
+              )}>
                 {experience.title}
               </h3>
-              <p className="text-sm sm:text-base text-brand-muted line-clamp-2 mt-2 leading-relaxed">
+              <p className={cn(
+                "text-brand-muted leading-snug",
+                variant === "compact" ? "text-sm sm:text-base line-clamp-1 mt-0.5" : "text-base sm:text-lg mt-2 line-clamp-2 leading-relaxed"
+              )}>
                 {experience.shortDescription}
               </p>
             </CardHeader>
-            <CardContent className="p-5 sm:p-6 lg:p-7 pt-3">
-              <div className="flex flex-wrap gap-2 text-sm text-brand-muted">
-                <span>{experience.duration}</span>
-                <span aria-hidden>·</span>
-                <span>{experience.capacity}</span>
+            <CardContent className={variant === "compact" ? "p-2 sm:p-3 pt-1" : "p-5 sm:p-6 lg:p-7 pt-3"}>
+              <div className={cn(
+                "flex flex-wrap items-center gap-2",
+                variant === "compact" ? "text-sm" : "text-base"
+              )}>
+                {experience.fromPriceCents != null && (
+                  <span className="font-bold text-brand-primary">
+                    From ${(experience.fromPriceCents / 100).toFixed(0)}
+                  </span>
+                )}
+                {experience.fromPriceCents != null && (
+                  <span className="text-brand-muted" aria-hidden>·</span>
+                )}
+                <span className="text-brand-muted">{experience.duration}</span>
+                <span className="text-brand-muted" aria-hidden>·</span>
+                <span className="text-brand-muted">{experience.capacity}</span>
               </div>
-              {variant === "default" && (
-                <ul className="mt-3 flex flex-wrap gap-2">
-                  {experience.highlights.slice(0, 3).map((h) => (
-                    <li
-                      key={h}
-                      className="rounded-full bg-brand-bg px-3 py-1 text-xs font-medium text-brand-primary"
-                    >
-                      {h}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className={cn(
+                "flex flex-wrap gap-1.5",
+                variant === "compact" ? "mt-1 gap-1" : "mt-2"
+              )}>
+                {experience.highlights.slice(0, variant === "compact" ? 2 : 3).map((h) => (
+                  <li
+                    key={h}
+                    className={cn(
+                      "rounded-full bg-brand-bg font-medium text-brand-primary",
+                      variant === "compact" ? "px-2.5 py-1 text-xs sm:text-sm" : "px-3 py-1.5 text-sm"
+                    )}
+                  >
+                    {h}
+                  </li>
+                ))}
+              </ul>
             </CardContent>
-            <CardFooter className="mt-auto p-5 sm:p-6 lg:p-7 pt-2">
-              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-primary group-hover:gap-2 transition-all">
-                View details
-                <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
-              </span>
-            </CardFooter>
           </div>
         </Link>
         <div
-          className="border-t border-brand-dark/5 p-5 sm:p-6 lg:p-7 flex items-center justify-center sm:justify-end bg-brand-bg/30"
+          className={cn(
+            "border-t border-brand-dark/5 flex flex-nowrap items-center justify-center gap-2 sm:gap-3 bg-brand-bg/30",
+            variant === "compact" ? "p-2 sm:p-2.5" : "p-5 sm:p-6 lg:p-7"
+          )}
           onClick={(e) => e.stopPropagation()}
         >
           <BookingCTA
@@ -116,7 +145,22 @@ export function ExperienceCard({
             page="home"
             experience={experience.slug}
             variant="inline"
+            showCall={false}
+            dense={variant === "compact"}
+            onBookNowClick={handleBookNow}
           />
+          <Link
+            href={href}
+            className={cn(
+              "shrink-0 inline-flex items-center justify-center font-medium border-2 border-brand-primary text-brand-primary hover:text-brand-muted hover:bg-brand-primary/10 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+              variant === "compact"
+                ? "h-11 min-h-[44px] rounded-xl px-4 py-2.5 text-base sm:text-lg"
+                : "h-12 sm:h-14 min-h-[44px] px-5 sm:px-6 py-2.5 rounded-xl text-base sm:text-lg hover:scale-[1.02] active:scale-[0.98]"
+            )}
+            aria-label={`Learn more about ${experience.title}`}
+          >
+            Learn more
+          </Link>
         </div>
       </Card>
     </motion.article>

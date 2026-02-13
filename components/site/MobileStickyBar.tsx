@@ -3,21 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Home, Compass, Menu, Mail } from "lucide-react";
+import { Home, Compass, CalendarCheck, Menu, Mail } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 
 type NavLink = { href: string; label: string; icon: LucideIcon; center?: boolean };
 
 const navItems: NavLink[] = [
   { href: "/", label: "Home", icon: Home },
   { href: "/experiences", label: "Experiences", icon: Compass },
+  { href: "#", label: "Book now", icon: CalendarCheck, center: true },
   { href: "/more", label: "Menu", icon: Menu },
   { href: "/contact", label: "Contact", icon: Mail },
 ];
 
 export function MobileStickyBar() {
   const pathname = usePathname();
+  const { setOpen: setBookingModalOpen } = useBookingModal();
 
   return (
     <nav
@@ -40,24 +43,28 @@ export function MobileStickyBar() {
 
           if (isCenter) {
             return (
-              <Link key={linkItem.href} href={linkItem.href} className="flex flex-1 min-w-0 mx-0.5 -mt-4">
+              <button
+                key="book-now"
+                type="button"
+                onClick={() => setBookingModalOpen(true)}
+                className="flex flex-1 min-w-0 mx-0.5 -mt-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary rounded-xl"
+                aria-label="Book now"
+              >
                 <motion.span
                   className={cn(
-                    "flex flex-col items-center justify-center flex-1 min-h-[52px] rounded-xl",
+                    "flex flex-col items-center justify-center flex-1 min-h-[52px] rounded-xl w-full",
                     "bg-brand-secondary text-white font-semibold",
-                    "shadow-[0_-2px_16px_rgba(254,63,147,0.4)]",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
+                    "shadow-[0_-2px_16px_rgba(254,63,147,0.4)]"
                   )}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                  aria-current={isActive ? "page" : undefined}
                 >
                   <linkItem.icon className="h-6 w-6 shrink-0 mb-0.5" aria-hidden />
                   <span className="text-[10px] leading-tight font-medium truncate w-full text-center px-1">
                     {linkItem.label}
                   </span>
                 </motion.span>
-              </Link>
+              </button>
             );
           }
 

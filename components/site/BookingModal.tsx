@@ -258,10 +258,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    // When opening with pre-selection: date only → step 2 (pick time); date+slot → step 3 (pick boat)
+    // When opening with pre-selection: experience only → step 2 (pick date/time); date only → step 2; date+slot → step 3 (pick boat)
     if (initialSelection?.date) {
       setStep(initialSelection?.slotId ? 3 : 2);
-    } else setStep(1);
+    } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
+      setStep(2); // Experience chosen (e.g. from card) → skip step 1, go to date & time
+    } else {
+      setStep(1);
+    }
     setSelectedExperience(null);
     setBoats([]);
     setSelectedBoat(null);
@@ -806,7 +810,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0 max-h-[90vh] md:max-h-[88vh]"
             : step === 4
-              ? "h-[42dvh] min-h-[240px] sm:h-[44dvh] sm:min-h-[260px] md:h-[46vh] md:min-h-[280px] lg:h-[48vh] lg:min-h-[300px]"
+              ? "h-[78dvh] min-h-[380px] sm:h-[75dvh] sm:min-h-[400px] md:h-[46vh] md:min-h-[280px] lg:h-[48vh] lg:min-h-[300px]"
               : "flex-1 min-h-0"
         )}
       >
@@ -1140,6 +1144,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     const isAvailable =
                       availableBoatIdsForSelectedSlot.has(boat.id) &&
                       !unavailableBoatIdsForSelectedSlot.has(boat.id);
+                    const isBooked = !isAvailable && bookedBoatIdsForSelectedSlot.has(boat.id);
                     const isSelected = selectedBoat?.id === boat.id;
                     const thumb = boat.photos?.[0];
                     return (
@@ -1149,11 +1154,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         disabled={!isAvailable}
                         onClick={() => isAvailable && setSelectedBoat(boat)}
                         className={cn(
-                          "flex flex-col overflow-hidden rounded-lg sm:rounded-xl border-2 text-left transition-all min-h-0",
+                          "relative flex flex-col overflow-hidden rounded-lg sm:rounded-xl border-2 text-left transition-all min-h-0",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
                           "touch-manipulation",
                           isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
-                          !isAvailable && "opacity-60 cursor-not-allowed bg-brand-dark/5 border-brand-dark/20"
+                          !isAvailable && "cursor-not-allowed",
+                          isBooked && "border-brand-dark/25 bg-brand-dark/5",
+                          !isAvailable && !isBooked && "opacity-60 bg-brand-dark/5 border-brand-dark/20"
                         )}
                       >
                         <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t-[6px] sm:rounded-t-[10px]">
@@ -1162,13 +1169,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}
-                          {!isAvailable && bookedBoatIdsForSelectedSlot.has(boat.id) && (
-                            <div className="absolute inset-0 bg-brand-dark/50 flex items-center justify-center">
-                              <span className="text-[10px] sm:text-xs font-semibold text-white uppercase tracking-wide px-1.5 py-1 sm:px-2 sm:py-1.5 rounded bg-brand-dark/90">Booked</span>
-                            </div>
-                          )}
                         </div>
-                        <div className="flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0">
+                        {isBooked && (
+                          <>
+                            <div className="absolute inset-0 bg-white/50 rounded-lg sm:rounded-xl pointer-events-none z-10" aria-hidden />
+                            {bookedBoatIdsForSelectedSlot.has(boat.id) && (
+                              <div className="absolute top-0 left-0 right-0 w-full aspect-[4/3] bg-brand-dark/75 flex items-center justify-center z-20 rounded-t-[6px] sm:rounded-t-[10px] overflow-hidden">
+                                <span className="text-xs sm:text-sm font-semibold text-white uppercase tracking-wide px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg bg-brand-dark border border-white/20">Booked</span>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-20")}>
                           <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
                         </div>
                       </button>

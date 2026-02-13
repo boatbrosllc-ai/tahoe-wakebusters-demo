@@ -2,8 +2,8 @@
 
 import { motion } from "framer-motion";
 import { Calendar, CheckCircle, Anchor } from "lucide-react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 
 const steps = [
   {
@@ -24,6 +24,7 @@ const steps = [
 ];
 
 export function HowItWorks() {
+  const { setOpen: setBookingModalOpen } = useBookingModal();
   return (
     <section className="section-padding bg-brand-bg" aria-labelledby="how-it-works-heading">
       <div className="container-wide">
@@ -52,8 +53,8 @@ export function HowItWorks() {
           ))}
         </div>
         <div className="mt-10 text-center">
-          <Button asChild size="lg" className="rounded-xl">
-            <Link href="/booking">Book now</Link>
+          <Button size="lg" className="rounded-xl" onClick={() => setBookingModalOpen(true)}>
+            Book now
           </Button>
         </div>
       </div>

@@ -3,12 +3,12 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Calendar, Phone, User, LayoutDashboard, ChevronDown } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Phone, User, LayoutDashboard, ChevronDown } from "lucide-react";
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
-import { CalendarModal } from "@/components/site/CalendarModal";
 import { BookingModal } from "@/components/site/BookingModal";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ const navLinks = [
 ];
 
 export function Header() {
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const pathname = usePathname();
   const [accountOpen, setAccountOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
@@ -29,12 +29,13 @@ export function Header() {
 
   const handleCallClick = () => analytics.callClick("header", "global");
 
+  // Re-check admin session on mount and when pathname changes (e.g. after signing in and navigating to site)
   useEffect(() => {
     fetch("/api/admin/session", { credentials: "include" })
       .then((res) => res.json().catch(() => ({})))
       .then((data: { signedIn?: boolean }) => setIsAdmin(data.signedIn === true))
       .catch(() => setIsAdmin(false));
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -92,13 +93,6 @@ export function Header() {
               {link.label}
             </Link>
           ))}
-          <button
-            type="button"
-            onClick={() => setBookingModalOpen(true)}
-            className="shrink-0 px-3 py-3 rounded-lg text-base font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap"
-          >
-            Book
-          </button>
         </nav>
 
         {/* Right: icons + CTA – compact on mobile, no wrap */}
@@ -111,15 +105,7 @@ export function Header() {
           >
             <Phone className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
           </a>
-          <button
-            type="button"
-            onClick={() => setCalendarOpen(true)}
-            className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 lg:w-12 lg:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
-            aria-label="Open calendar"
-          >
-            <Calendar className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
-          </button>
-          <CalendarModal open={calendarOpen} onOpenChange={setCalendarOpen} />
+          {/* Account icon – only when admin is signed in; never shown to regular users */}
           {isAdmin && (
             <div className="relative shrink-0" ref={accountRef}>
               <button
@@ -154,7 +140,7 @@ export function Header() {
             variant="secondary"
             size="lg"
             className={cn(
-              "shrink-0 rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] touch-manipulation",
+              "hidden sm:inline-flex shrink-0 rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] touch-manipulation",
               "h-11 min-w-[4rem] px-3 text-sm font-semibold sm:h-12 sm:min-w-[5rem] sm:px-4 lg:h-12 lg:min-w-[7rem] lg:px-5 lg:text-base"
             )}
             onClick={() => setBookingModalOpen(true)}

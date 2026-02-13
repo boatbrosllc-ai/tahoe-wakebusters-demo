@@ -7,11 +7,11 @@ const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: `${brand.companyName} | Lake Travis & Lake Austin Boat Rentals | Austin TX`,
+    default: `${brand.companyName} | Lake Austin Boat Rentals | Austin TX`,
     template: `%s | ${brand.companyName}`,
   },
   description:
-    "Premium boat rentals on Lake Travis and Lake Austin, Austin TX. Pontoon parties, wake & surf, sunset cruises, family days & corporate outings. Local crew, easy booking.",
+    "Lake Austin boat rentals – pontoon parties, wake & surf, sunset cruises, family days & corporate outings. Premium boats, local crew, easy booking. Austin TX.",
   openGraph: {
     type: "website",
     locale: "en_US",
@@ -37,10 +37,7 @@ function localBusinessJsonLd() {
       addressRegion: brand.address.state,
       postalCode: brand.address.zip,
     },
-    areaServed: [
-      { "@type": "Place", name: "Lake Travis, Austin TX" },
-      { "@type": "Place", name: "Lake Austin, Austin TX" },
-    ],
+    areaServed: [{ "@type": "Place", name: "Lake Austin, Austin TX" }],
     openingHoursSpecification: {
       "@type": "OpeningHoursSpecification",
       dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],

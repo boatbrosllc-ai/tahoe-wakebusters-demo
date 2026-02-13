@@ -4,8 +4,8 @@ import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Contact | Lake Travis & Lake Austin Boat Rentals",
-  description: `Get in touch with ${brand.companyName}. Lake Travis and Lake Austin boat rentals, Austin TX. Phone, email, address.`,
+  title: "Contact | Lake Austin Boat Rentals",
+  description: `Get in touch with ${brand.companyName}. Lake Austin boat rentals, Austin TX. Phone, email, address.`,
 };
 
 const address = `${brand.address.line1}, ${brand.address.city}, ${brand.address.state} ${brand.address.zip}`;

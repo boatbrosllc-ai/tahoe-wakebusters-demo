@@ -1,6 +1,6 @@
 # Boat Bros ATX – Marketing Website
 
-Next.js 14 App Router marketing site for Boat Bros ATX: Lake Travis boat rentals. Built for high conversion (book now, click-to-call, lead capture) with a premium, mobile-first experience.
+Next.js 14 App Router marketing site for Boat Bros ATX: Lake Austin boat rentals. Built for high conversion (book now, click-to-call, lead capture) with a premium, mobile-first experience.
 
 ## Tech stack
 
@@ -139,7 +139,7 @@ Implementation: `lib/analytics.ts`. No vendor hardcoding; add `window.gtag` / `w
 
 - Per-page metadata (title, description, Open Graph).
 - JSON-LD: `LocalBusiness` in `(site)/layout.tsx`, `FAQPage` on `/faqs`.
-- Location-oriented copy: Austin, TX / Lake Travis.
+- Location-oriented copy: Austin, TX / Lake Austin boat rentals.
 
 ## Brand assets
 

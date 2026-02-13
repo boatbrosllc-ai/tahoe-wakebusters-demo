@@ -1,5 +1,5 @@
 /**
- * Seed Firestore with boats (Long Pontoon, Wake Board, Lake Travis Pontoon), rates (3–8h), addons, and open slots for the next 14 days.
+ * Seed Firestore with boats (Long Pontoon, Wake Board, Lake Austin Pontoon), rates (3–8h), addons, and open slots for the next 14 days.
  * Call with POST and Authorization: Bearer <SEED_SECRET> or CRON_SECRET.
  * Idempotent: creates each boat only if none exist (by name), then rates/addons/slots.
  */
@@ -17,7 +17,7 @@ const BOATS = [
     timezone: "America/Chicago",
     capacityMax: 16,
     petsMax: 4,
-    defaultLocationText: "Lake Travis — we'll send exact meeting point after booking.",
+    defaultLocationText: "Lake Austin — we'll send exact meeting point after booking.",
     cancellationPolicyText: "Cancel 24h before for full refund. See terms for details.",
   },
   {
@@ -29,11 +29,11 @@ const BOATS = [
     cancellationPolicyText: "Cancel 24h before for full refund. See terms for details.",
   },
   {
-    name: "Lake Travis Pontoon",
+    name: "Lake Austin Pontoon",
     timezone: "America/Chicago",
     capacityMax: 14,
     petsMax: 4,
-    defaultLocationText: "Lake Travis / Lake Austin — we'll send exact meeting point after booking.",
+    defaultLocationText: "Lake Austin — we'll send exact meeting point after booking.",
     cancellationPolicyText: "Cancel 24h before for full refund. See terms for details.",
   },
 ];
