@@ -74,14 +74,11 @@ export async function GET(request: NextRequest) {
         return parsed?.dateStr ?? slotId.slice(0, 10);
       };
 
-      // 1) Paid bookings are source of truth — merge FIRST so we never overwrite with stale slot docs.
-      // Use a single query for all paid bookings, then filter in memory. This guarantees we never miss
-      // a booking due to wrong experienceId, missing boatId, or missing composite index.
-      const isPaidStatus = (s: unknown): boolean => {
-        if (s === "paid" || s === "confirmed") return true;
-        if (typeof s === "string" && s.toLowerCase() === "paid") return true;
-        return false;
-      };
+      // 1) Bookings are the single source of truth for "booked". Merge FIRST so we never overwrite with stale slot docs.
+      // Only these statuses mean the slot is taken; canceled/refunded are ignored.
+      const SLOT_TAKEN_STATUSES = ["paid", "deposit_paid", "final_due", "final_paid", "final_processing"] as const;
+      const isSlotTakenStatus = (s: unknown): boolean =>
+        typeof s === "string" && (SLOT_TAKEN_STATUSES as readonly string[]).includes(s);
       const normalizeSlotId = (raw: unknown): string | null => {
         if (raw == null) return null;
         const s = String(raw).trim();
@@ -99,9 +96,9 @@ export async function GET(request: NextRequest) {
         }
         return null;
       };
-      const mergePaidBooking = (doc: { id: string; data: () => Record<string, unknown> }) => {
+      const mergeBookingSlot = (doc: { id: string; data: () => Record<string, unknown> }) => {
         const b = doc.data() as { boatId?: string; slotId?: string; slot_id?: string; status?: string; experienceId?: string };
-        if (!isPaidStatus(b.status)) return;
+        if (!isSlotTakenStatus(b.status)) return;
         const slotIdRaw = normalizeSlotId(b.slotId ?? b.slot_id);
         if (!slotIdRaw) return;
         const parsed = parseSlotIdRelaxed(slotIdRaw);
@@ -109,6 +106,7 @@ export async function GET(request: NextRequest) {
         if (parsed.dateStr < startDate || parsed.dateStr > endDate) return;
         const { start: slotStart, end: slotEnd } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        // Only mark the specific boat that has the booking. Never mark all boats (would falsely show every boat as booked).
         const bid = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
         if (bid && boatIds.includes(bid)) {
           const key = `${bid}:${slotIdNorm}`;
@@ -123,30 +121,18 @@ export async function GET(request: NextRequest) {
             updatedAt: null,
             boatId: bid,
           });
-          return;
-        }
-        for (const boatId of boatIds) {
-          const key = `${boatId}:${slotIdNorm}`;
-          existingByBoatAndKey.set(key, {
-            id: slotIdNorm,
-            dateStr: parsed.dateStr,
-            startAt: slotStart.toISOString(),
-            endAt: slotEnd.toISOString(),
-            status: "booked",
-            holdId: null,
-            bookingId: doc.id,
-            updatedAt: null,
-            boatId,
-          });
         }
       };
 
-      const paidSnap = await db.collection("bookings").where("status", "==", "paid").get();
-      paidSnap.docs.forEach((doc) => {
+      const bookingsSnap = await db
+        .collection("bookings")
+        .where("status", "in", [...SLOT_TAKEN_STATUSES])
+        .get();
+      bookingsSnap.docs.forEach((doc) => {
         const b = doc.data() as { experienceId?: string; boatId?: string };
         const matchesExperience = b.experienceId === experienceId;
         const matchesBoat = typeof b.boatId === "string" && boatIds.includes(b.boatId);
-        if (matchesExperience || matchesBoat) mergePaidBooking(doc);
+        if (matchesExperience || matchesBoat) mergeBookingSlot(doc);
       });
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
@@ -166,12 +152,14 @@ export async function GET(request: NextRequest) {
             const startAt = (data.startAt as { toDate(): Date }).toDate();
             const endAt = (data.endAt as { toDate(): Date }).toDate();
             const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
+            // "booked" on slot docs is not trusted: only bookings collection is source of truth. Stale slot docs show as open.
+            const status = data.status === "booked" ? "open" : data.status;
             existingByBoatAndKey.set(key, {
               id: doc.id,
               dateStr: dateStrFromSlotId(doc.id),
               startAt: startAt.toISOString(),
               endAt: endAt.toISOString(),
-              status: data.status,
+              status,
               holdId: data.holdId,
               bookingId: data.bookingId,
               updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
@@ -240,13 +228,33 @@ export async function GET(request: NextRequest) {
           }
         });
       }
+      // Expired holds: treat as open so availability is accurate without waiting for cleanup-holds
+      const now = new Date().toISOString();
+      slots.forEach((s) => {
+        if (s.status === "held") {
+          const exp = (s as { expiresAt?: string }).expiresAt;
+          if (exp && exp <= now) {
+            s.status = "open";
+            (s as Record<string, unknown>).holdId = null;
+          }
+        }
+      });
       return NextResponse.json(
         { slots },
         { headers: { "Cache-Control": "no-store, max-age=0" } }
       );
     }
 
-    // Boats: legacy – only return existing Firestore slots
+    // Boats: legacy – use bookings as source of truth for "booked", slot docs for grid/held/blocked
+    const LEGACY_SLOT_TAKEN = ["paid", "deposit_paid", "final_due", "final_paid", "final_processing"];
+    const legacyBookingsSnap = await db
+      .collection("bookings")
+      .where("boatId", "==", boatId)
+      .where("status", "in", LEGACY_SLOT_TAKEN)
+      .get();
+    const legacyBookedSlotIds = new Set(
+      legacyBookingsSnap.docs.map((d) => (d.data() as { slotId?: string }).slotId).filter(Boolean) as string[]
+    );
     const slotsRef = db.collection("boats").doc(boatId!).collection("slots");
     const snap = await slotsRef
       .where("startAt", ">=", Timestamp.fromDate(start))
@@ -259,12 +267,14 @@ export async function GET(request: NextRequest) {
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
       const parsed = parseSlotId(doc.id);
+      const fromBooking = legacyBookedSlotIds.has(doc.id);
+      const status = fromBooking ? "booked" : data.status === "booked" ? "open" : data.status;
       return {
         id: doc.id,
         dateStr: parsed?.dateStr ?? doc.id.slice(0, 10),
         startAt: startAt.toDate().toISOString(),
         endAt: endAt.toDate().toISOString(),
-        status: data.status,
+        status,
         holdId: data.holdId,
         bookingId: data.bookingId,
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,

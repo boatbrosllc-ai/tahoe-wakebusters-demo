@@ -54,31 +54,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const paymentStage = pi.metadata?.payment_stage;
+    const paymentStage = (pi.metadata?.payment_stage ?? "") as string;
     const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
     const pm = pi.payment_method as { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | null;
     let card: BookingCardDisplay | undefined;
     if (pm?.card) {
       card = { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year };
     }
-    const totalCents = (parseInt(pi.metadata?.totalCents ?? "0", 10) || pi.amount) ?? 0;
-    const depositCents = (parseInt(pi.metadata?.depositCents ?? "0", 10) || pi.amount) ?? 0;
+    const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+    const totalCents = totalCentsFromMeta || (pi.amount ?? 0);
+    const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
+    const depositCents = depositCentsFromMeta || (pi.amount ?? 0);
     const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - depositCents);
+    const amountCharged = pi.amount ?? 0;
+    // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
+    const isDepositByStage = paymentStage === "deposit";
+    const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
+    const useDepositInput = customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
 
     const convertInput: ConvertHoldInput =
-      paymentStage === "deposit" && customerId
+      useDepositInput
         ? ({
             paymentStage: "deposit",
             paymentIntentId: pi.id,
-            amountTotalCents: pi.amount ?? undefined,
+            amountTotalCents: amountCharged,
             currency: pi.currency ?? undefined,
             stripe: {
               customerId,
               paymentMethodId: pm?.id,
               card,
               totalCents,
-              depositCents,
-              finalCents,
+              depositCents: amountCharged,
+              finalCents: Math.max(0, totalCents - amountCharged),
             },
           } as ConvertHoldInputDeposit)
         : {

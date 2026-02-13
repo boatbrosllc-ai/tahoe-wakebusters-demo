@@ -1245,9 +1245,28 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             </span>
                           </div>
                         )}
-                        <div className="border-t border-brand-dark/10 pt-3 mt-3 flex justify-between items-baseline">
-                          <span className="text-sm font-semibold text-brand-dark">Total</span>
-                          <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                        <div className="border-t border-brand-dark/10 pt-3 mt-3 space-y-1.5">
+                          <div className="flex justify-between items-baseline text-sm">
+                            <span className="text-brand-muted">Total</span>
+                            <span className="font-medium text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                          </div>
+                          {payFullAmount ? (
+                            <div className="flex justify-between items-baseline">
+                              <span className="text-sm font-semibold text-brand-dark">Total due now</span>
+                              <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex justify-between items-baseline">
+                                <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
+                                <span className="text-xl font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between items-baseline text-sm">
+                                <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
+                                <span className="font-medium text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1793,7 +1812,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
                     <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && priceSummary.totalCents > 0 ? (
-                        <>We&apos;ve received your payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
+                        payFullAmount ? (
+                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
+                        ) : (
+                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
+                        )
                       ) : (
                         "We&apos;ve received your payment. You&apos;ll get a confirmation email shortly."
                       )}

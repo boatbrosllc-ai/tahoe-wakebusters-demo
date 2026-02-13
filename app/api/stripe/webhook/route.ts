@@ -319,24 +319,30 @@ export async function POST(request: NextRequest) {
       const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
       const paymentMethodId = typeof pm === "object" && pm?.id ? pm.id : undefined;
 
-      const totalCents = (parseInt(pi.metadata?.totalCents ?? "0", 10) || piAmountTotal) ?? 0;
-      const depositCents = (parseInt(pi.metadata?.depositCents ?? "0", 10) || piAmountTotal) ?? 0;
-      const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - depositCents);
+      const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+      const totalCents = totalCentsFromMeta || (piAmountTotal ?? 0);
+      const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
+      const amountCharged = piAmountTotal ?? 0;
+      const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - (depositCentsFromMeta || amountCharged));
+      // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
+      const isDepositByStage = paymentStage === "deposit";
+      const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
+      const useDepositInput = !!customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
 
       const convertInput: ConvertHoldInput =
-        paymentStage === "deposit" && customerId
+        useDepositInput
           ? ({
               paymentStage: "deposit",
               paymentIntentId: piId,
-              amountTotalCents: piAmountTotal,
+              amountTotalCents: amountCharged,
               currency: piCurrency,
               stripe: {
                 customerId,
                 paymentMethodId,
                 card,
                 totalCents,
-                depositCents,
-                finalCents,
+                depositCents: amountCharged,
+                finalCents: Math.max(0, totalCents - amountCharged),
               },
             } as ConvertHoldInputDeposit)
           : {

@@ -7,11 +7,12 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
 import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
-function parseBody(body: unknown): { holdId: string; payFullAmount?: boolean } | null {
+function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   if (!holdId) return null;
+  // Default to deposit (false): only charge full when client explicitly sends payFullAmount: true
   const payFullAmount = o.payFullAmount === true;
   return { holdId, payFullAmount };
 }
@@ -112,7 +113,7 @@ export async function POST(request: NextRequest) {
     const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);
     const depositCents = Math.round(totalCents * 0.5);
     const finalCents = totalCents - depositCents;
-    const payFullAmount = input.payFullAmount === true;
+    const payFullAmount = input.payFullAmount;
     const chargeCents = payFullAmount ? totalCents : depositCents;
 
     const stripe = getStripe();

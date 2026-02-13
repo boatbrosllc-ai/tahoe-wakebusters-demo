@@ -346,10 +346,11 @@ export default function AdminBookingsPage() {
       {!loading && !error && list.length > 0 && viewMode === "list" && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
           <div className="overflow-x-auto -mx-px">
-            <table className="w-full min-w-[720px] text-sm">
+            <table className="w-full min-w-[800px] text-sm">
               <thead>
                 <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Trip</th>
+                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Booked</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Party</th>
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
@@ -377,6 +378,11 @@ export default function AdminBookingsPage() {
                           {b.durationHours != null && ` (${b.durationHours}h)`}
                         </span>
                       )}
+                    </td>
+                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap text-xs">
+                      {b.createdAt
+                        ? new Date(b.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                        : "—"}
                     </td>
                     <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
                       {b.experienceName}
