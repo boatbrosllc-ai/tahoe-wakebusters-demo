@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { ExperienceListingPageContent } from "./ExperienceListingPageContent";
+import { ExperienceListingPageContent } from "./ExperienceListingPageContent.jsx";
 import type { ExperienceWithDetails } from "@/lib/booking/get-experience-by-slug";
 
 export interface ExperienceListingPageProps {
