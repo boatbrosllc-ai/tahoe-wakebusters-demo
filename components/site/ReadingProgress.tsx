@@ -27,9 +27,9 @@ export function ReadingProgress() {
     <div
       className="fixed left-0 top-0 z-50 w-full h-1 bg-brand-primary/15"
       role="progressbar"
-      aria-valuenow={String(progress)}
-      aria-valuemin="0"
-      aria-valuemax="100"
+      aria-valuenow={progress}
+      aria-valuemin={0}
+      aria-valuemax={100}
       aria-label="Reading progress"
     >
       <div
