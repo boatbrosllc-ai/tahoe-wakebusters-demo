@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Image from "next/image";
-import Link from "next/link";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
@@ -13,12 +12,12 @@ export default function OurStoryPage() {
   return (
     <div className="min-h-screen w-full bg-brand-bg">
       {/* Hero – full width, centered content */}
-      <section className="relative w-full aspect-[3/4] sm:aspect-[21/9] min-h-[320px] sm:min-h-[360px] lg:min-h-[420px] max-h-[75vh] sm:max-h-[55vh] overflow-hidden">
+      <section className="relative w-full aspect-[3/4] sm:aspect-[21/9] min-h-[360px] sm:min-h-[420px] lg:min-h-[480px] max-h-[80vh] sm:max-h-[60vh] overflow-hidden">
         <Image
           src="/photos/brothers.webp"
           alt="The Boat Bros crew – local Austin team"
           fill
-          className="object-cover object-[center_30%]"
+          className="object-cover object-[center_20%]"
           priority
           sizes="100vw"
         />
@@ -40,7 +39,7 @@ export default function OurStoryPage() {
       </section>
 
       {/* Story content – centered card */}
-      <section className="relative -mt-12 sm:-mt-16 z-20 w-full px-4 sm:px-6 lg:px-8 pb-20 lg:pb-28 flex justify-center bg-brand-bg">
+      <section className="relative pt-10 sm:pt-12 lg:pt-16 z-20 w-full px-4 sm:px-6 lg:px-8 pb-20 lg:pb-28 flex justify-center bg-brand-bg">
         <div className="w-full max-w-4xl">
           <article className="rounded-2xl sm:rounded-3xl border-2 border-brand-dark/10 bg-white/90 shadow-premium overflow-hidden backdrop-blur-sm">
             <div className="p-6 sm:p-8 lg:p-10 xl:p-12">
@@ -81,14 +80,6 @@ export default function OurStoryPage() {
                 callHint=""
                 className="justify-center"
               />
-              <p className="mt-4 text-sm text-white/70">
-                <Link
-                  href="/contact"
-                  className="text-brand-primary font-medium hover:text-white transition-colors underline underline-offset-2"
-                >
-                  Contact us
-                </Link>
-              </p>
             </div>
           </div>
         </div>

@@ -109,7 +109,7 @@ export function Hero() {
 
           {/* Trust – directly under bullets so it reads with the headline */}
           <motion.div
-            className="mt-3 sm:mt-4"
+            className="mt-5 sm:mt-6 mb-4 sm:mb-5"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.4, delay: 0.28 }}
@@ -119,7 +119,7 @@ export function Hero() {
 
           {/* CTAs */}
           <motion.div
-            className="mt-5 w-full max-w-sm mx-auto sm:mt-6 lg:mt-8 lg:max-w-xl"
+            className="mt-4 w-full max-w-sm mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45, delay: 0.35 }}
