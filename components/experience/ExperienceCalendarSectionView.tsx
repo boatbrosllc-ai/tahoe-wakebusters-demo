@@ -17,10 +17,13 @@ function formatPrice(cents: number) {
 }
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
+export type OnOpenInModalSelection = { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string };
+export type OnOpenInModalFn = (selection: OnOpenInModalSelection) => void;
+
 export interface ExperienceCalendarSectionViewProps {
   darkCard?: boolean;
   className?: string;
-  onOpenInModal?: (selection: { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string }) => void;
+  onOpenInModal?: OnOpenInModalFn;
   inlineBookingHeight?: number | null;
   slidingPanelIndex: number;
   slidingPanelCount: number;
@@ -993,7 +996,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                       "border-brand-dark/15 hover:border-brand-dark/30"
                     );
                     if (onOpenInModal && selectedDate) {
-                      const openModal = onOpenInModal;
+                      const openModal = onOpenInModal as OnOpenInModalFn;
                       return (
                         <button
                           key={slot.id}
