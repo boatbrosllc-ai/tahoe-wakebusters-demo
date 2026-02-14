@@ -149,6 +149,44 @@ export async function sendFinalChargeFailedEmail(
 }
 
 /**
+ * Send contact form submission to the business email (CONTACT_EMAIL or boatbrosllc@gmail.com).
+ * Uses same Brevo transactional API as booking emails.
+ */
+export async function sendContactFormEmail(name: string, email: string, message: string): Promise<void> {
+  const toEmail = (process.env.CONTACT_EMAIL ?? "boatbrosllc@gmail.com").trim();
+  const subject = "Contact form – Boat Bros";
+  const escapedName = name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escapedEmail = email.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escapedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p><strong>New contact form submission</strong></p>
+  <p><strong>Name:</strong> ${escapedName}</p>
+  <p><strong>Email:</strong> ${escapedEmail}</p>
+  <p><strong>Message:</strong></p>
+  <p style="white-space: pre-wrap;">${escapedMessage}</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from Boat Bros contact form</p>
+</body></html>`;
+  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      sender: getSender(),
+      to: [{ email: toEmail }],
+      replyTo: email.trim(),
+      subject,
+      htmlContent: html,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("[brevo] sendContactFormEmail", res.status, text);
+    throw new Error(`Brevo send failed: ${res.status}`);
+  }
+}
+
+/**
  * Add or update contact in Brevo and optionally add to list (marketing opt-in).
  */
 export async function upsertBrevoContact(

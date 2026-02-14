@@ -32,8 +32,11 @@ export const brand = {
   },
   hours: "Daily 8am – sunset (seasonal)",
   socials: {
-    instagram: "https://instagram.com/boatbrosatx",
-    facebook: "https://facebook.com/boatbrosatx",
+    instagram: "https://www.instagram.com/boatbrosatx/?hl=en",
+    facebook: "https://www.facebook.com/p/Boat-Bros-100094413895091/",
+    tiktok: "https://www.tiktok.com/@boatbrosatx",
+    yelp: "https://www.yelp.com/biz/boat-bros-austin",
+    tripadvisor: "https://www.tripadvisor.com/Attraction_Review-g30196-d33273443-Reviews-Boat_Bros-Austin_Texas.html",
   },
 };
 

@@ -96,6 +96,39 @@ export function Footer() {
                   Facebook
                 </a>
               )}
+              {brand.socials.tiktok && (
+                <a
+                  href={brand.socials.tiktok}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+                  aria-label="TikTok"
+                >
+                  TikTok
+                </a>
+              )}
+              {brand.socials.yelp && (
+                <a
+                  href={brand.socials.yelp}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+                  aria-label="Yelp"
+                >
+                  Yelp
+                </a>
+              )}
+              {brand.socials.tripadvisor && (
+                <a
+                  href={brand.socials.tripadvisor}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+                  aria-label="TripAdvisor"
+                >
+                  TripAdvisor
+                </a>
+              )}
             </div>
           </div>
         </div>

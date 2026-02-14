@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sendContactFormEmail } from "@/lib/booking/brevo";
 
 /**
- * Contact form. Stores submissions temporarily; TODO: persist to DB, send email, or CRM.
+ * Contact form. Sends submission to business email (boatbrosllc@gmail.com or CONTACT_EMAIL) via Brevo.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -24,12 +25,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // TODO: Save to DB, send email, or forward to CRM.
-    // eslint-disable-next-line no-console
-    console.log("[Contact]", { name, email, message: message.slice(0, 200), at: new Date().toISOString() });
-
+    await sendContactFormEmail(name, email, message);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (e) {
+    console.error("[Contact] send failed", e);
     return NextResponse.json(
       { error: "Something went wrong" },
       { status: 500 }

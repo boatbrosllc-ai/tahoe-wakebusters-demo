@@ -90,8 +90,8 @@ export function ExperiencesListClient() {
           <Image src="/photos/IMG_2123.webp" alt="" fill className="object-cover object-[center_78%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 from-30% via-black/25 to-transparent" />
-        <div className="absolute inset-0 flex flex-col justify-end pb-12 sm:pb-16 lg:pb-20">
-          <div className={contentWidth + " relative"}>
+        <div className="absolute inset-0 flex flex-col justify-center items-center sm:justify-end sm:items-stretch pb-0 sm:pb-12 sm:pb-16 lg:pb-20">
+          <div className={contentWidth + " relative text-center sm:text-left w-full"}>
             <motion.h1
               className="font-display text-4xl sm:text-5xl md:text-6xl font-bold text-white tracking-tight leading-tight"
               initial={reduceMotion ? false : { opacity: 0, y: 20 }}
@@ -101,7 +101,7 @@ export function ExperiencesListClient() {
               On the water
             </motion.h1>
             <motion.p
-              className="mt-4 text-lg text-white/90 max-w-lg"
+              className="mt-4 text-lg text-white/90 max-w-lg sm:max-w-lg mx-auto sm:mx-0"
               initial={reduceMotion ? false : { opacity: 0, y: 16 }}
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1, ease: easing }}
