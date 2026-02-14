@@ -12,8 +12,8 @@ export const brand = {
   logoMonogramPath: "/logos/BB_Monogram_Pink_NoBkg@3x.png",
   /** Navbar logo – same for mobile and desktop (BB pink button icon) */
   logoNavbarPath: "/logos/BB pink Button Icon.png",
-  /** Legacy: horizontal pink logo */
-  logoPinkPath: "/logos/BB_Horizontal_Logo_Pink_NoBkg.png",
+  /** Pink logo – hero hover */
+  logoPinkPath: "/logos/Boay Bros pink Final.png",
   /** Logo on dark backgrounds (e.g. dark hero/footer) */
   logoDarkPath: "/logos/BB_Horizontal_Logo_White_NoBkg.png",
   /** Hero section – white logo (mobile + desktop) */

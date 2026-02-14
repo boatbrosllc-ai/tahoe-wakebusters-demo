@@ -64,9 +64,18 @@ export function Hero() {
                   src={brand.logoHeroPath ?? brand.logoDarkPath}
                   alt={brand.logoAlt}
                   fill
-                  className="object-contain object-center group-hover:hero-logo-hover-pink"
+                  className="object-contain object-center transition-opacity duration-200 group-hover:opacity-0"
                   sizes="(max-width: 1024px) 90vw, 1000px"
                   priority
+                />
+                {/* Pink logo on hover – same container so same size; export at 1000×312 to match white logo */}
+                <Image
+                  src={brand.logoPinkPath}
+                  alt=""
+                  fill
+                  className="object-contain object-center opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                  sizes="(max-width: 1024px) 90vw, 1000px"
+                  aria-hidden
                 />
               </span>
             </Link>
