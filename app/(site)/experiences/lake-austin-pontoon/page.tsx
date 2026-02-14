@@ -1,72 +1,44 @@
-"use client";
+import { getExperienceBySlug } from "@/lib/booking/get-experience-by-slug";
+import { LakeAustinPontoonLayout } from "@/components/experience/LakeAustinPontoonLayout";
 
-import { useCallback } from "react";
-import { Hero } from "@/components/experience/Hero";
-import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
-import { SocialProofStrip } from "@/components/experience/SocialProofStrip";
-import { ExperienceOverview } from "@/components/experience/ExperienceOverview";
-import { GalleryMosaic } from "@/components/experience/GalleryMosaic";
-import { IncludedGrid } from "@/components/experience/IncludedGrid";
-import { PricingSection } from "@/components/experience/PricingSection";
-import { Reviews } from "@/components/experience/Reviews";
-import { FAQ } from "@/components/experience/FAQ";
-import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
-import { FinalCTA } from "@/components/experience/FinalCTA";
-import { PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
+export default async function LakeAustinPontoonPage() {
+  let heroImageUrl: string | null = null;
+  let galleryImages: { url: string; alt?: string }[] = [];
+  let overviewImageUrl: string | null = null;
 
-const BOOKING_SECTION_ID = "booking-preview";
+  let socialProof: { rating?: number; ratingCount?: string; stats?: string[]; tagline?: string } | undefined;
 
-export default function LakeAustinPontoonPage() {
-  const scrollToBooking = useCallback(() => {
-    document.getElementById(BOOKING_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
-  const scrollToGallery = useCallback(() => {
-    document.getElementById("gallery")?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+  try {
+    const data = await getExperienceBySlug("pontoon");
+    if (data?.experience) {
+      const exp = data.experience;
+      if (exp.heroMedia?.url) heroImageUrl = exp.heroMedia.url;
+      const gallery = exp.gallery ?? [];
+      const altTexts = exp.galleryAltTexts ?? [];
+      // Photo 1 = experience section (overview) only; gallery starts with photo 2 (index 1)
+      if (gallery.length > 0) overviewImageUrl = gallery[0];
+      galleryImages = gallery
+        .slice(1)
+        .map((url, i) => ({ url, alt: altTexts[i + 1]?.trim() || undefined }));
+      if (exp.rating != null || exp.ratingCount || (exp.stats?.length ?? 0) > 0 || exp.tagline) {
+        socialProof = {
+          rating: exp.rating,
+          ratingCount: exp.ratingCount ?? undefined,
+          stats: exp.stats?.length ? exp.stats : undefined,
+          tagline: exp.tagline?.trim() || undefined,
+        };
+      }
+    }
+  } catch {
+    // fall back to static data in layout
+  }
 
   return (
-    <div className="min-h-screen bg-brand-dark">
-      <Hero
-        onViewGallery={scrollToGallery}
-        bookingSectionId={BOOKING_SECTION_ID}
-      />
-
-      {/* Booking preview strip: card on right/bottom */}
-      <section
-        id={BOOKING_SECTION_ID}
-        className="relative -mt-24 sm:-mt-32 lg:-mt-40 z-10 max-w-7xl mx-auto px-5 sm:px-6 lg:px-8 pb-8"
-      >
-        <div className="flex justify-end">
-          <div className="w-full max-w-sm lg:max-w-md">
-            <BookingPreviewCard
-              onCheckAvailability={scrollToBooking}
-              sectionId={BOOKING_SECTION_ID}
-            />
-          </div>
-        </div>
-      </section>
-
-      <SocialProofStrip />
-      <ExperienceOverview />
-      <GalleryMosaic id="gallery" />
-      <IncludedGrid />
-      <PricingSection id={BOOKING_SECTION_ID} />
-      <Reviews />
-      <FAQ />
-      <FinalCTA
-        onCheckAvailability={scrollToBooking}
-        bookingSectionId={BOOKING_SECTION_ID}
-      />
-
-      <StickyMobileBar
-        price={PRICING_MAP[4]}
-        onCheckAvailability={scrollToBooking}
-        bookingSectionId={BOOKING_SECTION_ID}
-      />
-
-      {/* Spacer for sticky bar on mobile */}
-      <div className="h-20 lg:hidden" aria-hidden />
-    </div>
+    <LakeAustinPontoonLayout
+      heroImageUrl={heroImageUrl ?? undefined}
+      galleryImages={galleryImages.length > 0 ? galleryImages : undefined}
+      overviewImageUrl={overviewImageUrl ?? undefined}
+      socialProof={socialProof}
+    />
   );
 }

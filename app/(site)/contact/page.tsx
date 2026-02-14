@@ -5,7 +5,13 @@ import { Phone, Mail, MapPin } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Contact | Lake Austin Boat Rentals",
-  description: `Get in touch with ${brand.companyName}. Lake Austin boat rentals, Austin TX. Phone, email, address.`,
+  description:
+    "Contact Boat Bros for Lake Austin boat rentals. Pontoon, wake surf, sunset cruise. Phone, email, Austin TX.",
+  keywords: ["Lake Austin boat rentals", "contact boat rental Lake Austin", "Boat Bros Austin TX"],
+  openGraph: {
+    title: "Contact | Lake Austin Boat Rentals | Boat Bros",
+    description: "Get in touch for Lake Austin boat rentals. Phone, email, address.",
+  },
 };
 
 const address = `${brand.address.line1}, ${brand.address.city}, ${brand.address.state} ${brand.address.zip}`;

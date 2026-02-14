@@ -1,0 +1,1073 @@
+"use client";
+
+import React from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { Dialog } from "@/components/ui/dialog";
+import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
+import type { SlotDto } from "./ExperienceCalendarSection";
+
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+function formatPrice(cents: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
+}
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+export interface ExperienceCalendarSectionViewProps {
+  darkCard?: boolean;
+  className?: string;
+  onOpenInModal?: (selection: { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string }) => void;
+  inlineBookingHeight?: number | null;
+  slidingPanelIndex: number;
+  slidingPanelCount: number;
+  panel1Ref: React.RefObject<HTMLDivElement | null>;
+  panel2Ref: React.RefObject<HTMLDivElement | null>;
+  panel3Ref: React.RefObject<HTMLDivElement | null>;
+  panel4Ref?: React.RefObject<HTMLDivElement | null>;
+  panel5Ref?: React.RefObject<HTMLDivElement | null>;
+  inlineStepIndex?: number;
+  goToInlineStep?: (step: number) => void;
+  rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
+  loading: boolean;
+  selectedDurationForModal: number | null;
+  setSelectedDurationForModal: (v: number | null) => void;
+  setSelectedSlotInline: React.Dispatch<React.SetStateAction<SlotDto | null>>;
+  monthLabel: string;
+  goToToday: () => void;
+  goPrevMonth: () => void;
+  goNextMonth: () => void;
+  step2CompactGrid: ({ dateStr: string; label: string; weekday: string } | null)[];
+  selectedDate: string | null;
+  openCountByDateForDuration: Map<string, number>;
+  slotsByDate: Map<string, { open: number; held: number; booked: number; blocked: number }>;
+  datePrices: Record<string, number>;
+  todayStr: string;
+  handleDayClick: (dateStr: string) => void;
+  selectedSlotInline: { id: string; startAt: string; endAt: string; boatId?: string; name?: string } | null;
+  timeOptionsForModal: { timeLabel: string; slot: SlotDto }[];
+  setShowInlineBoatStep: (v: boolean) => void;
+  noAvailabilityBecauseNotSetUp: boolean;
+  didFetchSlots: boolean;
+  hasAnyAvailability: boolean;
+  inlineBoatsLoading: boolean;
+  inlineBoats: { id: string; name: string; photos?: string[] }[];
+  availableBoatIdsForInlineSlot: Set<string>;
+  unavailableBoatIdsForInlineSlot: Set<string>;
+  bookedBoatIdsForInlineSlot: Set<string>;
+  selectedBoatInline: { id: string; name: string; photos?: string[] } | null;
+  setSelectedBoatInline: (v: { id: string; name: string; photos?: string[] } | null) => void;
+  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number };
+  ratesForDetails?: { id: string; durationHours: number; displayName: string; priceCents: number }[];
+  addonsForDetails?: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
+  experienceId?: string | null;
+  experienceSlug?: string | null;
+  showDetailsStep: boolean;
+  setShowDetailsStep: (v: boolean) => void;
+  inlineDetailsRate: { id: string; durationHours: number; displayName: string; priceCents: number } | null;
+  inlineDetailsStepReady: boolean;
+  hasInlineDetails: boolean;
+  calendarMonth: Date;
+  setCalendarMonth: (v: Date | ((prev: Date) => Date)) => void;
+  setSelectedDate: (v: string | null) => void;
+  calendarDays: {
+    dateStr: string;
+    day: number;
+    isCurrentMonth: boolean;
+    isPast: boolean;
+    openCount: number;
+    bookedCount: number;
+    openSlots: { id: string; startAt: string; endAt: string }[];
+  }[];
+  slotModalOpen: boolean;
+  setSlotModalOpen: (v: boolean) => void;
+  selectedDateLabel: string;
+  directCheckout?: boolean;
+  directDiscountCode: string;
+  setDirectDiscountCode: (v: string) => void;
+  directCheckoutLoading: string | null;
+  setDirectCheckoutLoading: (v: string | null) => void;
+  bookHref?: string | null;
+}
+
+export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionViewProps) {
+  const {
+    darkCard,
+    className,
+    onOpenInModal,
+    inlineBookingHeight,
+    slidingPanelIndex,
+    slidingPanelCount,
+    panel1Ref,
+    panel2Ref,
+    panel3Ref,
+    panel4Ref,
+    panel5Ref,
+    inlineStepIndex = 0,
+    goToInlineStep,
+    rates,
+    loading,
+    selectedDurationForModal,
+    setSelectedDurationForModal,
+    setSelectedSlotInline,
+    monthLabel,
+    goToToday,
+    goPrevMonth,
+    goNextMonth,
+    step2CompactGrid,
+    selectedDate,
+    openCountByDateForDuration,
+    slotsByDate,
+    datePrices,
+    todayStr,
+    handleDayClick,
+    selectedSlotInline,
+    timeOptionsForModal,
+    setShowInlineBoatStep,
+    noAvailabilityBecauseNotSetUp,
+    didFetchSlots,
+    hasAnyAvailability,
+    inlineBoatsLoading,
+    inlineBoats,
+    availableBoatIdsForInlineSlot,
+    unavailableBoatIdsForInlineSlot,
+    bookedBoatIdsForInlineSlot,
+    selectedBoatInline,
+    setSelectedBoatInline,
+    experienceForDetails,
+    ratesForDetails,
+    addonsForDetails,
+    experienceId,
+    experienceSlug,
+    showDetailsStep,
+    setShowDetailsStep,
+    inlineDetailsRate,
+    inlineDetailsStepReady,
+    hasInlineDetails,
+    calendarMonth,
+    setCalendarMonth,
+    setSelectedDate,
+    calendarDays,
+    slotModalOpen,
+    setSlotModalOpen,
+    selectedDateLabel,
+    directCheckout,
+    directDiscountCode,
+    setDirectDiscountCode,
+    directCheckoutLoading,
+    setDirectCheckoutLoading,
+    bookHref,
+  } = props;
+
+  return (
+    <>
+      <section
+        id="availability"
+        className={cn("w-full", darkCard ? "py-4" : "py-6 sm:py-10 lg:py-16", className)}
+        aria-labelledby="calendar-section-heading"
+      >
+        <div className={cn("mx-auto px-4 sm:px-6 lg:px-8", darkCard ? "max-w-md sm:max-w-lg lg:max-w-xl" : "max-w-6xl")}>
+          <div
+            className={cn(
+              darkCard
+                ? "rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl p-5 sm:p-6 shadow-[0_8px_32px_rgba(0,0,0,0.2)]"
+                : "rounded-2xl sm:rounded-3xl bg-white p-4 sm:p-6 lg:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary"
+            )}
+          >
+            {onOpenInModal ? (
+              slidingPanelCount >= 4 ? (
+                /* 5-step sliding layout: duration → date → time → boat → details (no modals) */
+                <div
+                  className="overflow-hidden w-full transition-[height] duration-300 ease-out"
+                  style={inlineBookingHeight != null ? { height: inlineBookingHeight, minHeight: inlineBookingHeight } : undefined}
+                >
+                <div
+                  className={cn(
+                    "flex h-full min-h-full transition-transform duration-300 ease-out",
+                    slidingPanelCount === 5 && "w-[500%]",
+                    slidingPanelCount === 4 && "w-[400%]",
+                      slidingPanelCount === 5 && slidingPanelIndex === 0 && "translate-x-0",
+                      slidingPanelCount === 5 && slidingPanelIndex === 1 && "-translate-x-[20%]",
+                      slidingPanelCount === 5 && slidingPanelIndex === 2 && "-translate-x-[40%]",
+                      slidingPanelCount === 5 && slidingPanelIndex === 3 && "-translate-x-[60%]",
+                      slidingPanelCount === 5 && slidingPanelIndex === 4 && "-translate-x-[80%]",
+                      slidingPanelCount === 4 && slidingPanelIndex === 0 && "translate-x-0",
+                      slidingPanelCount === 4 && slidingPanelIndex === 1 && "-translate-x-[25%]",
+                      slidingPanelCount === 4 && slidingPanelIndex === 2 && "-translate-x-[50%]",
+                      slidingPanelCount === 4 && slidingPanelIndex === 3 && "-translate-x-[75%]"
+                    )}
+                  >
+                    {/* Step 0: Duration */}
+                    <div
+                      ref={panel1Ref as React.RefObject<HTMLDivElement>}
+                      className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}
+                    >
+                      <h2 id="calendar-section-heading" className={cn("text-xl sm:text-2xl font-extrabold tracking-tight", darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl")}>
+                        Pick your date & time
+                      </h2>
+                      <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
+                        Choose a duration, then date, time, boat, and checkout.
+                      </p>
+                      {loading ? (
+                        <div className="mt-4 space-y-4">
+                          <div className={cn("h-10 w-48 animate-pulse rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
+                        </div>
+                      ) : (
+                        <div className="mt-4 sm:mt-6 space-y-4">
+                          {rates.length > 0 && (
+                            <div>
+                              <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Duration</p>
+                              <div className="flex flex-wrap gap-2">
+                                {rates.map((r) => {
+                                  const isSelected = selectedDurationForModal === r.durationHours;
+                                  return (
+                                    <button
+                                      key={r.id}
+                                      type="button"
+                                      onClick={() => { setSelectedDurationForModal(r.durationHours); setSelectedSlotInline(null); }}
+                                      className={cn(
+                                        "rounded-xl border-2 px-3 py-2.5 sm:py-3 text-sm font-semibold transition-all min-h-[44px] touch-manipulation",
+                                        darkCard ? (isSelected ? "border-brand-primary bg-brand-primary text-white" : "border-white/30 text-white/90 hover:border-white/50") : (isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30")
+                                      )}
+                                    >
+                                      {r.displayName ?? `${r.durationHours} hr`}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {selectedDurationForModal == null && <p className={cn("mt-2 text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>Select a duration to see available dates.</p>}
+                            </div>
+                          )}
+                          {selectedDurationForModal != null && goToInlineStep && (
+                            <button type="button" onClick={() => goToInlineStep(1)} className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 transition-colors text-sm">
+                              Next: Pick date
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {/* Step 1: Date */}
+                    <div ref={panel2Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                      <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight shrink-0", darkCard ? "text-white" : "text-brand-dark")}>Pick your date</h2>
+                      <p className={cn("mt-1 text-xs sm:text-sm shrink-0", darkCard ? "text-white/80" : "text-brand-muted")}>Select a date for your charter.</p>
+                      {!loading && selectedDurationForModal != null && (
+                        <>
+                          <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
+                            <p className={cn("text-sm font-semibold", darkCard ? "text-white/90" : "text-brand-dark")}>Date</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button type="button" onClick={goToToday} className={cn("rounded-lg border px-2.5 py-1.5 text-xs font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg")}>Today</button>
+                              <div className={cn("flex rounded-lg border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
+                                <button type="button" onClick={goPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
+                                <span className={cn("min-w-[6rem] text-center text-xs font-semibold py-1.5 flex items-center justify-center", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
+                                <button type="button" onClick={goNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full shrink-0">
+                            {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
+                            {step2CompactGrid.map((cell, idx) => {
+                              if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-0", darkCard ? "min-h-[44px] sm:min-h-[52px]" : "min-h-[36px] sm:min-h-[40px]")} />;
+                              const { dateStr, label, weekday } = cell;
+                              const isSelected = selectedDate === dateStr;
+                              const isPast = dateStr < todayStr;
+                              const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
+                              const entry = slotsByDate.get(dateStr);
+                              const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                              const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                              const isAvailable = !isPast && openForDuration > 0;
+                              const priceCents = datePrices[dateStr];
+                              return (
+                                <button
+                                  key={dateStr}
+                                  type="button"
+                                  disabled={isPast || !isAvailable}
+                                  onClick={() => isAvailable && handleDayClick(dateStr)}
+                                  className={cn(
+                                    "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full",
+                                    darkCard ? "min-h-[44px] sm:min-h-[52px]" : "min-h-[36px] sm:min-h-[40px]",
+                                    darkCard
+                                      ? cn(
+                                          isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
+                                          !isPast && !isAvailable && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                          isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
+                                          isAvailable && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                          isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
+                                        )
+                                      : cn(
+                                          isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
+                                          !isPast && !isAvailable && !isFullyBooked && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                          isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                          isAvailable && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                          isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                                        )
+                                  )}
+                                >
+                                  <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                                  <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
+                                  {typeof priceCents === "number" && isAvailable && <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}</span>}
+                                  {isFullyBooked && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-3 flex gap-2 shrink-0">
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(0)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
+                            {selectedDate && goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 text-sm">Next: Pick time</button>}
+                          </div>
+                          {noAvailabilityBecauseNotSetUp && <div className={cn("mt-4 rounded-2xl border px-4 py-3 text-sm shrink-0", darkCard ? "border-white/20 text-white/80" : "border-brand-dark/10 text-brand-muted")}><p>Calendar not loading. Check Firebase and run setup in /admin.</p></div>}
+                          {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800 shrink-0"><p>No availability for this month.</p></div>}
+                        </>
+                      )}
+                    </div>
+                    {/* Step 2: Time */}
+                    <div ref={panel3Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                      <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight shrink-0", darkCard ? "text-white" : "text-brand-dark")}>Pick your time</h2>
+                      <p className={cn("mt-1 text-xs sm:text-sm shrink-0", darkCard ? "text-white/80" : "text-brand-muted")}>Choose a start time for {selectedDate ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long" }) : "your date"}.</p>
+                      {selectedDate && (
+                        <>
+                          {timeOptionsForModal.length === 0 ? <p className={cn("mt-4 text-xs shrink-0", darkCard ? "text-white/70" : "text-brand-muted")}>No open slots for this duration on this day.</p> : (
+                            <div className="mt-3 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-h-[220px] flex flex-wrap gap-2 content-start overscroll-contain touch-pan-y">
+                              {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                                const isSelected = selectedSlotInline?.id === slot.id;
+                                return (
+                                  <button key={slot.id} type="button" onClick={() => setSelectedSlotInline(slot)} className={cn("rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all flex-shrink-0 min-h-[44px] touch-manipulation", darkCard ? (isSelected ? "border-brand-primary bg-brand-primary text-white" : "border-white/30 text-white/90 hover:border-white/50") : (isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 hover:border-brand-dark/30"))}>{timeLabel}</button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="mt-3 flex gap-2 shrink-0">
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(1)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
+                            <button type="button" disabled={!selectedSlotInline} onClick={() => selectedSlotInline && goToInlineStep?.(3)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 text-sm">Continue to choose your boat</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    {/* Step 3: Boat */}
+                    <div ref={panel4Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pl-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                      {selectedDate && selectedSlotInline ? (
+                        <>
+                          <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                            <h3 className={cn("text-lg font-bold tracking-tight", darkCard ? "text-white" : "text-brand-dark")}>Choose your boat</h3>
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="text-xs font-medium text-white/80 hover:text-white">Change time</button>}
+                          </div>
+                          <p className={cn("text-xs mb-3", darkCard ? "text-white/70" : "text-brand-muted")}>{selectedDate} · {formatTime(selectedSlotInline.startAt)}</p>
+                          <div className="min-h-0 flex-1 overflow-y-auto max-h-[280px]">
+                            {inlineBoatsLoading ? <div className="py-4 flex justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" /></div> : inlineBoats.length === 0 ? <p className={cn("text-xs py-2", darkCard ? "text-white/70" : "text-brand-muted")}>No boats assigned — continue to details.</p> : (
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
+                                {inlineBoats.slice(0, 6).map((boat) => {
+                                  const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
+                                  const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                  const isSelected = selectedBoatInline?.id === boat.id;
+                                  const thumb = boat.photos?.[0];
+                                  return (
+                                    <button key={boat.id} type="button" disabled={!isAvailable} onClick={() => isAvailable && setSelectedBoatInline(boat)} className={cn("relative flex flex-col overflow-hidden rounded-md border-2 text-left transition-all min-h-0", "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary", isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30", !isAvailable && "cursor-not-allowed opacity-70", isBooked && "border-brand-dark/25 bg-brand-dark/5")}>
+                                      <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t">{thumb ? <Image src={getDisplayImageUrl(thumb)} alt="" fill className="object-cover" sizes="80px" /> : <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />}</div>
+                                      {isBooked && <div className="absolute top-0 left-0 right-0 w-full aspect-[4/3] bg-brand-dark/75 flex items-center justify-center z-10 rounded-t"><span className="text-[9px] font-semibold text-white uppercase">Booked</span></div>}
+                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-10")}><span className={cn("text-[10px] font-semibold truncate block", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span></div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1 mt-3">
+                            <button type="button" disabled={inlineBoatsLoading || (inlineBoats.length > 0 && !selectedBoatInline)} onClick={() => { if (!selectedDate || !selectedSlotInline) return; if (experienceForDetails && ratesForDetails && addonsForDetails) goToInlineStep?.(4); else onOpenInModal?.({ experienceId: experienceId ?? undefined, experienceSlug: experienceSlug ?? undefined, date: selectedDate, slotId: selectedSlotInline.id, boatId: selectedBoatInline?.id ?? (selectedSlotInline as { boatId?: string }).boatId }); }} className="w-full rounded-lg bg-brand-primary text-white font-semibold py-2.5 px-3 min-h-[44px] touch-manipulation text-sm hover:bg-brand-primary/90 disabled:opacity-50">Continue to checkout</button>
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="w-full rounded-lg border-2 border-white/30 px-3 py-2 min-h-[44px] touch-manipulation text-xs font-semibold text-white hover:bg-white/10">Change time</button>}
+                          </div>
+                        </>
+                      ) : <p className={cn("text-sm py-4", darkCard ? "text-white/80" : "text-brand-muted")}>Select date and time first.</p>}
+                    </div>
+                    {/* Step 4: Details & payment (only when hasInlineDetails) */}
+                    {slidingPanelCount === 5 && hasInlineDetails && panel5Ref && (
+                      <div ref={panel5Ref as React.RefObject<HTMLDivElement>} className="w-1/5 flex-shrink-0 pl-2 min-w-0 overflow-hidden flex flex-col h-full">
+                        {selectedDate && selectedSlotInline && experienceForDetails && (!inlineDetailsStepReady ? <p className={cn("text-sm py-4", darkCard ? "text-white/80" : "text-brand-muted")}>Loading…</p> : (
+                          <>
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(3)} className={cn("mb-2 text-xs font-medium shrink-0", darkCard ? "text-white/80 hover:text-white" : "text-brand-muted hover:text-brand-primary")}>← Back to boat</button>}
+                            <div className={cn("min-h-0 flex-1 overflow-y-auto rounded-xl", darkCard && "bg-white text-brand-dark shadow-lg p-4")}>
+                              <InlineBookingDetailsStep experienceId={experienceForDetails.id} experienceTitle={experienceForDetails.title} experienceMaxGuests={experienceForDetails.maxGuests} experiencePetsMax={experienceForDetails.petsMax} boatId={selectedBoatInline?.id} boatName={selectedBoatInline?.name} slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }} rateId={inlineDetailsRate!.id} rateDisplayName={inlineDetailsRate!.displayName ?? `${inlineDetailsRate!.durationHours} hr`} rateDurationHours={inlineDetailsRate!.durationHours} selectedDate={selectedDate} addons={addonsForDetails ?? []} onBack={() => goToInlineStep?.(3)} onSuccess={() => { goToInlineStep?.(3); setShowInlineBoatStep(false); }} />
+                            </div>
+                          </>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+              /* Original 3-panel layout (duration+date+time | boat | details) */
+              <div
+                className="overflow-hidden w-full transition-[height] duration-300 ease-out"
+                style={inlineBookingHeight != null ? { height: inlineBookingHeight } : undefined}
+              >
+                <div
+                  className={cn(
+                    "flex transition-transform duration-300 ease-out",
+                    slidingPanelIndex === 2 && "items-start",
+                    slidingPanelCount === 3 ? "w-[300%]" : "w-[200%]",
+                    slidingPanelCount === 3 && slidingPanelIndex === 0 && "translate-x-0",
+                    slidingPanelCount === 3 && slidingPanelIndex === 1 && "-translate-x-[33.333%]",
+                    slidingPanelCount === 3 && slidingPanelIndex === 2 && "-translate-x-[66.666%]",
+                    slidingPanelCount === 2 && slidingPanelIndex === 0 && "translate-x-0",
+                    slidingPanelCount === 2 && slidingPanelIndex === 1 && "-translate-x-1/2"
+                  )}
+                >
+                  {/* Panel 1: Pick date & time */}
+                  <div
+                    ref={panel1Ref as React.RefObject<HTMLDivElement>}
+                    className={slidingPanelCount === 3 ? "w-1/3 flex-shrink-0 pr-2 min-w-0" : "w-1/2 flex-shrink-0 pr-2"}
+                  >
+                    <h2
+                      id="calendar-section-heading"
+                      className={cn(
+                        "text-xl sm:text-2xl font-extrabold tracking-tight",
+                        darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl"
+                      )}
+                    >
+                      Pick your date & time
+                    </h2>
+                    <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
+                      Choose a duration, date, and time — then choose your boat and checkout.
+                    </p>
+                    {loading ? (
+                      <div className="mt-4 sm:mt-6 space-y-4">
+                        <div className={cn("h-10 w-48 animate-pulse rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
+                        <div className="grid grid-cols-7 gap-1">
+                          {Array.from({ length: 35 }, (_, i) => (
+                            <div key={i} className={cn("aspect-square animate-pulse rounded-lg", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-4 sm:mt-6 space-y-4">
+                        {rates.length > 0 && (
+                          <div>
+                            <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Duration</p>
+                            <div className="flex flex-wrap gap-2">
+                              {rates.map((r) => {
+                                const isSelected = selectedDurationForModal === r.durationHours;
+                                return (
+                                  <button
+                                    key={r.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedDurationForModal(r.durationHours);
+                                      setSelectedSlotInline(null);
+                                    }}
+                                    className={cn(
+                                      "rounded-xl border-2 px-3 py-2.5 text-sm font-semibold transition-all",
+                                      darkCard
+                                        ? isSelected
+                                          ? "border-brand-primary bg-brand-primary text-white"
+                                          : "border-white/30 text-white/90 hover:border-white/50"
+                                        : isSelected
+                                          ? "border-brand-primary bg-brand-primary/10 text-brand-dark"
+                                          : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                                    )}
+                                  >
+                                    {r.displayName ?? `${r.durationHours} hr`}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {selectedDurationForModal == null && (
+                              <p className={cn("mt-2 text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>Select a duration to see available dates.</p>
+                            )}
+                          </div>
+                        )}
+                        {selectedDurationForModal != null && (
+                          <>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <p className={cn("text-sm font-semibold", darkCard ? "text-white/90" : "text-brand-dark")}>Date</p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={goToToday}
+                                  className={cn(
+                                    "rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
+                                    darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg"
+                                  )}
+                                >
+                                  Today
+                                </button>
+                                <div className={cn("flex rounded-xl border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
+                                  <button type="button" onClick={goPrevMonth} className={cn("rounded-lg p-2.5", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
+                                    <ChevronLeft className="h-5 w-5" />
+                                  </button>
+                                  <span className={cn("min-w-[8rem] text-center text-sm font-semibold py-2", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
+                                  <button type="button" onClick={goNextMonth} className={cn("rounded-lg p-2.5", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
+                                    <ChevronRight className="h-5 w-5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-7 gap-px sm:gap-0.5 min-w-0 w-full">
+                              {WEEKDAY_LABELS.map((d) => (
+                                <div key={d} className={cn("py-0.5 text-center text-[9px] sm:text-[10px] font-semibold uppercase", darkCard ? "text-white/70" : "text-brand-muted")}>
+                                  {d}
+                                </div>
+                              ))}
+                              {step2CompactGrid.map((cell, idx) => {
+                                if (cell == null) {
+                                  return <div key={`blank-${idx}`} className="min-h-[36px] sm:min-h-[40px]" />;
+                                }
+                                const { dateStr, label, weekday } = cell;
+                                const isSelected = selectedDate === dateStr;
+                                const isPast = dateStr < todayStr;
+                                const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
+                                const entry = slotsByDate.get(dateStr);
+                                const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                                const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                                const isAvailable = !isPast && openForDuration > 0;
+                                const priceCents = datePrices[dateStr];
+                                return (
+                                  <button
+                                    key={dateStr}
+                                    type="button"
+                                    disabled={isPast || !isAvailable}
+                                    onClick={() => isAvailable && handleDayClick(dateStr)}
+                                    className={cn(
+                                      "rounded border min-h-[36px] sm:min-h-[40px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full",
+                                      darkCard
+                                        ? cn(
+                                            isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
+                                            !isPast && !isAvailable && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                            isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
+                                            isAvailable && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
+                                          )
+                                        : cn(
+                                            isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
+                                            !isPast && !isAvailable && !isFullyBooked && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                            isAvailable && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                                          )
+                                    )}
+                                  >
+                                    <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                                    <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
+                                    {typeof priceCents === "number" && isAvailable && (
+                                      <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>
+                                        ${(priceCents / 100).toFixed(0)}
+                                      </span>
+                                    )}
+                                    {isFullyBooked && <span className={cn("block text-[7px] sm:text-[8px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {selectedDate && (
+                              <div className="pt-3 border-t border-brand-dark/10">
+                                <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Time</p>
+                                {timeOptionsForModal.length === 0 ? (
+                                  <p className={cn("text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>No open slots this day for the selected duration.</p>
+                                ) : (
+                                  <div className="flex flex-wrap gap-2">
+                                    {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                                      const isSelected = selectedSlotInline?.id === slot.id;
+                                      return (
+                                        <button
+                                          key={slot.id}
+                                          type="button"
+                                          onClick={() => setSelectedSlotInline(slot)}
+                                          className={cn(
+                                            "rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all",
+                                            darkCard
+                                              ? isSelected
+                                                ? "border-brand-primary bg-brand-primary text-white"
+                                                : "border-white/30 text-white/90 hover:border-white/50"
+                                              : isSelected
+                                                ? "border-brand-primary bg-brand-primary/10 text-brand-dark"
+                                                : "border-brand-dark/15 hover:border-brand-dark/30"
+                                          )}
+                                        >
+                                          {timeLabel}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            <div className="mt-4 pt-4 border-t border-brand-dark/10">
+                              <button
+                                type="button"
+                                disabled={!selectedDate || !selectedSlotInline}
+                                onClick={() => {
+                                  if (!selectedDate || !selectedSlotInline) return;
+                                  setShowInlineBoatStep(true);
+                                }}
+                                className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                              >
+                                Continue to choose your boat
+                              </button>
+                              <p className={cn("text-center text-xs mt-2", darkCard ? "text-white/70" : "text-brand-muted")}>Pick your boat below, then continue to checkout</p>
+                            </div>
+                            {noAvailabilityBecauseNotSetUp && (
+                              <div className={cn("mt-6 rounded-2xl border px-4 py-4 text-center text-sm", darkCard ? "border-white/20 bg-white/5 text-white/80" : "border-brand-dark/10 bg-brand-bg/50 text-brand-muted")}>
+                                <p className={darkCard ? "text-white font-medium" : "font-medium text-brand-dark"}>Calendar not loading from Firestore.</p>
+                                <p className="mt-1">Check Firebase config and run setup in <a href="/admin" className="text-brand-primary underline">/admin</a>.</p>
+                              </div>
+                            )}
+                            {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                              <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
+                                <p className="font-medium">No availability for the dates shown. Try another month or call us.</p>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {/* Panel 2: Choose your boat */}
+                  <div
+                    ref={panel2Ref as React.RefObject<HTMLDivElement>}
+                    className={cn("flex flex-col flex-shrink-0 pl-2 min-w-0 max-h-[400px]", hasInlineDetails ? "w-1/3" : "w-1/2")}
+                  >
+                    {selectedDate && selectedSlotInline ? (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-0.5 shrink-0">
+                          <h3 className={cn("text-xs sm:text-sm font-bold tracking-tight", darkCard ? "text-white" : "text-brand-dark")}>Choose your boat</h3>
+                          <button
+                            type="button"
+                            onClick={() => { setShowInlineBoatStep(false); setSelectedBoatInline(null); }}
+                            className={cn("text-xs font-medium whitespace-nowrap", darkCard ? "text-white/80 hover:text-white" : "text-brand-muted hover:text-brand-primary")}
+                          >
+                            Change date or time
+                          </button>
+                        </div>
+                        <p className={cn("text-[10px] sm:text-[11px] mb-1.5 shrink-0", darkCard ? "text-white/70" : "text-brand-muted")}>
+                          {selectedDate} · {formatTime(selectedSlotInline.startAt)}
+                        </p>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                          {inlineBoatsLoading ? (
+                            <div className="py-4 flex justify-center">
+                              <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+                            </div>
+                          ) : inlineBoats.length === 0 ? (
+                            <p className={cn("text-xs py-2", darkCard ? "text-white/70" : "text-brand-muted")}>No boats assigned — continue to details.</p>
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 sm:gap-1.5 mb-2">
+                                {inlineBoats.slice(0, 6).map((boat) => {
+                                  const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
+                                  const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                  const isSelected = selectedBoatInline?.id === boat.id;
+                                  const thumb = boat.photos?.[0];
+                                  return (
+                                    <button
+                                      key={boat.id}
+                                      type="button"
+                                      disabled={!isAvailable}
+                                      onClick={() => isAvailable && setSelectedBoatInline(boat)}
+                                      className={cn(
+                                        "relative flex flex-col overflow-hidden rounded-md border-2 text-left transition-all min-h-0",
+                                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                                        isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30",
+                                        !isAvailable && "cursor-not-allowed opacity-70",
+                                        isBooked && "border-brand-dark/25 bg-brand-dark/5"
+                                      )}
+                                    >
+                                      <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t">
+                                        {thumb ? (
+                                          <Image src={getDisplayImageUrl(thumb)} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, 33vw" />
+                                        ) : (
+                                          <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
+                                        )}
+                                      </div>
+                                      {isBooked && (
+                                        <div className="absolute top-0 left-0 right-0 w-full aspect-[4/3] bg-brand-dark/75 flex items-center justify-center z-10 rounded-t">
+                                          <span className="text-[9px] font-semibold text-white uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-dark border border-white/20">Booked</span>
+                                        </div>
+                                      )}
+                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-10")}>
+                                        <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                                        {!isAvailable && isBooked && (
+                                          <span className="text-[9px] font-semibold text-amber-700 uppercase tracking-wide block mt-0.5">Booked</span>
+                                        )}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {inlineBoats.length > 6 && (
+                                <div className="mb-2">
+                                  <label htmlFor="inline-other-boats" className="sr-only">Other boats</label>
+                                  <select
+                                    id="inline-other-boats"
+                                    value={selectedBoatInline && inlineBoats.findIndex((b) => b.id === selectedBoatInline.id) >= 6 ? selectedBoatInline.id : ""}
+                                    onChange={(e) => {
+                                      const id = e.target.value;
+                                      if (id) {
+                                        const boat = inlineBoats.find((b) => b.id === id);
+                                        if (boat) setSelectedBoatInline(boat);
+                                      }
+                                    }}
+                                    className="w-full rounded-md border-2 border-brand-dark/15 bg-white px-2 py-1.5 text-[11px] font-medium text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
+                                  >
+                                    <option value="">Other boats ({inlineBoats.length - 6})</option>
+                                    {inlineBoats.slice(6).map((boat) => {
+                                      const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
+                                      const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                      return (
+                                        <option key={boat.id} value={boat.id} disabled={!isAvailable}>
+                                          {boat.name}{isBooked ? " (Booked)" : ""}
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1 shrink-0 mt-1">
+                          <button
+                            type="button"
+                            disabled={inlineBoatsLoading || (inlineBoats.length > 0 && !selectedBoatInline)}
+                            onClick={() => {
+                              if (!selectedDate || !selectedSlotInline) return;
+                              const boatId = selectedBoatInline?.id ?? (selectedSlotInline as { boatId?: string }).boatId;
+                              if (experienceForDetails && ratesForDetails && addonsForDetails) {
+                                setShowDetailsStep(true);
+                              } else if (onOpenInModal) {
+                                onOpenInModal({
+                                  experienceId: experienceId ?? undefined,
+                                  experienceSlug: experienceSlug ?? undefined,
+                                  date: selectedDate,
+                                  slotId: selectedSlotInline.id,
+                                  boatId: boatId ?? undefined,
+                                });
+                              }
+                            }}
+                            className="w-full rounded-lg bg-brand-primary text-white font-semibold py-2 px-3 text-xs hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            Continue to checkout
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setShowInlineBoatStep(false); setSelectedBoatInline(null); }}
+                            className={cn("w-full rounded-lg border-2 px-3 py-2 text-xs font-semibold transition-colors", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}
+                          >
+                            Change date or time
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className={cn("text-sm py-4", darkCard ? "text-white/80" : "text-brand-muted")}>Select date and time first.</p>
+                    )}
+                  </div>
+                  {hasInlineDetails && (
+                    <div ref={panel3Ref as React.RefObject<HTMLDivElement>} className="w-1/3 flex-shrink-0 pl-2 min-w-0 flex flex-col">
+                      {selectedDate && selectedSlotInline && experienceForDetails && (
+                        !inlineDetailsStepReady ? (
+                          <p className={cn("text-sm py-4", darkCard ? "text-white/80" : "text-brand-muted")}>Loading…</p>
+                        ) : (
+                          <InlineBookingDetailsStep
+                            experienceId={experienceForDetails.id}
+                            experienceTitle={experienceForDetails.title}
+                            experienceMaxGuests={experienceForDetails.maxGuests}
+                            experiencePetsMax={experienceForDetails.petsMax}
+                            boatId={selectedBoatInline?.id}
+                            boatName={selectedBoatInline?.name}
+                            slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }}
+                            rateId={inlineDetailsRate!.id}
+                            rateDisplayName={inlineDetailsRate!.displayName ?? `${inlineDetailsRate!.durationHours} hr`}
+                            rateDurationHours={inlineDetailsRate!.durationHours}
+                            selectedDate={selectedDate}
+                            addons={addonsForDetails ?? []}
+                            onBack={() => setShowDetailsStep(false)}
+                            onSuccess={() => {
+                              setShowDetailsStep(false);
+                              setShowInlineBoatStep(false);
+                            }}
+                          />
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) ) : (
+              <>
+                <h2
+                  id="calendar-section-heading"
+                  className={cn("text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight", darkCard ? "text-white" : "text-brand-dark")}
+                >
+                  Choose your date
+                </h2>
+                <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
+                  Tap a date to pick a time and continue to checkout.
+                </p>
+                {loading ? (
+                  <div className="mt-4 sm:mt-6 space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className={cn("h-9 sm:h-10 w-20 sm:w-24 animate-pulse rounded-lg sm:rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} aria-hidden />
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 sm:gap-2 lg:gap-4">
+                      {WEEKDAY_LABELS.map((label, i) => (
+                        <div key={`weekday-${i}`} className={cn("py-0.5 sm:py-2 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/50" : "text-brand-muted/50")}>
+                          {label}
+                        </div>
+                      ))}
+                      {Array.from({ length: 35 }, (_, i) => (
+                        <div key={i} className={cn("min-h-[44px] sm:min-h-[88px] lg:min-h-[120px] xl:min-h-[140px] animate-pulse rounded-lg sm:rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} aria-hidden />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 sm:mt-6 flex flex-wrap items-center justify-between gap-4">
+                      <h2 className={cn("text-2xl font-bold", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</h2>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const d = new Date();
+                            setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+                            setSelectedDate(todayStr);
+                          }}
+                          className={cn(
+                            "rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
+                            darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg"
+                          )}
+                        >
+                          Today
+                        </button>
+                        <div className={cn("flex rounded-xl border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
+                          <button type="button" onClick={goPrevMonth} className={cn("rounded-lg p-2.5", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
+                            <ChevronLeft className="h-5 w-5" />
+                          </button>
+                          <button type="button" onClick={goNextMonth} className={cn("rounded-lg p-2.5", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
+                            <ChevronRight className="h-5 w-5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 sm:mt-4 flex-1 grid grid-cols-7 gap-px sm:gap-1 min-h-[320px] sm:min-h-[400px] lg:min-h-[480px] bg-brand-dark/10 rounded-xl overflow-hidden border border-brand-dark/10 bg-white shadow-soft">
+                      {WEEKDAY_LABELS.map((d) => (
+                        <div key={d} className="py-2 px-1 text-center text-xs font-semibold uppercase text-brand-muted bg-brand-bg/50 sm:text-sm">
+                          {d}
+                        </div>
+                      ))}
+                      {calendarDays.map((cell) => {
+                        const isSelected = selectedDate === cell.dateStr;
+                        const hasOpen = cell.openCount > 0;
+                        const hasBooked = cell.bookedCount > 0;
+                        const isPast = cell.isPast;
+                        const isClickable = cell.isCurrentMonth && (hasOpen || hasBooked) && !isPast;
+                        return (
+                          <button
+                            key={cell.dateStr + cell.day}
+                            type="button"
+                            disabled={!isClickable}
+                            onClick={() => isClickable && handleDayClick(cell.dateStr)}
+                            className={cn(
+                              "flex flex-col items-stretch text-left p-1.5 sm:p-2 min-h-[64px] sm:min-h-[80px] lg:min-h-[100px] overflow-hidden rounded-lg transition-all",
+                              !cell.isCurrentMonth && "text-brand-muted/50",
+                              cell.isCurrentMonth && isPast && "text-brand-muted/60",
+                              isClickable && "cursor-pointer hover:ring-2 hover:ring-brand-primary/30",
+                              isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/10",
+                              hasOpen && cell.isCurrentMonth && !isPast && "bg-green-50/80 hover:bg-green-100 text-green-900",
+                              hasBooked && !hasOpen && cell.isCurrentMonth && !isPast && "bg-brand-dark/5 text-brand-muted"
+                            )}
+                          >
+                            <span className="text-sm font-semibold sm:text-base shrink-0">{cell.day}</span>
+                            <div className="flex-1 min-h-0 mt-1 overflow-y-auto space-y-0.5">
+                              {cell.openSlots.slice(0, 4).map((slot) => (
+                                <div key={slot.id} className="text-[10px] sm:text-xs font-medium text-green-800 bg-green-200/60 rounded px-1 py-0.5 truncate" title={formatTime(slot.startAt)}>
+                                  {formatTime(slot.startAt)}
+                                </div>
+                              ))}
+                              {cell.openSlots.length > 4 && <div className="text-[10px] text-brand-muted">+{cell.openSlots.length - 4} more</div>}
+                              {cell.isCurrentMonth && !cell.isPast && cell.openSlots.length === 0 && cell.bookedCount > 0 && <div className="text-[10px] text-brand-muted">Booked</div>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-brand-muted">
+                      <span className="flex items-center gap-2">
+                        <span className="h-3 w-3 rounded bg-green-200 border border-green-300" aria-hidden />
+                        Available (times in day)
+                      </span>
+                      <span className="flex items-center gap-2">
+                        <span className="h-3 w-3 rounded bg-brand-dark/10" aria-hidden />
+                        Booked
+                      </span>
+                    </div>
+                    {noAvailabilityBecauseNotSetUp && (
+                      <div className="mt-6 rounded-2xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-4 text-center text-sm text-brand-muted">
+                        <p className="font-medium text-brand-dark">Calendar not loading from Firestore.</p>
+                        <p className="mt-1">Yes—we use Firestore for the calendar. With no bookings, every date is open. Right now the app couldn&apos;t load this experience, so the calendar can&apos;t show those open dates.</p>
+                        <p className="mt-2 text-brand-dark font-medium">Check:</p>
+                        <ul className="mt-1 list-inside list-disc space-y-0.5 text-left max-w-md mx-auto">
+                          <li>Firebase is configured in <code className="rounded bg-brand-dark/10 px-1 py-0.5 text-xs">.env.local</code> (see <code className="rounded bg-brand-dark/10 px-1 py-0.5 text-xs">docs/BOOKING_SETUP.md</code>)</li>
+                          <li>Experiences are seeded: open <a href="/admin" className="font-medium text-brand-primary underline hover:no-underline">/admin</a> and click <strong className="text-brand-dark">Run setup</strong></li>
+                        </ul>
+                        <p className="mt-2 text-brand-muted/90">After that, this calendar will show 100% open dates until someone books.</p>
+                      </div>
+                    )}
+                    {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                      <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
+                        <p className="font-medium">No availability for the dates shown.</p>
+                        <p className="mt-1 text-amber-700/90">Try another month or call us to request a date.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {!onOpenInModal && (
+      <Dialog
+        open={slotModalOpen && !!selectedDate}
+        onOpenChange={(open) => {
+          if (!open) setSlotModalOpen(false);
+        }}
+        title={selectedDate ? `Pick a time · ${selectedDateLabel}` : "Choose a time"}
+        description="Select a duration, then a start time. Price shown per option."
+        className="max-w-md w-[calc(100vw-2rem)] sm:w-full"
+      >
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+          {directCheckout && (
+            <div>
+              <label className="block text-xs font-semibold text-brand-dark mb-1.5">Discount code (optional)</label>
+              <input
+                type="text"
+                value={directDiscountCode}
+                onChange={(e) => setDirectDiscountCode(e.target.value)}
+                placeholder="e.g. SAVE20"
+                className="w-full rounded-xl border border-brand-dark/15 px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none"
+              />
+            </div>
+          )}
+          <div>
+            <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Duration</p>
+            <div className="flex flex-wrap gap-1.5">
+              {rates.map((r) => {
+                const isSelected = selectedDurationForModal === r.durationHours;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setSelectedDurationForModal(r.durationHours)}
+                    className={cn(
+                      "rounded-lg border-2 px-2.5 py-1.5 text-xs font-medium transition-all",
+                      isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                    )}
+                  >
+                    {r.displayName ?? `${r.durationHours} hr`}
+                  </button>
+                );
+              })}
+            </div>
+            {selectedDurationForModal == null && <p className="mt-2 text-xs text-brand-muted">Select a duration to see available times.</p>}
+          </div>
+          {selectedDurationForModal != null && (
+            <div>
+              <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
+              {timeOptionsForModal.length === 0 ? (
+                <p className="text-xs text-brand-muted">No open slots for this duration on this day.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5 md:gap-2">
+                  {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                    const rate = rates.find((r) => r.durationHours === selectedDurationForModal);
+                    const priceLabel = rate ? formatPrice(rate.priceCents) : null;
+                    const useOpenInModal = !!onOpenInModal && !!selectedDate;
+                    const useDirectCheckout = !useOpenInModal && directCheckout;
+                    const checkoutHref =
+                      !useOpenInModal && !useDirectCheckout && bookHref && selectedDate
+                        ? `${bookHref}?date=${encodeURIComponent(selectedDate)}&slotId=${encodeURIComponent(slot.id)}`
+                        : null;
+                    const isDirectLoading = directCheckoutLoading === slot.id;
+                    const btnClass = cn(
+                      "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all flex flex-col items-center justify-center min-h-[52px]",
+                      "border-brand-dark/15 hover:border-brand-dark/30"
+                    );
+                    if (useOpenInModal && selectedDate) {
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          onClick={() => {
+                            onOpenInModal?.({
+                              experienceId: experienceId ?? undefined,
+                              experienceSlug: experienceSlug ?? undefined,
+                              date: selectedDate,
+                              slotId: slot.id,
+                              boatId: (slot as { boatId?: string }).boatId,
+                            });
+                            setSlotModalOpen(false);
+                          }}
+                          className={btnClass}
+                        >
+                          <span>{timeLabel}</span>
+                          {priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}
+                        </button>
+                      );
+                    }
+                    if (useDirectCheckout) {
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          disabled={!experienceId || isDirectLoading}
+                          onClick={async () => {
+                            if (!experienceId) return;
+                            setDirectCheckoutLoading(slot.id);
+                            try {
+                              const res = await fetch("/api/booking/create-checkout-session-direct", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  experienceId,
+                                  slotId: slot.id,
+                                  ...(slot.boatId && { boatId: slot.boatId }),
+                                  partySize: 1,
+                                  petsCount: 0,
+                                  ...(directDiscountCode.trim() && { discountCode: directDiscountCode.trim() }),
+                                }),
+                              });
+                              const data = await res.json().catch(() => ({}));
+                              if (res.ok && data?.url) {
+                                setSlotModalOpen(false);
+                                window.location.href = data.url;
+                                return;
+                              }
+                              const msg = (data as { error?: string }).error ?? "Checkout failed";
+                              alert(msg);
+                            } finally {
+                              setDirectCheckoutLoading(null);
+                            }
+                          }}
+                          className={cn(btnClass, "disabled:opacity-60 disabled:pointer-events-none")}
+                        >
+                          {isDirectLoading ? "…" : (<><span>{timeLabel}</span>{priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}</>)}
+                        </button>
+                      );
+                    }
+                    return checkoutHref ? (
+                      <Link key={slot.id} href={checkoutHref} onClick={() => setSlotModalOpen(false)} className={btnClass}>
+                        <span>{timeLabel}</span>
+                        {priceLabel && <span className="text-[10px] md:text-xs font-semibold text-brand-primary mt-0.5">{priceLabel}</span>}
+                      </Link>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Dialog>
+      )}
+    </>
+  );
+}

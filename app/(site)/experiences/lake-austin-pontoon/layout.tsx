@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import { brand } from "@/content/brand";
 
 export const metadata: Metadata = {
-  title: "Lake Austin Luxury Pontoon | Captain Included | Boat Bros",
+  title: "Lake Austin Pontoon Rentals | Captain Included",
   description:
-    "Premium pontoon charter on Lake Austin. Captain included, premium sound, lily pad, cooler & ice. Chill, swim, celebrate. Book your day.",
+    "Pontoon rentals Lake Austin. Captain included, premium sound, lily pad, cooler & ice. Chill, swim, celebrate. Book your Lake Austin pontoon rental.",
+  keywords: ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
   openGraph: {
-    title: "Lake Austin Luxury Pontoon | Boat Bros",
+    title: "Lake Austin Pontoon Rentals | Boat Bros",
     description:
-      "Premium pontoon charter on Lake Austin. Captain included, premium sound, lily pad. Book your day.",
+      "Pontoon rentals Lake Austin. Captain included, premium sound, lily pad. Book your day.",
   },
 };
 

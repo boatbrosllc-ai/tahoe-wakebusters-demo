@@ -11,7 +11,15 @@ export const metadata: Metadata = {
     template: `%s | ${brand.companyName}`,
   },
   description:
-    "Captained charters for lake days & celebrations — check availability & book online now. Austin TX.",
+    "Lake Austin boat rentals — pontoon, wake surf, sunset cruises. Captained charters. Book online. Boat Bros ATX, Austin TX.",
+  keywords: [
+    "Lake Austin boat rentals",
+    "boat rentals Lake Austin",
+    "Lake Austin pontoon rentals",
+    "pontoon rental Lake Austin",
+    "Lake Austin wake boat",
+    "Lake Austin sunset cruise",
+  ],
   openGraph: {
     type: "website",
     locale: "en_US",
@@ -26,7 +34,8 @@ function localBusinessJsonLd() {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: brand.companyName,
-    description: brand.tagline,
+    description:
+      "Lake Austin boat rentals: pontoon rentals, wake boat and wake surf, sunset cruises. Captained charters on Lake Austin, Austin TX. Book online.",
     url: baseUrl,
     telephone: brand.phoneTel,
     email: brand.email,
@@ -43,6 +52,15 @@ function localBusinessJsonLd() {
       dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
       opens: "08:00",
       closes: "20:00",
+    },
+    hasOfferCatalog: {
+      "@type": "OfferCatalog",
+      name: "Lake Austin boat rental experiences",
+      itemListElement: [
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Lake Austin pontoon rental" } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Lake Austin wake boat and wake surf rental" } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Lake Austin sunset cruise" } },
+      ],
     },
   };
 }

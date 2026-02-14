@@ -17,13 +17,21 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const firestoreSlug = STATIC_TO_FIRESTORE_SLUG[slug] ?? slug;
   try {
     const data = await getFirestoreExperience(firestoreSlug);
-    if (data) return { title: `Book ${data.experience.title} | Calendar` };
+    if (data)
+      return {
+        title: `Book ${data.experience.title} | Lake Austin Boat Rental`,
+        description: `Book your Lake Austin boat rental — ${data.experience.title}. Choose date and time. Captain included. Boat Bros ATX.`,
+      };
     const staticExp = getStaticExperience(slug);
-    if (staticExp) return { title: `Book ${staticExp.title} | Calendar` };
+    if (staticExp)
+      return {
+        title: `Book ${staticExp.title} | Lake Austin Boat Rental`,
+        description: `Book ${staticExp.title} on Lake Austin. Choose date and time. Captain included. Boat Bros ATX.`,
+      };
   } catch {
     // ignore
   }
-  return { title: "Book | Calendar" };
+  return { title: "Book | Lake Austin Boat Rental" };
 }
 
 function BookingUnavailable({ backHref, experienceName }: { backHref: string; experienceName: string }) {

@@ -106,7 +106,7 @@ export function ExperiencesListClient() {
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1, ease: easing }}
             >
-              Pontoon days, wake sessions, sunset cruises — your next adventure starts here.
+              Lake Austin boat rentals: pontoon, wake surf, sunset cruises — book your day on the water.
             </motion.p>
           </div>
         </div>

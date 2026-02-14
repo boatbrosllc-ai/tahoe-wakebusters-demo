@@ -8,11 +8,23 @@ import { FINAL_CTA } from "@/lib/experience/lakeAustinPontoon.data";
 export function FinalCTA({
   onCheckAvailability,
   bookingSectionId,
+  headline,
+  primaryCta,
+  secondaryCta,
+  secondaryHref,
 }: {
   onCheckAvailability?: () => void;
   bookingSectionId?: string;
-}) {
+  headline?: string;
+  primaryCta?: string;
+  secondaryCta?: string;
+  secondaryHref?: string;
+} = {}) {
   const reduceMotion = useReducedMotion();
+  const headlineText = headline ?? FINAL_CTA.headline;
+  const primaryCtaText = primaryCta ?? FINAL_CTA.primaryCta;
+  const secondaryCtaText = secondaryCta ?? FINAL_CTA.secondaryCta;
+  const secondaryHrefUrl = secondaryHref ?? FINAL_CTA.secondaryHref;
 
   const scrollToBooking = () => {
     if (bookingSectionId) {
@@ -39,7 +51,7 @@ export function FinalCTA({
       />
       <div className="relative max-w-4xl mx-auto px-5 sm:px-8 text-center">
         <h2 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white tracking-tight leading-tight">
-          {FINAL_CTA.headline}
+          {headlineText}
         </h2>
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
           <Button
@@ -47,13 +59,13 @@ export function FinalCTA({
             onClick={scrollToBooking}
             className="rounded-full h-14 px-10 text-lg font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/95 shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all w-full sm:w-auto focus-visible:ring-brand-primary"
           >
-            {FINAL_CTA.primaryCta}
+            {primaryCtaText}
           </Button>
           <Link
-            href={FINAL_CTA.secondaryHref}
+            href={secondaryHrefUrl}
             className="text-white/90 text-sm font-medium hover:text-white underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
           >
-            {FINAL_CTA.secondaryCta}
+            {secondaryCtaText}
           </Link>
         </div>
       </div>

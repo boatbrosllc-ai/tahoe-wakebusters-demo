@@ -5,7 +5,18 @@ import { FAQsPageClient } from "./FAQsPageClient";
 
 export const metadata: Metadata = {
   title: "FAQs | Lake Austin Boat Rentals",
-  description: `Frequently asked questions about Lake Austin boat rentals. ${brand.companyName}, Austin TX.`,
+  description:
+    "FAQs about Lake Austin boat rentals: pontoon rental, wake boat, sunset cruise. Captain included, pricing, cancellation. Boat Bros ATX, Austin TX.",
+  keywords: [
+    "Lake Austin boat rental",
+    "boat rental Lake Austin with captain",
+    "Lake Austin pontoon rental",
+    "Lake Austin boat rental prices",
+  ],
+  openGraph: {
+    title: "FAQs | Lake Austin Boat Rentals | Boat Bros",
+    description: "Frequently asked questions about Lake Austin boat rentals. Captain, pricing, booking.",
+  },
 };
 
 function faqJsonLd() {

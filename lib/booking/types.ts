@@ -138,6 +138,18 @@ export interface Experience {
   friSunDays?: number[];
   /** Display order on website (lower = first). Default undefined = last. */
   sortOrder?: number;
+  /** Social proof: star rating (e.g. 4.9). */
+  rating?: number;
+  /** Social proof: e.g. "500+ 5-star days". */
+  ratingCount?: string;
+  /** Short stat pills (e.g. "Top-rated on Lake Austin", "Captain-led", "Free lily pad"). */
+  stats?: string[];
+  /** Tagline above or with title (e.g. "Loved by locals & visitors"). */
+  tagline?: string;
+  /** "What you'll do" steps: label + description (e.g. Dock → Meet your captain). */
+  steps?: { label: string; description: string }[];
+  /** Gallery category labels (e.g. "Vibes", "Boat", "Lake Days") — one per image or grouped. */
+  galleryLabels?: string[];
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents

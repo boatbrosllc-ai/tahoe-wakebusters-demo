@@ -27,7 +27,8 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
   const bookHref = `/experiences/${slug}/book`;
   const firestoreSlug = STATIC_TO_FIRESTORE_SLUG[slug] ?? null;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const gallery = experience.gallery ?? [];
+  // Photo 1 = hero/experience section; gallery starts with photo 2 (index 1)
+  const gallery = (experience.gallery ?? []).slice(1);
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {

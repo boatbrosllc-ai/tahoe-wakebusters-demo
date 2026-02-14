@@ -10,7 +10,7 @@ const footerLinks = [
   { href: "/faqs", label: "FAQs" },
   { href: "/our-story", label: "Our Story" },
   { href: "/contact", label: "Contact" },
-  { href: "/blog", label: "Blog" },
+  { href: "/blog", label: "The Dock" },
 ];
 
 const linkClass =

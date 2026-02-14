@@ -843,7 +843,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       open={open}
       onOpenChange={onOpenChange}
       className={cn(
-        "w-[calc(100vw-2rem)] max-w-md",
+        "w-[calc(100vw-2rem)] max-w-md max-h-[85dvh]",
         "md:max-w-2xl md:max-h-[88vh]",
         "lg:max-w-3xl"
       )}
@@ -863,7 +863,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           <button
             type="button"
             onClick={step > 1 ? handleBack : () => onOpenChange(false)}
-            className="flex items-center gap-1 rounded-lg p-2 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
+            className="flex items-center gap-1 rounded-lg p-2 min-h-[44px] min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
             aria-label={step > 1 ? "Back" : "Close"}
           >
             <ChevronLeft className="h-5 w-5" aria-hidden />
@@ -1201,7 +1201,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           "relative flex flex-col overflow-hidden rounded-lg sm:rounded-xl border-2 text-left transition-all min-h-0",
                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
                           "touch-manipulation",
-                          isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
+                          isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
                           !isAvailable && "cursor-not-allowed",
                           isBooked && "border-brand-dark/25 bg-brand-dark/5",
                           !isAvailable && !isBooked && "opacity-60 bg-brand-dark/5 border-brand-dark/20"
@@ -1225,7 +1225,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           </>
                         )}
                         <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-20")}>
-                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
                         </div>
                       </button>
                     );

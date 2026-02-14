@@ -9,6 +9,7 @@ import {
   Sun,
   LifeBuoy,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { INCLUDED_ITEMS } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
@@ -21,12 +22,34 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   lily: Sun,
   lifejacket: LifeBuoy,
   safety: ShieldCheck,
+  sparkles: Sparkles,
 };
+
+/** Map label text to icon key for dynamic included items (e.g. from Firestore). */
+function getIconKey(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes("captain") || l.includes("skipper")) return "captain";
+  if (l.includes("fuel") || l.includes("gas")) return "fuel";
+  if (l.includes("cooler") || l.includes("ice")) return "cooler";
+  if (l.includes("bluetooth") || l.includes("stereo") || l.includes("music")) return "sound";
+  if (l.includes("lilly") || l.includes("lily") || l.includes("pad") || l.includes("float")) return "lily";
+  if (l.includes("life") || l.includes("vest") || l.includes("jacket") || l.includes("pfd")) return "lifejacket";
+  if (l.includes("safety")) return "safety";
+  if (l.includes("good") && l.includes("vibes")) return "sparkles";
+  return "sparkles";
+}
 
 const ease = [0.22, 1, 0.36, 1];
 
-export function IncludedGrid() {
+export interface IncludedGridItem {
+  icon: string;
+  title: string;
+  desc: string;
+}
+
+export function IncludedGrid({ items: itemsProp }: { items?: IncludedGridItem[] } = {}) {
   const reduceMotion = useReducedMotion();
+  const items = itemsProp?.length ? itemsProp : INCLUDED_ITEMS;
 
   return (
     <section className="bg-brand-dark py-16 sm:py-20 lg:py-24">
@@ -41,8 +64,9 @@ export function IncludedGrid() {
           What&apos;s included
         </motion.h2>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {INCLUDED_ITEMS.map((item, i) => {
-            const Icon = iconMap[item.icon] ?? ShieldCheck;
+          {items.map((item, i) => {
+            const iconKey = item.icon in iconMap ? item.icon : getIconKey(item.title);
+            const Icon = iconMap[iconKey] ?? ShieldCheck;
             return (
               <motion.div
                 key={item.title}

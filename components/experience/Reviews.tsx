@@ -5,12 +5,22 @@ import { Star } from "lucide-react";
 import { REVIEWS } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
 
+export interface ReviewItem {
+  name: string;
+  text: string;
+  location?: string;
+  date?: string;
+  rating?: number;
+  featured?: boolean;
+}
+
 const ease = [0.22, 1, 0.36, 1];
 
-export function Reviews() {
+export function Reviews({ reviews: reviewsProp }: { reviews?: ReviewItem[] } = {}) {
   const reduceMotion = useReducedMotion();
-  const featured = REVIEWS.find((r) => r.featured);
-  const rest = REVIEWS.filter((r) => !r.featured);
+  const list = reviewsProp?.length ? reviewsProp : REVIEWS;
+  const featured = list.find((r) => r.featured) ?? list[0];
+  const rest = list.filter((r) => r !== featured);
 
   return (
     <section className="bg-brand-dark py-16 sm:py-20 lg:py-24">
@@ -33,15 +43,17 @@ export function Reviews() {
             transition={{ duration: 0.7, ease }}
           >
             <div className="flex gap-1 mb-4">
-              {Array.from({ length: featured.rating }).map((_, i) => (
+              {Array.from({ length: featured?.rating ?? 5 }).map((_, i) => (
                 <Star key={i} className="h-5 w-5 fill-brand-primary text-brand-primary" aria-hidden />
               ))}
             </div>
             <p className="font-display text-2xl sm:text-3xl lg:text-4xl text-white leading-snug">
-              &ldquo;{featured.text}&rdquo;
+              &ldquo;{featured?.text}&rdquo;
             </p>
             <p className="mt-6 text-white/70">
-              — {featured.name}, {featured.location} · {featured.date}
+              — {featured?.name}
+              {featured?.location ? `, ${featured.location}` : ""}
+              {featured?.date ? ` · ${featured.date}` : ""}
             </p>
           </motion.div>
         )}
@@ -62,7 +74,9 @@ export function Reviews() {
               </div>
               <p className="text-white/90 text-sm leading-relaxed">&ldquo;{r.text}&rdquo;</p>
               <p className="mt-4 text-white/60 text-sm">
-                {r.name} · {r.location} · {r.date}
+                {r.name}
+                {r.location ? ` · ${r.location}` : ""}
+                {r.date ? ` · ${r.date}` : ""}
               </p>
             </motion.div>
           ))}

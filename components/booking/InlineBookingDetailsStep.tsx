@@ -90,7 +90,7 @@ function PaymentFormInner({
       <button
         type="submit"
         disabled={!stripe || processing}
-        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-60 transition-colors"
+        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 transition-colors"
       >
         {processing ? "Processing…" : "Pay now"}
       </button>
@@ -313,7 +313,7 @@ export function InlineBookingDetailsStep({
         <button
           type="button"
           onClick={onSuccess}
-          className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 hover:bg-brand-primary/90"
+          className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
         >
           Close
         </button>
@@ -337,7 +337,7 @@ export function InlineBookingDetailsStep({
     return (
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-2">
-          <button type="button" onClick={onBack} className="text-sm font-medium text-brand-muted hover:text-brand-primary">
+          <button type="button" onClick={onBack} className="text-sm font-medium min-h-[44px] min-w-[44px] flex items-center touch-manipulation text-brand-muted hover:text-brand-primary">
             ← Back
           </button>
         </div>
@@ -365,7 +365,7 @@ export function InlineBookingDetailsStep({
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between gap-2 mb-3">
-        <button type="button" onClick={onBack} className="text-sm font-medium text-brand-muted hover:text-brand-primary">
+        <button type="button" onClick={onBack} className="text-sm font-medium min-h-[44px] min-w-[44px] flex items-center touch-manipulation text-brand-muted hover:text-brand-primary">
           ← Back
         </button>
         <span className="text-xs font-medium text-brand-muted uppercase tracking-wider">Details & payment</span>
@@ -444,21 +444,21 @@ export function InlineBookingDetailsStep({
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
               placeholder="Full name *"
-              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
             />
             <input
               type="email"
               value={customerEmail}
               onChange={(e) => setCustomerEmail(e.target.value)}
               placeholder="Email *"
-              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
             />
             <input
               type="tel"
               value={customerPhone}
               onChange={(e) => setCustomerPhone(e.target.value)}
               placeholder="Phone *"
-              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
             />
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="rounded border-brand-dark/30 text-brand-primary" />
@@ -483,7 +483,7 @@ export function InlineBookingDetailsStep({
                   const raw = parseInt(e.target.value, 10) || 1;
                   setPartySize(Math.min(experienceMaxGuests, Math.max(1, raw)));
                 }}
-                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
                 aria-label="Party size"
               />
               <p className="text-[11px] text-brand-muted mt-0.5">Max {experienceMaxGuests} guests</p>
@@ -497,7 +497,7 @@ export function InlineBookingDetailsStep({
                 max={Math.min(experiencePetsMax, PETS_MAX)}
                 value={petsCount}
                 onChange={(e) => setPetsCount(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
                 aria-label="Number of pets"
               />
             </div>
@@ -713,7 +713,7 @@ export function InlineBookingDetailsStep({
           <button
             type="button"
             onClick={handleProceedToPayment}
-            className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 hover:bg-brand-primary/90"
+            className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
           >
             Proceed to payment
           </button>
@@ -762,7 +762,7 @@ export function InlineBookingDetailsStep({
                 const v = parseInt(e.target.value, 10);
                 if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
               }}
-              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
+              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 min-h-[44px] text-base touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
             />
           </div>
           <button
@@ -772,7 +772,7 @@ export function InlineBookingDetailsStep({
               setTipChoice("now");
               setTipNowModalOpen(false);
             }}
-            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
           >
             Apply {tipModalPercent}% tip
           </button>
@@ -802,7 +802,7 @@ export function InlineBookingDetailsStep({
               setTipLaterMessageOpen(false);
               setTipChoice("later");
             }}
-            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
           >
             Got it
           </button>

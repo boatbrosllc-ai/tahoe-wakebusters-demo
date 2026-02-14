@@ -1,53 +1,80 @@
 "use client";
 
-import Image from "next/image";
+import { useMemo } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { SOCIAL_PROOF, SOCIAL_AVATARS, SOCIAL_LINE } from "@/lib/experience/lakeAustinPontoon.data";
-import { cn } from "@/lib/utils";
+import { SOCIAL_PROOF } from "@/lib/experience/lakeAustinPontoon.data";
 
-export function SocialProofStrip() {
+export interface SocialProofStripProps {
+  /** Star rating from business (e.g. 4.9). When set with other props, strip uses real business data. */
+  rating?: number;
+  /** Count line from business (e.g. "500+ 5-star days"). Shown as label; if it contains a space, first token is label, rest is sub. */
+  ratingCount?: string;
+  /** Stat pills from business (e.g. "Top-rated on Lake Austin", "Captain-led", "Free lily pad"). "X on Y" → label "X", sub "Y". */
+  stats?: string[];
+  /** Tagline for the avatars block (e.g. "Loved by locals & visitors"). */
+  tagline?: string;
+}
+
+function buildItemsFromExperience(props: SocialProofStripProps): { label: string; sub: string }[] {
+  const { rating, ratingCount, stats } = props;
+  const items: { label: string; sub: string }[] = [];
+  if (rating != null) {
+    items.push({ label: `★ ${Number(rating).toFixed(1)}`, sub: "rating" });
+  }
+  if (ratingCount?.trim()) {
+    const s = ratingCount.trim();
+    const firstSpace = s.indexOf(" ");
+    if (firstSpace > 0) {
+      items.push({ label: s.slice(0, firstSpace), sub: s.slice(firstSpace + 1) });
+    } else {
+      items.push({ label: s, sub: "" });
+    }
+  }
+  (stats ?? []).forEach((stat) => {
+    const t = stat.trim();
+    if (!t) return;
+    const onMatch = t.match(/^(.+?)\s+on\s+(.+)$/);
+    if (onMatch) {
+      items.push({ label: onMatch[1].trim(), sub: onMatch[2].trim() });
+    } else {
+      items.push({ label: t, sub: "" });
+    }
+  });
+  return items;
+}
+
+export function SocialProofStrip({ rating, ratingCount, stats, tagline }: SocialProofStripProps = {}) {
   const reduceMotion = useReducedMotion();
+
+  const useRealData = rating != null || (ratingCount?.trim?.() ?? "") !== "" || (stats?.length ?? 0) > 0;
+  const items = useMemo(() => {
+    if (!useRealData) return SOCIAL_PROOF;
+    const built = buildItemsFromExperience({ rating, ratingCount, stats, tagline });
+    return built.length > 0 ? built : SOCIAL_PROOF;
+  }, [useRealData, rating, ratingCount, stats, tagline]);
 
   return (
     <motion.section
-      className="bg-brand-dark border-y border-white/10 py-4"
+      className="bg-brand-dark border-y border-white/10 py-5 sm:py-4"
       initial={reduceMotion ? false : { opacity: 0 }}
       whileInView={{ opacity: 1 }}
       viewport={{ once: true, amount: 0.3 }}
       transition={{ duration: 0.5 }}
     >
-      <div className="max-w-7xl mx-auto px-5 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-6 overflow-x-auto scrollbar-hide pb-2 -mx-5 px-5 sm:mx-0 sm:px-0">
-          {SOCIAL_PROOF.map((item, i) => (
+      {/* Mobile: full-width horizontal scroll so nothing is cut off; inner min-w-max so scroll works */}
+      <div className="w-full overflow-x-auto overflow-y-hidden scrollbar-hide sm:overflow-visible">
+        <div className="flex flex-nowrap sm:flex-wrap items-center gap-6 sm:gap-8 px-4 py-1 min-w-max sm:min-w-0 sm:max-w-7xl sm:mx-auto sm:px-6 lg:px-8 sm:py-0">
+          {items.map((item, i) => (
             <div
               key={`${item.label}-${i}`}
-              className="flex-shrink-0 flex flex-col items-center gap-0.5"
+              className="flex-shrink-0 flex flex-col items-center gap-0.5 sm:gap-1"
             >
-              <span className="text-white font-semibold text-lg">{item.label}</span>
+              <span className="text-white font-semibold text-lg sm:text-xl whitespace-nowrap">{item.label}</span>
               {item.sub && (
-                <span className="text-white/60 text-xs">{item.sub}</span>
+                <span className="text-white/60 text-xs sm:text-sm whitespace-nowrap">{item.sub}</span>
               )}
             </div>
           ))}
-          <div className="flex-shrink-0 flex items-center gap-2 pl-4 border-l border-white/20">
-            <div className="flex -space-x-2">
-              {SOCIAL_AVATARS.map((src, i) => (
-                <div
-                  key={src}
-                  className="relative w-8 h-8 rounded-full border-2 border-brand-dark overflow-hidden bg-white/20"
-                >
-                  <Image
-                    src={src}
-                    alt=""
-                    width={32}
-                    height={32}
-                    className="object-cover"
-                  />
-                </div>
-              ))}
-            </div>
-            <span className="text-white/80 text-sm whitespace-nowrap">{SOCIAL_LINE}</span>
-          </div>
         </div>
       </div>
     </motion.section>

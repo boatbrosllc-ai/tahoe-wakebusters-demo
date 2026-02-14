@@ -21,3 +21,13 @@ export function getDisplayImageUrl(url: string | null | undefined): string {
   }
   return url;
 }
+
+/** Normalize image URL for equality (e.g. decode %20 so same file matches). Use when excluding hero from gallery. */
+export function normalizeImageUrlForComparison(url: string | null | undefined): string {
+  if (url == null || url === "") return "";
+  try {
+    return decodeURIComponent(String(url)).replace(/\/+/g, "/").trim();
+  } catch {
+    return String(url);
+  }
+}

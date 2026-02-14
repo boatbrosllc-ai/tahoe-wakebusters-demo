@@ -8,9 +8,9 @@ export const HERO = {
   subtitle: "Captain included. Premium sound. Chill, swim, celebrate.",
   primaryCta: "Check Availability",
   secondaryCta: "View Gallery",
-  /** Fallback image if no video. Use local or Unsplash. */
+  /** Hero image — local pontoon photo (same as pontoon experience in content/experiences). */
   imageFallback: "/photos/pontoon-hero-fallback.jpg",
-  unsplashFallback: "https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=1920&q=80",
+  unsplashFallback: "/photos/DSC09399%20(2).webp",
 };
 
 export const BOOKING_PREVIEW = {
@@ -52,6 +52,7 @@ export const EXPERIENCE_OVERVIEW = {
     { icon: "lily", text: "Giant floating lily pad" },
     { icon: "cooler", text: "Cooler + ice + bottled water" },
     { icon: "fuel", text: "Fuel included" },
+    { icon: "sparkles", text: "Good vibes" },
   ],
   timeline: [
     { step: "Dock", desc: "Meet your captain" },
@@ -100,6 +101,7 @@ export const INCLUDED_ITEMS = [
   { icon: "lily", title: "Lily pad", desc: "Giant floating mat for swimming." },
   { icon: "lifejacket", title: "Life jackets", desc: "USCG-approved for all ages." },
   { icon: "safety", title: "Safety first", desc: "Captain-trained; life jackets + brief." },
+  { icon: "sparkles", title: "Good vibes", desc: "Chill atmosphere, great music, and memories." },
 ];
 
 export const PRICING = {

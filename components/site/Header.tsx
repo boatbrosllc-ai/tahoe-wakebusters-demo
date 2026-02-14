@@ -17,6 +17,7 @@ const navLinks = [
   { href: "/experiences", label: "Experiences" },
   { href: "/faqs", label: "FAQs" },
   { href: "/our-story", label: "Our Story" },
+  { href: "/blog", label: "The Dock" },
   { href: "/contact", label: "Contact" },
 ];
 

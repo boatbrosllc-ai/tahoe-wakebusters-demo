@@ -5,7 +5,13 @@ import { BookingCTA } from "@/components/site/BookingCTA";
 
 export const metadata: Metadata = {
   title: "Our Story | Lake Austin Boat Rentals",
-  description: `Meet the crew behind ${brand.companyName}. Local Austin team, premium Lake Austin boat rentals.`,
+  description:
+    "Meet the crew behind Boat Bros. Local Austin team — Lake Austin boat rentals, pontoon, wake surf, sunset cruises. Captain included.",
+  keywords: ["Lake Austin boat rentals", "Boat Bros Austin", "best boat rentals Lake Austin"],
+  openGraph: {
+    title: "Our Story | Lake Austin Boat Rentals | Boat Bros",
+    description: "Meet the crew. Local Austin team — Lake Austin boat rentals, captain included.",
+  },
 };
 
 export default function OurStoryPage() {

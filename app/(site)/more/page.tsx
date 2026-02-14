@@ -17,7 +17,13 @@ import { CallCard } from "@/components/site/CallCard";
 
 export const metadata: Metadata = {
   title: "Menu | Lake Austin Boat Rentals",
-  description: `Browse ${brand.companyName} – experiences, book, story, FAQs, contact. Lake Austin boat rentals, Austin TX.`,
+  description:
+    "Boat Bros — Lake Austin boat rentals: pontoon, wake surf, sunset cruise. Book, experiences, FAQs, contact. Austin TX.",
+  keywords: ["Lake Austin boat rentals", "Boat Bros", "pontoon rental Lake Austin"],
+  openGraph: {
+    title: "Menu | Lake Austin Boat Rentals | Boat Bros",
+    description: "Browse experiences, book, story, FAQs, contact. Lake Austin boat rentals.",
+  },
 };
 
 const pageLinks = [

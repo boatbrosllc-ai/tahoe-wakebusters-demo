@@ -78,6 +78,30 @@
     display: none;
   }
 
+  /* Article prose – readability & hierarchy (Google-friendly) */
+  .article-prose {
+    @apply text-brand-dark;
+  }
+  .article-prose p {
+    @apply text-brand-muted leading-[1.75] mb-6 max-w-[65ch];
+  }
+  .article-prose h2 {
+    @apply text-2xl sm:text-3xl font-bold text-brand-dark mt-12 mb-4 pt-2 border-l-4 border-brand-primary pl-5 first:mt-0;
+  }
+  .article-prose h3 {
+    @apply text-xl font-bold text-brand-dark mt-8 mb-3;
+  }
+  .article-prose ul {
+    @apply list-none space-y-3 mb-6 pl-0 max-w-[65ch];
+  }
+  .article-prose ul li {
+    @apply pl-6 relative text-brand-muted leading-relaxed;
+  }
+  .article-prose ul li::before {
+    content: "";
+    @apply absolute left-0 top-[0.55em] w-2 h-2 rounded-full bg-brand-primary;
+  }
+
   /* Subtle grain overlay for premium hero sections */
   .grain-overlay::after {
     content: "";

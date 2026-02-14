@@ -1,29 +1,42 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import { GALLERY_IMAGES, GALLERY_CATEGORIES } from "@/lib/experience/lakeAustinPontoon.data";
+import { getDisplayImageUrl } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
-export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
+export interface GalleryImageItem {
+  url: string;
+  alt?: string;
+}
+
+export function GalleryMosaic({ id = "gallery", images: imagesProp }: { id?: string; images?: GalleryImageItem[] }) {
   const reduceMotion = useReducedMotion();
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [category, setCategory] = useState<string | null>(null);
+
+  const images = useMemo(() => {
+    if (imagesProp?.length) {
+      return imagesProp.map(({ url, alt }) => ({ url: getDisplayImageUrl(url), alt: alt ?? "" }));
+    }
+    return GALLERY_IMAGES.map((img) => ({ url: img.url, alt: img.alt }));
+  }, [imagesProp]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (selectedIndex == null) return;
       if (e.key === "Escape") setSelectedIndex(null);
       if (e.key === "ArrowLeft")
-        setSelectedIndex((i) => (i === null ? null : (i - 1 + GALLERY_IMAGES.length) % GALLERY_IMAGES.length));
+        setSelectedIndex((i) => (i === null ? null : (i - 1 + images.length) % images.length));
       if (e.key === "ArrowRight")
-        setSelectedIndex((i) => (i === null ? null : (i + 1) % GALLERY_IMAGES.length));
+        setSelectedIndex((i) => (i === null ? null : (i + 1) % images.length));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedIndex]);
+  }, [selectedIndex, images.length]);
 
   useEffect(() => {
     if (selectedIndex != null) document.body.style.overflow = "hidden";
@@ -32,9 +45,9 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
     };
   }, [selectedIndex]);
 
-  // Mosaic: 1 large + 4 small (grid)
-  const main = GALLERY_IMAGES[0];
-  const rest = GALLERY_IMAGES.slice(1, 5);
+  const main = images[0];
+  const rest = images.slice(1, 5);
+  const showCategoryFilter = !imagesProp?.length;
 
   return (
     <section id={id} className="bg-brand-dark py-16 sm:py-20 lg:py-24">
@@ -48,6 +61,7 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
         >
           Gallery
         </motion.h2>
+        {showCategoryFilter && (
         <div className="flex flex-wrap gap-2 mb-8">
           {GALLERY_CATEGORIES.map((c) => (
             <button
@@ -65,7 +79,9 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
             </button>
           ))}
         </div>
+        )}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {main && (
           <motion.button
             type="button"
             className="relative aspect-[4/3] rounded-xl overflow-hidden col-span-2 row-span-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
@@ -85,9 +101,10 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 hover:opacity-100 transition-opacity" />
           </motion.button>
+          )}
           {rest.map((img, i) => (
             <motion.button
-              key={img.url}
+              key={`${img.url}-${i}`}
               type="button"
               className="relative aspect-[4/3] rounded-xl overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
               initial={reduceMotion ? false : { opacity: 0, y: 16 }}
@@ -134,7 +151,7 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
               className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedIndex((i) => (i == null ? GALLERY_IMAGES.length - 1 : (i - 1 + GALLERY_IMAGES.length) % GALLERY_IMAGES.length));
+                setSelectedIndex((i) => (i == null ? images.length - 1 : (i - 1 + images.length) % images.length));
               }}
               aria-label="Previous image"
             >
@@ -145,7 +162,7 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
               className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedIndex((i) => (i == null ? 0 : (i + 1) % GALLERY_IMAGES.length));
+                setSelectedIndex((i) => (i == null ? 0 : (i + 1) % images.length));
               }}
               aria-label="Next image"
             >
@@ -161,8 +178,8 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
               onClick={(e) => e.stopPropagation()}
             >
               <Image
-                src={GALLERY_IMAGES[selectedIndex].url}
-                alt={GALLERY_IMAGES[selectedIndex].alt}
+                src={images[selectedIndex]?.url ?? ""}
+                alt={images[selectedIndex]?.alt ?? ""}
                 fill
                 className="object-contain"
                 sizes="100vw"

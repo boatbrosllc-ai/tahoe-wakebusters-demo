@@ -6,9 +6,15 @@ import { ChevronDown } from "lucide-react";
 import { FAQ_ITEMS } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
 
-export function FAQ() {
+export interface FAQItem {
+  question: string;
+  answer: string;
+}
+
+export function FAQ({ items: itemsProp }: { items?: FAQItem[] } = {}) {
   const reduceMotion = useReducedMotion();
   const [openIndex, setOpenIndex] = useState<number | null>(0);
+  const items = itemsProp?.length ? itemsProp : FAQ_ITEMS;
 
   return (
     <section className="bg-brand-dark py-16 sm:py-20 lg:py-24">
@@ -23,7 +29,7 @@ export function FAQ() {
           FAQ
         </motion.h2>
         <div className="space-y-2">
-          {FAQ_ITEMS.map((item, i) => {
+          {items.map((item, i) => {
             const isOpen = openIndex === i;
             return (
               <motion.div

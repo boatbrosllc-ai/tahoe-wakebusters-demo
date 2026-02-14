@@ -43,7 +43,7 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking.", notes: "Parking available nearby." },
     maxGuests: 14,
     petsMax: 4,
-    included: ["Captain", "Cooler", "Bluetooth stereo", "Shade canopy", "Life vests"],
+    included: ["Captain", "Cooler", "Bluetooth stereo", "Shade canopy", "Life vests", "Good vibes"],
     whatToBring: ["Sunscreen", "Water-friendly shoes", "Valid ID"],
     rules: ["No glass on board", "No smoking", "Follow captain instructions"],
     cancellationPolicy: CANCELLATION_POLICY,
