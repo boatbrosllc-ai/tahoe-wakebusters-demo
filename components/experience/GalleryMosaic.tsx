@@ -134,7 +134,7 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
               className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedIndex((i) => (i - 1 + GALLERY_IMAGES.length) % GALLERY_IMAGES.length);
+                setSelectedIndex((i) => (i == null ? GALLERY_IMAGES.length - 1 : (i - 1 + GALLERY_IMAGES.length) % GALLERY_IMAGES.length));
               }}
               aria-label="Previous image"
             >
@@ -145,7 +145,7 @@ export function GalleryMosaic({ id = "gallery" }: { id?: string }) {
               className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedIndex((i) => (i + 1) % GALLERY_IMAGES.length);
+                setSelectedIndex((i) => (i == null ? 0 : (i + 1) % GALLERY_IMAGES.length));
               }}
               aria-label="Next image"
             >
