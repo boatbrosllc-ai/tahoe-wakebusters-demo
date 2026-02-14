@@ -105,9 +105,7 @@ export function Header() {
               className="flex items-center justify-center w-8 h-8 rounded text-white/90 hover:text-white hover:bg-white/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-secondary"
               aria-label="Yelp"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                <path d="M20.16 12.73l-4.27 1.62.96 2.53a2.24 2.24 0 0 1-1.14 2.94 2.24 2.24 0 0 1-2.94-1.14l-.97-2.54-2.74.46a.56.56 0 0 1-.6-.36.56.56 0 0 1 .35-.7l2.75-.46-.46-2.74a.56.56 0 0 1 .35-.7.56.56 0 0 1 .7.35l.47 2.75 4.27-1.62-.47-2.74a.56.56 0 0 1 .35-.7.56.56 0 0 1 .7.35l.48 2.8zm-7.5 4.5l.96 2.53a2.24 2.24 0 0 1-1.14 2.94 2.24 2.24 0 0 1-2.94-1.14l-.97-2.54-4.27 1.62.47 2.74a.56.56 0 0 1-.35.7.56.56 0 0 1-.7-.35l-.48-2.8-2.74.46a.56.56 0 0 1-.6-.36.56.56 0 0 1 .35-.7l2.75-.46-.96-2.53a2.24 2.24 0 0 1 1.14-2.94 2.24 2.24 0 0 1 2.94 1.14l.97 2.54 2.74-.46-.47-2.74a.56.56 0 0 1 .35-.7.56.56 0 0 1 .7.35l.48 2.8 4.27-1.62zm-1.5-5.46l.48 2.8 2.74-.46-.96-2.53a2.24 2.24 0 0 1 1.14-2.94 2.24 2.24 0 0 1 2.94 1.14l.97 2.54.97-2.54a2.24 2.24 0 0 1 2.94-1.14 2.24 2.24 0 0 1 1.14 2.94l-.96 2.53 2.74.46a.56.56 0 0 1 .35.7.56.56 0 0 1-.7.35l-2.75-.46-.48 2.8a.56.56 0 0 1-.7.35.56.56 0 0 1-.35-.7l.47-2.74-4.27-1.62-.47 2.74a.56.56 0 0 1-.7.35.56.56 0 0 1-.35-.7l.48-2.8z" />
-              </svg>
+              <Image src="/photos/yelp.png" alt="" width={16} height={16} className="w-4 h-4 object-contain brightness-0 invert" aria-hidden />
             </a>
           )}
           {brand.socials.tripadvisor && (
@@ -118,9 +116,7 @@ export function Header() {
               className="flex items-center justify-center w-8 h-8 rounded text-white/90 hover:text-white hover:bg-white/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-secondary"
               aria-label="TripAdvisor"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                <path d="M12.006 4.295c-2.67 0-5.338.784-7.645 2.353H0l2.96 2.955a5.997 5.997 0 0 0 4.043 10.43 5.976 5.976 0 0 0 4.075-1.6L12 19.705l1.022-1.02a5.976 5.976 0 0 0 4.075 1.6 5.997 5.997 0 0 0 4.043-10.43L24 6.648h-4.35a13.573 13.573 0 0 0-7.644-2.353zM12 6.255c1.531 0 2.711 1.24 2.711 2.77 0 1.53-1.18 2.77-2.71 2.77-1.531 0-2.712-1.24-2.712-2.77 0-1.53 1.18-2.77 2.71-2.77zm0 10.49c-2.372 0-4.303-1.92-4.303-4.285 0-2.365 1.931-4.285 4.303-4.285 2.372 0 4.303 1.92 4.303 4.285 0 2.365-1.931 4.285-4.303 4.285z" />
-              </svg>
+              <Image src="/photos/tripadvisor.png" alt="" width={24} height={24} className="w-6 h-6 object-contain brightness-0 invert" aria-hidden />
             </a>
           )}
         </div>

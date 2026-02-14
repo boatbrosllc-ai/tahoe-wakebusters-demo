@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { brand } from "@/content/brand";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 
@@ -112,9 +113,10 @@ export function Footer() {
                   href={brand.socials.yelp}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+                  className="inline-flex items-center gap-1.5 text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
                   aria-label="Yelp"
                 >
+                  <Image src="/photos/yelp.png" alt="" width={20} height={20} className="w-5 h-5 shrink-0 object-contain brightness-0 invert" aria-hidden />
                   Yelp
                 </a>
               )}
@@ -123,9 +125,10 @@ export function Footer() {
                   href={brand.socials.tripadvisor}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+                  className="inline-flex items-center gap-1.5 text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
                   aria-label="TripAdvisor"
                 >
+                  <Image src="/photos/tripadvisor.png" alt="" width={20} height={20} className="w-5 h-5 shrink-0 object-contain brightness-0 invert" aria-hidden />
                   TripAdvisor
                 </a>
               )}
