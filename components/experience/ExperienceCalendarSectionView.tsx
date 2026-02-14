@@ -992,13 +992,14 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                       "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all flex flex-col items-center justify-center min-h-[52px]",
                       "border-brand-dark/15 hover:border-brand-dark/30"
                     );
-                    if (useOpenInModal && selectedDate) {
+                    if (onOpenInModal && selectedDate) {
+                      const openModal = onOpenInModal;
                       return (
                         <button
                           key={slot.id}
                           type="button"
                           onClick={() => {
-                            onOpenInModal?.({
+                            openModal({
                               experienceId: experienceId ?? undefined,
                               experienceSlug: experienceSlug ?? undefined,
                               date: selectedDate,
