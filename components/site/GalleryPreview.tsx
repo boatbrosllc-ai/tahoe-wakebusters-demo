@@ -8,6 +8,8 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // All from public/photos (URL-encode spaces as %20)
+const INITIAL_COUNT = 6;
+
 const images = [
   "/photos/IMG_8520.webp",
   "/photos/IMG_3160.webp",
@@ -36,6 +38,10 @@ const images = [
 
 export function GalleryPreview() {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const visibleImages = showAll ? images : images.slice(0, INITIAL_COUNT);
+  const moreImages = !showAll ? images.slice(INITIAL_COUNT) : [];
+  const hasMore = images.length > INITIAL_COUNT && !showAll;
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {
@@ -60,8 +66,8 @@ export function GalleryPreview() {
         <p className="text-base sm:text-lg text-brand-muted text-center max-w-2xl mx-auto mb-8 sm:mb-10">
           Lake Austin views, boats, and good times.
         </p>
-        <div className="grid grid-cols-3 gap-3 sm:gap-4 lg:gap-5">
-          {images.map((src, i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 lg:gap-5">
+          {visibleImages.map((src, i) => (
             <motion.button
               type="button"
               key={src}
@@ -83,11 +89,52 @@ export function GalleryPreview() {
                 alt=""
                 fill
                 className="object-cover transition-transform duration-500 ease-out group-hover:scale-110"
-                sizes="(max-width: 640px) 33vw, (max-width: 1024px) 33vw, 20vw"
+                sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
               />
             </motion.button>
           ))}
         </div>
+        {hasMore && moreImages.length > 0 && (
+          <>
+            {/* Mobile: horizontal swipe strip for more photos */}
+            <div className="mt-6 sm:hidden">
+              <p className="text-sm text-brand-muted mb-2 px-1">Swipe for more</p>
+              <div className="overflow-x-auto overflow-y-hidden scrollbar-hide -mx-5 px-5 pb-2 -webkit-overflow-scrolling-touch">
+                <div className="flex gap-3 min-w-max">
+                  {moreImages.map((src) => (
+                    <button
+                      type="button"
+                      key={src}
+                      onClick={() => setLightboxSrc(src)}
+                      className="relative shrink-0 w-[180px] aspect-[4/3] rounded-xl overflow-hidden bg-brand-dark/10 shadow-soft ring-1 ring-brand-dark/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg"
+                      aria-label="View photo"
+                    >
+                      <Image
+                        src={src}
+                        alt=""
+                        fill
+                        className="object-cover"
+                        sizes="180px"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <p className="mt-6 text-center">
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="inline-flex items-center gap-2 rounded-full border-2 border-brand-primary bg-transparent px-6 py-3 text-brand-primary font-semibold hover:bg-brand-primary hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg"
+              >
+                Load more photos
+              </button>
+            </p>
+            <p className="mt-2 text-center text-sm text-brand-muted sm:hidden">
+              Or tap &quot;Load more&quot; to see all {images.length} in the grid
+            </p>
+          </>
+        )}
         <p className="mt-6 sm:mt-6 text-center">
           <Link
             href="/experiences"

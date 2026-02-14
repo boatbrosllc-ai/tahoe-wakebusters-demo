@@ -6,6 +6,7 @@ import { HowItWorks } from "@/components/site/HowItWorks";
 import { Testimonials } from "@/components/site/Testimonials";
 import { GalleryPreview } from "@/components/site/GalleryPreview";
 import { LeadCapture } from "@/components/site/LeadCapture";
+import { PrefetchCriticalRoutes } from "@/components/site/PrefetchCriticalRoutes";
 
 export const metadata: Metadata = {
   title: "Lake Austin Boat Rentals | Pontoon, Wake Surf & Sunset Cruises",
@@ -31,6 +32,7 @@ export const metadata: Metadata = {
 export default function HomePage() {
   return (
     <>
+      <PrefetchCriticalRoutes />
       <Hero />
       <ExperienceChooser />
       <HowItWorks />

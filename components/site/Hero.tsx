@@ -9,6 +9,8 @@ import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
 const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
+/** Poster for LCP and fallback before video plays — avoids video competing with LCP. */
+const HERO_VIDEO_POSTER = "/photos/IMG_0386.webp";
 
 const bullets = [
   "Lake Austin",
@@ -28,6 +30,8 @@ export function Hero() {
           muted
           loop
           playsInline
+          preload="metadata"
+          poster={HERO_VIDEO_POSTER}
           className="absolute inset-0 w-full h-full object-cover"
           aria-hidden
         >
@@ -50,7 +54,7 @@ export function Hero() {
               type: "spring",
               stiffness: 380,
               damping: 19,
-              opacity: { duration: 0.25 },
+              opacity: { duration: 0.2 },
               scale: { type: "spring", stiffness: 400, damping: 12 },
             }}
           >
@@ -86,7 +90,7 @@ export function Hero() {
             className="lg:mt-2 w-full"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.1 }}
+            transition={{ duration: 0.4, delay: 0.06 }}
           >
             <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
               Lake Austin boat rentals, done right.
@@ -95,7 +99,7 @@ export function Hero() {
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.18 }}
+              transition={{ duration: 0.4, delay: 0.12 }}
             >
               Captained charters for lake days & celebrations — check availability & book online now.
             </motion.p>
@@ -106,7 +110,7 @@ export function Hero() {
             className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1.5 sm:mt-5 sm:gap-x-4 lg:mt-6 lg:gap-x-5 lg:gap-y-2"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, delay: 0.25 }}
+            transition={{ duration: 0.35, delay: 0.2 }}
           >
             {bullets.map((item, i) => (
               <li key={i} className="flex items-center justify-center gap-1.5 text-xs text-white/85 sm:text-sm lg:text-base">
@@ -121,7 +125,7 @@ export function Hero() {
             className="mt-5 sm:mt-6 mb-4 sm:mb-5"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, delay: 0.28 }}
+            transition={{ duration: 0.35, delay: 0.24 }}
           >
             <TrustRow className="text-xs sm:text-sm lg:text-base text-white/85" />
           </motion.div>
@@ -131,7 +135,7 @@ export function Hero() {
             className="mt-4 w-full max-w-sm mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.35 }}
+            transition={{ duration: 0.4, delay: 0.3 }}
           >
             <div className="relative rounded-2xl p-[1px] bg-gradient-to-b from-white/20 to-transparent shadow-[0_0_40px_rgba(254,63,147,0.12)] lg:rounded-3xl">
               <div className="rounded-2xl bg-brand-dark/50 backdrop-blur-sm p-4 sm:p-5 lg:p-6 lg:rounded-3xl">

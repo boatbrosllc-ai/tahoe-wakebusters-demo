@@ -85,6 +85,44 @@
     overflow-y: hidden;
   }
 
+  /* Navigation progress bar – thin bar at top during client-side nav */
+  .nav-progress-bar-inner {
+    animation: navProgress 0.8s ease-in-out infinite;
+  }
+  @keyframes navProgress {
+    0% {
+      transform: translateX(-100%);
+    }
+    50% {
+      transform: translateX(200%);
+    }
+    100% {
+      transform: translateX(-100%);
+    }
+  }
+
+  /* Staged skeleton reveal – animation-delay per stage (no inline styles) */
+  .skeleton-reveal-stage-0 { animation-delay: 0ms; }
+  .skeleton-reveal-stage-1 { animation-delay: 100ms; }
+  .skeleton-reveal-stage-2 { animation-delay: 200ms; }
+
+  /* View Transitions API – smooth crossfade between pages (ignored if unsupported) */
+  @supports (view-transition-name: root) {
+    ::view-transition-old(root) {
+      animation: view-transition-fade-out 0.2s ease-out forwards;
+    }
+    ::view-transition-new(root) {
+      animation: view-transition-fade-in 0.25s ease-out 0.05s both;
+    }
+  }
+  @keyframes view-transition-fade-out {
+    to { opacity: 0; }
+  }
+  @keyframes view-transition-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
   /* Article prose – readability & hierarchy (Google-friendly) */
   .article-prose {
     @apply text-brand-dark;

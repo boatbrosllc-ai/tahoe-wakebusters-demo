@@ -5,6 +5,7 @@ import {
   Compass,
   CalendarCheck,
   BookOpen,
+  Newspaper,
   HelpCircle,
   Mail,
   ChevronRight,
@@ -45,6 +46,12 @@ const pageLinks = [
     label: "Our Story",
     icon: BookOpen,
     description: "Meet the crew behind Boat Bros and our story",
+  },
+  {
+    href: "/blog",
+    label: "The Dock",
+    icon: Newspaper,
+    description: "Boat tips, Austin events, and lake & boating news",
   },
   {
     href: "/faqs",

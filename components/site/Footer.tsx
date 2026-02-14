@@ -7,10 +7,10 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 const footerLinks = [
   { href: "/experiences", label: "Experiences" },
   { href: "/booking", label: "Book" },
-  { href: "/faqs", label: "FAQs" },
   { href: "/our-story", label: "Our Story" },
-  { href: "/contact", label: "Contact" },
   { href: "/blog", label: "The Dock" },
+  { href: "/faqs", label: "FAQs" },
+  { href: "/contact", label: "Contact" },
 ];
 
 const linkClass =
