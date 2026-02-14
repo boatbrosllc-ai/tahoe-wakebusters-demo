@@ -69,13 +69,20 @@
     filter: brightness(0.9);
   }
 
-  /* Hide scrollbar for horizontal gallery strip */
+  /* Hide scrollbar for horizontal gallery strip; touch-friendly scroll on mobile */
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+  /* Social proof strip: ensure horizontal scroll works and content isn't cut off on mobile */
+  .social-proof-scroll {
+    -webkit-overflow-scrolling: touch;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   /* Article prose – readability & hierarchy (Google-friendly) */
