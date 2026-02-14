@@ -68,7 +68,7 @@ export function Reviews({ reviews: reviewsProp }: { reviews?: ReviewItem[] } = {
               transition={{ duration: 0.5, delay: 0.05 * i, ease }}
             >
               <div className="flex gap-1 mb-3">
-                {Array.from({ length: r.rating }).map((_, j) => (
+                {Array.from({ length: r.rating ?? 5 }).map((_, j) => (
                   <Star key={j} className="h-4 w-4 fill-brand-primary text-brand-primary" aria-hidden />
                 ))}
               </div>
