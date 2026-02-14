@@ -63,7 +63,7 @@ export function IncludedGrid({ items: itemsProp }: { items?: IncludedGridItem[] 
         >
           What&apos;s included
         </motion.h2>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
           {items.map((item, i) => {
             const iconKey = item.icon in iconMap ? item.icon : getIconKey(item.title);
             const Icon = iconMap[iconKey] ?? ShieldCheck;
