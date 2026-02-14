@@ -454,8 +454,6 @@ export function ExperienceCalendarSection({
   const didFetchSlots = !!experienceId;
   const noAvailabilityBecauseNotSetUp = !experienceId && !!firestoreSlug && !loading;
 
-  if (!experienceIdProp && !firestoreSlug) return null;
-
   const selectedDateLabel = selectedDate
     ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
     : "";
@@ -489,6 +487,8 @@ export function ExperienceCalendarSection({
     ro.observe(el);
     return () => ro.disconnect();
   }, [onOpenInModal, slidingPanelIndex, loading, showInlineBoatStep, showDetailsStep, inlineBoats.length, selectedDate, selectedSlotInline, inlineDetailsStepReady, selectedDurationForModal]);
+
+  if (!experienceIdProp && !firestoreSlug) return null;
 
   return (
     <>

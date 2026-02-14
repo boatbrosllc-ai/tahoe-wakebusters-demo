@@ -83,7 +83,12 @@ export function ExperiencesListClient() {
     <div className="min-h-screen bg-white">
       {/* Hero – gradient + motion */}
       <section className="relative h-[45vh] min-h-[320px] max-h-[480px] overflow-hidden bg-brand-dark">
-        <Image src="/photos/IMG_2123.webp" alt="" fill className="object-cover object-[center_78%]" priority sizes="100vw" />
+        <div className="absolute inset-0 sm:hidden">
+          <Image src="/photos/IMG_0386.webp" alt="" fill className="object-cover object-[center_62%]" priority sizes="100vw" />
+        </div>
+        <div className="absolute inset-0 hidden sm:block">
+          <Image src="/photos/IMG_2123.webp" alt="" fill className="object-cover object-[center_78%]" priority sizes="100vw" />
+        </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 from-30% via-black/25 to-transparent" />
         <div className="absolute inset-0 flex flex-col justify-end pb-12 sm:pb-16 lg:pb-20">
           <div className={contentWidth + " relative"}>
