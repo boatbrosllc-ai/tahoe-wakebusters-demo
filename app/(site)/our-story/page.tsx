@@ -11,38 +11,40 @@ export const metadata: Metadata = {
 
 export default function OurStoryPage() {
   return (
-    <div className="min-h-screen bg-brand-bg/40">
-      {/* Hero – brothers photo with overlay */}
-      <section className="relative aspect-[3/4] sm:aspect-[21/9] min-h-[320px] sm:min-h-[360px] lg:min-h-[420px] max-h-[75vh] sm:max-h-[55vh] overflow-hidden">
+    <div className="min-h-screen w-full bg-brand-bg">
+      {/* Hero – full width, centered content */}
+      <section className="relative w-full aspect-[3/4] sm:aspect-[21/9] min-h-[320px] sm:min-h-[360px] lg:min-h-[420px] max-h-[75vh] sm:max-h-[55vh] overflow-hidden">
         <Image
           src="/photos/brothers.webp"
           alt="The Boat Bros crew – local Austin team"
           fill
-          className="object-cover object-[center_20%]"
+          className="object-cover object-[center_30%]"
           priority
           sizes="100vw"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/40 to-brand-dark/20" />
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/10 via-transparent to-brand-muted/5" aria-hidden />
-        <div className="absolute inset-0 flex flex-col justify-end px-5 py-12 sm:px-8 sm:py-14 lg:px-12 lg:py-20">
-          <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-brand-primary mb-3">
-            Lake Austin boat rentals
-          </p>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-bold text-white tracking-tight drop-shadow-lg">
-            Our story
-          </h1>
-          <p className="mt-3 text-lg sm:text-xl lg:text-2xl text-white/90 max-w-2xl">
-            The crew behind {brand.companyName} – Lake Austin boat rentals, done right.
-          </p>
+        <div className="absolute inset-0 flex flex-col items-center justify-end text-center w-full px-5 py-12 sm:px-8 sm:py-14 lg:px-12 lg:py-20">
+          <div className="w-full max-w-4xl mx-auto">
+            <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-brand-primary mb-3">
+              Lake Austin boat rentals
+            </p>
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-bold text-white tracking-tight drop-shadow-lg">
+              Our story
+            </h1>
+            <p className="mt-3 text-lg sm:text-xl lg:text-2xl text-white/90 max-w-2xl mx-auto">
+              The crew behind {brand.companyName} – Lake Austin boat rentals, done right.
+            </p>
+          </div>
         </div>
       </section>
 
-      {/* Story content – card overlapping hero */}
-      <section className="relative -mt-12 sm:-mt-16 z-20 px-4 sm:px-6 lg:px-8 pb-20 lg:pb-28">
-        <div className="container-narrow mx-auto">
-          <article className="rounded-2xl sm:rounded-3xl border-2 border-brand-dark/10 bg-white shadow-premium overflow-hidden">
+      {/* Story content – centered card */}
+      <section className="relative -mt-12 sm:-mt-16 z-20 w-full px-4 sm:px-6 lg:px-8 pb-20 lg:pb-28 flex justify-center bg-brand-bg">
+        <div className="w-full max-w-4xl">
+          <article className="rounded-2xl sm:rounded-3xl border-2 border-brand-dark/10 bg-white/90 shadow-premium overflow-hidden backdrop-blur-sm">
             <div className="p-6 sm:p-8 lg:p-10 xl:p-12">
-              <p className="text-xl sm:text-2xl lg:text-3xl text-brand-dark font-semibold leading-relaxed mb-8 border-l-4 border-brand-primary pl-6 -ml-6 sm:pl-8 sm:-ml-8">
+              <p className="text-xl sm:text-2xl lg:text-3xl text-brand-dark font-semibold leading-relaxed mb-8 border-l-4 border-brand-primary pl-6 sm:pl-8">
                 We&apos;re a local Austin crew who love Lake Austin and wanted to share the best of the lake with visitors and locals alike.
               </p>
               <div className="space-y-6 text-brand-muted leading-relaxed text-base sm:text-lg">

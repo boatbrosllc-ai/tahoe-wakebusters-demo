@@ -88,7 +88,7 @@ export function Hero() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, delay: 0.18 }}
             >
-              Pontoon, Watersports, Sunset Cruise, or Holiday Tour on the water. Local crew, easy booking.
+              Captained charters for lake days & celebrations — check availability & book online now.
             </motion.p>
           </motion.div>
 

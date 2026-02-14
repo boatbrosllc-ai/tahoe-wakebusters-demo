@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
-import { experiences as staticExperiences } from "@/content/experiences";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
 export interface ExperienceListItem {
   id: string;
@@ -35,7 +35,7 @@ export async function GET() {
         title: exp.title ?? "",
         subtitle: exp.subtitle ?? "",
         heroMedia: exp.heroMedia ?? { type: "image", url: "" },
-        maxGuests: exp.maxGuests ?? 14,
+        maxGuests: getMaxGuestsForExperience(exp),
         petsMax: exp.petsMax ?? 0,
         fromPriceCents,
         active: exp.active ?? true,
@@ -58,15 +58,7 @@ export async function GET() {
       if (slugA !== slugB) return slugA - slugB;
       return (a.title ?? "").localeCompare(b.title ?? "");
     });
-    // Override hero images with content/experiences so Book now "choose experience" matches site
-    const withHeroFromContent = list.map((item) => {
-      const staticExp = staticExperiences.find((e) => (e.slug ?? "").toLowerCase() === (item.slug ?? "").toLowerCase());
-      if (staticExp?.heroImage) {
-        return { ...item, heroMedia: { type: "image" as const, url: staticExp.heroImage } };
-      }
-      return item;
-    });
-    return NextResponse.json({ experiences: withHeroFromContent });
+    return NextResponse.json({ experiences: list });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isConfigMissing =

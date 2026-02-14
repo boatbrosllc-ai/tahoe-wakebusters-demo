@@ -11,7 +11,7 @@ export const metadata: Metadata = {
     template: `%s | ${brand.companyName}`,
   },
   description:
-    "Lake Austin boat rentals – pontoon parties, wake & surf, sunset cruises, family days & corporate outings. Premium boats, local crew, easy booking. Austin TX.",
+    "Captained charters for lake days & celebrations — check availability & book online now. Austin TX.",
   openGraph: {
     type: "website",
     locale: "en_US",

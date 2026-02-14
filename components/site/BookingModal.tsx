@@ -450,6 +450,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .finally(() => setSlotsLoading(false));
   }, [selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
 
+  // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 8)
+  useEffect(() => {
+    const max = selectedExperience?.maxGuests ?? 14;
+    setPartySize((prev) => (prev > max ? max : prev));
+  }, [selectedExperience?.id, selectedExperience?.maxGuests]);
+
   // Clear time selection when date is cleared (e.g. modal reset)
   useEffect(() => {
     if (!selectedDate) setSelectedSlot(null);
@@ -608,6 +614,44 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     tipLaterWasOpenRef.current = tipLaterMessageOpen;
   }, [tipLaterMessageOpen]);
 
+  // Confetti when booking is confirmed (payment success) — dynamic import to avoid SSR resolution
+  useEffect(() => {
+    if (step !== 4 || paymentPhase !== "success") return;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    import("canvas-confetti").then(({ default: confetti }) => {
+      if (cancelled) return;
+      const duration = 2500;
+      const end = Date.now() + duration;
+      const frame = () => {
+        if (cancelled) return;
+        confetti({
+          particleCount: 3,
+          angle: 60,
+          spread: 55,
+          origin: { x: 0 },
+          colors: ["#50bdba", "#2d8a87", "#f4a6b8", "#ffd54f"],
+        });
+        confetti({
+          particleCount: 3,
+          angle: 120,
+          spread: 55,
+          origin: { x: 1 },
+          colors: ["#50bdba", "#2d8a87", "#f4a6b8", "#ffd54f"],
+        });
+        if (Date.now() < end) requestAnimationFrame(frame);
+      };
+      frame();
+      timeoutId = setTimeout(() => {
+        if (!cancelled) confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+      }, 200);
+    });
+    return () => {
+      cancelled = true;
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
+  }, [step, paymentPhase]);
+
   useEffect(() => {
     if (!selectedExperience?.id || !selectedRateId || !selectedDate) {
       setEffectiveRateCents(null);
@@ -699,7 +743,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
       return;
     }
-    const maxGuests = selectedExperience.maxGuests ?? 14;
+    const maxGuests = selectedExperience?.maxGuests ?? 14;
     const maxPets = selectedExperience.petsMax ?? 0;
     if (partySize < 1 || partySize > maxGuests) {
       setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${maxGuests}.`);
@@ -1393,10 +1437,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           min={1}
                           max={selectedExperience?.maxGuests ?? 14}
                           value={partySize}
-                          onChange={(e) => setPartySize(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          onChange={(e) => {
+                            const max = selectedExperience?.maxGuests ?? 14;
+                            const raw = parseInt(e.target.value, 10) || 1;
+                            setPartySize(Math.min(max, Math.max(1, raw)));
+                          }}
                           required
                           className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
                         />
+                        <p className="text-[11px] text-brand-muted mt-0.5">Max {selectedExperience?.maxGuests ?? 14} guests</p>
                       </div>
                       <div>
                         <label htmlFor="booking-pets" className="block text-sm font-medium text-brand-dark mb-1">Pets</label>

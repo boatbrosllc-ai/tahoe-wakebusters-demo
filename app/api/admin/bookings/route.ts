@@ -27,6 +27,16 @@ function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: st
   return null;
 }
 
+/** Normalize to YYYY-MM-DD so range comparison works (e.g. "2026-2-18" -> "2026-02-18"). */
+function normalizeTripDateStr(s: string | null | undefined): string | null {
+  if (!s || typeof s !== "string") return null;
+  const trimmed = s.trim();
+  const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
 /** Addon with display name for admin list/detail */
 export type AddonWithName = { addonId: string; name: string; qty: number };
 
@@ -54,24 +64,29 @@ export async function GET(request: NextRequest) {
     let docs: QueryDocumentSnapshot[];
     if (fromTripDate && toTripDate) {
       const tripLimit = Math.min(limit, 500);
-      const byTripSnap = await db
-        .collection("bookings")
-        .where("startDateStr", ">=", fromTripDate)
-        .where("startDateStr", "<=", toTripDate)
-        .limit(tripLimit)
-        .get();
-      const createdAtSnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
       const tripDateInRange = (b: Booking) => {
         const startDateStr = (b as { startDateStr?: string }).startDateStr;
-        if (startDateStr) return startDateStr >= fromTripDate && startDateStr <= toTripDate;
         const parsed = parseSlotIdForDisplay(b.slotId);
-        const tripDate = parsed?.dateStr ?? null;
-        if (!tripDate) return false;
-        return tripDate >= fromTripDate && tripDate <= toTripDate;
+        const tripDateNorm = normalizeTripDateStr(startDateStr ?? parsed?.dateStr ?? null);
+        if (!tripDateNorm) return false;
+        return tripDateNorm >= fromTripDate && tripDateNorm <= toTripDate;
       };
+      let byTripDocs: QueryDocumentSnapshot[] = [];
+      try {
+        const byTripSnap = await db
+          .collection("bookings")
+          .where("startDateStr", ">=", fromTripDate)
+          .where("startDateStr", "<=", toTripDate)
+          .limit(tripLimit)
+          .get();
+        byTripDocs = byTripSnap.docs;
+      } catch {
+        // Index may be missing; fall back to createdAt + in-memory filter
+      }
+      const createdAtSnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
       const fromCreatedAt = createdAtSnap.docs.filter((d) => tripDateInRange(d.data() as Booking));
       const merged = new Map<string, QueryDocumentSnapshot>();
-      byTripSnap.docs.forEach((d) => merged.set(d.id, d));
+      byTripDocs.forEach((d) => merged.set(d.id, d));
       fromCreatedAt.forEach((d) => {
         if (!merged.has(d.id)) merged.set(d.id, d);
       });
@@ -145,13 +160,13 @@ export async function GET(request: NextRequest) {
     let list = docs.map((d) => {
       const b = d.data() as Booking & { startDateStr?: string };
       const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-      let startDate: string | null = b.startDateStr ?? null;
+      const parsed = parseSlotIdForDisplay(b.slotId);
+      const rawTripDate = b.startDateStr ?? parsed?.dateStr ?? null;
+      const startDate = normalizeTripDateStr(rawTripDate);
       let startTime: string | null = null;
       let endTime: string | null = null;
       let durationHours: number | null = null;
-      const parsed = parseSlotIdForDisplay(b.slotId);
       if (parsed) {
-        if (!startDate) startDate = parsed.dateStr;
         durationHours = parsed.durationHours;
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
         startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -202,7 +217,8 @@ export async function GET(request: NextRequest) {
 
     if (fromTripDate || toTripDate) {
       list = list.filter((item) => {
-        const tripDate = item.startDate ?? item.createdAt?.slice(0, 10);
+        const raw = item.startDate ?? item.createdAt?.slice(0, 10);
+        const tripDate = normalizeTripDateStr(raw);
         if (!tripDate) return false;
         if (fromTripDate && tripDate < fromTripDate) return false;
         if (toTripDate && tripDate > toTripDate) return false;

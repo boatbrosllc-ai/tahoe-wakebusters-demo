@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { Dialog } from "@/components/ui/dialog";
+import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
 
@@ -54,6 +56,12 @@ function getDaysInMonth(year: number, month: number): { dateStr: string; label: 
 
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
 
+interface BoatOption {
+  id: string;
+  name: string;
+  photos?: string[];
+}
+
 function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
 }
@@ -81,6 +89,10 @@ interface ExperienceCalendarSectionProps {
   directCheckout?: boolean;
   /** When set, picking a time opens the app BookingModal with this selection (experience + date + slot). Use for "calendar first" flow. */
   onOpenInModal?: (selection: ExperienceCalendarOpenModalSelection) => void;
+  /** When provided with ratesForDetails and addonsForDetails, details & payment step is shown inline (third panel) instead of opening the modal. */
+  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number };
+  ratesForDetails?: RateOption[];
+  addonsForDetails?: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
   className?: string;
 }
 
@@ -93,6 +105,9 @@ export function ExperienceCalendarSection({
   bookHref,
   directCheckout = false,
   onOpenInModal,
+  experienceForDetails,
+  ratesForDetails,
+  addonsForDetails,
   className,
 }: ExperienceCalendarSectionProps) {
   const [experienceId, setExperienceId] = useState<string | null>(experienceIdProp ?? null);
@@ -107,6 +122,17 @@ export function ExperienceCalendarSection({
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   /** When using inline step-2 (onOpenInModal), the slot chosen for "Continue to choose your boat". */
   const [selectedSlotInline, setSelectedSlotInline] = useState<SlotDto | null>(null);
+  /** When true, show "Choose your boat" inline on the page instead of opening the modal. */
+  const [showInlineBoatStep, setShowInlineBoatStep] = useState(false);
+  /** When true (and experienceForDetails/ratesForDetails/addonsForDetails provided), show "Details & payment" as third panel. */
+  const [showDetailsStep, setShowDetailsStep] = useState(false);
+  const [inlineBookingHeight, setInlineBookingHeight] = useState<number | null>(null);
+  const panel1Ref = useRef<HTMLDivElement>(null);
+  const panel2Ref = useRef<HTMLDivElement>(null);
+  const panel3Ref = useRef<HTMLDivElement>(null);
+  const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
+  const [inlineBoatsLoading, setInlineBoatsLoading] = useState(false);
+  const [selectedBoatInline, setSelectedBoatInline] = useState<BoatOption | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -169,6 +195,58 @@ export function ExperienceCalendarSection({
     if (!experienceId) return;
     fetchSlots();
   }, [experienceId, fetchSlots]);
+
+  // When showing inline boat step, fetch boats for this experience
+  useEffect(() => {
+    if (!showInlineBoatStep || !experienceId) return;
+    setInlineBoatsLoading(true);
+    setInlineBoats([]);
+    setSelectedBoatInline(null);
+    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(experienceId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.boats && Array.isArray(data.boats)) setInlineBoats(data.boats);
+        else setInlineBoats([]);
+      })
+      .finally(() => setInlineBoatsLoading(false));
+  }, [showInlineBoatStep, experienceId]);
+
+  /** Boat IDs that have the selected slot's start time OPEN (for inline boat step). */
+  const availableBoatIdsForInlineSlot = useMemo(() => {
+    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
+    const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of slots) {
+      const boatId = (s as SlotDto & { boatId?: string }).boatId;
+      if (!boatId || s.status !== "open") continue;
+      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+    }
+    return ids;
+  }, [selectedSlotInline?.startAt, slots]);
+  /** Boat IDs unavailable (held/blocked) at the selected time. */
+  const unavailableBoatIdsForInlineSlot = useMemo(() => {
+    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
+    const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of slots) {
+      const boatId = (s as SlotDto & { boatId?: string }).boatId;
+      if (!boatId || s.status === "open") continue;
+      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+    }
+    return ids;
+  }, [selectedSlotInline?.startAt, slots]);
+  /** Boat IDs booked at the selected time (show "Booked" overlay). */
+  const bookedBoatIdsForInlineSlot = useMemo(() => {
+    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
+    const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const ids = new Set<string>();
+    for (const s of slots) {
+      const boatId = (s as SlotDto & { boatId?: string }).boatId;
+      if (!boatId || s.status !== "booked") continue;
+      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+    }
+    return ids;
+  }, [selectedSlotInline?.startAt, slots]);
 
   // Fetch admin-configured day pricing (weekend/holiday/weekday) for the visible calendar range
   useEffect(() => {
@@ -382,6 +460,36 @@ export function ExperienceCalendarSection({
     ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
     : "";
 
+  const hasInlineDetails = !!(experienceForDetails && ratesForDetails && addonsForDetails);
+  const slidingPanelCount = hasInlineDetails ? 3 : 2;
+  const slidingPanelIndex = showDetailsStep ? 2 : showInlineBoatStep ? 1 : 0;
+
+  const inlineDetailsRate = useMemo(() => {
+    if (!selectedDate || !selectedSlotInline || !experienceForDetails) return null;
+    const rateList = ratesForDetails ?? rates;
+    const dur = parseSlotId(selectedSlotInline.id)?.durationHours ?? selectedDurationForModal;
+    const rate = (dur != null ? rateList.find((r) => r.durationHours === dur) : null) ?? rateList[0];
+    return rate ?? null;
+  }, [selectedDate, selectedSlotInline, experienceForDetails, ratesForDetails, rates, selectedDurationForModal]);
+  const inlineDetailsStepReady = inlineDetailsRate && addonsForDetails;
+
+  // Measure active panel height so the booking card adjusts per step; ResizeObserver keeps height in sync when content grows (e.g. tip selection).
+  // On details step (panel 3) we use items-start so the panel doesn't stretch and we get content height, not row height.
+  useLayoutEffect(() => {
+    if (!onOpenInModal) return;
+    const refs = [panel1Ref, panel2Ref, panel3Ref];
+    const el = refs[slidingPanelIndex]?.current;
+    if (!el) {
+      setInlineBookingHeight(null);
+      return;
+    }
+    const updateHeight = () => setInlineBookingHeight(el.offsetHeight);
+    updateHeight();
+    const ro = new ResizeObserver(updateHeight);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onOpenInModal, slidingPanelIndex, loading, showInlineBoatStep, showDetailsStep, inlineBoats.length, selectedDate, selectedSlotInline, inlineDetailsStepReady, selectedDurationForModal]);
+
   return (
     <>
       <section
@@ -392,15 +500,34 @@ export function ExperienceCalendarSection({
         <div className="mx-auto max-w-6xl px-3 sm:px-6 lg:px-8">
           <div className="rounded-2xl sm:rounded-3xl bg-white p-4 sm:p-6 lg:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary">
             {onOpenInModal ? (
-              /* Step 2 of book flow: duration → date → time → Continue to choose your boat */
-              <>
-                <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">
-                  Pick your date & time
-                </h2>
-                <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
-                  Choose a duration, date, and time — then choose your boat and checkout.
-                </p>
-                {loading ? (
+              <div
+                className="overflow-hidden w-full transition-[height] duration-300 ease-out"
+                style={inlineBookingHeight != null ? { height: inlineBookingHeight } : undefined}
+              >
+                <div
+                  className={cn(
+                    "flex transition-transform duration-300 ease-out",
+                    slidingPanelIndex === 2 && "items-start",
+                    slidingPanelCount === 3 ? "w-[300%]" : "w-[200%]",
+                    slidingPanelCount === 3 && slidingPanelIndex === 0 && "translate-x-0",
+                    slidingPanelCount === 3 && slidingPanelIndex === 1 && "-translate-x-[33.333%]",
+                    slidingPanelCount === 3 && slidingPanelIndex === 2 && "-translate-x-[66.666%]",
+                    slidingPanelCount === 2 && slidingPanelIndex === 0 && "translate-x-0",
+                    slidingPanelCount === 2 && slidingPanelIndex === 1 && "-translate-x-1/2"
+                  )}
+                >
+                  {/* Panel 1: Pick date & time */}
+                  <div
+                    ref={panel1Ref}
+                    className={slidingPanelCount === 3 ? "w-1/3 flex-shrink-0 pr-2 min-w-0" : "w-1/2 flex-shrink-0 pr-2"}
+                  >
+                    <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">
+                      Pick your date & time
+                    </h2>
+                    <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-brand-muted">
+                      Choose a duration, date, and time — then choose your boat and checkout.
+                    </p>
+                    {loading ? (
                   <div className="mt-4 sm:mt-6 space-y-4">
                     <div className="h-10 w-48 animate-pulse rounded-xl bg-brand-dark/10" />
                     <div className="grid grid-cols-7 gap-1">
@@ -541,20 +668,14 @@ export function ExperienceCalendarSection({
                             type="button"
                             disabled={!selectedDate || !selectedSlotInline}
                             onClick={() => {
-                              if (!selectedDate || !selectedSlotInline || !onOpenInModal) return;
-                              onOpenInModal({
-                                experienceId: experienceId ?? undefined,
-                                experienceSlug: experienceSlug ?? undefined,
-                                date: selectedDate,
-                                slotId: selectedSlotInline.id,
-                                boatId: selectedSlotInline.boatId,
-                              });
+                              if (!selectedDate || !selectedSlotInline) return;
+                              setShowInlineBoatStep(true);
                             }}
                             className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                           >
                             Continue to choose your boat
                           </button>
-                          <p className="text-center text-xs text-brand-muted mt-2">Then pick your boat and complete checkout</p>
+                          <p className="text-center text-xs text-brand-muted mt-2">Pick your boat below, then continue to checkout</p>
                         </div>
                         {noAvailabilityBecauseNotSetUp && (
                           <div className="mt-6 rounded-2xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-4 text-center text-sm text-brand-muted">
@@ -571,7 +692,181 @@ export function ExperienceCalendarSection({
                     )}
                   </div>
                 )}
-              </>
+                  </div>
+                  {/* Panel 2: Choose your boat — max height so card isn't too long; boat list scrolls only when many boats */}
+                  <div
+                    ref={panel2Ref}
+                    className={cn("flex flex-col flex-shrink-0 pl-2 min-w-0 max-h-[400px]", hasInlineDetails ? "w-1/3" : "w-1/2")}
+                  >
+                    {selectedDate && selectedSlotInline ? (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-0.5 shrink-0">
+                          <h3 className="text-xs sm:text-sm font-bold text-brand-dark tracking-tight">Choose your boat</h3>
+                          <button
+                            type="button"
+                            onClick={() => { setShowInlineBoatStep(false); setSelectedBoatInline(null); }}
+                            className="text-xs font-medium text-brand-muted hover:text-brand-primary transition-colors whitespace-nowrap"
+                          >
+                            Change date or time
+                          </button>
+                        </div>
+                        <p className="text-[10px] sm:text-[11px] text-brand-muted mb-1.5 shrink-0">
+                          {selectedDate} · {formatTime(selectedSlotInline.startAt)}
+                        </p>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                        {inlineBoatsLoading ? (
+                          <div className="py-4 flex justify-center">
+                            <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+                          </div>
+                        ) : inlineBoats.length === 0 ? (
+                          <p className="text-xs text-brand-muted py-2">No boats assigned — continue to details.</p>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 sm:gap-1.5 mb-2">
+                              {inlineBoats.slice(0, 6).map((boat) => {
+                                const isAvailable =
+                                  availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
+                                const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                const isSelected = selectedBoatInline?.id === boat.id;
+                                const thumb = boat.photos?.[0];
+                                return (
+                                  <button
+                                    key={boat.id}
+                                    type="button"
+                                    disabled={!isAvailable}
+                                    onClick={() => isAvailable && setSelectedBoatInline(boat)}
+                                    className={cn(
+                                      "relative flex flex-col overflow-hidden rounded-md border-2 text-left transition-all min-h-0",
+                                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                                      isSelected ? "border-brand-primary bg-brand-primary/10 ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30",
+                                      !isAvailable && "cursor-not-allowed opacity-70",
+                                      isBooked && "border-brand-dark/25 bg-brand-dark/5"
+                                    )}
+                                  >
+                                    <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t">
+                                      {thumb ? (
+                                        <Image src={getDisplayImageUrl(thumb)} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, 33vw" />
+                                      ) : (
+                                        <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
+                                      )}
+                                    </div>
+                                    {isBooked && (
+                                      <div className="absolute top-0 left-0 right-0 w-full aspect-[4/3] bg-brand-dark/75 flex items-center justify-center z-10 rounded-t">
+                                        <span className="text-[9px] font-semibold text-white uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-dark border border-white/20">Booked</span>
+                                      </div>
+                                    )}
+                                    <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-10")}>
+                                      <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                                      {!isAvailable && isBooked && (
+                                        <span className="text-[9px] font-semibold text-amber-700 uppercase tracking-wide block mt-0.5">Booked</span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {inlineBoats.length > 6 && (
+                              <div className="mb-2">
+                                <label htmlFor="inline-other-boats" className="sr-only">Other boats</label>
+                                <select
+                                  id="inline-other-boats"
+                                  value={selectedBoatInline && inlineBoats.findIndex((b) => b.id === selectedBoatInline.id) >= 6 ? selectedBoatInline.id : ""}
+                                  onChange={(e) => {
+                                    const id = e.target.value;
+                                    if (id) {
+                                      const boat = inlineBoats.find((b) => b.id === id);
+                                      if (boat) setSelectedBoatInline(boat);
+                                    }
+                                  }}
+                                  className="w-full rounded-md border-2 border-brand-dark/15 bg-white px-2 py-1.5 text-[11px] font-medium text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
+                                >
+                                  <option value="">Other boats ({inlineBoats.length - 6})</option>
+                                  {inlineBoats.slice(6).map((boat) => {
+                                    const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
+                                    const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                    return (
+                                      <option key={boat.id} value={boat.id} disabled={!isAvailable}>
+                                        {boat.name}{isBooked ? " (Booked)" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        </div>
+                        <div className="flex flex-col gap-1 shrink-0 mt-1">
+                          <button
+                            type="button"
+                            disabled={inlineBoatsLoading || (inlineBoats.length > 0 && !selectedBoatInline)}
+                            onClick={() => {
+                              if (!selectedDate || !selectedSlotInline) return;
+                              const boatId = selectedBoatInline?.id ?? (selectedSlotInline as { boatId?: string }).boatId;
+                              if (experienceForDetails && ratesForDetails && addonsForDetails) {
+                                setShowDetailsStep(true);
+                              } else if (onOpenInModal) {
+                                onOpenInModal({
+                                  experienceId: experienceId ?? undefined,
+                                  experienceSlug: experienceSlug ?? undefined,
+                                  date: selectedDate,
+                                  slotId: selectedSlotInline.id,
+                                  boatId: boatId ?? undefined,
+                                });
+                              }
+                            }}
+                            className="w-full rounded-lg bg-brand-primary text-white font-semibold py-2 px-3 text-xs hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            Continue to checkout
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setShowInlineBoatStep(false); setSelectedBoatInline(null); }}
+                            className="w-full rounded-lg border-2 border-brand-dark/15 px-3 py-2 text-xs font-semibold text-brand-dark hover:bg-brand-bg transition-colors"
+                          >
+                            Change date or time
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-sm text-brand-muted py-4">Select date and time first.</p>
+                    )}
+                  </div>
+                  {/* Panel 3: Details & payment (only when experienceForDetails / ratesForDetails / addonsForDetails provided) */}
+                  {hasInlineDetails && (
+                    <div
+                      ref={panel3Ref}
+                      className="w-1/3 flex-shrink-0 pl-2 min-w-0 flex flex-col"
+                    >
+                      {selectedDate && selectedSlotInline && experienceForDetails && (
+                        !inlineDetailsStepReady ? (
+                          <p className="text-sm text-brand-muted py-4">Loading…</p>
+                        ) : (
+                          <InlineBookingDetailsStep
+                            experienceId={experienceForDetails.id}
+                            experienceTitle={experienceForDetails.title}
+                            experienceMaxGuests={experienceForDetails.maxGuests}
+                            experiencePetsMax={experienceForDetails.petsMax}
+                            boatId={selectedBoatInline?.id}
+                            boatName={selectedBoatInline?.name}
+                            slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }}
+                            rateId={inlineDetailsRate!.id}
+                            rateDisplayName={inlineDetailsRate!.displayName ?? `${inlineDetailsRate!.durationHours} hr`}
+                            rateDurationHours={inlineDetailsRate!.durationHours}
+                            selectedDate={selectedDate}
+                            addons={addonsForDetails}
+                            onBack={() => setShowDetailsStep(false)}
+                            onSuccess={() => {
+                              setShowDetailsStep(false);
+                              setShowInlineBoatStep(false);
+                            }}
+                          />
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             ) : (
               <>
                 <h2 id="calendar-section-heading" className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-brand-dark tracking-tight">

@@ -13,6 +13,7 @@ export interface ExperienceCardProps {
   experience: Experience;
   index?: number;
   variant?: "default" | "compact";
+  featured?: boolean;
   className?: string;
 }
 
@@ -20,6 +21,7 @@ export function ExperienceCard({
   experience,
   index = 0,
   variant = "default",
+  featured = false,
   className,
 }: ExperienceCardProps) {
   const href = `/experiences/${experience.slug}`;
@@ -43,7 +45,8 @@ export function ExperienceCard({
           "transition-all duration-300",
           "hover:shadow-premium hover:border-brand-primary/20 active:scale-[0.99]",
           "flex flex-col h-full",
-          variant === "compact" && "flex-col"
+          variant === "compact" && "flex-col",
+          featured && "border-2 border-brand-primary/25 shadow-md"
         )}
       >
         <Link
@@ -71,6 +74,12 @@ export function ExperienceCard({
               sizes={variant === "compact" ? "(max-width: 1024px) 50vw, 25vw" : "(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/30 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            {/* Featured / Most popular badge */}
+            {featured && (
+              <span className="absolute top-2 left-2 rounded-lg bg-brand-primary font-semibold text-brand-dark shadow-soft backdrop-blur-sm px-2.5 py-1 text-xs sm:text-sm" aria-hidden>
+                Most popular
+              </span>
+            )}
             {/* Duration badge on image */}
             <span
               className={cn(

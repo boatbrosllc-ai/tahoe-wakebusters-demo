@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import { Star } from "lucide-react";
 import { testimonials } from "@/content/testimonials";
@@ -32,7 +33,13 @@ export function Testimonials() {
 
       <div className="container-wide relative z-10 px-4 sm:px-6 lg:px-8">
         {/* Stats strip – 5.0 · 273+ reviews · Austin */}
-        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-center mb-10 sm:mb-12">
+        <motion.div
+          className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-center mb-10 sm:mb-12"
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-40px" }}
+          transition={{ duration: 0.4 }}
+        >
           <div className="flex items-center gap-2">
             <div className="flex gap-0.5" aria-hidden>
               {[1, 2, 3, 4, 5].map((i) => (
@@ -42,7 +49,15 @@ export function Testimonials() {
             <span className="text-2xl sm:text-3xl font-bold text-white">5.0</span>
           </div>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
-          <p className="text-lg sm:text-xl font-semibold text-white">
+          <p className="flex items-center gap-2 text-lg sm:text-xl font-semibold text-white">
+            <Image
+              src="/logos/google-g.svg"
+              alt=""
+              width={28}
+              height={28}
+              className="h-7 w-7 shrink-0"
+              aria-hidden
+            />
             <span className="text-white">273+</span>{" "}
             <span className="text-white/90">Google reviews</span>
           </p>
@@ -50,7 +65,7 @@ export function Testimonials() {
           <p className="text-sm sm:text-base text-white/80">
             Boat Bros · 5019 TX-360 Loop, Austin, TX
           </p>
-        </div>
+        </motion.div>
 
         <h2 id="testimonials-heading" className="sr-only">
           What people say about Boat Bros
@@ -82,7 +97,7 @@ export function Testimonials() {
                     ease: [0.4, 0, 0.2, 1],
                   },
                 }}
-                className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 sm:p-6 shadow-xl flex flex-col h-full min-h-[200px]"
+                className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 sm:p-6 shadow-xl flex flex-col h-full min-h-[200px] transition-all duration-300 hover:shadow-2xl hover:-translate-y-1"
               >
                 <div className="flex gap-0.5 mb-3" aria-hidden>
                   {Array.from({ length: 5 }).map((_, j) => (
@@ -115,12 +130,14 @@ export function Testimonials() {
             const targetIndex = (i * 3) % L;
             const isActive = index === targetIndex;
             return (
-              <button
+              <motion.button
                 key={i}
                 type="button"
                 aria-current={isActive ? "true" : undefined}
                 aria-label={`Show reviews ${targetIndex + 1}-${Math.min(targetIndex + 3, L)}`}
                 onClick={() => setIndex(targetIndex)}
+                whileTap={{ scale: 0.9 }}
+                transition={{ duration: 0.15 }}
                 className={cn(
                   "h-2 rounded-full transition-all duration-300",
                   isActive ? "w-6 bg-brand-primary" : "w-2 bg-white/30 hover:bg-white/50"

@@ -4,6 +4,7 @@ import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
@@ -154,7 +155,7 @@ export async function POST(request: NextRequest) {
       if (boat.active === false) {
         return NextResponse.json({ error: "Boat not available" }, { status: 400 });
       }
-      capacityMax = experience.maxGuests ?? 14;
+      capacityMax = getMaxGuestsForExperience(experience);
       petsMax = experience.petsMax ?? 0;
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
@@ -204,7 +205,7 @@ export async function POST(request: NextRequest) {
       if (!experience.active) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
       }
-      capacityMax = experience.maxGuests ?? 14;
+      capacityMax = getMaxGuestsForExperience(experience);
       petsMax = experience.petsMax ?? 0;
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });

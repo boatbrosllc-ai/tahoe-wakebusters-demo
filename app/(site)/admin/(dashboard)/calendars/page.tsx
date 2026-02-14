@@ -51,11 +51,19 @@ function getMonthRange(month: Date): { start: string; end: string } {
   return { start: toDateStr(start), end: toDateStr(end) };
 }
 
-/** Calendar date YYYY-MM-DD for a slot — always from slot id, never from startAt (UTC). */
+/** Calendar date YYYY-MM-DD for a slot — always from slot id (or local start time), never UTC from startAt. */
 function getSlotCalendarDate(slot: SlotDto): string {
   if (slot.dateStr && /^\d{4}-\d{2}-\d{2}$/.test(slot.dateStr)) return slot.dateStr;
-  const parsed = parseSlotId(slot.id);
+  let parsed = parseSlotId(slot.id);
   if (parsed) return parsed.dateStr;
+  // Relaxed: single-digit month/day (e.g. 2026-2-13-13-4)
+  const cleaned = slot.id.trim().replace(/\s/g, "");
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const norm = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    parsed = parseSlotId(norm);
+    if (parsed) return parsed.dateStr;
+  }
   const parts = slot.id.trim().split("-");
   if (parts.length >= 3) {
     const y = parts[0];
@@ -64,7 +72,9 @@ function getSlotCalendarDate(slot: SlotDto): string {
     const s = `${y}-${m}-${d}`;
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   }
-  return slot.startAt.slice(0, 10);
+  // Fallback: use local date of startAt so UTC doesn't shift the day (e.g. 1 PM Central = Feb 14 00:00 UTC)
+  const startDate = new Date(slot.startAt);
+  return `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
 }
 
 const SLOT_STATUS_CLASS: Record<SlotStatus, string> = {

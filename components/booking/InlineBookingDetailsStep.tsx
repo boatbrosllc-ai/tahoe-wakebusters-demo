@@ -1,0 +1,813 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { cn } from "@/lib/utils";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { Dialog } from "@/components/ui/dialog";
+
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
+const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+const TEXAS_SALES_TAX_RATE = 0.0825;
+const PETS_MAX = 4;
+
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+/** Fires confetti once when mounted (booking confirmed). Dynamic import avoids SSR resolution. */
+function BookingSuccessWithConfetti({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    import("canvas-confetti").then(({ default: confetti }) => {
+      if (cancelled) return;
+      const duration = 2500;
+      const end = Date.now() + duration;
+      const frame = () => {
+        if (cancelled) return;
+        confetti({
+          particleCount: 3,
+          angle: 60,
+          spread: 55,
+          origin: { x: 0 },
+          colors: ["#50bdba", "#2d8a87", "#f4a6b8", "#ffd54f"],
+        });
+        confetti({
+          particleCount: 3,
+          angle: 120,
+          spread: 55,
+          origin: { x: 1 },
+          colors: ["#50bdba", "#2d8a87", "#f4a6b8", "#ffd54f"],
+        });
+        if (Date.now() < end) requestAnimationFrame(frame);
+      };
+      frame();
+      timeoutId = setTimeout(() => {
+        if (!cancelled) confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+      }, 200);
+    });
+    return () => {
+      cancelled = true;
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
+  }, []);
+  return <>{children}</>;
+}
+
+function PaymentFormInner({
+  onSuccess,
+  onError,
+}: {
+  onSuccess: () => void;
+  onError: (message: string) => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [processing, setProcessing] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setProcessing(true);
+    try {
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        redirect: "if_required",
+      });
+      if (error) onError(error.message ?? "Payment failed");
+      else onSuccess();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Payment failed");
+    } finally {
+      setProcessing(false);
+    }
+  };
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <PaymentElement />
+      <button
+        type="submit"
+        disabled={!stripe || processing}
+        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-60 transition-colors"
+      >
+        {processing ? "Processing…" : "Pay now"}
+      </button>
+    </form>
+  );
+}
+
+export interface InlineBookingDetailsStepProps {
+  experienceId: string;
+  experienceTitle: string;
+  experienceMaxGuests: number;
+  experiencePetsMax: number;
+  boatId?: string;
+  boatName?: string;
+  slot: { id: string; startAt: string; endAt: string };
+  rateId: string;
+  rateDisplayName: string;
+  rateDurationHours: number;
+  selectedDate: string;
+  addons: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
+  onBack: () => void;
+  onSuccess: () => void;
+}
+
+export function InlineBookingDetailsStep({
+  experienceId,
+  experienceTitle,
+  experienceMaxGuests,
+  experiencePetsMax,
+  boatId,
+  boatName,
+  slot,
+  rateId,
+  rateDisplayName,
+  rateDurationHours,
+  selectedDate,
+  addons,
+  onBack,
+  onSuccess,
+}: InlineBookingDetailsStepProps) {
+  const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
+  const [customerName, setCustomerName] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [partySize, setPartySize] = useState(1);
+  const [petsCount, setPetsCount] = useState(0);
+  const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
+  const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
+  const [tipPercent, setTipPercent] = useState(20);
+  const [tipNowModalOpen, setTipNowModalOpen] = useState(false);
+  const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
+  const [tipModalPercent, setTipModalPercent] = useState(20);
+  const [discountCode, setDiscountCode] = useState("");
+  const [appliedDiscount, setAppliedDiscount] = useState<{ discountCents: number; code: string } | null>(null);
+  const [appliedDiscountError, setAppliedDiscountError] = useState<string | null>(null);
+  const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  const [howDidYouHear, setHowDidYouHear] = useState("");
+  const [comments, setComments] = useState("");
+  const [cancellationAck, setCancellationAck] = useState(false);
+  const [payFullAmount, setPayFullAmount] = useState(false);
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
+  const [holdId, setHoldId] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
+
+  useEffect(() => {
+    fetch(
+      `/api/booking/effective-price?experienceId=${encodeURIComponent(experienceId)}&rateId=${encodeURIComponent(rateId)}&date=${encodeURIComponent(selectedDate)}`
+    )
+      .then((res) => res.json())
+      .then((data) => (typeof data?.priceCents === "number" ? setEffectiveRateCents(data.priceCents) : setEffectiveRateCents(null)))
+      .catch(() => setEffectiveRateCents(null));
+  }, [experienceId, rateId, selectedDate]);
+
+  const priceSummary = useMemo(() => {
+    const rateCents = effectiveRateCents ?? 0;
+    const addonLines = displayAddons
+      .filter((a) => (addonSelections[a.id] ?? 0) > 0)
+      .map((a) => ({
+        name: a.name,
+        qty: addonSelections[a.id] ?? 0,
+        priceCents: a.priceCents * (addonSelections[a.id] ?? 0),
+      }));
+    const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
+    const subtotalBeforeTax = rateCents + addonsTotalCents;
+    const salesTaxCents = Math.round(subtotalBeforeTax * TEXAS_SALES_TAX_RATE);
+    const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
+    const pct = Math.min(35, Math.max(20, tipPercent));
+    const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
+    const discountCents = appliedDiscount?.discountCents ?? 0;
+    const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
+    return {
+      rateLabel: rateDisplayName,
+      rateCents,
+      addonLines,
+      salesTaxCents,
+      tipCents,
+      discountCents,
+      totalCents,
+    };
+  }, [effectiveRateCents, rateDisplayName, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
+
+  const handleProceedToPayment = async () => {
+    if (
+      !customerName.trim() ||
+      !customerEmail.trim() ||
+      !customerPhone.trim() ||
+      !cancellationAck ||
+      tipChoice === null
+    ) {
+      setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
+      return;
+    }
+    if (partySize < 1 || partySize > experienceMaxGuests) {
+      setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${experienceMaxGuests}.`);
+      return;
+    }
+    if (petsCount < 0 || petsCount > Math.min(experiencePetsMax, PETS_MAX)) {
+      setPaymentError(`Pets must be between 0 and ${Math.min(experiencePetsMax, PETS_MAX)}.`);
+      return;
+    }
+    setPaymentError(null);
+    setPaymentPhase("loading");
+    const addonList = Object.entries(addonSelections)
+      .filter(([, qty]) => qty > 0)
+      .map(([addonId, qty]) => ({ addonId, qty }));
+    const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
+    try {
+      const holdRes = await fetch("/api/booking/create-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          experienceId,
+          boatId: boatId ?? undefined,
+          slotId: slot.id,
+          rateId,
+          partySize,
+          petsCount,
+          addonSelections: addonList,
+          customerDraft: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
+          marketingOptIn,
+          answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
+          ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
+          ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
+        }),
+      });
+      const holdData = await holdRes.json();
+      if (!holdRes.ok) {
+        setPaymentError(holdData.error ?? "Failed to create hold");
+        setPaymentPhase("form");
+        return;
+      }
+      const newHoldId = holdData.holdId;
+      setHoldId(newHoldId);
+      const intentRes = await fetch("/api/booking/create-payment-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId: newHoldId, payFullAmount }),
+      });
+      const intentData = await intentRes.json();
+      if (!intentRes.ok) {
+        setPaymentError(intentData.error ?? "Failed to start payment");
+        setPaymentPhase("form");
+        return;
+      }
+      if (!intentData.clientSecret) {
+        setPaymentError("Payment intent missing client secret");
+        setPaymentPhase("form");
+        return;
+      }
+      if (!STRIPE_PUBLISHABLE_KEY) {
+        setPaymentError("Stripe not configured.");
+        setPaymentPhase("form");
+        return;
+      }
+      setClientSecret(intentData.clientSecret);
+      setPaymentIntentId(intentData.paymentIntentId ?? null);
+      setPaymentPhase("stripe");
+    } catch (err) {
+      setPaymentError(err instanceof Error ? err.message : "Something went wrong");
+      setPaymentPhase("form");
+    }
+  };
+
+  const handlePaymentSuccess = async () => {
+    setPaymentPhase("completing");
+    if (!holdId || !paymentIntentId) {
+      setPaymentPhase("success");
+      return;
+    }
+    try {
+      await fetch("/api/booking/complete-after-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId, paymentIntentId }),
+      });
+    } catch {
+      // still show success
+    }
+    setPaymentPhase("success");
+  };
+
+  if (paymentPhase === "success") {
+    return (
+      <BookingSuccessWithConfetti>
+        <div className="py-6 flex flex-col items-center gap-4 text-center">
+          <div className="w-12 h-12 rounded-full bg-brand-primary/15 flex items-center justify-center">
+          <svg className="w-6 h-6 text-brand-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-bold text-brand-dark">You&apos;re all set!</h3>
+        <p className="text-sm text-brand-muted">
+          We&apos;ve received your payment for {experienceTitle}. You&apos;ll get a confirmation email shortly.
+        </p>
+        <button
+          type="button"
+          onClick={onSuccess}
+          className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 hover:bg-brand-primary/90"
+        >
+          Close
+        </button>
+        </div>
+      </BookingSuccessWithConfetti>
+    );
+  }
+
+  if (paymentPhase === "loading" || paymentPhase === "completing") {
+    return (
+      <div className="py-12 flex flex-col items-center gap-3">
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+        <p className="text-sm text-brand-muted">
+          {paymentPhase === "loading" ? "Preparing checkout…" : "Completing your booking…"}
+        </p>
+      </div>
+    );
+  }
+
+  if (paymentPhase === "stripe" && clientSecret && stripePromise) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-2">
+          <button type="button" onClick={onBack} className="text-sm font-medium text-brand-muted hover:text-brand-primary">
+            ← Back
+          </button>
+        </div>
+        <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4">
+          <p className="font-bold text-brand-dark">{experienceTitle}</p>
+          <p className="text-sm text-brand-muted">
+            {new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · {formatTime(slot.startAt)} · {rateDisplayName}
+          </p>
+          <p className="text-xl font-bold text-brand-primary mt-2">
+            ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+          </p>
+        </div>
+        <div className="min-h-[200px]">
+          <Elements stripe={stripePromise} options={{ clientSecret }}>
+            <PaymentFormInner onSuccess={handlePaymentSuccess} onError={setPaymentError} />
+          </Elements>
+        </div>
+        {paymentError && <p className="text-sm text-red-600">{paymentError}</p>}
+      </div>
+    );
+  }
+
+  const dateLabel = new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <button type="button" onClick={onBack} className="text-sm font-medium text-brand-muted hover:text-brand-primary">
+          ← Back
+        </button>
+        <span className="text-xs font-medium text-brand-muted uppercase tracking-wider">Details & payment</span>
+      </div>
+
+      {paymentError && (
+        <div className="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex items-center justify-between gap-2">
+          <span>{paymentError}</span>
+          <button type="button" onClick={() => setPaymentError(null)} className="text-red-600 underline text-xs">Dismiss</button>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pb-4">
+        {/* Summary */}
+        <div className="rounded-xl border-2 border-brand-dark/10 bg-white p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
+          <h3 className="font-bold text-brand-dark text-base">{experienceTitle}</h3>
+          {boatName && <p className="text-sm text-brand-dark/80 mt-0.5">{boatName}</p>}
+          <p className="text-sm text-brand-muted mt-2">{dateLabel} · {formatTime(slot.startAt)} · {rateDurationHours} hr</p>
+          <div className="mt-3 pt-3 border-t border-brand-dark/10 space-y-1.5 text-sm">
+            <div className="flex justify-between">
+              <span className="text-brand-muted">{rateDisplayName}</span>
+              <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
+            </div>
+            {priceSummary.addonLines.map((line) => (
+              <div key={line.name} className="flex justify-between">
+                <span className="text-brand-muted">{line.name}{line.qty > 1 ? ` × ${line.qty}` : ""}</span>
+                <span>+${(line.priceCents / 100).toFixed(2)}</span>
+              </div>
+            ))}
+            {priceSummary.salesTaxCents > 0 && (
+              <div className="flex justify-between">
+                <span className="text-brand-muted">Sales tax (8.25%)</span>
+                <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
+              </div>
+            )}
+            {priceSummary.tipCents > 0 && (
+              <div className="flex justify-between">
+                <span className="text-brand-muted">Tip</span>
+                <span>+${(priceSummary.tipCents / 100).toFixed(2)}</span>
+              </div>
+            )}
+            {priceSummary.discountCents > 0 && (
+              <div className="flex justify-between text-emerald-600">
+                <span>Discount</span>
+                <span>−${(priceSummary.discountCents / 100).toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between font-semibold pt-2 border-t border-brand-dark/10">
+              <span>Total</span>
+              <span>${(priceSummary.totalCents / 100).toFixed(2)}</span>
+            </div>
+            {!payFullAmount ? (
+              <>
+                <div className="flex justify-between text-brand-dark">
+                  <span className="text-xs font-semibold">Deposit due now</span>
+                  <span className="text-lg font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                </div>
+                <p className="text-xs text-brand-muted">Remaining 50% charged 48h before trip</p>
+              </>
+            ) : (
+              <div className="flex justify-between">
+                <span className="text-xs font-semibold">Total due now</span>
+                <span className="text-lg font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Contact */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Contact details</p>
+          <div className="space-y-2 rounded-xl border-2 border-brand-dark/10 bg-white p-3">
+            <input
+              type="text"
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              placeholder="Full name *"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+            />
+            <input
+              type="email"
+              value={customerEmail}
+              onChange={(e) => setCustomerEmail(e.target.value)}
+              placeholder="Email *"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+            />
+            <input
+              type="tel"
+              value={customerPhone}
+              onChange={(e) => setCustomerPhone(e.target.value)}
+              placeholder="Phone *"
+              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+            />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="rounded border-brand-dark/30 text-brand-primary" />
+              <span className="text-xs text-brand-muted">Updates and offers from Boat Bros</span>
+            </label>
+          </div>
+        </div>
+
+        {/* Party & add-ons */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Party & add-ons</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="inline-booking-party-size" className="block text-xs font-medium text-brand-dark mb-1">Party size *</label>
+              <input
+                id="inline-booking-party-size"
+                type="number"
+                min={1}
+                max={experienceMaxGuests}
+                value={partySize}
+                onChange={(e) => {
+                  const raw = parseInt(e.target.value, 10) || 1;
+                  setPartySize(Math.min(experienceMaxGuests, Math.max(1, raw)));
+                }}
+                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+                aria-label="Party size"
+              />
+              <p className="text-[11px] text-brand-muted mt-0.5">Max {experienceMaxGuests} guests</p>
+            </div>
+            <div>
+              <label htmlFor="inline-booking-pets" className="block text-xs font-medium text-brand-dark mb-1">Pets</label>
+              <input
+                id="inline-booking-pets"
+                type="number"
+                min={0}
+                max={Math.min(experiencePetsMax, PETS_MAX)}
+                value={petsCount}
+                onChange={(e) => setPetsCount(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2 text-sm"
+                aria-label="Number of pets"
+              />
+            </div>
+          </div>
+          {displayAddons.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {displayAddons.map((addon) => {
+                const qty = addonSelections[addon.id] ?? 0;
+                const name = addon.name.toLowerCase();
+                const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                return (
+                  <div
+                    key={addon.id}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-lg border-2 px-3 py-2 text-sm",
+                      qty > 0 ? "border-brand-primary/40 bg-brand-primary/5" : "border-brand-dark/10 bg-white"
+                    )}
+                  >
+                    <span className="min-w-0 truncate">{addon.name}{qty > 0 ? ` × ${qty}` : ""}</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="font-semibold text-brand-primary">+${(addon.priceCents / 100).toFixed(0)}</span>
+                      <button
+                        type="button"
+                        onClick={() => setAddonSelections((prev) => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] ?? 0) - 1) }))}
+                        className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 text-xs font-medium disabled:opacity-40"
+                        disabled={qty === 0}
+                        aria-label="Remove one"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAddonSelections((prev) => ({ ...prev, [addon.id]: Math.min(effectiveMax, (prev[addon.id] ?? 0) + 1) }))}
+                        className="rounded p-1 text-brand-muted hover:text-brand-primary hover:bg-brand-primary/10 text-xs font-medium disabled:opacity-40"
+                        disabled={qty >= effectiveMax}
+                        aria-label="Add one"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Tip */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Tip *</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
+                setTipNowModalOpen(true);
+              }}
+              className={cn(
+                "flex-1 rounded-xl border-2 py-2.5 text-sm font-semibold",
+                tipChoice === "now" ? "border-brand-primary bg-brand-primary/15 text-brand-dark" : "border-brand-dark/15 bg-white text-brand-muted"
+              )}
+              title="Choose tip amount (20–35%)"
+            >
+              Tip now
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTipChoice("later");
+                setTipLaterMessageOpen(true);
+              }}
+              className={cn(
+                "flex-1 rounded-xl border-2 py-2.5 text-sm font-semibold",
+                tipChoice === "later" ? "border-brand-primary bg-brand-primary/15 text-brand-dark" : "border-brand-dark/15 bg-white text-brand-muted"
+              )}
+              title="Tip your crew later"
+            >
+              Tip later
+            </button>
+          </div>
+          {tipChoice === "now" && priceSummary.tipCents > 0 && (
+            <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
+          )}
+          {tipChoice === "later" && (
+            <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
+          )}
+        </div>
+
+        {/* Payment amount */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setPayFullAmount(false)}
+              className={cn(
+                "rounded-xl border-2 py-3 px-3 text-left text-sm",
+                !payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
+              )}
+            >
+              <span className="font-semibold">Pay 50% deposit</span>
+              <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPayFullAmount(true)}
+              className={cn(
+                "rounded-xl border-2 py-3 px-3 text-left text-sm",
+                payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
+              )}
+            >
+              <span className="font-semibold">Pay full amount</span>
+              <span className="block text-xs text-brand-muted">${(priceSummary.totalCents / 100).toFixed(2)} now</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Discount */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Discount code</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={discountCode}
+              onChange={(e) => {
+                setDiscountCode(e.target.value);
+                setAppliedDiscount(null);
+                setAppliedDiscountError(null);
+              }}
+              placeholder="Enter code"
+              className="flex-1 rounded-lg border border-brand-dark/10 px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              disabled={!discountCode.trim() || appliedDiscountLoading}
+              onClick={async () => {
+                const code = discountCode.trim();
+                if (!code) return;
+                setAppliedDiscountLoading(true);
+                setAppliedDiscountError(null);
+                try {
+                  const totalBefore = priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0) + priceSummary.salesTaxCents + priceSummary.tipCents;
+                  const res = await fetch("/api/booking/validate-discount", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ code, totalCents: totalBefore }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (data.valid && typeof data.discountCents === "number" && data.code) {
+                    setAppliedDiscount({ discountCents: data.discountCents, code: data.code });
+                  } else {
+                    setAppliedDiscount(null);
+                    setAppliedDiscountError(data.error ?? "Invalid code");
+                  }
+                } catch {
+                  setAppliedDiscountError("Could not validate");
+                } finally {
+                  setAppliedDiscountLoading(false);
+                }
+              }}
+              className="rounded-lg border-2 border-brand-primary bg-brand-primary text-white font-semibold px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Apply
+            </button>
+          </div>
+          {appliedDiscountError && <p className="text-xs text-red-600 mt-1">{appliedDiscountError}</p>}
+          {appliedDiscount && <p className="text-xs text-emerald-600 mt-1">Discount: −${(appliedDiscount.discountCents / 100).toFixed(2)}</p>}
+        </div>
+
+        {/* Optional */}
+        <div>
+          <input
+            type="text"
+            value={howDidYouHear}
+            onChange={(e) => setHowDidYouHear(e.target.value)}
+            placeholder="How did you hear about us?"
+            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm"
+          />
+          <textarea
+            value={comments}
+            onChange={(e) => setComments(e.target.value)}
+            placeholder="Special requests or notes"
+            rows={2}
+            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm mt-2 resize-none"
+          />
+        </div>
+
+        {/* Cancellation */}
+        <div className="rounded-xl border-2 border-amber-200/60 bg-amber-50/50 p-3">
+          <p className="text-xs font-semibold text-brand-dark mb-1">Cancellation policy</p>
+          <p className="text-[11px] text-brand-muted leading-relaxed">{DEFAULT_CANCELLATION_POLICY}</p>
+          <label className="mt-2 flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cancellationAck}
+              onChange={(e) => setCancellationAck(e.target.checked)}
+              className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary mt-0.5 shrink-0"
+            />
+            <span className="text-sm text-brand-dark">I have read and accept the cancellation policy *</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Pay block */}
+      <div className="shrink-0 pt-3 border-t-2 border-brand-dark/10 bg-white">
+        <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold text-brand-dark">{payFullAmount ? "Total due" : "Deposit due"}</p>
+            <p className="text-xl font-bold text-brand-primary">
+              ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleProceedToPayment}
+            className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 hover:bg-brand-primary/90"
+          >
+            Proceed to payment
+          </button>
+        </div>
+        <p className="text-center text-[10px] text-brand-muted mt-1.5">Secure payment via Stripe</p>
+      </div>
+
+      {/* Tip amount modal — choose 20–35% */}
+      <Dialog
+        open={tipNowModalOpen}
+        onOpenChange={(open) => {
+          setTipNowModalOpen(open);
+          if (!open) setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
+        }}
+        className="max-w-sm"
+      >
+        <div>
+          <h3 className="text-lg font-bold text-brand-dark mb-1">Choose tip amount</h3>
+          <p className="text-xs text-brand-muted mb-4">20–35%. Tips go directly to your captain and crew.</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {[20, 22, 25, 28, 30, 35].map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setTipModalPercent(p)}
+                className={cn(
+                  "rounded-xl border-2 px-4 py-2.5 text-sm font-semibold transition-all",
+                  tipModalPercent === p
+                    ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/30"
+                    : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+                )}
+              >
+                {p}%
+              </button>
+            ))}
+          </div>
+          <div className="mb-4">
+            <label htmlFor="inline-tip-custom-pct" className="block text-xs font-medium text-brand-dark mb-1.5">Or enter custom % (20–35)</label>
+            <input
+              id="inline-tip-custom-pct"
+              type="number"
+              min={20}
+              max={35}
+              value={tipModalPercent}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
+              }}
+              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setTipPercent(Math.min(35, Math.max(20, tipModalPercent)));
+              setTipChoice("now");
+              setTipNowModalOpen(false);
+            }}
+            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+          >
+            Apply {tipModalPercent}% tip
+          </button>
+        </div>
+      </Dialog>
+
+      {/* Tip later message */}
+      <Dialog
+        open={tipLaterMessageOpen}
+        onOpenChange={(open) => {
+          setTipLaterMessageOpen(open);
+          if (!open) setTipChoice("later");
+        }}
+        className="max-w-sm"
+      >
+        <div>
+          <h3 className="text-lg font-bold text-brand-dark mb-2">Captain gratuity</h3>
+          <p className="text-sm text-brand-dark leading-relaxed mb-2">
+            To ensure exceptional service, a 20% gratuity is required for all private charters. Gratuity is paid directly to your captain at the end of the trip via Venmo, Zelle, Cash App, or cash.
+          </p>
+          <p className="text-xs text-brand-muted leading-relaxed mb-4">
+            If any part of your experience does not meet expectations, contact us immediately and we&apos;ll take care of it.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setTipLaterMessageOpen(false);
+              setTipChoice("later");
+            }}
+            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
+          >
+            Got it
+          </button>
+        </div>
+      </Dialog>
+    </div>
+  );
+}

@@ -8,6 +8,7 @@ import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
 const HOLD_EXPIRY_MINUTES = 10;
 
@@ -72,7 +73,8 @@ export async function POST(request: NextRequest) {
     if (!experience.active) {
       return NextResponse.json({ error: "Experience not available" }, { status: 400 });
     }
-    if (input.partySize > experience.maxGuests) {
+    const maxGuests = getMaxGuestsForExperience(experience);
+    if (input.partySize > maxGuests) {
       return NextResponse.json({ error: "Party size exceeds maximum" }, { status: 400 });
     }
     if (input.petsCount > experience.petsMax) {
