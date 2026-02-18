@@ -41,7 +41,7 @@ export default function WaiverTemplatesPage() {
         </div>
         <div className="flex gap-2">
           <Link href="/admin/waivers/requests">
-            <Button variant="outline">Requests</Button>
+            <Button variant="outline">Tracking</Button>
           </Link>
           <Link href="/admin/waivers/templates/new">
             <Button className="inline-flex items-center gap-2">

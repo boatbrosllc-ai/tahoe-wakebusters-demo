@@ -1,7 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
+import { getDb } from "@/lib/booking/firebase-admin";
 import { listRequests } from "@/lib/waiver/firestore";
 import { listWaiverRequestsQuerySchema } from "@/lib/waiver/schema";
+import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+
+type RequestWithId = Awaited<ReturnType<typeof listRequests>>[number];
+
+async function enrichWithBookingSummary(
+  requests: RequestWithId[]
+): Promise<(RequestWithId & { bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string } })[]> {
+  if (requests.length === 0) return [];
+  const db = getDb();
+  const bookingIds = [...new Set(requests.map((r) => r.bookingId))];
+  const chunk = <T,>(arr: T[], size: number): T[][] =>
+    Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
+  const bookingMap = new Map<string, { slotId?: string; startDateStr?: string; experienceId?: string }>();
+  for (const ids of chunk(bookingIds, 10)) {
+    const docs = await Promise.all(ids.map((id) => db.collection("bookings").doc(id).get()));
+    docs.forEach((d) => {
+      if (d.exists) bookingMap.set(d.id, d.data() as { slotId?: string; startDateStr?: string; experienceId?: string });
+    });
+  }
+  const experienceIds = [...new Set(Array.from(bookingMap.values()).map((b) => b.experienceId).filter(Boolean) as string[])];
+  const experienceMap = new Map<string, string>();
+  for (const ids of chunk(experienceIds, 10)) {
+    const docs = await Promise.all(ids.map((id) => db.collection("experiences").doc(id).get()));
+    docs.forEach((d) => {
+      if (d.exists) experienceMap.set(d.id, (d.data() as { title?: string }).title ?? d.id);
+    });
+  }
+  return requests.map((r) => {
+    const booking = bookingMap.get(r.bookingId);
+    if (!booking) return r;
+    let tripDate = booking.startDateStr ?? "";
+    let startTime: string | undefined;
+    let endTime: string | undefined;
+    const parsed = booking.slotId ? parseSlotId(booking.slotId) : null;
+    if (parsed) {
+      tripDate = parsed.dateStr;
+      const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+      startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    }
+    const experienceName = booking.experienceId ? experienceMap.get(booking.experienceId) ?? booking.experienceId : "—";
+    return {
+      ...r,
+      bookingSummary: { tripDate, experienceName, startTime, endTime },
+    };
+  });
+}
 
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -30,7 +78,8 @@ export async function GET(request: NextRequest) {
       search: filters.search,
       limit: filters.limit,
     });
-    return NextResponse.json({ requests });
+    const enriched = await enrichWithBookingSummary(requests);
+    return NextResponse.json({ requests: enriched });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const isFirebase = /firebase|FIREBASE|config missing|credential/i.test(message);

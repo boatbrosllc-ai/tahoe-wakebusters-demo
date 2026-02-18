@@ -117,7 +117,7 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
         onBack={handleBack}
         nextLabel={step === STEPS.length - 1 ? (submitting ? "Submitting…" : "Submit") : "Continue"}
         nextDisabled={nextDisabled || submitting}
-        hideNext={step === STEPS.length - 1 && submitting}
+        nextLoading={submitting}
       >
         {error && (
           <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-800 text-sm" role="alert">
