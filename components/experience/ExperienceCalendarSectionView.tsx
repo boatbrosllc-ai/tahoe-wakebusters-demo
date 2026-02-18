@@ -1024,9 +1024,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         <button
                           key={slot.id}
                           type="button"
-                          disabled={!experienceId || isDirectLoading}
+                          disabled={!experienceId || !!directCheckoutLoading}
                           onClick={async () => {
-                            if (!experienceId) return;
+                            if (!experienceId || directCheckoutLoading) return;
                             setDirectCheckoutLoading(slot.id);
                             try {
                               const res = await fetch("/api/booking/create-checkout-session-direct", {

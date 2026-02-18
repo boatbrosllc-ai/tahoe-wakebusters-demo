@@ -104,7 +104,11 @@ export default function LakeAustinBoatRentalPage() {
               Lake Austin Boat Rentals (Captain Included)
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-              Book a pontoon, wake surf, or sunset cruise on Lake Austin. All trips include a licensed captain—you show up and enjoy. Serving Austin, TX and the Lake Austin area.
+              Book a{" "}
+              <Link href="/lake-austin-pontoon-rentals" className="text-white font-medium underline decoration-white/50 hover:decoration-white">
+                Lake Austin Pontoon Rentals
+              </Link>
+              , wake surf, or sunset cruise on Lake Austin. All trips include a licensed captain—you show up and enjoy. Serving Austin, TX and the Lake Austin area.
             </p>
           </div>
         </section>

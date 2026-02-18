@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { hasFirebaseConfig } from "@/lib/booking/env";
 import {
   buildSlotId,
   getSlotGrid,
@@ -12,8 +13,17 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
 
+const SLOTS_FIREBASE_HINT =
+  "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
+
 export async function GET(request: NextRequest) {
   try {
+    if (!hasFirebaseConfig()) {
+      return NextResponse.json(
+        { error: "Booking is not configured.", hint: SLOTS_FIREBASE_HINT },
+        { status: 503 }
+      );
+    }
     const boatId = request.nextUrl.searchParams.get("boatId");
     const experienceId = request.nextUrl.searchParams.get("experienceId");
     const startDate = request.nextUrl.searchParams.get("startDate");
@@ -167,29 +177,54 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
+      const seenBookingIds = new Set<string>();
+
+      const addBookingsFromQuery = (snap: import("firebase-admin").firestore.QuerySnapshot) => {
+        snap.docs.forEach((doc) => {
+          if (seenBookingIds.has(doc.id)) return;
+          seenBookingIds.add(doc.id);
+          allBookingDocs.push(doc);
+        });
+      };
+
       let bookingsSnap = await db
         .collection("bookings")
         .where("experienceId", "==", experienceId)
         .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
         .get();
-      // Fallback: some bookings store experienceId as experience slug (e.g. from direct checkout). Include those.
-      if (experienceSlug && experienceSlug !== experienceId) {
+      addBookingsFromQuery(bookingsSnap);
+      // Fallback: some bookings store experienceId as experience slug (e.g. "lake-austin-pontoon" or "pontoon"). Include all variants.
+      const slugVariants = new Set<string>();
+      if (experienceSlug && experienceSlug !== experienceId) slugVariants.add(experienceSlug);
+      if (experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") {
+        slugVariants.add("pontoon");
+        slugVariants.add("lake-austin-pontoon");
+      }
+      for (const slugVariant of slugVariants) {
         const bySlugSnap = await db
           .collection("bookings")
-          .where("experienceId", "==", experienceSlug)
+          .where("experienceId", "==", slugVariant)
           .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
           .get();
-        const seenIds = new Set(bookingsSnap.docs.map((d) => d.id));
-        bySlugSnap.docs.forEach((doc) => {
-          if (!seenIds.has(doc.id)) {
-            seenIds.add(doc.id);
-            mergeBookingSlot(doc);
-          }
-        });
+        addBookingsFromQuery(bySlugSnap);
       }
-      bookingsSnap.docs.forEach((doc) => mergeBookingSlot(doc));
+      allBookingDocs.forEach((doc) => mergeBookingSlot(doc));
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
       bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));
+
+      /** Safely get Date from Firestore Timestamp or ISO string (avoids 500 on malformed docs). */
+      const toDateSafe = (v: unknown): Date | null => {
+        if (!v) return null;
+        if (typeof v === "string") {
+          const d = new Date(v);
+          return Number.isNaN(d.getTime()) ? null : d;
+        }
+        if (typeof v === "object" && v !== null && typeof (v as { toDate?: () => Date }).toDate === "function") {
+          return (v as { toDate(): Date }).toDate();
+        }
+        return null;
+      };
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -205,20 +240,22 @@ export async function GET(request: NextRequest) {
             const key = `${bid}:${doc.id}`;
             if (existingByBoatAndKey.has(key)) return;
             const data = doc.data() as Slot;
-            const startAt = (data.startAt as { toDate(): Date }).toDate();
-            const endAt = (data.endAt as { toDate(): Date }).toDate();
-            const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
+            const startAtDate = toDateSafe(data.startAt);
+            const endAtDate = toDateSafe(data.endAt);
+            if (!startAtDate || !endAtDate) return; // skip malformed slot doc
+            const updatedAt = data.updatedAt as { toDate?: () => Date } | undefined;
+            const updatedAtIso = updatedAt?.toDate?.()?.toISOString?.() ?? null;
             // "booked" on slot docs is not trusted: only bookings collection is source of truth. Stale slot docs show as open.
             const status = data.status === "booked" ? "open" : data.status;
             existingByBoatAndKey.set(key, {
               id: doc.id,
               dateStr: dateStrFromSlotId(doc.id),
-              startAt: startAt.toISOString(),
-              endAt: endAt.toISOString(),
+              startAt: startAtDate.toISOString(),
+              endAt: endAtDate.toISOString(),
               status,
               holdId: data.holdId,
               bookingId: data.bookingId,
-              updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
+              updatedAt: updatedAtIso,
               boatId: bid,
               experienceId,
             });
@@ -226,7 +263,7 @@ export async function GET(request: NextRequest) {
         })
       );
 
-      const grid = getSlotGrid(start, end, durationsUnique);
+      const grid = durationsUnique.length > 0 ? getSlotGrid(start, end, durationsUnique) : [];
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
       try {
         const blocksSnap = await db
@@ -391,7 +428,12 @@ export async function GET(request: NextRequest) {
       { headers: { "Cache-Control": "no-store, max-age=0" } }
     );
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error("[slots]", err);
-    return NextResponse.json({ error: "Failed to load slots" }, { status: 500 });
+    const isFirebase = /firebase|FIREBASE|config missing|credential|private.?key/i.test(message);
+    return NextResponse.json(
+      { error: "Failed to load slots", ...(isFirebase && { hint: SLOTS_FIREBASE_HINT }) },
+      { status: isFirebase ? 503 : 500 }
+    );
   }
 }

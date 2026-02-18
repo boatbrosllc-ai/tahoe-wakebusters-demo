@@ -12,7 +12,7 @@ import { Reviews } from "@/components/experience/Reviews";
 import { FAQ } from "@/components/experience/FAQ";
 import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
-import { PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
+import { HERO, PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
 
 const BOOKING_SECTION_ID = "booking-preview";
 
@@ -54,7 +54,7 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
 
   return (
     <div className="min-h-screen bg-brand-dark">
-      <Hero heroImageUrl={heroImageUrl} />
+      <Hero heroImageUrl={heroImageUrl} introParagraph={HERO.introParagraph} />
 
       <section
         id={BOOKING_SECTION_ID}

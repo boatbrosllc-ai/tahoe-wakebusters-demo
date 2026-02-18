@@ -209,8 +209,9 @@ export function ExperienceCalendarSection({
     };
   }, [experienceIdProp, firestoreSlug]);
 
+  // Load rates when we have experienceId (from prop or from slug resolve). Keeps prices in sync when slug response omitted rates.
   useEffect(() => {
-    if (!experienceId || !experienceIdProp) return;
+    if (!experienceId) return;
     let cancelled = false;
     fetch(`/api/experiences/rates?experienceId=${encodeURIComponent(experienceId)}`)
       .then((res) => (res.ok ? res.json() : null))
@@ -220,7 +221,7 @@ export function ExperienceCalendarSection({
     return () => {
       cancelled = true;
     };
-  }, [experienceId, experienceIdProp]);
+  }, [experienceId]);
 
   const dateRange = useMemo(() => getDateRangeForMonth(calendarMonth), [calendarMonth]);
 

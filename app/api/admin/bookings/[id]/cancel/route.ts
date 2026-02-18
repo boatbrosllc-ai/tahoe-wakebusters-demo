@@ -46,22 +46,22 @@ export async function POST(
         ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
         : null;
     if (!slotRef) {
-      await bookingRef.update({ status: "canceled" });
+      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
       return NextResponse.json({ ok: true, slotReleased: false });
     }
     const slotSnap = await slotRef.get();
     if (!slotSnap.exists) {
-      await bookingRef.update({ status: "canceled" });
+      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
       return NextResponse.json({ ok: true, slotReleased: false });
     }
     const slot = slotSnap.data() as { status?: string; bookingId?: string };
     if (slot.status !== "booked" || slot.bookingId !== bookingId) {
-      await bookingRef.update({ status: "canceled" });
+      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
       return NextResponse.json({ ok: true, slotReleased: false });
     }
 
     await db.runTransaction(async (tx) => {
-      tx.update(bookingRef, { status: "canceled" });
+      tx.update(bookingRef, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
       tx.update(slotRef, {
         status: "open",
         holdId: FieldValue.delete(),

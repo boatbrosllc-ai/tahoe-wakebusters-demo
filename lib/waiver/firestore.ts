@@ -412,12 +412,37 @@ export function isTokenValid(
 // Booking waiver pointer
 // ---------------------------------------------------------------------------
 
+export type BookingWaiverPointer = {
+  requestId: string;
+  status: WaiverRequestStatus;
+  templateId: string;
+  templateVersion: number;
+};
+
+export async function getBookingWaiverPointer(
+  bookingId: string
+): Promise<BookingWaiverPointer | null> {
+  const db = getDb();
+  const snap = await db.collection(COLL.bookings).doc(bookingId).get();
+  if (!snap.exists) return null;
+  const waiver = (snap.data() as { waiver?: BookingWaiverPointer })?.waiver;
+  if (
+    !waiver ||
+    typeof waiver.requestId !== "string" ||
+    typeof waiver.templateId !== "string" ||
+    typeof waiver.templateVersion !== "number"
+  )
+    return null;
+  return waiver as BookingWaiverPointer;
+}
+
 export async function setBookingWaiverPointer(
   bookingId: string,
-  pointer: { requestId: string; status: WaiverRequestStatus; templateId: string; templateVersion: number }
+  pointer: BookingWaiverPointer
 ): Promise<void> {
   const db = getDb();
-  await db.collection(COLL.bookings).doc(bookingId).update({ waiver: pointer });
+  const { FieldValue } = getFirestoreExports();
+  await db.collection(COLL.bookings).doc(bookingId).update({ waiver: pointer, updatedAt: FieldValue.serverTimestamp() });
 }
 
 export async function getRequestByBookingId(

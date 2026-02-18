@@ -31,10 +31,23 @@ export async function GET(request: NextRequest) {
     const fromStr = fromParam.slice(0, 10);
     const toStr = toParam.slice(0, 10);
 
+    // Build experienceId list: doc id + slug variants (bookings may store experienceId as slug, e.g. pontoon / lake-austin-pontoon)
+    const experienceIdsToQuery: string[] = [experienceId];
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    if (expSnap.exists) {
+      const expData = expSnap.data() as { slug?: string } | undefined;
+      const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
+      if (experienceSlug && experienceSlug !== experienceId) experienceIdsToQuery.push(experienceSlug);
+      if (experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") {
+        if (!experienceIdsToQuery.includes("pontoon")) experienceIdsToQuery.push("pontoon");
+        if (!experienceIdsToQuery.includes("lake-austin-pontoon")) experienceIdsToQuery.push("lake-austin-pontoon");
+      }
+    }
     const SLOT_TAKEN_STATUSES = ["paid", "deposit_paid", "final_due", "final_paid", "final_processing"];
+    // Firestore "in" limit 10; we have at most a few ids
     const bookingsSnap = await db
       .collection("bookings")
-      .where("experienceId", "==", experienceId)
+      .where("experienceId", "in", experienceIdsToQuery.slice(0, 10))
       .where("status", "in", SLOT_TAKEN_STATUSES)
       .get();
     const blocksSnap = await db

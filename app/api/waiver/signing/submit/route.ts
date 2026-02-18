@@ -11,6 +11,7 @@ import {
   createRequestForGroupSigner,
   updateRequestSigned,
   markTokenUsed,
+  getBookingWaiverPointer,
   setBookingWaiverPointer,
 } from "@/lib/waiver/firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
@@ -137,15 +138,15 @@ export async function POST(request: NextRequest) {
     };
 
     await updateRequestSigned(req.id, signed);
-    if (!isGroupSign && token) {
-      await markTokenUsed(token);
-      await setBookingWaiverPointer(req.bookingId, {
-        requestId: req.id,
-        status: "signed",
-        templateId: req.templateId,
-        templateVersion: req.templateVersion,
-      });
-    }
+    if (token) await markTokenUsed(token);
+    // Update booking.waiver.status to "signed" for both primary link and group signers (so admin/customer see signed)
+    const existing = await getBookingWaiverPointer(req.bookingId);
+    await setBookingWaiverPointer(req.bookingId, {
+      requestId: existing?.requestId ?? req.id,
+      status: "signed",
+      templateId: existing?.templateId ?? req.templateId,
+      templateVersion: existing?.templateVersion ?? req.templateVersion,
+    });
 
     return NextResponse.json({ success: true });
   } catch (e) {

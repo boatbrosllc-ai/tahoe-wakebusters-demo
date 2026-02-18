@@ -20,7 +20,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({});
     }
     const db = getDb();
-    const expSnap = await db.collection("experiences").where("slug", "==", slug).where("active", "==", true).limit(1).get();
+    const normalizedSlug = slug.trim().toLowerCase();
+    let expSnap = await db.collection("experiences").where("slug", "==", normalizedSlug).where("active", "==", true).limit(1).get();
+    // Pontoon is referenced as "pontoon" in code (e.g. firestoreSlug) but may be stored as "lake-austin-pontoon" in Firestore (URL slug).
+    if (expSnap.empty && (normalizedSlug === "pontoon" || normalizedSlug === "lake-austin-pontoon")) {
+      const fallbackSlug = normalizedSlug === "pontoon" ? "lake-austin-pontoon" : "pontoon";
+      expSnap = await db.collection("experiences").where("slug", "==", fallbackSlug).where("active", "==", true).limit(1).get();
+    }
     if (expSnap.empty) {
       // 200 + empty so clients get no 404 in console; they check data?.id for fallback UI
       return NextResponse.json({});

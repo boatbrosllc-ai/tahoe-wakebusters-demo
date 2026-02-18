@@ -375,9 +375,17 @@ export async function POST(request: NextRequest) {
                 });
                 return;
               }
+              // Hold exists but expired or different slot → treat slot as available, overwrite with new hold below
+              if (expiryDate <= now || existingHold.status !== "active") {
+                // fall through to update slot and create new hold
+              } else {
+                throw new Error("Slot no longer available");
+              }
             }
+            // Hold doc missing → treat slot as available
+          } else if (slot.status !== "held" || !slot.holdId) {
+            throw new Error("Slot no longer available");
           }
-          throw new Error("Slot no longer available");
         }
         // Defense in depth: ensure no paid booking already exists for this boat/experience and time
         const slotStartMs = (slot.startAt as { toDate(): Date }).toDate().getTime();
@@ -429,6 +437,17 @@ export async function POST(request: NextRequest) {
         // Prevent double-booking: reject if any existing held/booked/blocked slot overlaps this time
         const dayStart = new Date(parsed.dateStr + "T00:00:00");
         const dayEnd = new Date(parsed.dateStr + "T23:59:59.999");
+        const isHeldTrulyTaken = async (slotData: Slot, holdId: string | null | undefined): Promise<boolean> => {
+          if (slotData.status !== "held" || !holdId) return slotData.status !== "open";
+          const holdSnap = await tx.get(db.collection("holds").doc(holdId));
+          if (!holdSnap.exists) return false; // missing hold → treat as open
+          const hold = holdSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
+          if (hold?.status !== "active") return false;
+          const exp = hold?.expiresAt?.toDate?.();
+          if (exp && exp <= now) return false; // expired → treat as open
+          return true;
+        };
+
         if (isListingBoatFlow && input.boatId) {
           const boatSlotsRef = db.collection("boats").doc(input.boatId).collection("slots");
           const sameDaySnap = await tx.get(
@@ -439,6 +458,7 @@ export async function POST(request: NextRequest) {
           for (const doc of sameDaySnap.docs) {
             const data = doc.data() as Slot;
             if (data.status === "open") continue;
+            if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
             const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
             const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
             if (slotStartMs < existingEnd && slotEndMs > existingStart) {
@@ -455,6 +475,7 @@ export async function POST(request: NextRequest) {
           for (const doc of sameDaySnap.docs) {
             const data = doc.data() as Slot;
             if (data.status === "open") continue;
+            if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
             const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
             const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
             if (slotStartMs < existingEnd && slotEndMs > existingStart) {

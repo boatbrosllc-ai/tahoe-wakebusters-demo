@@ -4,8 +4,11 @@
  */
 
 export const HERO = {
-  title: "Lake Austin Luxury Pontoon",
+  title: "Lake Austin Pontoon Rental Experience",
   subtitle: "Captain included. Premium sound. Chill, swim, celebrate.",
+  /** SEO intro for hero (Lake Austin pontoon rentals, captained, Austin TX). */
+  introParagraph:
+    "Our Lake Austin pontoon rentals are captained pontoon rental experiences in Austin, TX. No boating license required—relax with your group while a licensed captain runs the boat. Book your Lake Austin pontoon rental below.",
   primaryCta: "Check Availability",
   secondaryCta: "View Gallery",
   /** Hero image — local pontoon photo (same as pontoon experience in content/experiences). */

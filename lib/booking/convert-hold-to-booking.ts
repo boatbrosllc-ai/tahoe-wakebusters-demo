@@ -13,7 +13,6 @@ import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waive
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { signManageToken } from "@/lib/booking/manageToken";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
@@ -240,17 +239,8 @@ export async function convertHoldToBooking(
 
   const startTs = slot.startAt as { toDate(): Date };
   const endTs = slot.endAt as { toDate(): Date };
-  let manageLink: string | undefined;
-  if (bookingEnv.manageBookingSecret && isDeposit) {
-    try {
-      const token = signManageToken({ bookingId });
-      manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
-    } catch (_) {
-      // MANAGE_BOOKING_SECRET not set; omit link
-    }
-  } else if (!isDeposit) {
-    manageLink = `${bookingEnv.appBaseUrl}/booking/success?payment_intent=${input.paymentIntentId}`;
-  }
+  // Manage booking link removed from confirmation email per product request.
+  const manageLink: string | undefined = undefined;
   const waiverResult = await createWaiverForBooking({
     bookingId,
     customerEmail: customer.email,

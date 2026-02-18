@@ -88,6 +88,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           locationText,
           isDeposit: isDeposit ?? false,
           waiverSigningUrl: waiverSigningUrl ?? "",
+          manageLink: "", // Intentionally empty so Brevo template does not show "Manage booking"
         },
       }
     : {

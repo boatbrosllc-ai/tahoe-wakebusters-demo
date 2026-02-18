@@ -97,7 +97,18 @@ function getTodayDateStr(now: Date): string {
   return getDateStrInSlotTimezone(now);
 }
 
-/** Generate (dateStr, startHour, durationHours) for the given range; excludes past times only for today. */
+/** Next calendar day (YYYY-MM-DD); timezone-agnostic so DST-safe for range iteration. */
+function nextDateStr(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const next = new Date(y, m - 1, d + 1);
+  const ny = next.getFullYear();
+  const nm = String(next.getMonth() + 1).padStart(2, "0");
+  const nd = String(next.getDate()).padStart(2, "0");
+  return `${ny}-${nm}-${nd}`;
+}
+
+/** Generate (dateStr, startHour, durationHours) for the given range; excludes past times only for today.
+ * Date iteration uses America/Chicago for start/end so day boundaries match the business timezone regardless of server TZ. */
 export function getSlotGrid(
   startDate: Date,
   endDate: Date,
@@ -106,12 +117,9 @@ export function getSlotGrid(
   const out: { dateStr: string; startHour: number; durationHours: number }[] = [];
   const now = new Date();
   const todayStr = getTodayDateStr(now);
-  const start = new Date(startDate);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(endDate);
-  end.setHours(23, 59, 59, 999);
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const startStr = getDateStrInSlotTimezone(startDate);
+  const endStr = getDateStrInSlotTimezone(endDate);
+  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
     for (const durationHours of durationHoursList) {
       const latestStart = getLatestStartHourForDuration(durationHours);
       for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {

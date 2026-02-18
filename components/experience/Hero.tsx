@@ -12,6 +12,7 @@ export function Hero({
   heroImageUrl,
   title,
   subtitle,
+  introParagraph,
 }: {
   /** When set (e.g. from admin pontoon listing), overrides static HERO image. */
   heroImageUrl?: string;
@@ -19,6 +20,8 @@ export function Hero({
   title?: string;
   /** When set, overrides static HERO subtitle. */
   subtitle?: string;
+  /** Optional intro paragraph below subtitle (e.g. for SEO). */
+  introParagraph?: string;
 }) {
   const reduceMotion = useReducedMotion();
   const motionProps = reduceMotion
@@ -95,6 +98,16 @@ export function Hero({
           >
             {heroSubtitle}
           </motion.p>
+          {introParagraph && (
+            <motion.p
+              className="font-display mt-4 sm:mt-5 text-sm sm:text-base lg:text-lg text-white/90 max-w-3xl mx-auto leading-relaxed [text-shadow:0_1px_3px_rgba(0,0,0,0.8)] sm:[text-shadow:none]"
+              initial={motionProps.initial}
+              animate={motionProps.animate}
+              transition={{ ...motionProps.transition, delay: reduceMotion ? 0 : 0.22 }}
+            >
+              {introParagraph}
+            </motion.p>
+          )}
         </div>
       </div>
     </section>

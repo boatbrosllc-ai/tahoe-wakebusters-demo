@@ -55,13 +55,27 @@ export function ExperienceChooser() {
           Choose your experience
         </motion.h2>
         <motion.p
-          className="text-lg sm:text-xl text-brand-muted text-center max-w-2xl mx-auto mb-10 sm:mb-12 leading-relaxed"
+          className="text-lg sm:text-xl text-brand-muted text-center max-w-2xl mx-auto mb-4 leading-relaxed"
           initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.4, delay: 0.06 }}
         >
           Pick one and book now.
+        </motion.p>
+        <motion.p
+          className="text-center mb-10 sm:mb-12"
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-40px" }}
+          transition={{ duration: 0.4, delay: 0.08 }}
+        >
+          <Link
+            href="/lake-austin-pontoon-rentals"
+            className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
+          >
+            Lake Austin Pontoon Rentals
+          </Link>
         </motion.p>
 
         {pontoonData && (

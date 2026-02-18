@@ -309,6 +309,7 @@ export async function POST(request: NextRequest) {
           "stripe.finalPaymentIntentId": piId,
           "stripe.finalChargedAt": Timestamp.now(),
           "stripe.finalError": FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
         console.log("[stripe-webhook] payment_intent.succeeded final_paid", { bookingId });
         await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "final_paid", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
@@ -402,6 +403,7 @@ export async function POST(request: NextRequest) {
             status: newStatus,
             "stripe.finalError": { code: lastError?.code ?? undefined, message: lastError?.message ?? undefined },
             "stripe.finalChargeAttemptedAt": Timestamp.now(),
+            updatedAt: FieldValue.serverTimestamp(),
           });
           console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
           try {

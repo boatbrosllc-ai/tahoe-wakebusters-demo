@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Image from "next/image";
+import Link from "next/link";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
@@ -54,7 +55,11 @@ export default function OurStoryPage() {
               </p>
               <div className="space-y-6 text-brand-muted leading-relaxed text-base sm:text-lg">
                 <p>
-                  Boat Bros started with a simple idea: make it easy to book a great day on the water. No hassle, no hidden fees—just solid boats, clear pricing, and a team that shows up. We offer pontoons for parties, tow boats for wake and surf, and sunset cruises for anyone who wants to unwind with a view.
+                  Boat Bros started with a simple idea: make it easy to book a great day on the water. No hassle, no hidden fees—just solid boats, clear pricing, and a team that shows up. We offer{" "}
+                  <Link href="/lake-austin-pontoon-rentals" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+                    Lake Austin Pontoon Rentals
+                  </Link>
+                  {" "}for parties, tow boats for wake and surf, and sunset cruises for anyone who wants to unwind with a view.
                 </p>
                 <p>
                   Every rental includes life vests, safety briefing, and support if you need it. We&apos;re licensed and insured, and we work with captains who know the lake. Whether you&apos;re planning a family day, a bachelor party, or a corporate outing, we&apos;re here to make it smooth.

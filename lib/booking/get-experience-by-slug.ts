@@ -11,7 +11,12 @@ export interface ExperienceWithDetails {
 
 export async function getExperienceBySlug(slug: string): Promise<ExperienceWithDetails | null> {
   const db = getDb();
-  const snap = await db.collection("experiences").where("slug", "==", slug).where("active", "==", true).limit(1).get();
+  const normalizedSlug = slug.trim().toLowerCase();
+  let snap = await db.collection("experiences").where("slug", "==", normalizedSlug).where("active", "==", true).limit(1).get();
+  if (snap.empty && (normalizedSlug === "pontoon" || normalizedSlug === "lake-austin-pontoon")) {
+    const fallbackSlug = normalizedSlug === "pontoon" ? "lake-austin-pontoon" : "pontoon";
+    snap = await db.collection("experiences").where("slug", "==", fallbackSlug).where("active", "==", true).limit(1).get();
+  }
   if (snap.empty) return null;
   const doc = snap.docs[0];
   const experience = doc.data() as Experience;

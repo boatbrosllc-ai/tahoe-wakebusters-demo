@@ -98,9 +98,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ requests: enriched });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    const isFirebase = /firebase|FIREBASE|config missing|credential/i.test(message);
+    const isFirebase = /firebase|FIREBASE|config missing|credential|private.?key|service.?account/i.test(message);
     return NextResponse.json(
-      { error: message, ...(isFirebase && { hint: FIREBASE_SETUP_HINT }) },
+      {
+        error: isFirebase ? "Waiver tracking requires Firebase." : message,
+        ...(isFirebase && { hint: FIREBASE_SETUP_HINT }),
+      },
       { status: isFirebase ? 503 : 500 }
     );
   }
