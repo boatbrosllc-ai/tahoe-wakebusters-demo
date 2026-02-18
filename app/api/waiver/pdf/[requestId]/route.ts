@@ -26,7 +26,8 @@ export async function GET(
     if (!exists) return NextResponse.json({ error: "PDF file not found" }, { status: 404 });
 
     const [buffer] = await file.download();
-    return new NextResponse(buffer, {
+    const body: BodyInit = new Uint8Array(buffer);
+    return new NextResponse(body, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="waiver-${requestId}.pdf"`,
