@@ -78,7 +78,7 @@ export function Hero({
         All trips
       </Link>
       <div className="absolute inset-0 flex flex-col justify-center sm:justify-start items-center sm:items-stretch">
-        <div className="w-full max-w-4xl mx-auto px-5 sm:px-8 lg:px-12 pt-0 sm:pt-8 lg:pt-12 pb-16 text-center">
+        <div className="w-full max-w-4xl mx-auto px-5 sm:px-8 lg:px-12 pt-0 sm:pt-8 lg:pt-12 pb-16 text-center -mt-40 sm:mt-0">
           <motion.h1
             className="font-display text-3xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-extrabold text-white tracking-tight leading-[1.08] [text-shadow:0_2px_4px_rgba(0,0,0,0.8),0_4px_12px_rgba(0,0,0,0.6)] sm:[text-shadow:0_2px_40px_rgba(0,0,0,0.4)]"
             initial={motionProps.initial}
