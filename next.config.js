@@ -2,6 +2,8 @@ const path = require('path');
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Avoid "generate is not a function" when config.generateBuildId is undefined (Next 14.x)
+  generateBuildId: async () => null,
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**' },

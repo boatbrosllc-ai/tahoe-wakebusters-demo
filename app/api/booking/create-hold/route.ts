@@ -369,8 +369,8 @@ export async function POST(request: NextRequest) {
                   marketingOptIn: input.marketingOptIn,
                   expiresAt: Timestamp.fromDate(newExpiresAt),
                   tipCents: tipCents,
-                  ...(holdPayload.pricing && { pricing: holdPayload.pricing }),
-                  ...(holdPayload.effectiveRateCents != null && { effectiveRateCents: holdPayload.effectiveRateCents }),
+                  ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
+                  ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
                   ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
                 });
                 return;

@@ -268,6 +268,29 @@ export async function POST(request: NextRequest) {
     const specialNotes = typeof body.specialNotes === "string" ? body.specialNotes.trim() : "";
     let boatId: string | undefined = typeof body.boatId === "string" ? body.boatId.trim() || undefined : undefined;
 
+    const billingAddress = body.billingAddress && typeof body.billingAddress === "object"
+      ? {
+          line1: typeof body.billingAddress.line1 === "string" ? body.billingAddress.line1.trim() : undefined,
+          line2: typeof body.billingAddress.line2 === "string" ? body.billingAddress.line2.trim() : undefined,
+          city: typeof body.billingAddress.city === "string" ? body.billingAddress.city.trim() : undefined,
+          state: typeof body.billingAddress.state === "string" ? body.billingAddress.state.trim() : undefined,
+          zip: typeof body.billingAddress.zip === "string" ? body.billingAddress.zip.trim() : undefined,
+          country: typeof body.billingAddress.country === "string" ? body.billingAddress.country.trim() : undefined,
+        }
+      : undefined;
+    const hasBilling = billingAddress && Object.values(billingAddress).some(Boolean);
+
+    const cardInput = body.card && typeof body.card === "object" ? body.card as { last4?: string; brand?: string; expMonth?: number; expYear?: number } : undefined;
+    const cardDisplay = cardInput
+      ? {
+          last4: typeof cardInput.last4 === "string" ? cardInput.last4.replace(/\D/g, "").slice(-4) : undefined,
+          brand: typeof cardInput.brand === "string" ? cardInput.brand.trim() : undefined,
+          expMonth: typeof cardInput.expMonth === "number" && cardInput.expMonth >= 1 && cardInput.expMonth <= 12 ? cardInput.expMonth : undefined,
+          expYear: typeof cardInput.expYear === "number" && cardInput.expYear >= 2000 ? cardInput.expYear : undefined,
+        }
+      : undefined;
+    const hasCard = cardDisplay && (cardDisplay.last4 || cardDisplay.brand);
+
     if (!experienceId) return NextResponse.json({ error: "experienceId is required" }, { status: 400 });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tripDate)) return NextResponse.json({ error: "tripDate must be YYYY-MM-DD" }, { status: 400 });
     if (!Number.isInteger(startHour) || startHour < 7 || startHour > 18) return NextResponse.json({ error: "startHour must be 7–18 (operating hours 7am–7pm)" }, { status: 400 });
@@ -319,6 +342,8 @@ export async function POST(request: NextRequest) {
       pricing,
       status: "paid",
       stripe: {},
+      ...(hasBilling && billingAddress && { billingAddress }),
+      ...(hasCard && cardDisplay && { card: cardDisplay }),
       createdAt: Timestamp.now(),
     };
 

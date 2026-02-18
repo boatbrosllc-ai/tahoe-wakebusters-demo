@@ -396,6 +396,15 @@ export interface Booking {
   reminderDayOfSentAt?: FirestoreTimestamp;
   /** Display-only card (brand, last4, exp). */
   card?: BookingCardDisplay;
+  /** Billing address (e.g. for manual/admin-added bookings). */
+  billingAddress?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    country?: string;
+  };
   /** Waiver request pointer (when in-app waiver is used). */
   waiver?: {
     requestId: string;

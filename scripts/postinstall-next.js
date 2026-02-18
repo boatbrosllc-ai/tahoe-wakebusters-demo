@@ -23,9 +23,10 @@ const generateBuildIdPath = path.join(projectRoot, "node_modules", "next", "dist
 if (fs.existsSync(generateBuildIdPath)) {
   let content = fs.readFileSync(generateBuildIdPath, "utf8");
   if (!content.includes('if (typeof generate !== "function")')) {
+    // Match "let buildId = await generate();" so we guard before calling generate (handles undefined config.generateBuildId)
     content = content.replace(
-      "async function generateBuildId(generate, fallback) {\n    let buildId = await generate();",
-      'async function generateBuildId(generate, fallback) {\n    if (typeof generate !== "function") {\n        generate = fallback;\n    }\n    let buildId = await generate();'
+      /(\s+)let buildId = await generate\(\);/,
+      "$1if (typeof generate !== \"function\") { generate = fallback; }\n$1let buildId = await generate();"
     );
     fs.writeFileSync(generateBuildIdPath, content, "utf8");
     console.log("[postinstall-next] Patched generate-build-id.js for config loading.");

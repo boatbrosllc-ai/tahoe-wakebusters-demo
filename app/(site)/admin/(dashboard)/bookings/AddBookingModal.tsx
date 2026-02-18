@@ -14,6 +14,15 @@ const SOURCE_OPTIONS = [
   { value: "Other", label: "Other" },
 ];
 
+const CARD_BRANDS = [
+  { value: "", label: "Select brand (optional)" },
+  { value: "Visa", label: "Visa" },
+  { value: "Mastercard", label: "Mastercard" },
+  { value: "Amex", label: "Amex" },
+  { value: "Discover", label: "Discover" },
+  { value: "Other", label: "Other" },
+];
+
 const DURATION_OPTIONS = [2, 3, 4, 6, 8];
 const START_HOURS = Array.from({ length: 12 }, (_, i) => i + 7); // 7–18 (operating hours 7am–7pm)
 
@@ -48,6 +57,17 @@ export function AddBookingModal({
   const [specialNotes, setSpecialNotes] = useState("");
   const [boats, setBoats] = useState<BoatOption[]>([]);
   const [boatId, setBoatId] = useState("");
+  // Billing & payment (optional)
+  const [billingLine1, setBillingLine1] = useState("");
+  const [billingLine2, setBillingLine2] = useState("");
+  const [billingCity, setBillingCity] = useState("");
+  const [billingState, setBillingState] = useState("");
+  const [billingZip, setBillingZip] = useState("");
+  const [billingCountry, setBillingCountry] = useState("");
+  const [cardLast4, setCardLast4] = useState("");
+  const [cardBrand, setCardBrand] = useState("");
+  const [cardExpMonth, setCardExpMonth] = useState("");
+  const [cardExpYear, setCardExpYear] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +134,28 @@ export function AddBookingModal({
           source: source || undefined,
           externalReference: referenceNumber.trim() || undefined,
           specialNotes: specialNotes.trim() || undefined,
+          ...(billingLine1.trim() || billingCity.trim() || billingZip.trim()
+            ? {
+                billingAddress: {
+                  line1: billingLine1.trim() || undefined,
+                  line2: billingLine2.trim() || undefined,
+                  city: billingCity.trim() || undefined,
+                  state: billingState.trim() || undefined,
+                  zip: billingZip.trim() || undefined,
+                  country: billingCountry.trim() || undefined,
+                },
+              }
+            : {}),
+          ...(cardLast4.replace(/\D/g, "").length >= 4 || cardBrand
+            ? {
+                card: {
+                  last4: cardLast4.replace(/\D/g, "").slice(-4) || undefined,
+                  brand: cardBrand || undefined,
+                  expMonth: cardExpMonth ? parseInt(cardExpMonth, 10) : undefined,
+                  expYear: cardExpYear ? parseInt(cardExpYear, 10) : undefined,
+                },
+              }
+            : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -130,6 +172,16 @@ export function AddBookingModal({
       setReferenceNumber("");
       setSpecialNotes("");
       setBoatId("");
+      setBillingLine1("");
+      setBillingLine2("");
+      setBillingCity("");
+      setBillingState("");
+      setBillingZip("");
+      setBillingCountry("");
+      setCardLast4("");
+      setCardBrand("");
+      setCardExpMonth("");
+      setCardExpYear("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create booking");
     } finally {
@@ -316,6 +368,113 @@ export function AddBookingModal({
             />
           </div>
         </div>
+        </div>
+
+        <div className="border-t border-brand-dark/10 pt-4">
+          <p className="text-sm font-medium text-brand-dark mb-2">Billing & payment</p>
+          <p className="text-xs text-brand-muted mb-3">Optional. For records only. Do not enter full card numbers.</p>
+          <div className="space-y-3">
+            <input
+              type="text"
+              placeholder="Billing address line 1"
+              value={billingLine1}
+              onChange={(e) => setBillingLine1(e.target.value)}
+              className={inputClass}
+            />
+            <input
+              type="text"
+              placeholder="Address line 2"
+              value={billingLine2}
+              onChange={(e) => setBillingLine2(e.target.value)}
+              className={inputClass}
+            />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <input
+                type="text"
+                placeholder="City"
+                value={billingCity}
+                onChange={(e) => setBillingCity(e.target.value)}
+                className={inputClass}
+              />
+              <input
+                type="text"
+                placeholder="State"
+                value={billingState}
+                onChange={(e) => setBillingState(e.target.value)}
+                className={inputClass}
+              />
+              <input
+                type="text"
+                placeholder="ZIP"
+                value={billingZip}
+                onChange={(e) => setBillingZip(e.target.value)}
+                className={inputClass}
+              />
+              <input
+                type="text"
+                placeholder="Country"
+                value={billingCountry}
+                onChange={(e) => setBillingCountry(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div>
+                <label htmlFor="add-booking-card-last4" className="block text-xs font-medium text-brand-muted mb-1">Card last 4</label>
+                <input
+                  id="add-booking-card-last4"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="1234"
+                  value={cardLast4}
+                  onChange={(e) => setCardLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="add-booking-card-brand" className="block text-xs font-medium text-brand-muted mb-1">Card brand</label>
+                <select
+                  id="add-booking-card-brand"
+                  value={cardBrand}
+                  onChange={(e) => setCardBrand(e.target.value)}
+                  className={inputClass}
+                >
+                  {CARD_BRANDS.map((o) => (
+                    <option key={o.value || "none"} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="add-booking-card-exp-month" className="block text-xs font-medium text-brand-muted mb-1">Exp month</label>
+                  <input
+                    id="add-booking-card-exp-month"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    placeholder="MM"
+                    value={cardExpMonth}
+                    onChange={(e) => setCardExpMonth(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-booking-card-exp-year" className="block text-xs font-medium text-brand-muted mb-1">Exp year</label>
+                  <input
+                    id="add-booking-card-exp-year"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="YYYY"
+                    value={cardExpYear}
+                    onChange={(e) => setCardExpYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div>

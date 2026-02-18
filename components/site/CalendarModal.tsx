@@ -222,8 +222,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
   const goPrevMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
   const goNextMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
-  const handleDayClick = (dateStr: string, available: boolean) => {
-    if (!available) return;
+  const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
     onOpenChange(false);
     setSlotModalOpen(true);
@@ -301,7 +300,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
             ) : (
               calendarDays.map((cell) => {
                 const isAvailable = cell.available && !cell.isPast;
-                const isClickable = cell.isCurrentMonth && isAvailable;
+                const isPast = cell.isPast;
+                const isClickable = cell.isCurrentMonth && !isPast;
                 const isToday = cell.dateStr === todayStr;
                 const isSelected = selectedDate === cell.dateStr;
                 return (
@@ -309,13 +309,14 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                     key={cell.dateStr + cell.day}
                     type="button"
                     disabled={!isClickable}
-                    onClick={() => handleDayClick(cell.dateStr, isAvailable)}
+                    onClick={() => handleDayClick(cell.dateStr)}
                     className={cn(
                       "min-h-[36px] sm:min-h-[44px] flex flex-col items-center justify-center rounded text-xs sm:text-sm font-medium transition-all touch-manipulation",
                       !cell.isCurrentMonth && "text-brand-muted/40",
                       cell.isCurrentMonth && cell.isPast && "text-brand-muted/50 bg-brand-dark/5",
-                      cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted",
+                      cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted hover:bg-brand-dark/15 cursor-pointer",
                       isAvailable && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
+                      isClickable && "cursor-pointer",
                       isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1",
                       isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/15"
                     )}

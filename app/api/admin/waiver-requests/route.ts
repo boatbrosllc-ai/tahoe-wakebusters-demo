@@ -13,7 +13,7 @@ async function enrichWithBookingSummary(
 ): Promise<(RequestWithId & { bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string; partySize?: number; signedCount?: number } })[]> {
   if (requests.length === 0) return [];
   const db = getDb();
-  const bookingIds = [...new Set(requests.map((r) => r.bookingId))];
+  const bookingIds = Array.from(new Set(requests.map((r) => r.bookingId)));
   const chunk = <T,>(arr: T[], size: number): T[][] =>
     Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
   const bookingMap = new Map<string, { slotId?: string; startDateStr?: string; experienceId?: string; partySize?: number }>();
@@ -30,7 +30,7 @@ async function enrichWithBookingSummary(
     const partySize = bookingMap.get(bid)?.partySize ?? 0;
     signedCountByBooking.set(bid, { signed, partySize });
   }
-  const experienceIds = [...new Set(Array.from(bookingMap.values()).map((b) => b.experienceId).filter(Boolean) as string[])];
+  const experienceIds = Array.from(new Set(Array.from(bookingMap.values()).map((b) => b.experienceId).filter(Boolean) as string[]));
   const experienceMap = new Map<string, string>();
   for (const ids of chunk(experienceIds, 10)) {
     const docs = await Promise.all(ids.map((id) => db.collection("experiences").doc(id).get()));
