@@ -237,7 +237,7 @@ export default function LakeAustinBoatRentalPage() {
               <li className="flex gap-4">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-primary text-sm font-bold text-white" aria-hidden>3</span>
                 <div>
-                  <strong className="text-brand-dark">Show up & enjoy</strong> — We'll send meet-up and parking details. Your captain handles the rest.
+                  <strong className="text-brand-dark">Show up & enjoy</strong> — We&apos;ll send meet-up and parking details. Your captain handles the rest.
                 </div>
               </li>
             </ol>
@@ -251,10 +251,10 @@ export default function LakeAustinBoatRentalPage() {
               Parking & meet-up
             </h2>
             <p className="mt-4 text-brand-dark/90 leading-relaxed">
-              Exact meet-up location and parking instructions are sent with your booking confirmation. We operate from the Austin area near Lake Austin; your confirmation will include the specific marina or dock, a contact for the day of your trip, and any parking fees or tips. If you have accessibility or parking questions before booking, contact us and we'll help.
+              Exact meet-up location and parking instructions are sent with your booking confirmation. We operate from the Austin area near Lake Austin; your confirmation will include the specific marina or dock, a contact for the day of your trip, and any parking fees or tips. If you have accessibility or parking questions before booking, contact us and we&apos;ll help.
             </p>
             <p className="mt-3 text-sm text-brand-muted">
-              Meet-up location may vary by experience and date. We'll confirm details after you book.
+              Meet-up location may vary by experience and date. We&apos;ll confirm details after you book.
             </p>
           </div>
         </section>
