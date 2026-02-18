@@ -201,7 +201,7 @@ export async function GET(request: NextRequest) {
         slugVariants.add("pontoon");
         slugVariants.add("lake-austin-pontoon");
       }
-      for (const slugVariant of slugVariants) {
+      for (const slugVariant of Array.from(slugVariants)) {
         const bySlugSnap = await db
           .collection("bookings")
           .where("experienceId", "==", slugVariant)

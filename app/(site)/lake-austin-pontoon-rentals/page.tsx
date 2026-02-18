@@ -176,7 +176,7 @@ export default function LakeAustinPontoonRentalsPage() {
               About captained pontoon rentals on Lake Austin
             </h2>
             <p className="text-lg text-brand-dark leading-relaxed">
-              Our Lake Austin pontoon rentals are fully captained—you never need a boating license. Relax with your group on a premium pontoon while a licensed captain handles the boat. We're based in Austin, TX and run trips on Lake Austin year-round. Book online and get instant confirmation.
+              Our Lake Austin pontoon rentals are fully captained—you never need a boating license. Relax with your group on a premium pontoon while a licensed captain handles the boat. We&apos;re based in Austin, TX and run trips on Lake Austin year-round. Book online and get instant confirmation.
             </p>
           </div>
         </section>
