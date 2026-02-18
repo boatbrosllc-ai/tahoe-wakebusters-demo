@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
+import { formatBookingTimeFromIso, formatBookingDate } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 
 const SLOTS_POLL_MS = 60000;
@@ -35,11 +36,11 @@ interface AddonDto {
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatBookingTimeFromIso(iso);
 }
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  return formatBookingDate(new Date(iso));
 }
 
 function getDateRange(days: number): { start: string; end: string } {

@@ -4,6 +4,7 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -169,8 +170,8 @@ export async function GET(request: NextRequest) {
       if (parsed) {
         durationHours = parsed.durationHours;
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        startTime = formatBookingTime(start);
+        endTime = formatBookingTime(end);
       }
       const addonMap = b.experienceId ? experienceAddons.get(b.experienceId) : undefined;
       const addonsWithNames: AddonWithName[] = (b.addonSelections ?? []).map((sel: AddonSelection) => ({
@@ -263,11 +264,13 @@ export async function POST(request: NextRequest) {
     const partySize = typeof body.partySize === "number" ? body.partySize : parseInt(String(body.partySize), 10) || 1;
     const totalCents = typeof body.totalCents === "number" ? body.totalCents : Math.round(parseFloat(String(body.totalCents || 0)) * 100);
     const source = typeof body.source === "string" ? body.source.trim() : "";
+    const externalReference = typeof body.externalReference === "string" ? body.externalReference.trim() : "";
     const specialNotes = typeof body.specialNotes === "string" ? body.specialNotes.trim() : "";
+    let boatId: string | undefined = typeof body.boatId === "string" ? body.boatId.trim() || undefined : undefined;
 
     if (!experienceId) return NextResponse.json({ error: "experienceId is required" }, { status: 400 });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tripDate)) return NextResponse.json({ error: "tripDate must be YYYY-MM-DD" }, { status: 400 });
-    if (!Number.isInteger(startHour) || startHour < 7 || startHour > 23) return NextResponse.json({ error: "startHour must be 7–23" }, { status: 400 });
+    if (!Number.isInteger(startHour) || startHour < 7 || startHour > 18) return NextResponse.json({ error: "startHour must be 7–18 (operating hours 7am–7pm)" }, { status: 400 });
     if (!Number.isInteger(durationHours) || durationHours < 1 || durationHours > 12) return NextResponse.json({ error: "durationHours must be 1–12" }, { status: 400 });
     if (!customer.name || !customer.email) return NextResponse.json({ error: "customer name and email are required" }, { status: 400 });
     if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });
@@ -278,13 +281,21 @@ export async function POST(request: NextRequest) {
     const expSnap = await db.collection("experiences").doc(experienceId).get();
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
 
+    if (boatId) {
+      const boatSnap = await db.collection("boats").doc(boatId).get();
+      const boatData = boatSnap.data() as { experienceIds?: string[] } | undefined;
+      const assigned = boatData?.experienceIds?.includes(experienceId);
+      if (!boatSnap.exists || !assigned) boatId = undefined;
+    }
+
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
     const firstRate = ratesSnap.docs[0];
     const rateId = firstRate?.id ?? "manual";
     const durationFromRate = firstRate ? (firstRate.data() as { durationHours?: number }).durationHours : durationHours;
 
     const slotId = buildSlotId(tripDate, startHour, durationHours);
-    const notes = [source, specialNotes].filter(Boolean).join(" — ");
+    const noteParts = [source, externalReference ? `Ref: ${externalReference}` : "", specialNotes].filter(Boolean);
+    const notes = noteParts.join(" — ");
     const pricing = {
       subtotalCents: totalCents,
       taxCents: 0,
@@ -294,6 +305,7 @@ export async function POST(request: NextRequest) {
     };
 
     const booking: Omit<Booking, "createdAt"> & { createdAt: ReturnType<typeof Timestamp.now> } = {
+      ...(boatId && { boatId }),
       experienceId,
       slotId,
       startDateStr: tripDate,

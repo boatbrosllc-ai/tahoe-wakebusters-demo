@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
+import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
@@ -35,7 +36,7 @@ interface AddonDto {
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatBookingTimeFromIso(iso);
 }
 
 function getDateRange(days: number): { start: string; end: string } {

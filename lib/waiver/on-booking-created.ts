@@ -7,9 +7,11 @@
 import "server-only";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 import {
   listTemplates,
   createRequest,
+  createGroupToken,
   setBookingWaiverPointer,
   updateRequest,
 } from "./firestore";
@@ -25,6 +27,8 @@ export interface CreateWaiverForBookingInput {
 export interface CreateWaiverForBookingResult {
   requestId: string;
   signingUrl: string;
+  /** Shareable link for other party members to sign the same booking's waiver. */
+  groupSigningUrl?: string;
   /** Include this URL in the booking confirmation email. */
   includeInConfirmationEmail: boolean;
   /** Send a separate waiver invite email (caller should call sendWaiverInviteAndMarkSent). */
@@ -82,8 +86,8 @@ export async function createWaiverForBooking(
       if (parsed) {
         tripDate = parsed.dateStr;
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        startTime = formatBookingTime(start);
+        endTime = formatBookingTime(end);
       }
       if (b.experienceId) {
         const expSnap = await db.collection("experiences").doc(b.experienceId).get();
@@ -97,9 +101,17 @@ export async function createWaiverForBooking(
     const includeInConfirmationEmail = active.includeInConfirmationEmail !== false;
     const sendSeparateWaiverInvite = active.sendSeparateWaiverInvite === true;
 
+    let groupSigningUrl: string | undefined;
+    const partyCount = partySize ?? 1;
+    if (partyCount > 1) {
+      const group = await createGroupToken(input.bookingId, active.id, active.version, partyCount);
+      groupSigningUrl = group.groupSigningUrl;
+    }
+
     return {
       requestId,
       signingUrl,
+      groupSigningUrl,
       includeInConfirmationEmail,
       sendSeparateWaiverInvite,
       bookingSummary,

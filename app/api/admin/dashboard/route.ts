@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking } from "@/lib/booking/types";
-import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
@@ -12,7 +13,7 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
 
 function formatTimeLabel(dateStr: string, startHour: number, durationHours: number): string {
   const { start } = getSlotStartEnd(dateStr, startHour, durationHours);
-  return start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatBookingTime(start);
 }
 
 export async function GET(request: NextRequest) {
@@ -26,10 +27,11 @@ export async function GET(request: NextRequest) {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-    const todayStr = now.toISOString().slice(0, 10);
+    // Use business timezone (America/Chicago) so "next 7 days" matches what admins expect
+    const todayStr = getDateStrInSlotTimezone(now);
     const in7Days = new Date(now);
     in7Days.setDate(in7Days.getDate() + 6);
-    const in7DaysStr = in7Days.toISOString().slice(0, 10);
+    const in7DaysStr = getDateStrInSlotTimezone(in7Days);
 
     const [bookingsSnap, experiencesSnap] = await Promise.all([
       db.collection("bookings").get(),

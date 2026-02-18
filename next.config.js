@@ -31,9 +31,6 @@ const nextConfig = {
     }
     return config;
   },
-  generateBuildId() {
-    return process.env.BUILD_ID || "boatbros-" + Date.now();
-  },
 };
 
 module.exports = nextConfig;

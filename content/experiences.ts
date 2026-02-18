@@ -53,8 +53,8 @@ export const experiences: Experience[] = [
     capacity: "Up to 8",
     heroImage: "/photos/Thomas_2.14.1.webp",
     gallery: ["/photos/Thomas_2.14.1.webp", "/photos/DSC00513%20(3).webp", "/photos/DSC00539.webp", "/photos/IMG_2123.webp"],
-    pricingNote: "From $299 for 2 hours. Driver add-on recommended for first-timers.",
-    fromPriceCents: 29900,
+    pricingNote: "From $600 for 2 hours. Driver add-on recommended for first-timers.",
+    fromPriceCents: 60000,
     faqs: [
       { q: "Is equipment included?", a: "Yes. Wakeboards, surf board, and tubes are included. Life vests in all sizes provided." },
     ],
@@ -71,8 +71,8 @@ export const experiences: Experience[] = [
     capacity: "Up to 6",
     heroImage: "/photos/IMG_9647%202.webp",
     gallery: ["/photos/IMG_9647%202.webp", "/photos/DSC09319%20(4).webp", "/photos/DSC09321%20(2).webp", "/photos/IMG_4539.webp"],
-    pricingNote: "From $249 for 2 hours.",
-    fromPriceCents: 24900,
+    pricingNote: "From $35 per ticket for 2 hours.",
+    fromPriceCents: 3500,
     faqs: [],
   },
   {
@@ -87,12 +87,25 @@ export const experiences: Experience[] = [
     capacity: "Up to 10",
     heroImage: "/photos/DSC09399%20(2).webp",
     gallery: ["/photos/IMG_5095.webp", "/photos/IMG_5285.webp", "/photos/DSC09308%20(2).webp", "/photos/IMG_1197.webp"],
-    pricingNote: "Seasonal pricing. Available November – January.",
-    fromPriceCents: 45000,
+    pricingNote: "$45 per ticket. Seasonal. Available November – January.",
+    fromPriceCents: 4500,
     faqs: [{ q: "When is the Holiday Tour available?", a: "Typically November through early January. Dates are shown when you select a slot." }],
   },
 ];
 
 export function getExperienceBySlug(slug: string): Experience | undefined {
   return experiences.find((e) => e.slug === slug);
+}
+
+/**
+ * Format "from" price for display by experience slug.
+ * - Watersports: "From $600"
+ * - Sunset: "From $35 per ticket"
+ * - Holiday: "$45 per ticket"
+ */
+export function formatExperiencePriceLabel(slug: string | null | undefined, fromPriceCents: number): string {
+  const price = (fromPriceCents / 100).toFixed(0);
+  if (/holiday/i.test(slug ?? "")) return `$${price} per ticket`;
+  if (/sunset/i.test(slug ?? "")) return `From $${price} per ticket`;
+  return `From $${price}`;
 }

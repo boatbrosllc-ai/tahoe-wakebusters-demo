@@ -3,21 +3,27 @@
 @tailwind utilities;
 
 :root {
-  /* Boat Bros ATX – main two */
-  --brand-primary: #50bdba;   /* Teal – primary CTAs, links */
-  --brand-secondary: #fe3f93; /* Pink – accent, secondary CTAs */
+  /* Boat Bros ATX – aligned with Lockup logo (teal + pink) */
+  --brand-primary: #50bdba;   /* Teal – primary CTAs, links, email gradient */
+  --brand-secondary: #fe3f93; /* Pink – accent, Lockup Pink logo accent */
   /* Supporting */
-  --brand-dark: #001c30;      /* Navy – dark sections, headings */
-  --brand-muted: #196a87;     /* Darker teal – subtle elements */
-  --brand-bg: #f0fafb;        /* Very light teal tint */
+  --brand-dark: #001c30;      /* Navy – dark sections, headings, email gradient end */
+  --brand-muted: #196a87;     /* Darker teal – subtle text, secondary copy */
+  --brand-bg: #f0fafb;        /* Very light teal tint – cards, email background */
 }
 
 @layer base {
   html {
     @apply scroll-smooth;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
   }
   body {
     @apply antialiased text-brand-dark bg-white;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+    /* Prevent horizontal drag on mobile that reveals whitespace */
+    min-width: 100%;
   }
   *:focus-visible {
     @apply outline-2 outline-offset-2 outline-brand-primary;

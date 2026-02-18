@@ -1,26 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { listRequests } from "@/lib/waiver/firestore";
+import { listRequests, listRequestsByBookingId } from "@/lib/waiver/firestore";
 import { listWaiverRequestsQuerySchema } from "@/lib/waiver/schema";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 type RequestWithId = Awaited<ReturnType<typeof listRequests>>[number];
 
 async function enrichWithBookingSummary(
   requests: RequestWithId[]
-): Promise<(RequestWithId & { bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string } })[]> {
+): Promise<(RequestWithId & { bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string; partySize?: number; signedCount?: number } })[]> {
   if (requests.length === 0) return [];
   const db = getDb();
   const bookingIds = [...new Set(requests.map((r) => r.bookingId))];
   const chunk = <T,>(arr: T[], size: number): T[][] =>
     Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, (i + 1) * size));
-  const bookingMap = new Map<string, { slotId?: string; startDateStr?: string; experienceId?: string }>();
+  const bookingMap = new Map<string, { slotId?: string; startDateStr?: string; experienceId?: string; partySize?: number }>();
   for (const ids of chunk(bookingIds, 10)) {
     const docs = await Promise.all(ids.map((id) => db.collection("bookings").doc(id).get()));
     docs.forEach((d) => {
-      if (d.exists) bookingMap.set(d.id, d.data() as { slotId?: string; startDateStr?: string; experienceId?: string });
+      if (d.exists) bookingMap.set(d.id, d.data() as { slotId?: string; startDateStr?: string; experienceId?: string; partySize?: number });
     });
+  }
+  const signedCountByBooking = new Map<string, { signed: number; partySize: number }>();
+  for (const bid of bookingIds) {
+    const bookingReqs = await listRequestsByBookingId(bid);
+    const signed = bookingReqs.filter((r) => r.status === "signed").length;
+    const partySize = bookingMap.get(bid)?.partySize ?? 0;
+    signedCountByBooking.set(bid, { signed, partySize });
   }
   const experienceIds = [...new Set(Array.from(bookingMap.values()).map((b) => b.experienceId).filter(Boolean) as string[])];
   const experienceMap = new Map<string, string>();
@@ -40,13 +48,21 @@ async function enrichWithBookingSummary(
     if (parsed) {
       tripDate = parsed.dateStr;
       const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-      startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-      endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      startTime = formatBookingTime(start);
+      endTime = formatBookingTime(end);
     }
     const experienceName = booking.experienceId ? experienceMap.get(booking.experienceId) ?? booking.experienceId : "—";
+    const counts = signedCountByBooking.get(r.bookingId);
     return {
       ...r,
-      bookingSummary: { tripDate, experienceName, startTime, endTime },
+      bookingSummary: {
+        tripDate,
+        experienceName,
+        startTime,
+        endTime,
+        partySize: counts?.partySize,
+        signedCount: counts?.signed,
+      },
     };
   });
 }

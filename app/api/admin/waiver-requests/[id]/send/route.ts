@@ -12,6 +12,7 @@ import { generateSigningToken, createTokenExpiresAt, getDefaultTokenExpiryDays }
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 export async function POST(
   _request: NextRequest,
@@ -78,8 +79,8 @@ export async function POST(
       if (parsed) {
         tripDate = parsed.dateStr;
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        startTime = formatBookingTime(start);
+        endTime = formatBookingTime(end);
       }
       if (booking.experienceId) {
         const expSnap = await db.collection("experiences").doc(booking.experienceId).get();

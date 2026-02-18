@@ -329,6 +329,8 @@ export async function POST(request: NextRequest) {
       holdPayload.discountCode = discountCodeApplied;
       holdPayload.discountCents = discountCents;
     }
+    holdPayload.pricing = { ...pricing, currency: pricing.currency ?? "usd" };
+    holdPayload.effectiveRateCents = rateForPricing.priceCents;
 
     let reusedHoldId: string | null = null;
     let reusedExpiresAt: Date | null = null;
@@ -367,6 +369,9 @@ export async function POST(request: NextRequest) {
                   marketingOptIn: input.marketingOptIn,
                   expiresAt: Timestamp.fromDate(newExpiresAt),
                   tipCents: tipCents,
+                  ...(holdPayload.pricing && { pricing: holdPayload.pricing }),
+                  ...(holdPayload.effectiveRateCents != null && { effectiveRateCents: holdPayload.effectiveRateCents }),
+                  ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
                 });
                 return;
               }

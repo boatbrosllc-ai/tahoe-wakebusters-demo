@@ -12,19 +12,8 @@ import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat
 import { signManageToken } from "@/lib/booking/manageToken";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
-
-function formatSlotDateTime(ts: { toDate(): Date }): string {
-  const d = ts.toDate();
-  return d.toLocaleString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -174,14 +163,20 @@ export async function POST(request: NextRequest) {
       const addonsById = new Map<string, Addon | ExperienceAddon>();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
       const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-      if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
-        const slotStart = (slot.startAt as { toDate(): Date }).toDate();
-        rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays, experienceForPricing.friSunDays) };
+      let pricing: import("@/lib/booking/types").BookingPricing;
+      if (hold.pricing) {
+        pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
+      } else {
+        let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+        if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
+          const slotStart = (slot.startAt as { toDate(): Date }).toDate();
+          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experienceForPricing.holidayDates, experienceForPricing.weekendDays, experienceForPricing.friSunDays) };
+        }
+        pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
       }
-      const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
-      const finalPricing = { ...pricing, totalCents: pricing.totalCents + holdTipCents };
+      const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
+      const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
       // Always use the email from the booking details form for the confirmation email.
       const customerDetails = session.customer_details;
       const customer = {

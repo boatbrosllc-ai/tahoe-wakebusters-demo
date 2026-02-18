@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -9,8 +10,6 @@ import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
 const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
-/** Poster for LCP and fallback before video plays — avoids video competing with LCP. */
-const HERO_VIDEO_POSTER = "/photos/IMG_0386.webp";
 
 const bullets = [
   "Lake Austin",
@@ -21,18 +20,19 @@ const bullets = [
 
 export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
+  const [videoReady, setVideoReady] = useState(false);
   return (
-    <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
-      {/* Background video + dark overlay so text pops */}
+    <section className="relative min-h-[100dvh] sm:min-h-[85vh] md:min-h-[82vh] lg:min-h-[80vh] xl:min-h-[85vh] 2xl:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
+      {/* Background video: no poster; smooth fade-in when ready */}
       <div className="absolute inset-0">
         <video
           autoPlay
           muted
           loop
           playsInline
-          preload="metadata"
-          poster={HERO_VIDEO_POSTER}
-          className="absolute inset-0 w-full h-full object-cover"
+          preload="auto"
+          onCanPlay={() => setVideoReady(true)}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-out ${videoReady ? "opacity-100" : "opacity-0"}`}
           aria-hidden
         >
           <source src={HERO_VIDEO_SRC} type="video/webm" />
@@ -41,11 +41,11 @@ export function Hero() {
         <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/75 via-brand-dark/50 to-brand-dark/90" />
       </div>
 
-      <div className="relative z-10 w-full px-5 pt-0 pb-12 sm:py-14 lg:py-20 xl:py-24 -mt-12 sm:mt-0">
-        <div className="mx-auto w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl text-center">
+      <div className="relative z-10 w-full px-5 pt-0 pb-12 sm:py-10 md:py-12 lg:py-14 xl:py-20 2xl:py-24 -mt-12 sm:mt-0">
+        <div className="mx-auto w-full max-w-2xl md:max-w-3xl lg:max-w-4xl xl:max-w-5xl text-center">
           {/* Logo – pop in: scale up with a satisfying spring overshoot; hover: cartoonish enlarge */}
           <motion.div
-            className="relative flex justify-center mb-4 sm:mb-5 lg:mb-8 cursor-pointer"
+            className="relative flex justify-center mb-4 sm:mb-5 md:mb-6 lg:mb-6 xl:mb-8 cursor-pointer"
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.08 }}
@@ -60,10 +60,10 @@ export function Hero() {
           >
             <Link
               href="/"
-              className="group block w-full max-w-[85vw] lg:max-w-[900px] xl:max-w-[1000px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
+              className="group block w-full max-w-[85vw] sm:max-w-[75vw] md:max-w-[700px] lg:max-w-[800px] xl:max-w-[900px] 2xl:max-w-[1000px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
               aria-label={`${brand.logoAlt} home`}
             >
-              <span className="relative block w-full max-h-[140px] sm:max-h-[180px] md:max-h-[220px] lg:max-h-[320px] xl:max-h-[360px] 2xl:max-h-[380px] aspect-[1000/312] max-w-full">
+              <span className="relative block w-full max-h-[140px] sm:max-h-[160px] md:max-h-[200px] lg:max-h-[240px] xl:max-h-[300px] 2xl:max-h-[360px] aspect-[1000/312] max-w-full">
                 <Image
                   src={brand.logoHeroPath ?? brand.logoDarkPath}
                   alt={brand.logoAlt}
@@ -92,11 +92,11 @@ export function Hero() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.06 }}
           >
-            <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
+            <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-2xl lg:text-2xl xl:text-3xl 2xl:text-4xl">
               Lake Austin boat rentals, done right.
             </h1>
             <motion.p
-              className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
+              className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-base lg:mt-4 lg:text-lg lg:max-w-xl xl:text-lg xl:max-w-2xl 2xl:text-xl"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.12 }}
@@ -132,13 +132,13 @@ export function Hero() {
 
           {/* CTAs */}
           <motion.div
-            className="mt-4 w-full max-w-sm mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
+            className="mt-4 w-full max-w-sm mx-auto sm:mt-5 md:mt-5 lg:mt-6 lg:max-w-md xl:max-w-xl"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.3 }}
           >
             <div className="relative rounded-2xl p-[1px] bg-gradient-to-b from-white/20 to-transparent shadow-[0_0_40px_rgba(254,63,147,0.12)] lg:rounded-3xl">
-              <div className="rounded-2xl bg-brand-dark/50 backdrop-blur-sm p-4 sm:p-5 lg:p-6 lg:rounded-3xl">
+              <div className="rounded-2xl bg-brand-dark/50 backdrop-blur-sm p-4 sm:p-5 md:p-5 lg:p-5 xl:p-6 lg:rounded-3xl">
                 <BookingCTA
                   source="hero"
                   page="home"

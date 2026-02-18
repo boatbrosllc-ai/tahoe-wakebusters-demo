@@ -36,6 +36,8 @@ export interface BookingEmailContext {
   manageLink?: string;
   /** Waiver signing URL to include in confirmation (when template has includeInConfirmationEmail). */
   waiverSigningUrl?: string;
+  /** Shareable waiver link for other party members (when partySize > 1). */
+  waiverGroupSigningUrl?: string;
 }
 
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
@@ -60,7 +62,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const html = renderBookingConfirmationHtml(booking, context);
 
   const templateId = bookingEnv.brevoBookingTemplateId;
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink, waiverSigningUrl } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, waiverSigningUrl } = context;
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     booking.addonSelections.length > 0
@@ -68,7 +70,6 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
       : "None";
   const totalPaid = (booking.pricing.totalCents / 100).toFixed(2);
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  const manageUrl = manageLink ?? `${bookingEnv.appBaseUrl}/booking`;
 
   const toName = booking.customer?.name?.trim() ?? "";
   const payload: Record<string, unknown> = templateId
@@ -85,7 +86,6 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           totalPaid,
           cancellationPolicy,
           locationText,
-          manageUrl,
           isDeposit: isDeposit ?? false,
           waiverSigningUrl: waiverSigningUrl ?? "",
         },
@@ -142,29 +142,25 @@ export async function sendBookingReminderEmail(
 }
 
 /**
- * Send "final charge failed" or "action required" email with manage-booking link.
+ * Send "final charge failed" or "action required" email. No manage link; ask guest to contact us.
  */
 export async function sendFinalChargeFailedEmail(
   toEmail: string,
   toName: string,
-  manageLink: string | undefined,
+  _manageLink: string | undefined,
   requiresAction: boolean
 ): Promise<void> {
   const subject = requiresAction
     ? "Action needed to complete your booking – Boat Bros ATX"
     : "Payment failed for your upcoming trip – Boat Bros ATX";
   const body = requiresAction
-    ? "Your card requires verification to complete the remaining balance. Please use the link below to update your card or complete payment."
-    : "We couldn't charge the remaining balance for your upcoming trip. Please use the link below to update your card or pay the remaining balance.";
-  const cta = manageLink
-    ? `<a href="${manageLink.replace(/"/g, "&quot;")}" target="_blank" rel="noopener" style="display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; background: #50bdba; border-radius: 10px;">Complete payment</a>`
-    : "";
+    ? "Your card requires verification to complete the remaining balance. Please reply to this email or contact us to update your card or complete payment."
+    : "We couldn't charge the remaining balance for your upcoming trip. Please reply to this email or contact us to update your card or pay the remaining balance.";
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">
   <p>Hi ${toName.replace(/</g, "&lt;")},</p>
   <p>${body.replace(/</g, "&lt;")}</p>
-  ${cta ? `<p style="margin-top: 24px;">${cta}</p>` : ""}
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
   const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {

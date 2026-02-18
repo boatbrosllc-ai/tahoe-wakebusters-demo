@@ -75,13 +75,19 @@ export const signerSchema = z.object({
   dob: z.string().optional(), // YYYY-MM-DD or empty
 });
 
-export const submitWaiverSigningSchema = z.object({
-  token: z.string().min(1, "Token is required"),
-  signer: signerSchema,
-  initials: z.record(z.string(), z.string()).default({}),
-  signatureDataUrl: z.string().min(1, "Signature is required"), // data:image/png;base64,...
-  typedName: z.string().optional(),
-});
+export const submitWaiverSigningSchema = z
+  .object({
+    token: z.string().optional(),
+    groupToken: z.string().optional(),
+    signer: signerSchema,
+    initials: z.record(z.string(), z.string()).default({}),
+    signatureDataUrl: z.string().min(1, "Signature is required"), // data:image/png;base64,...
+    typedName: z.string().optional(),
+  })
+  .refine((data) => (data.token?.length ?? 0) > 0 || (data.groupToken?.length ?? 0) > 0, {
+    message: "Either token or groupToken is required",
+    path: ["token"],
+  });
 
 export type SubmitWaiverSigningInput = z.infer<typeof submitWaiverSigningSchema>;
 

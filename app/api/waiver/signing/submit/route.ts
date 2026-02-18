@@ -6,7 +6,9 @@ import {
   getTokenById,
   getRequestById,
   getTemplateById,
+  getGroupTokenById,
   isTokenValid,
+  createRequestForGroupSigner,
   updateRequestSigned,
   markTokenUsed,
   setBookingWaiverPointer,
@@ -30,20 +32,43 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 400 });
   }
 
-  const { token, signer, initials, signatureDataUrl, typedName } = parsed.data;
+  const { token, groupToken, signer, initials, signatureDataUrl, typedName } = parsed.data;
 
   try {
-    const tokenDoc = await getTokenById(token);
-    if (!tokenDoc) {
-      return NextResponse.json({ error: "Invalid or expired link" }, { status: 400 });
-    }
-    if (!isTokenValid(tokenDoc)) {
-      return NextResponse.json({ error: "This signing link has expired or already been used" }, { status: 400 });
-    }
+    let req: (Awaited<ReturnType<typeof getRequestById>>) & { id: string };
+    let isGroupSign = false;
 
-    const req = await getRequestById(tokenDoc.waiverRequestId);
-    if (!req || req.status !== "pending") {
-      return NextResponse.json({ error: "Waiver request not found or no longer pending" }, { status: 400 });
+    if (groupToken) {
+      const groupDoc = await getGroupTokenById(groupToken);
+      if (!groupDoc) {
+        return NextResponse.json({ error: "This group link is invalid or has expired." }, { status: 400 });
+      }
+      const requestId = await createRequestForGroupSigner(
+        groupDoc.bookingId,
+        groupDoc.templateId,
+        groupDoc.templateVersion
+      );
+      const created = await getRequestById(requestId);
+      if (!created) {
+        return NextResponse.json({ error: "Failed to create waiver request" }, { status: 500 });
+      }
+      req = created;
+      isGroupSign = true;
+    } else if (token) {
+      const tokenDoc = await getTokenById(token);
+      if (!tokenDoc) {
+        return NextResponse.json({ error: "Invalid or expired link" }, { status: 400 });
+      }
+      if (!isTokenValid(tokenDoc)) {
+        return NextResponse.json({ error: "This signing link has expired or already been used" }, { status: 400 });
+      }
+      const found = await getRequestById(tokenDoc.waiverRequestId);
+      if (!found || found.status !== "pending") {
+        return NextResponse.json({ error: "Waiver request not found or no longer pending" }, { status: 400 });
+      }
+      req = found;
+    } else {
+      return NextResponse.json({ error: "Token or group link is required" }, { status: 400 });
     }
 
     const template = await getTemplateById(req.templateId);
@@ -112,13 +137,15 @@ export async function POST(request: NextRequest) {
     };
 
     await updateRequestSigned(req.id, signed);
-    await markTokenUsed(token);
-    await setBookingWaiverPointer(req.bookingId, {
-      requestId: req.id,
-      status: "signed",
-      templateId: req.templateId,
-      templateVersion: req.templateVersion,
-    });
+    if (!isGroupSign && token) {
+      await markTokenUsed(token);
+      await setBookingWaiverPointer(req.bookingId, {
+        requestId: req.id,
+        status: "signed",
+        templateId: req.templateId,
+        templateVersion: req.templateVersion,
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (e) {

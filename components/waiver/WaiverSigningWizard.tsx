@@ -56,12 +56,15 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
       setError(null);
       setSubmitting(true);
       try {
-        const token = typeof window !== "undefined" ? new URL(window.location.href).searchParams.get("token") ?? "" : "";
+        const url = typeof window !== "undefined" ? window.location.href : "";
+        const params = typeof window !== "undefined" ? new URL(url).searchParams : null;
+        const token = params?.get("token") ?? "";
+        const groupToken = data.isGroupSigning && data.groupToken ? data.groupToken : undefined;
         const res = await fetch("/api/waiver/signing/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            token,
+            ...(groupToken ? { groupToken } : { token }),
             signer: {
               name: signer.name.trim(),
               email: signer.email.trim(),
@@ -95,6 +98,8 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
     initials,
     signatureDataUrl,
     typedName,
+    data.isGroupSigning,
+    data.groupToken,
     onSuccess,
   ]);
 
@@ -127,7 +132,7 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
 
         {/* Step 0: Booking summary + Your information */}
         {step === 0 && (
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0 overflow-hidden">
             <div className="rounded-xl bg-brand-bg/50 border border-brand-dark/10 px-4 py-3 text-sm text-brand-dark">
               <p className="font-medium text-brand-dark">{bookingSummary.experienceName}</p>
               <p className="text-brand-muted">{bookingSummary.tripDate}{bookingSummary.startTime ? ` · ${[bookingSummary.startTime, bookingSummary.endTime].filter(Boolean).join(" – ")}` : ""}{bookingSummary.partySize != null ? ` · ${bookingSummary.partySize} guests` : ""}</p>
@@ -172,14 +177,14 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                 </div>
               )}
               {template.requiredFields.dob && (
-                <div>
+                <div className="min-w-0 w-full">
                   <label htmlFor="waiver-dob" className={labelClass}>Date of birth</label>
                   <input
                     id="waiver-dob"
                     type="date"
                     value={signer.dob}
                     onChange={(e) => setSigner((s) => ({ ...s, dob: e.target.value }))}
-                    className={`${inputClass} bg-white text-brand-dark [color-scheme:light] max-w-full`}
+                    className={`${inputClass} bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border`}
                     aria-label="Date of birth"
                   />
                 </div>

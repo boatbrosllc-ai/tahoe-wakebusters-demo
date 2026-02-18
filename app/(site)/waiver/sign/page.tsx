@@ -8,20 +8,22 @@ import type { WaiverValidateResponse } from "@/lib/waiver/types";
 export default function WaiverSignPage() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token")?.trim() ?? "";
+  const group = searchParams.get("group")?.trim() ?? "";
   const [data, setData] = useState<WaiverValidateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [invalid, setInvalid] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) {
-      setInvalid("Missing signing link. Please use the link from your email.");
+    if (!token && !group) {
+      setInvalid("Missing signing link. Please use the link from your email or from your group.");
       setLoading(false);
       return;
     }
-    fetch(`/api/waiver/signing/validate?token=${encodeURIComponent(token)}`)
+    const query = group ? `group=${encodeURIComponent(group)}` : `token=${encodeURIComponent(token)}`;
+    fetch(`/api/waiver/signing/validate?${query}`)
       .then((res) => res.json())
       .then((json) => {
-        if (json.valid && json.waiverRequestId) {
+        if (json.valid && (json.waiverRequestId !== undefined || json.isGroupSigning)) {
           setData(json as WaiverValidateResponse);
         } else {
           setInvalid(json.error ?? "This link is invalid or has expired.");

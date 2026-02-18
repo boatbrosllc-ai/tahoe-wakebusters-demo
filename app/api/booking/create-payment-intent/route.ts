@@ -95,19 +95,24 @@ export async function POST(request: NextRequest) {
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
     }
     const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-    let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-    if (hasExperience && "priceCents" in rate) {
-      const parsed = parseSlotId(hold.slotId);
-      if (parsed) {
-        const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
-        const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
-        const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
-        if (experience) {
-          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
+    let pricing: import("@/lib/booking/types").BookingPricing;
+    if (hold.pricing) {
+      pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
+    } else {
+      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+      if (hasExperience && "priceCents" in rate) {
+        const parsed = parseSlotId(hold.slotId);
+        if (parsed) {
+          const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
+          const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
+          const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
+          if (experience) {
+            rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
+          }
         }
       }
+      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     }
-    const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
     const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
     const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);

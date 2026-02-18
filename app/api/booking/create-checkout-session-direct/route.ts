@@ -179,6 +179,8 @@ export async function POST(request: NextRequest) {
       holdPayload.discountCode = discountCodeApplied;
       holdPayload.discountCents = discountCents;
     }
+    holdPayload.pricing = { ...pricing, currency: pricing.currency ?? "usd" };
+    holdPayload.effectiveRateCents = rateForPricing.priceCents;
 
     await db.runTransaction(async (tx) => {
       const slotSnap = await tx.get(slotRef);

@@ -27,6 +27,7 @@ function formatDate(iso: string | null) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/Chicago",
   });
 }
 

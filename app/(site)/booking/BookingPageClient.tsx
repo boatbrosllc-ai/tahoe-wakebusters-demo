@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import Image from "next/image";
 import { BookingCalendar } from "@/components/booking/BookingCalendar";
 import { useBookingModal } from "@/components/site/BookingModalContext";
+import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn } from "@/lib/utils";
 
 interface ExperienceItem {
@@ -159,7 +160,7 @@ export function BookingPageClient() {
                         <span className="text-sm font-semibold text-white drop-shadow-sm">{exp.title}</span>
                         {exp.fromPriceCents != null && (
                           <span className="text-xs text-white/90 mt-0.5">
-                            {/holiday/i.test(exp.slug ?? "") ? `From $${(exp.fromPriceCents / 100).toFixed(0)} per ticket` : `From $${(exp.fromPriceCents / 100).toFixed(0)}`}
+                            {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents)}
                           </span>
                         )}
                       </div>

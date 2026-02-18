@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { experiences } from "@/content/experiences";
+import { experiences, formatExperiencePriceLabel } from "@/content/experiences";
 import type { Experience } from "@/content/experiences";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
@@ -100,7 +100,7 @@ export function ExperienceChooser() {
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
                 <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-7 lg:p-9">
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm text-brand-primary/95 mb-1.5">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm text-white mb-1.5">
                     <span className="inline-flex items-center gap-1.5 sm:gap-2">
                       <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
                       {pontoonData.duration}
@@ -118,7 +118,7 @@ export function ExperienceChooser() {
                   </p>
                   <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
                     {pontoonData.fromPriceCents != null && (
-                      <span className="text-base sm:text-xl font-bold text-brand-primary">From ${(pontoonData.fromPriceCents / 100).toFixed(0)}</span>
+                      <span className="text-base sm:text-xl font-bold text-brand-primary">{formatExperiencePriceLabel(pontoonData.slug, pontoonData.fromPriceCents)}</span>
                     )}
                     <span className="inline-flex items-center gap-1.5 text-white font-medium text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                       View trip <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
@@ -155,7 +155,7 @@ export function ExperienceChooser() {
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
                   <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-6 lg:p-7">
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-brand-primary/95 mb-1.5">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-white mb-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         {data.duration}
@@ -173,7 +173,7 @@ export function ExperienceChooser() {
                     </p>
                     <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-3">
                       {data.fromPriceCents != null && (
-                        <span className="text-sm sm:text-base font-bold text-brand-primary">From ${(data.fromPriceCents / 100).toFixed(0)}</span>
+                        <span className="text-sm sm:text-base font-bold text-brand-primary">{formatExperiencePriceLabel(data.slug, data.fromPriceCents)}</span>
                       )}
                       <span className="inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                         View trip <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />

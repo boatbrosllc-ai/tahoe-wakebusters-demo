@@ -7,6 +7,7 @@ import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
 
@@ -21,7 +22,7 @@ export interface SlotDto {
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatBookingTimeFromIso(iso);
 }
 
 /** Range covering one month before through one month after the given calendar month (so nav always has data). */

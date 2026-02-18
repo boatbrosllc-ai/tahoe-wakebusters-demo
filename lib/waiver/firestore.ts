@@ -7,6 +7,7 @@ import "server-only";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import {
   generateSigningToken,
+  generateGroupToken,
   createTokenExpiresAt,
   isTokenExpired,
   getDefaultTokenExpiryDays,
@@ -22,6 +23,7 @@ import type {
   WaiverRequiredFields,
   WaiverClause,
   WaiverSignatureConfig,
+  FirestoreTimestamp,
 } from "./types";
 import type { CreateWaiverTemplateInput } from "./schema";
 
@@ -29,6 +31,7 @@ const COLL = {
   templates: "waiverTemplates",
   requests: "waiverRequests",
   tokens: "waiverSigningTokens",
+  groupTokens: "waiverGroupTokens",
   bookings: "bookings",
 } as const;
 
@@ -189,6 +192,94 @@ export async function createRequest(
   });
 
   return { requestId, tokenId, signingUrl };
+}
+
+// ---------------------------------------------------------------------------
+// Group signing (shareable link for additional party members)
+// ---------------------------------------------------------------------------
+
+export interface WaiverGroupTokenDoc {
+  bookingId: string;
+  templateId: string;
+  templateVersion: number;
+  partySize: number;
+  createdAt: FirestoreTimestamp;
+  expiresAt: FirestoreTimestamp;
+}
+
+export async function createGroupToken(
+  bookingId: string,
+  templateId: string,
+  templateVersion: number,
+  partySize: number
+): Promise<{ groupToken: string; groupSigningUrl: string }> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const groupToken = generateGroupToken();
+  const expiresAt = createTokenExpiresAt(getDefaultTokenExpiryDays());
+  const baseUrl = getAppBaseUrl();
+  const groupSigningUrl = `${baseUrl}/waiver/sign?group=${encodeURIComponent(groupToken)}`;
+
+  const doc: WaiverGroupTokenDoc & { createdAt: import("firebase-admin").firestore.Timestamp; expiresAt: import("firebase-admin").firestore.Timestamp } = {
+    bookingId,
+    templateId,
+    templateVersion,
+    partySize,
+    createdAt: Timestamp.now(),
+    expiresAt: Timestamp.fromDate(expiresAt),
+  };
+  await db.collection(COLL.groupTokens).doc(groupToken).set(doc);
+  return { groupToken, groupSigningUrl };
+}
+
+export async function getGroupTokenById(
+  groupToken: string
+): Promise<(WaiverGroupTokenDoc & { id: string }) | null> {
+  const db = getDb();
+  const doc = await db.collection(COLL.groupTokens).doc(groupToken).get();
+  if (!doc.exists) return null;
+  const data = doc.data() as WaiverGroupTokenDoc;
+  const expiresAt = data.expiresAt as { seconds?: number; toDate?: () => Date };
+  const expDate = typeof expiresAt?.toDate === "function" ? expiresAt.toDate() : new Date((expiresAt?.seconds ?? 0) * 1000);
+  if (expDate.getTime() <= Date.now()) return null;
+  return { id: doc.id, ...data };
+}
+
+/** Create a waiver request for a group signer (no one-time token; will be marked signed on submit). */
+export async function createRequestForGroupSigner(
+  bookingId: string,
+  templateId: string,
+  templateVersion: number
+): Promise<string> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const requestId = db.collection(COLL.requests).doc().id;
+  const request: Omit<WaiverRequest, "createdAt"> & {
+    createdAt: import("firebase-admin").firestore.Timestamp;
+  } = {
+    bookingId,
+    templateId,
+    templateVersion,
+    status: "pending",
+    signingTokenId: "",
+    signingUrl: "",
+    sent: { initialSentAt: null, lastSentAt: null, reminder1SentAt: null },
+    createdAt: Timestamp.now(),
+  };
+  await db.collection(COLL.requests).doc(requestId).set(request);
+  return requestId;
+}
+
+export async function listRequestsByBookingId(
+  bookingId: string
+): Promise<(WaiverRequest & { id: string })[]> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLL.requests)
+    .where("bookingId", "==", bookingId)
+    .orderBy("createdAt", "asc")
+    .get();
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as WaiverRequest) }));
 }
 
 export async function updateRequest(

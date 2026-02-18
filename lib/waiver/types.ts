@@ -147,9 +147,13 @@ export interface WaiverBookingSummary {
   partySize?: number;
 }
 
+/** When true, client should submit with groupToken instead of token (request created on submit). */
 export interface WaiverValidateResponse {
   valid: true;
   waiverRequestId: string;
+  /** Set when signing via group link; submit with groupToken to create a new signer for the booking. */
+  isGroupSigning?: boolean;
+  groupToken?: string;
   bookingSummary: WaiverBookingSummary;
   template: {
     title: string;

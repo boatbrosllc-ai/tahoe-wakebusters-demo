@@ -4,6 +4,7 @@ import { getRequestById, getTemplateById, updateRequest } from "@/lib/waiver/fir
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -59,8 +60,8 @@ export async function POST(request: NextRequest) {
       if (parsed) {
         tripDate = parsed.dateStr;
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        startTime = formatBookingTime(start);
+        endTime = formatBookingTime(end);
       }
       if (booking.experienceId) {
         const expSnap = await db.collection("experiences").doc(booking.experienceId).get();

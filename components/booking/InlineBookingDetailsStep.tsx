@@ -5,6 +5,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { cn } from "@/lib/utils";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -13,7 +14,7 @@ const TEXAS_SALES_TAX_RATE = 0.0825;
 const PETS_MAX = 4;
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatBookingTimeFromIso(iso);
 }
 
 /** Fires confetti once when mounted (booking confirmed). Dynamic import avoids SSR resolution. */

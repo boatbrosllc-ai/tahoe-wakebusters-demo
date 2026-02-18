@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { getExperienceBySlug } from "@/content/experiences";
 
 export interface ExperienceListItem {
   id: string;
@@ -29,6 +30,9 @@ export async function GET() {
         const rate = r.data() as ExperienceRate;
         if (fromPriceCents == null || rate.priceCents < fromPriceCents) fromPriceCents = rate.priceCents;
       });
+      // Use content display price when set (so cards show correct "From $X" / per-ticket copy)
+      const contentExp = getExperienceBySlug(exp.slug ?? "");
+      if (contentExp?.fromPriceCents != null) fromPriceCents = contentExp.fromPriceCents;
       list.push({
         id: doc.id,
         slug: exp.slug ?? "",

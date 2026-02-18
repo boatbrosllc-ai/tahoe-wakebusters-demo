@@ -30,13 +30,14 @@ export async function GET(
         }
       }
       const { parseSlotId, getSlotStartEnd } = await import("@/lib/booking/experience-slots");
+      const { formatBookingTime } = await import("@/lib/booking/format-booking-datetime");
       const parsed = b.slotId ? parseSlotId(b.slotId) : null;
       let startTime: string | undefined;
       let endTime: string | undefined;
       if (parsed) {
         const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-        endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        startTime = formatBookingTime(start);
+        endTime = formatBookingTime(end);
       }
       bookingSummary = {
         experienceName,

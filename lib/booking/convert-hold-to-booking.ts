@@ -14,20 +14,10 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { bookingEnv } from "@/lib/booking/env";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { signManageToken } from "@/lib/booking/manageToken";
+import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
-
-function formatSlotDateTime(ts: { toDate(): Date }): string {
-  return ts.toDate().toLocaleString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 /** Legacy: full payment in one charge. */
 export interface ConvertHoldInputFull {
@@ -276,6 +266,7 @@ export async function convertHoldToBooking(
     isDeposit: !!isDeposit,
     manageLink,
     waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
+    waiverGroupSigningUrl: waiverResult?.groupSigningUrl,
   };
   try {
     await sendBookingConfirmationEmail(booking as Booking, emailContext);

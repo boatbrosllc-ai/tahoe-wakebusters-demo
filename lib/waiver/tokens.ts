@@ -16,6 +16,11 @@ export function generateSigningToken(): string {
   return randomBytes(TOKEN_BYTES).toString("hex");
 }
 
+/** Same as signing token; used as doc id for waiverGroupTokens. */
+export function generateGroupToken(): string {
+  return randomBytes(TOKEN_BYTES).toString("hex");
+}
+
 /**
  * Check if a token expiry timestamp is still valid (not yet expired).
  * Pass expiresAt as Date or Firestore-like { seconds } or ISO string.

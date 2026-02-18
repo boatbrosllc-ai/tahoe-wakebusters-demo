@@ -3,10 +3,17 @@
  * Used for sending and for admin HTML preview with sample data.
  */
 
+import { brand } from "@/content/brand";
 import { bookingEnv } from "./env";
 import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
 import type { Booking } from "./types";
 import type { BookingEmailContext } from "./brevo";
+
+/** Absolute URL for the Boat Bros email logo (Lockup Pink – used in all transactional emails). */
+function getEmailLogoUrl(): string {
+  const base = bookingEnv.appBaseUrl.replace(/\/$/, "");
+  return `${base}${brand.logoEmailPath}`;
+}
 
 import {
   buildReminder1WeekHtml,
@@ -69,29 +76,19 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
 
 const PRIMARY_COLOR = "#50bdba";
 const DARK_COLOR = "#001c30";
+const PINK_COLOR = "#fe3f93"; /* Brand secondary – Lockup Pink logo */
 const MUTED_COLOR = "#196a87";
 const BG_LIGHT = "#f0fafb";
 
-/**
- * Build manage/booking URL (works for Checkout Session or Payment Intent, or use context.manageLink for deposit).
- */
-function bookingManageUrl(
-  booking: { stripe: { checkoutSessionId?: string; paymentIntentId?: string } },
-  contextManageLink?: string
-): string {
-  if (contextManageLink) return contextManageLink;
-  const sessionId = booking.stripe.checkoutSessionId;
-  const pi = booking.stripe.paymentIntentId;
-  if (sessionId) return `${bookingEnv.appBaseUrl}/booking/success?session_id=${sessionId}`;
-  if (pi) return `${bookingEnv.appBaseUrl}/booking/success?payment_intent=${pi}`;
-  return `${bookingEnv.appBaseUrl}/booking`;
-}
+/** Header gradient: navy → teal → pink to match Lockup Pink logo palette. */
+const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COLOR} 50%, ${PINK_COLOR} 100%)`;
 
 /**
  * Render booking confirmation HTML (beautiful, email-client safe).
+ * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink, waiverSigningUrl } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, waiverSigningUrl, waiverGroupSigningUrl } = context;
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     booking.addonSelections.length > 0
@@ -101,9 +98,8 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
   const totalPaid = (depositPaidCents / 100).toFixed(2);
   const totalLabel = isDeposit ? "Deposit paid" : "Total paid";
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  const manageUrl = bookingManageUrl(booking, manageLink);
   const depositCopy = isDeposit
-    ? "50% deposit received. Remaining balance will be charged 48 hours before your trip. You can update your card or pay early using the link below."
+    ? "50% deposit received. Remaining balance will be charged 48 hours before your trip."
     : "";
 
   return `
@@ -121,9 +117,9 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 560px; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,28,48,0.08); overflow: hidden;">
           <!-- Header -->
           <tr>
-            <td style="background: linear-gradient(135deg, ${PRIMARY_COLOR} 0%, ${DARK_COLOR} 100%); padding: 28px 32px; text-align: center;">
-              <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.02em;">Boat Bros ATX</h1>
-              <p style="margin: 8px 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">Booking confirmed</p>
+            <td style="background: ${HEADER_GRADIENT}; padding: 28px 32px; text-align: center;">
+              <img src="${getEmailLogoUrl()}" alt="Boat Bros ATX" width="260" height="72" style="max-width: 260px; height: auto; display: block; margin: 0 auto;" />
+              <p style="margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">Booking confirmed</p>
             </td>
           </tr>
           <!-- Body -->
@@ -150,13 +146,6 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
               <p style="margin: 0 0 8px; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Cancellation:</strong> ${escapeHtml(cancellationPolicy)}</p>
               <p style="margin: 0 0 24px; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Location / meeting:</strong> ${escapeHtml(locationText)}</p>
 
-              <table role="presentation" cellspacing="0" cellpadding="0" align="center">
-                <tr>
-                  <td style="border-radius: 10px; background: ${PRIMARY_COLOR};">
-                    <a href="${escapeHtml(manageUrl)}" target="_blank" rel="noopener" style="display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;">${isDeposit ? "Manage booking" : "View booking details"}</a>
-                  </td>
-                </tr>
-              </table>
               ${waiverSigningUrl ? `
               <p style="margin: 24px 0 0; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">Please sign your waiver before your trip:</p>
               <table role="presentation" cellspacing="0" cellpadding="0" align="center" style="margin-top: 12px;">
@@ -166,6 +155,10 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
                   </td>
                 </tr>
               </table>
+              ${waiverGroupSigningUrl ? `
+              <p style="margin: 16px 0 0; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">Share this link with everyone in your party so they can sign the waiver too:</p>
+              <p style="margin: 8px 0 0; font-size: 13px; word-break: break-all;"><a href="${escapeHtml(waiverGroupSigningUrl)}" target="_blank" rel="noopener" style="color: ${PRIMARY_COLOR}; text-decoration: underline;">${escapeHtml(waiverGroupSigningUrl)}</a></p>
+              ` : ""}
               ` : ""}
             </td>
           </tr>

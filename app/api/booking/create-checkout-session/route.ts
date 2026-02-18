@@ -133,18 +133,24 @@ export async function POST(request: NextRequest) {
     }
     const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
     let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-    if (hasExperience && "priceCents" in rate) {
-      const parsed = parseSlotId(hold.slotId);
-      if (parsed) {
-        const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
-        const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
-        const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
-        if (experience) {
-          rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
+    let pricing: import("@/lib/booking/types").BookingPricing;
+    if (hold.pricing && hold.effectiveRateCents != null) {
+      rateForPricing = { ...rate, priceCents: hold.effectiveRateCents } as ExperienceRate & { priceCents: number };
+      pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
+    } else {
+      if (hasExperience && "priceCents" in rate) {
+        const parsed = parseSlotId(hold.slotId);
+        if (parsed) {
+          const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
+          const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
+          const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
+          if (experience) {
+            rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
+          }
         }
       }
+      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     }
-    const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
     let lineItems = buildLineItems({
       pricing,
       rate: rateForPricing as Rate | ExperienceRate,

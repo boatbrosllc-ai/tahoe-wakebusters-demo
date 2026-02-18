@@ -10,13 +10,15 @@ const SOURCE_OPTIONS = [
   { value: "GetMyBoat", label: "GetMyBoat" },
   { value: "Viator", label: "Viator" },
   { value: "Phone", label: "Phone" },
+  { value: "Email", label: "Email" },
   { value: "Other", label: "Other" },
 ];
 
 const DURATION_OPTIONS = [2, 3, 4, 6, 8];
-const START_HOURS = Array.from({ length: 17 }, (_, i) => i + 7); // 7–23
+const START_HOURS = Array.from({ length: 12 }, (_, i) => i + 7); // 7–18 (operating hours 7am–7pm)
 
 type ExperienceOption = { id: string; title: string };
+type BoatOption = { id: string; name: string; experienceIds?: string[] };
 
 export function AddBookingModal({
   open,
@@ -42,22 +44,40 @@ export function AddBookingModal({
   const [partySize, setPartySize] = useState(4);
   const [totalDollars, setTotalDollars] = useState("");
   const [source, setSource] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
   const [specialNotes, setSpecialNotes] = useState("");
+  const [boats, setBoats] = useState<BoatOption[]>([]);
+  const [boatId, setBoatId] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setLoadingExperiences(true);
     setError(null);
-    fetch("/api/admin/experiences", { credentials: "include" })
-      .then((res) => res.json())
-      .then((data) => {
-        const list = Array.isArray(data) ? data : [];
-        setExperiences(list.map((e: { id: string; title?: string }) => ({ id: e.id, title: e.title ?? e.id })));
-        if (list.length > 0 && !experienceId) setExperienceId(list[0].id);
+    Promise.all([
+      fetch("/api/admin/experiences", { credentials: "include" }).then((res) => res.json()),
+      fetch("/api/admin/boats", { credentials: "include" }).then((res) => res.json()),
+    ])
+      .then(([expData, boatData]) => {
+        const expList = Array.isArray(expData) ? expData : [];
+        setExperiences(expList.map((e: { id: string; title?: string }) => ({ id: e.id, title: e.title ?? e.id })));
+        if (expList.length > 0 && !experienceId) setExperienceId(expList[0].id);
+        const boatList = Array.isArray((boatData as { boats?: unknown })?.boats) ? (boatData as { boats: BoatOption[] }).boats : Array.isArray(boatData) ? (boatData as BoatOption[]) : [];
+        setBoats(boatList.map((b) => ({ id: b.id, name: b.name ?? b.id, experienceIds: b.experienceIds })));
       })
-      .catch(() => setExperiences([]))
+      .catch(() => {
+        setExperiences([]);
+        setBoats([]);
+      })
       .finally(() => setLoadingExperiences(false));
   }, [open]);
+
+  const boatsForExperience = experienceId
+    ? boats.filter((b) => b.experienceIds?.includes(experienceId))
+    : [];
+  const showBoatSelect = boatsForExperience.length > 1;
+  useEffect(() => {
+    setBoatId("");
+  }, [experienceId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,10 +107,12 @@ export function AddBookingModal({
           tripDate,
           startHour,
           durationHours,
+          boatId: boatId && boatsForExperience.some((b) => b.id === boatId) ? boatId : undefined,
           customer: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           partySize: partySize > 0 ? partySize : 1,
           totalCents,
           source: source || undefined,
+          externalReference: referenceNumber.trim() || undefined,
           specialNotes: specialNotes.trim() || undefined,
         }),
       });
@@ -105,7 +127,9 @@ export function AddBookingModal({
       setCustomerPhone("");
       setTotalDollars("");
       setSource("");
+      setReferenceNumber("");
       setSpecialNotes("");
+      setBoatId("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create booking");
     } finally {
@@ -114,9 +138,10 @@ export function AddBookingModal({
   };
 
   const inputClass = "w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none";
+  const dialogDescription = "Enter booking details from another source (GetMyBoat, Viator, phone, etc.) to keep everything in one place.";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Add booking" description="Manually add a booking (e.g. from GetMyBoat, Viator, or phone).">
+    <Dialog open={open} onOpenChange={onOpenChange} title="Add booking" description={dialogDescription}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -146,6 +171,23 @@ export function AddBookingModal({
             )}
           </select>
         </div>
+
+        {showBoatSelect && (
+          <div>
+            <label htmlFor="add-booking-boat" className="block text-sm font-medium text-brand-dark mb-1">Boat</label>
+            <select
+              id="add-booking-boat"
+              value={boatId}
+              onChange={(e) => setBoatId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Any / assign later</option>
+              {boatsForExperience.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -248,17 +290,32 @@ export function AddBookingModal({
         </div>
 
         <div>
-          <label htmlFor="add-booking-source" className="block text-sm font-medium text-brand-dark mb-1">Source</label>
-          <select
-            id="add-booking-source"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            className={inputClass}
-          >
-            {SOURCE_OPTIONS.map((o) => (
-              <option key={o.value || "none"} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="add-booking-source" className="block text-sm font-medium text-brand-dark mb-1">Source</label>
+            <select
+              id="add-booking-source"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              className={inputClass}
+            >
+              {SOURCE_OPTIONS.map((o) => (
+                <option key={o.value || "none"} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="add-booking-reference" className="block text-sm font-medium text-brand-dark mb-1">Confirmation / reference #</label>
+            <input
+              id="add-booking-reference"
+              type="text"
+              placeholder="e.g. GMB-12345"
+              value={referenceNumber}
+              onChange={(e) => setReferenceNumber(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+        </div>
         </div>
 
         <div>

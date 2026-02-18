@@ -16,6 +16,8 @@ export const brand = {
   logoPinkPath: "/logos/Boay Bros pink Final.png",
   /** Logo on dark backgrounds (e.g. dark hero/footer) */
   logoDarkPath: "/logos/BB_Horizontal_Logo_White_NoBkg.png",
+  /** All transactional emails – Lockup Main Logo Pink (no background) */
+  logoEmailPath: "/logos/BB_Lockup_MainLogo_Pink_NoBkg.png",
   /** Hero section – white logo (mobile + desktop) */
   logoHeroPath: "/logos/Hero Logo white.png",
   logoAlt: "Boat Bros ATX",

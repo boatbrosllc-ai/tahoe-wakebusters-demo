@@ -3,6 +3,7 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -75,8 +76,8 @@ export async function GET(
       if (!startDate) startDate = parsed.dateStr;
       durationHours = parsed.durationHours;
       const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-      startTime = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-      endTime = end.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      startTime = formatBookingTime(start);
+      endTime = formatBookingTime(end);
     }
 
     const addonsWithNames: AddonWithName[] = (b.addonSelections ?? []).map((sel: AddonSelection) => ({

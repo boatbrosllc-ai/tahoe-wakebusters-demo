@@ -287,6 +287,10 @@ export interface Hold {
   discountCode?: string;
   /** Discount amount in cents (saved for record). */
   discountCents?: number;
+  /** Canonical pricing at hold creation (rate + addons + tax). Used by checkout and webhook so amount never drifts. */
+  pricing?: BookingPricing;
+  /** Effective rate price (cents) used for this hold (date-based). Enables checkout to use hold.pricing without recomputing. */
+  effectiveRateCents?: number;
 }
 
 // ---------------------------------------------------------------------------

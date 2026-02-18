@@ -17,7 +17,7 @@ type RequestItem = {
   sent?: { initialSentAt?: unknown; lastSentAt?: unknown; reminder1SentAt?: unknown };
   signed?: { signedAt?: unknown };
   createdAt: unknown;
-  bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string };
+  bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string; partySize?: number; signedCount?: number };
 };
 
 function formatDate(v: unknown): string {
@@ -71,6 +71,8 @@ type RequestDetail = {
       signatureDataUrl: string;
       typedName?: string;
     };
+    /** Set when PDF was generated; used for "View PDF" link. */
+    pdfStoragePath?: string | null;
   };
   bookingSummary?: { experienceName?: string; tripDate?: string; startTime?: string; endTime?: string };
 };
@@ -90,6 +92,7 @@ export default function WaiverRequestsPage() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [viewModalRequestId, setViewModalRequestId] = useState<string | null>(null);
@@ -114,11 +117,17 @@ export default function WaiverRequestsPage() {
       .finally(() => setViewDetailLoading(false));
   }, [viewModalRequestId]);
 
+  // Debounce search so we don't refetch on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const fetchList = useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
-    if (search.trim()) params.set("search", search.trim());
+    if (debouncedSearch) params.set("search", debouncedSearch);
     const qs = params.toString();
     fetch(`/api/admin/waiver-requests${qs ? `?${qs}` : ""}`, { credentials: "include" })
       .then(async (res) => {
@@ -129,7 +138,7 @@ export default function WaiverRequestsPage() {
       .then(setList)
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setLoading(false));
-  }, [statusFilter, search]);
+  }, [statusFilter, debouncedSearch]);
 
   useEffect(() => {
     fetchList();
@@ -377,6 +386,9 @@ export default function WaiverRequestsPage() {
                               {r.bookingSummary.startTime != null && ` ${r.bookingSummary.startTime}`}
                             </span>
                           )}
+                          {r.bookingSummary.partySize != null && r.bookingSummary.signedCount != null && (
+                            <span className="text-brand-muted"> · {r.bookingSummary.signedCount} of {r.bookingSummary.partySize} signed</span>
+                          )}
                         </p>
                       )}
                     </div>
@@ -613,7 +625,7 @@ export default function WaiverRequestsPage() {
                     </Button>
                   </>
                 )}
-                {viewDetail.status === "signed" && viewDetail.signed?.pdfStoragePath && (
+                {viewDetail.status === "signed" && (viewDetail.signed as { pdfStoragePath?: string | null } | undefined)?.pdfStoragePath && (
                   <a
                     href={`/api/waiver/pdf/${viewDetail.id}`}
                     target="_blank"

@@ -246,7 +246,7 @@ export default function AdminHomePage() {
                 </Link>
               </div>
               <div className="min-h-[200px]">
-                {stats.upcomingBookings && stats.upcomingBookings.length > 0 ? (
+                {Array.isArray(stats.upcomingBookings) && stats.upcomingBookings.length > 0 ? (
                   <ul className="divide-y divide-brand-dark/5">
                     {stats.upcomingBookings.slice(0, 7).map((b) => (
                       <li key={b.id}>

@@ -7,8 +7,10 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
+import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -103,7 +105,7 @@ function getDaysInMonth(year: number, month: number): { dateStr: string; label: 
 }
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return formatBookingTimeFromIso(iso);
 }
 
 /** Sort key: time of day in minutes (0 = midnight, 420 = 7 AM, 1080 = 6 PM). Use for morning→night order. */
@@ -953,7 +955,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           ) : null}
                           {exp.fromPriceCents != null && (
                             <span className="text-sm font-medium text-white/95 mt-1">
-                              {/holiday/i.test(exp.slug ?? "") ? `From $${(exp.fromPriceCents / 100).toFixed(0)} per ticket` : `From $${(exp.fromPriceCents / 100).toFixed(0)}`}
+                              {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents)}
                             </span>
                           )}
                         </div>
