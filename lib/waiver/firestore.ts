@@ -271,7 +271,7 @@ export async function listRequests(
           ? (created as { toDate: () => Date }).toDate().getTime()
           : typeof (created as { seconds?: number }).seconds === "number"
             ? (created as { seconds: number }).seconds * 1000
-            : new Date(created as string).getTime();
+            : new Date(created as unknown as string).getTime();
       return ms >= from && ms <= to;
     });
   }
@@ -314,7 +314,7 @@ export function isTokenValid(
   if (!tokenDoc) return false;
   if (tokenDoc.usedAt != null) return false;
   const expiresAt = tokenDoc.expiresAt as { seconds?: number; toDate?: () => Date };
-  return !isTokenExpired(expiresAt);
+  return !isTokenExpired(expiresAt as unknown as Date | { seconds: number } | string);
 }
 
 // ---------------------------------------------------------------------------
