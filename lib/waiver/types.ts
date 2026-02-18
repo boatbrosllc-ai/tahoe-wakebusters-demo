@@ -89,8 +89,9 @@ export interface WaiverSigned {
   signedAt: FirestoreTimestamp;
   ip: string | null;
   userAgent: string | null;
-  pdfUrl: string;
-  pdfStoragePath: string;
+  /** Present when PDF was generated (e.g. serverless may skip). */
+  pdfUrl?: string | null;
+  pdfStoragePath?: string | null;
   contentHash: string;
   signedPayload: WaiverSignedPayload;
 }

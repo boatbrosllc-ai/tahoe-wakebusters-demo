@@ -76,41 +76,37 @@ export async function POST(request: NextRequest) {
     });
 
     const contentHash = createHash("sha256").update(html, "utf8").digest("hex");
-
-    let pdfBuffer: Buffer;
-    try {
-      pdfBuffer = await generateWaiverPdf(html);
-    } catch (pdfErr) {
-      const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
-      console.error("[waiver/submit] PDF generation failed", msg);
-      return NextResponse.json(
-        { error: "Could not generate PDF. Please try again or contact support." },
-        { status: 500 }
-      );
-    }
-
-    const storagePath = `waivers/${req.id}.pdf`;
-    const bucket = getStorageBucket();
-    const file = bucket.file(storagePath);
-    await file.save(pdfBuffer, {
-      metadata: {
-        contentType: "application/pdf",
-        metadata: { requestId: req.id, contentHash },
-      },
-    });
-
-    const pathSegments = storagePath.split("/").map((s) => encodeURIComponent(s)).join("/");
-    const pdfUrl = `https://storage.googleapis.com/${bucket.name}/${pathSegments}`;
-
     const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? request.headers.get("x-real-ip") ?? null;
     const userAgent = request.headers.get("user-agent") ?? null;
+
+    let pdfUrl: string | null = null;
+    let pdfStoragePath: string | null = null;
+
+    try {
+      const pdfBuffer = await generateWaiverPdf(html);
+      const storagePath = `waivers/${req.id}.pdf`;
+      const bucket = getStorageBucket();
+      const file = bucket.file(storagePath);
+      await file.save(pdfBuffer, {
+        metadata: {
+          contentType: "application/pdf",
+          metadata: { requestId: req.id, contentHash },
+        },
+      });
+      const pathSegments = storagePath.split("/").map((s) => encodeURIComponent(s)).join("/");
+      pdfUrl = `https://storage.googleapis.com/${bucket.name}/${pathSegments}`;
+      pdfStoragePath = storagePath;
+    } catch (pdfErr) {
+      const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
+      console.warn("[waiver/submit] PDF generation skipped (waiver still marked signed)", msg);
+    }
 
     const signed: WaiverSigned = {
       signedAt: now,
       ip,
       userAgent,
-      pdfUrl,
-      pdfStoragePath: storagePath,
+      ...(pdfUrl != null && { pdfUrl }),
+      ...(pdfStoragePath != null && { pdfStoragePath }),
       contentHash,
       signedPayload,
     };

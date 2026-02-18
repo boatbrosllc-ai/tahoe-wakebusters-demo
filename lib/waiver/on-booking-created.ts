@@ -95,7 +95,7 @@ export async function createWaiverForBooking(
 
     const bookingSummary = { experienceName, tripDate, startTime, endTime, partySize };
     const includeInConfirmationEmail = active.includeInConfirmationEmail !== false;
-    const sendSeparateWaiverInvite = active.sendSeparateWaiverInvite !== false;
+    const sendSeparateWaiverInvite = active.sendSeparateWaiverInvite === true;
 
     return {
       requestId,

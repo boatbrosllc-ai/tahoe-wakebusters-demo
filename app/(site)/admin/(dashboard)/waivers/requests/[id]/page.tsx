@@ -104,6 +104,9 @@ export default function WaiverRequestDetailPage() {
               <Button variant="outline">View PDF</Button>
             </a>
           )}
+          {req.status === "signed" && req.signed && !req.signed.pdfStoragePath && (
+            <span className="text-sm text-brand-muted">PDF not generated for this signing</span>
+          )}
           {req.status === "pending" && (
             <>
               <Button onClick={copyLink} variant="outline">Copy signing link</Button>

@@ -27,19 +27,12 @@ export function SignaturePad({
       const canvas = canvasRef.current;
       if (!canvas) return { x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
+      // Use display (CSS) coordinates; canvas context is already scaled by dpr in useEffect
       if ("touches" in e) {
         const t = e.touches[0];
-        return {
-          x: (t.clientX - rect.left) * scaleX,
-          y: (t.clientY - rect.top) * scaleY,
-        };
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
       }
-      return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY,
-      };
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     },
     []
   );
@@ -115,6 +108,9 @@ export function SignaturePad({
 
   return (
     <div className={cn("space-y-3", className)}>
+      <p className="text-sm text-brand-muted">
+        Use your finger or mouse to sign in the box below.
+      </p>
       <div className="border-2 border-brand-dark/20 rounded-xl overflow-hidden bg-white touch-none">
         <canvas
           ref={canvasRef}

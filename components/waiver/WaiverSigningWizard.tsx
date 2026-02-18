@@ -179,7 +179,8 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                     type="date"
                     value={signer.dob}
                     onChange={(e) => setSigner((s) => ({ ...s, dob: e.target.value }))}
-                    className={inputClass}
+                    className={`${inputClass} bg-white text-brand-dark [color-scheme:light] max-w-full`}
+                    aria-label="Date of birth"
                   />
                 </div>
               )}

@@ -94,6 +94,8 @@ export async function GET(
       else if (typeof (finalChargeAt as { seconds?: number }).seconds === "number") finalChargeAtStr = new Date((finalChargeAt as { seconds: number }).seconds * 1000).toISOString();
     }
 
+    const bWaiver = (b as { waiver?: { requestId: string; status: string; templateId: string; templateVersion: number } }).waiver;
+
     return NextResponse.json({
       id: doc.id,
       experienceId: b.experienceId,
@@ -119,6 +121,7 @@ export async function GET(
       startDate,
       startTime,
       endTime,
+      waiver: bWaiver ?? undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

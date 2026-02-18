@@ -7,7 +7,8 @@ import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
-import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays } from "lucide-react";
+import Link from "next/link";
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck } from "lucide-react";
 import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
@@ -171,6 +172,7 @@ export default function CalendarsPage() {
     endTime: string | null;
     durationHours: number | null;
     stripe?: { paymentIntentId?: string };
+    waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
   } | null>(null);
   const [bookingDetailLoading, setBookingDetailLoading] = useState(false);
 
@@ -1293,6 +1295,42 @@ export default function CalendarsPage() {
                   <div>
                     <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-1">Notes</p>
                     <p className="text-sm text-brand-dark whitespace-pre-wrap">{bookingDetail.specialNotes}</p>
+                  </div>
+                )}
+                {bookingDetail.waiver && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1.5">
+                      <FileCheck className="h-3.5 w-3.5" aria-hidden /> Waiver
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                          bookingDetail.waiver.status === "signed"
+                            ? "bg-green-100 text-green-800"
+                            : bookingDetail.waiver.status === "pending"
+                              ? "bg-blue-100 text-blue-800"
+                              : "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {bookingDetail.waiver.status === "signed" ? "Signed" : bookingDetail.waiver.status}
+                      </span>
+                      <Link
+                        href={`/admin/waivers/requests/${bookingDetail.waiver.requestId}`}
+                        className="text-sm text-brand-primary hover:underline"
+                      >
+                        View request
+                      </Link>
+                      {bookingDetail.waiver.status === "signed" && (
+                        <a
+                          href={`/api/waiver/pdf/${bookingDetail.waiver.requestId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-brand-primary hover:underline"
+                        >
+                          View PDF
+                        </a>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
