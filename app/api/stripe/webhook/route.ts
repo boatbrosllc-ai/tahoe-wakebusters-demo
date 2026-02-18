@@ -237,6 +237,17 @@ export async function POST(request: NextRequest) {
       });
       const startTs = slot.startAt as { toDate(): Date };
       const endTs = slot.endAt as { toDate(): Date };
+      let waiverResult: Awaited<ReturnType<typeof import("@/lib/waiver/on-booking-created").createWaiverForBooking>> = null;
+      try {
+        const { createWaiverForBooking } = await import("@/lib/waiver/on-booking-created");
+        waiverResult = await createWaiverForBooking({
+          bookingId,
+          customerEmail: customer.email,
+          customerName: customer.name,
+        });
+      } catch (waiverErr) {
+        console.error("[stripe-webhook] waiver creation failed", waiverErr);
+      }
       const emailContext = {
         boatName: boatNameForEmail ?? experienceName,
         startAt: formatSlotDateTime(startTs),
@@ -244,6 +255,7 @@ export async function POST(request: NextRequest) {
         durationHours: rate.durationHours,
         locationText,
         cancellationPolicyText,
+        waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
       };
       try {
         await sendBookingConfirmationEmail(booking as Booking, emailContext);
@@ -256,6 +268,14 @@ export async function POST(request: NextRequest) {
         });
       } catch (emailErr) {
         console.error("[stripe-webhook] Brevo send failed", emailErr);
+      }
+      if (waiverResult?.sendSeparateWaiverInvite) {
+        try {
+          const { sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
+          await sendWaiverInviteAndMarkSent(waiverResult);
+        } catch (waiverErr) {
+          console.error("[stripe-webhook] waiver invite send failed", waiverErr);
+        }
       }
       if (hold.marketingOptIn) {
         const listId = bookingEnv.brevoMarketingListId;

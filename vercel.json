@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/waiver/reminder-cron", "schedule": "0 9 * * *" },
+    { "path": "/api/booking/reminder-cron", "schedule": "0 * * * *" }
+  ]
+}

@@ -77,10 +77,10 @@ export function Hero({
         <ArrowLeft className="h-4 w-4" aria-hidden />
         All trips
       </Link>
-      <div className="absolute inset-0 flex flex-col justify-center sm:justify-start items-center sm:items-stretch">
-        <div className="w-full max-w-4xl mx-auto px-5 sm:px-8 lg:px-12 pt-0 sm:pt-8 lg:pt-12 pb-16 text-center -mt-40 sm:mt-0">
+      <div className="absolute inset-0 flex flex-col justify-center items-center">
+        <div className="w-full max-w-5xl mx-auto px-5 sm:px-8 lg:px-12 py-8 sm:py-12 text-center -translate-y-12 sm:-translate-y-20">
           <motion.h1
-            className="font-display text-3xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-extrabold text-white tracking-tight leading-[1.08] [text-shadow:0_2px_4px_rgba(0,0,0,0.8),0_4px_12px_rgba(0,0,0,0.6)] sm:[text-shadow:0_2px_40px_rgba(0,0,0,0.4)]"
+            className="font-display text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-snug [text-shadow:0_2px_4px_rgba(0,0,0,0.8),0_4px_12px_rgba(0,0,0,0.6)] sm:[text-shadow:0_2px_40px_rgba(0,0,0,0.4)]"
             initial={motionProps.initial}
             animate={motionProps.animate}
             transition={{ ...motionProps.transition, delay: reduceMotion ? 0 : 0.1 }}
@@ -88,7 +88,7 @@ export function Hero({
             {heroTitle}
           </motion.h1>
           <motion.p
-            className="font-display mt-4 sm:mt-6 text-lg sm:text-2xl lg:text-3xl text-white max-w-2xl mx-auto leading-relaxed font-light [text-shadow:0_1px_3px_rgba(0,0,0,0.8),0_2px_8px_rgba(0,0,0,0.6)] sm:[text-shadow:none]"
+            className="font-display mt-3 sm:mt-4 text-base sm:text-xl lg:text-2xl text-white max-w-4xl mx-auto leading-relaxed font-light [text-shadow:0_1px_3px_rgba(0,0,0,0.8),0_2px_8px_rgba(0,0,0,0.6)] sm:[text-shadow:none]"
             initial={motionProps.initial}
             animate={motionProps.animate}
             transition={{ ...motionProps.transition, delay: reduceMotion ? 0 : 0.18 }}

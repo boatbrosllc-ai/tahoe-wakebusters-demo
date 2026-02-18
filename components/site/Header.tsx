@@ -50,7 +50,7 @@ export function Header() {
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 w-full border-b border-brand-primary/80 backdrop-blur-md",
+        "sticky top-0 z-40 w-full border-b border-brand-primary backdrop-blur-md",
         "bg-brand-primary",
         "pt-[env(safe-area-inset-top)]"
       )}

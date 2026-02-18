@@ -549,7 +549,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         value={customer.phone}
                         onChange={(e) => setCustomer((c) => ({ ...c, phone: e.target.value }))}
                         className="w-full rounded-xl border border-brand-dark/15 bg-white px-4 py-3 text-brand-dark placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20"
-                        placeholder="(512) 555-0123"
+                        placeholder="(512) 957-6197"
                       />
                     </div>
                     <div className="sm:col-span-2">

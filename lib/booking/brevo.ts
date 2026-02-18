@@ -6,6 +6,12 @@
 import { bookingEnv } from "./env";
 import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
 import { renderBookingConfirmationHtml } from "./email-templates";
+import {
+  buildReminderHtml,
+  getReminderSubject,
+  type BookingReminderParams,
+  type ReminderType,
+} from "./reminder-emails";
 import type { Booking } from "./types";
 
 const BREVO_API_BASE = "https://api.brevo.com/v3";
@@ -28,9 +34,12 @@ export interface BookingEmailContext {
   isDeposit?: boolean;
   /** Signed manage-booking URL (deposit flow) or receipt URL. */
   manageLink?: string;
+  /** Waiver signing URL to include in confirmation (when template has includeInConfirmationEmail). */
+  waiverSigningUrl?: string;
 }
 
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
+const BOOKING_CONFIRMATION_WAIVER_SUBJECT = "Booking Confirmation & Waiver – Boat Bros ATX";
 
 function getSender(): { name: string; email: string } {
   const email = process.env.BREVO_SENDER_EMAIL?.trim() || "noreply@boatbrosatx.com";
@@ -51,7 +60,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const html = renderBookingConfirmationHtml(booking, context);
 
   const templateId = bookingEnv.brevoBookingTemplateId;
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink, waiverSigningUrl } = context;
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     booking.addonSelections.length > 0
@@ -78,12 +87,13 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           locationText,
           manageUrl,
           isDeposit: isDeposit ?? false,
+          waiverSigningUrl: waiverSigningUrl ?? "",
         },
       }
     : {
         sender: getSender(),
         to: [{ email: toEmail, name: toName }],
-        subject: BOOKING_CONFIRMATION_SUBJECT,
+        subject: waiverSigningUrl ? BOOKING_CONFIRMATION_WAIVER_SUBJECT : BOOKING_CONFIRMATION_SUBJECT,
         htmlContent: html,
       };
 
@@ -102,6 +112,32 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
     const errMsg = `Brevo send failed: ${res.status} ${text}`;
     console.error("[brevo] sendBookingConfirmationEmail", errMsg);
     throw new Error(errMsg);
+  }
+}
+
+/**
+ * Send booking reminder (1-week, 24h, or day-of). Uses reminder-emails HTML.
+ */
+export async function sendBookingReminderEmail(
+  type: ReminderType,
+  params: BookingReminderParams
+): Promise<void> {
+  const html = buildReminderHtml(type, params);
+  const subject = getReminderSubject(type, params.experienceName);
+  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      sender: getSender(),
+      to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("[brevo] sendBookingReminderEmail", type, res.status, text);
+    throw new Error(`Brevo reminder send failed: ${res.status}`);
   }
 }
 

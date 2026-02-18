@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
-import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -187,6 +187,7 @@ export async function GET(request: NextRequest) {
         else if (typeof finalChargeAt.toDate === "function") finalChargeAtStr = finalChargeAt.toDate().toISOString();
         else if (typeof (finalChargeAt as { seconds?: number }).seconds === "number") finalChargeAtStr = new Date((finalChargeAt as { seconds: number }).seconds * 1000).toISOString();
       }
+      const bWaiver = (b as { waiver?: { requestId: string; status: string; templateId: string; templateVersion: number } }).waiver;
       return {
         id: d.id,
         experienceId: b.experienceId,
@@ -212,6 +213,7 @@ export async function GET(request: NextRequest) {
         startDate,
         startTime,
         endTime,
+        waiver: bWaiver ?? undefined,
       };
     });
 
@@ -230,6 +232,100 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(list);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    return NextResponse.json(
+      { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
+      { status: isFirebaseConfig ? 503 : 500 }
+    );
+  }
+}
+
+/** Manual booking (e.g. from GetMyBoat, Viator, phone). Creates a booking doc with synthetic slotId; does not update slot/boat. */
+export async function POST(request: NextRequest) {
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    const experienceId = typeof body.experienceId === "string" ? body.experienceId.trim() : "";
+    const tripDate = typeof body.tripDate === "string" ? body.tripDate.trim() : "";
+    const startHour = typeof body.startHour === "number" ? body.startHour : parseInt(String(body.startHour), 10);
+    const durationHours = typeof body.durationHours === "number" ? body.durationHours : parseInt(String(body.durationHours), 10);
+    const customer = body.customer && typeof body.customer === "object"
+      ? {
+          name: typeof body.customer.name === "string" ? body.customer.name.trim() : "",
+          email: typeof body.customer.email === "string" ? body.customer.email.trim() : "",
+          phone: typeof body.customer.phone === "string" ? body.customer.phone.trim() : "",
+        }
+      : { name: "", email: "", phone: "" };
+    const partySize = typeof body.partySize === "number" ? body.partySize : parseInt(String(body.partySize), 10) || 1;
+    const totalCents = typeof body.totalCents === "number" ? body.totalCents : Math.round(parseFloat(String(body.totalCents || 0)) * 100);
+    const source = typeof body.source === "string" ? body.source.trim() : "";
+    const specialNotes = typeof body.specialNotes === "string" ? body.specialNotes.trim() : "";
+
+    if (!experienceId) return NextResponse.json({ error: "experienceId is required" }, { status: 400 });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tripDate)) return NextResponse.json({ error: "tripDate must be YYYY-MM-DD" }, { status: 400 });
+    if (!Number.isInteger(startHour) || startHour < 7 || startHour > 23) return NextResponse.json({ error: "startHour must be 7–23" }, { status: 400 });
+    if (!Number.isInteger(durationHours) || durationHours < 1 || durationHours > 12) return NextResponse.json({ error: "durationHours must be 1–12" }, { status: 400 });
+    if (!customer.name || !customer.email) return NextResponse.json({ error: "customer name and email are required" }, { status: 400 });
+    if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });
+
+    const db = getDb();
+    const { Timestamp } = getFirestoreExports();
+
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
+
+    const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
+    const firstRate = ratesSnap.docs[0];
+    const rateId = firstRate?.id ?? "manual";
+    const durationFromRate = firstRate ? (firstRate.data() as { durationHours?: number }).durationHours : durationHours;
+
+    const slotId = buildSlotId(tripDate, startHour, durationHours);
+    const notes = [source, specialNotes].filter(Boolean).join(" — ");
+    const pricing = {
+      subtotalCents: totalCents,
+      taxCents: 0,
+      feesCents: 0,
+      totalCents,
+      currency: "usd",
+    };
+
+    const booking: Omit<Booking, "createdAt"> & { createdAt: ReturnType<typeof Timestamp.now> } = {
+      experienceId,
+      slotId,
+      startDateStr: tripDate,
+      rateId,
+      addonSelections: [],
+      partySize: Number.isInteger(partySize) && partySize > 0 ? partySize : 1,
+      petsCount: 0,
+      answers: {},
+      customer: { name: customer.name, email: customer.email, phone: customer.phone },
+      specialNotes: notes || undefined,
+      pricing,
+      status: "paid",
+      stripe: {},
+      createdAt: Timestamp.now(),
+    };
+
+    const ref = await db.collection("bookings").add(booking);
+    const bookingId = ref.id;
+    try {
+      const { createWaiverForBooking, sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
+      const waiverResult = await createWaiverForBooking({
+        bookingId,
+        customerEmail: customer.email,
+        customerName: customer.name,
+      });
+      if (waiverResult?.sendSeparateWaiverInvite) {
+        await sendWaiverInviteAndMarkSent(waiverResult);
+      }
+    } catch (waiverErr) {
+      console.error("[admin/bookings] waiver creation failed", waiverErr);
+    }
+    return NextResponse.json({ id: bookingId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

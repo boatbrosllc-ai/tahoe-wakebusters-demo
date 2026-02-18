@@ -2,6 +2,7 @@
 
 import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { location } from "@/content/location";
 
 export function TrustLine({
   className,
@@ -23,8 +24,8 @@ export function TrustLine({
     >
       <span className="inline-flex items-center gap-0.5">
         <Star className="h-3.5 w-3.5 fill-brand-secondary text-brand-secondary shrink-0" aria-hidden />
-        <span className={isOnDark ? "font-medium text-white/95" : "font-medium text-brand-dark"}>4.9</span>
-        <span>(200+)</span>
+        <span className={isOnDark ? "font-medium text-white/95" : "font-medium text-brand-dark"}>{location.rating}</span>
+        <span>({location.reviewCount}+)</span>
       </span>
       <span className={isOnDark ? "text-white/50" : "text-brand-muted/70"} aria-hidden>·</span>
       <span>Local Austin crew</span>

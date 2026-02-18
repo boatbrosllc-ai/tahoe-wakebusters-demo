@@ -79,7 +79,7 @@ export function ExperienceChooser() {
             >
               {/* Most popular tag: overlapping top-right; scaled for mobile vs desktop */}
               <div
-                className="absolute top-0 right-0 z-10 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
+                className="absolute top-0 right-0 z-20 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
                 aria-hidden
               >
                 <Image
@@ -98,9 +98,9 @@ export function ExperienceChooser() {
                   className="object-cover object-[center_90%] sm:object-[center_75%] lg:object-[center_65%] transition-transform duration-500 group-hover:scale-[1.03]"
                   sizes="(max-width: 640px) 100vw, (max-width: 1024px) 100vw, 1280px"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 from-35% via-black/20 to-transparent sm:from-black/80 sm:from-40%" />
-                <div className="absolute inset-0 flex flex-col justify-end p-4 sm:p-6 lg:p-8">
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm text-brand-primary/95 mb-1">
+                <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
+                <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-7 lg:p-9">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm text-brand-primary/95 mb-1.5">
                     <span className="inline-flex items-center gap-1.5 sm:gap-2">
                       <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
                       {pontoonData.duration}
@@ -110,13 +110,13 @@ export function ExperienceChooser() {
                       {pontoonData.capacity}
                     </span>
                   </div>
-                  <h3 className="font-display text-xl sm:text-3xl lg:text-4xl font-bold text-white tracking-tight leading-tight">
+                  <h3 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-snug">
                     {pontoonData.title}
                   </h3>
-                  <p className="mt-1 sm:mt-2 text-white/90 text-sm sm:text-base max-w-lg line-clamp-2">
+                  <p className="mt-2 sm:mt-3 text-white/90 text-sm sm:text-base max-w-lg line-clamp-3 leading-relaxed">
                     {pontoonData.shortDescription}
                   </p>
-                  <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-4">
+                  <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
                     {pontoonData.fromPriceCents != null && (
                       <span className="text-base sm:text-xl font-bold text-brand-primary">From ${(pontoonData.fromPriceCents / 100).toFixed(0)}</span>
                     )}
@@ -153,9 +153,9 @@ export function ExperienceChooser() {
                     className="object-cover object-[center_90%] transition-transform duration-500 group-hover:scale-[1.03]"
                     sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 from-35% via-black/20 to-transparent sm:from-black/80 sm:from-40%" />
-                  <div className="absolute inset-0 flex flex-col justify-end p-4 sm:p-5 lg:p-6">
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-brand-primary/95 mb-1">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
+                  <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-6 lg:p-7">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-brand-primary/95 mb-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         {data.duration}
@@ -165,13 +165,13 @@ export function ExperienceChooser() {
                         {data.capacity}
                       </span>
                     </div>
-                    <h3 className="font-display text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight leading-tight">
+                    <h3 className="font-display text-sm sm:text-base lg:text-lg font-bold text-white tracking-tight leading-snug">
                       {data.title}
                     </h3>
-                    <p className="mt-1 text-white/90 text-xs sm:text-sm line-clamp-2">
+                    <p className="mt-2 text-white/90 text-xs sm:text-sm line-clamp-3 leading-relaxed">
                       {data.shortDescription}
                     </p>
-                    <div className="mt-2 sm:mt-3 flex flex-wrap items-center gap-2 sm:gap-3">
+                    <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-3">
                       {data.fromPriceCents != null && (
                         <span className="text-sm sm:text-base font-bold text-brand-primary">From ${(data.fromPriceCents / 100).toFixed(0)}</span>
                       )}

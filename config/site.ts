@@ -5,11 +5,11 @@
 
 export const siteConfig = {
   /** Primary phone number – used for click-to-call and display */
-  phone: "+1 (512) 555-0123",
+  phone: "(512) 957-6197",
   /** E.164 for tel: links */
-  phoneTel: "+15125550123",
+  phoneTel: "+15129576197",
   /** Optional SMS number (same as phone if not set) */
-  sms: "+15125550123",
+  sms: "+15129576197",
 
   /** Booking: use custom flow at /booking */
   booking: {

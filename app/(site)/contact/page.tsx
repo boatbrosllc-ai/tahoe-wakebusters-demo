@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { brand } from "@/content/brand";
 import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
@@ -61,6 +62,14 @@ export default function ContactPage() {
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-lg text-white/90 sm:text-xl">
             Call, email, or send a message. We&apos;re here to help with bookings and questions.
+          </p>
+          <p className="mt-3">
+            <Link
+              href="/lake-austin-boat-rental"
+              className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
+            >
+              View our location, map & hours →
+            </Link>
           </p>
         </div>
       </section>

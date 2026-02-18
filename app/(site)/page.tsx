@@ -6,6 +6,7 @@ import { HowItWorks } from "@/components/site/HowItWorks";
 import { Testimonials } from "@/components/site/Testimonials";
 import { GalleryPreview } from "@/components/site/GalleryPreview";
 import { LeadCapture } from "@/components/site/LeadCapture";
+import { HomeLocation } from "@/components/site/HomeLocation";
 import { PrefetchCriticalRoutes } from "@/components/site/PrefetchCriticalRoutes";
 
 export const metadata: Metadata = {
@@ -38,6 +39,7 @@ export default function HomePage() {
       <HowItWorks />
       <Testimonials />
       <GalleryPreview />
+      <HomeLocation />
       <LeadCapture />
     </>
   );

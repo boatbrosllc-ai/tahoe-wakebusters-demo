@@ -8,7 +8,18 @@ import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
 import type { Booking } from "./types";
 import type { BookingEmailContext } from "./brevo";
 
-export type EmailTemplateId = "booking_confirmation";
+import {
+  buildReminder1WeekHtml,
+  buildReminder24hHtml,
+  buildReminderDayOfHtml,
+  getReminderSubject,
+} from "./reminder-emails";
+
+export type EmailTemplateId =
+  | "booking_confirmation"
+  | "booking_reminder_1week"
+  | "booking_reminder_24h"
+  | "booking_reminder_dayof";
 
 export interface EmailTemplateMeta {
   id: EmailTemplateId;
@@ -17,12 +28,42 @@ export interface EmailTemplateMeta {
   subject: string;
 }
 
+const REMINDER_SAMPLE_PARAMS = {
+  to: "guest@example.com",
+  customerName: "Jordan",
+  experienceName: "Lake Austin Pontoon Charter",
+  tripDate: "Sat, Mar 22, 2025",
+  startTime: "2:00 PM",
+  locationText: "We'll send exact meeting point before your trip.",
+  locationAddress: "Lake Austin, Austin TX",
+  waiverSigningUrl: null as string | null,
+  whatToBring: ["Sunscreen", "Water", "ID"],
+};
+
 export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
   {
     id: "booking_confirmation",
-    name: "Booking confirmation",
-    description: "Sent when a booking is paid (Stripe webhook).",
-    subject: "Booking Confirmation – Boat Bros ATX",
+    name: "Confirmation and Waiver",
+    description: "One email with booking details and waiver link. Sent when a booking is paid.",
+    subject: "Booking Confirmation & Waiver – Boat Bros ATX",
+  },
+  {
+    id: "booking_reminder_1week",
+    name: "1 week before trip",
+    description: "Sent ~7 days before the trip. Includes waiver link if not yet signed.",
+    subject: getReminderSubject("1week", REMINDER_SAMPLE_PARAMS.experienceName),
+  },
+  {
+    id: "booking_reminder_24h",
+    name: "24 hours before",
+    description: "Sent the day before the trip. Directions, Fetii promo, $5 park fee.",
+    subject: getReminderSubject("24h", REMINDER_SAMPLE_PARAMS.experienceName),
+  },
+  {
+    id: "booking_reminder_dayof",
+    name: "Day of (3 hours before)",
+    description: "Sent 3 hours before start. Same logistics; waiver link if still unsigned.",
+    subject: getReminderSubject("dayof", REMINDER_SAMPLE_PARAMS.experienceName),
   },
 ];
 
@@ -50,7 +91,7 @@ function bookingManageUrl(
  * Render booking confirmation HTML (beautiful, email-client safe).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, manageLink, waiverSigningUrl } = context;
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     booking.addonSelections.length > 0
@@ -116,6 +157,16 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
                   </td>
                 </tr>
               </table>
+              ${waiverSigningUrl ? `
+              <p style="margin: 24px 0 0; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">Please sign your waiver before your trip:</p>
+              <table role="presentation" cellspacing="0" cellpadding="0" align="center" style="margin-top: 12px;">
+                <tr>
+                  <td style="border-radius: 10px; background: ${DARK_COLOR};">
+                    <a href="${escapeHtml(waiverSigningUrl)}" target="_blank" rel="noopener" style="display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none;">Sign waiver</a>
+                  </td>
+                </tr>
+              </table>
+              ` : ""}
             </td>
           </tr>
           <!-- Footer -->
@@ -151,7 +202,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     partySize: 4,
     petsCount: 0,
     answers: {},
-    customer: { name: "Jordan Smith", email: "jordan@example.com", phone: "(512) 555-0123" },
+    customer: { name: "Jordan Smith", email: "jordan@example.com", phone: "(512) 957-6197" },
     pricing: { subtotalCents: 29500, taxCents: 2500, feesCents: 0, totalCents: 32000, currency: "usd" },
     status: "paid",
     stripe: { paymentIntentId: "pi_preview" },
@@ -172,6 +223,12 @@ export function getPreviewHtml(templateId: EmailTemplateId): string {
   switch (templateId) {
     case "booking_confirmation":
       return getBookingConfirmationPreviewHtml();
+    case "booking_reminder_1week":
+      return buildReminder1WeekHtml(REMINDER_SAMPLE_PARAMS);
+    case "booking_reminder_24h":
+      return buildReminder24hHtml(REMINDER_SAMPLE_PARAMS);
+    case "booking_reminder_dayof":
+      return buildReminderDayOfHtml(REMINDER_SAMPLE_PARAMS);
     default:
       return "<p>Preview not available.</p>";
   }

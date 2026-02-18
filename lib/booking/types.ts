@@ -384,8 +384,21 @@ export interface Booking {
   finalChargeAt?: FirestoreTimestamp | string;
   /** When heads-up reminder email was sent (optional). */
   finalReminderSentAt?: FirestoreTimestamp;
+  /** When "1 week before trip" reminder was sent. */
+  reminder1WeekSentAt?: FirestoreTimestamp;
+  /** When "24 hours before" reminder was sent. */
+  reminder24hSentAt?: FirestoreTimestamp;
+  /** When "day of, 3 hours before" reminder was sent. */
+  reminderDayOfSentAt?: FirestoreTimestamp;
   /** Display-only card (brand, last4, exp). */
   card?: BookingCardDisplay;
+  /** Waiver request pointer (when in-app waiver is used). */
+  waiver?: {
+    requestId: string;
+    status: string;
+    templateId: string;
+    templateVersion: number;
+  };
   createdAt: FirestoreTimestamp;
 }
 

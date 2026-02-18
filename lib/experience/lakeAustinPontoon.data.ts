@@ -29,8 +29,8 @@ export const PRICING_MAP: Record<number, number> = {
 };
 
 export const SOCIAL_PROOF = [
-  { label: "★ 4.9", sub: "rating" },
-  { label: "500+", sub: "5-star days" },
+  { label: "★ 5.0", sub: "rating" },
+  { label: "273+", sub: "Google reviews" },
   { label: "Top-rated", sub: "on Lake Austin" },
   { label: "Captain-led", sub: "" },
   { label: "Free lily pad", sub: "" },

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import { Star } from "lucide-react";
 import { testimonials } from "@/content/testimonials";
+import { location } from "@/content/location";
 import { cn } from "@/lib/utils";
 
 const ROTATE_INTERVAL_MS = 5500;
@@ -46,7 +47,7 @@ export function Testimonials() {
                 <Star key={i} className="h-6 w-6 sm:h-7 sm:w-7 fill-amber-400 text-amber-400" aria-hidden />
               ))}
             </div>
-            <span className="text-2xl sm:text-3xl font-bold text-white">5.0</span>
+            <span className="text-2xl sm:text-3xl font-bold text-white">{location.rating}</span>
           </div>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
           <p className="flex items-center gap-2 text-lg sm:text-xl font-semibold text-white">
@@ -58,12 +59,12 @@ export function Testimonials() {
               className="h-7 w-7 shrink-0"
               aria-hidden
             />
-            <span className="text-white">273+</span>{" "}
+            <span className="text-white">{location.reviewCount}+</span>{" "}
             <span className="text-white/90">Google reviews</span>
           </p>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
           <p className="text-sm sm:text-base text-white/80">
-            Boat Bros · 5019 TX-360 Loop, Austin, TX
+            Boat Bros · {location.addressFormatted}
           </p>
         </motion.div>
 

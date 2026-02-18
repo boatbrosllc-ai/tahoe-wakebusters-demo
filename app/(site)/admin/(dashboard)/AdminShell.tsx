@@ -17,6 +17,7 @@ import {
   Menu,
   X,
   Tag,
+  FileSignature,
 } from "lucide-react";
 import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
@@ -37,8 +38,8 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
     label: "Business",
     links: [
       { href: "/admin/calendars", label: "Calendar", icon: Calendar },
-      { href: "/admin/pricing-calendar", label: "Pricing calendar", icon: DollarSign },
       { href: "/admin/bookings", label: "Bookings", icon: BookOpen },
+      { href: "/admin/waivers", label: "Waivers", icon: FileSignature },
       { href: "/admin/discounts", label: "Discounts", icon: Tag },
       { href: "/admin/customers", label: "Customers", icon: Users },
       { href: "/admin/financials", label: "Financials", icon: DollarSign },
@@ -164,7 +165,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       {/* Main content: full width on Calendars for a big readable calendar, constrained on other pages */}
       <main className="min-w-0 flex-1 overflow-auto py-6 px-4 sm:py-8 sm:px-6 lg:px-8">
-        <div className={cn("mx-auto w-full", pathname === "/admin" ? "max-w-6xl" : (pathname?.includes("/admin/calendars") || pathname?.includes("/admin/pricing-calendar") || pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
+        <div className={cn("mx-auto w-full", pathname === "/admin" ? "max-w-6xl" : (pathname?.includes("/admin/calendars") ||  pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
           {children}
         </div>
       </main>

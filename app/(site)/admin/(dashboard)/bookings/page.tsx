@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle } from "lucide-react";
+import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AddBookingModal } from "./AddBookingModal";
 
 type StripeEventItem = {
   id: string;
@@ -74,6 +75,7 @@ type BookingItem = {
   startDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+  waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
 };
 
 export default function AdminBookingsPage() {
@@ -91,6 +93,8 @@ export default function AdminBookingsPage() {
   const [webhookEventsOpen, setWebhookEventsOpen] = useState(false);
   const [webhookEvents, setWebhookEvents] = useState<StripeEventItem[]>([]);
   const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
+  const [addBookingOpen, setAddBookingOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -119,7 +123,7 @@ export default function AdminBookingsPage() {
       .then(setList)
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setLoading(false));
-  }, [buildParams]);
+  }, [buildParams, refreshKey]);
 
   useEffect(() => {
     if (!webhookEventsOpen) return;
@@ -201,10 +205,18 @@ export default function AdminBookingsPage() {
   return (
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Bookings</h1>
-        <p className="mt-1 text-sm text-brand-muted">
-          Trip date, party size, and full details. Click a row to open booking details (customer, add-ons, payment breakdown).
-        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Bookings</h1>
+            <p className="mt-1 text-sm text-brand-muted">
+              Trip date, party size, and full details. Click a row to open booking details (customer, add-ons, payment breakdown).
+            </p>
+          </div>
+          <Button onClick={() => setAddBookingOpen(true)} className="shrink-0 inline-flex items-center gap-2">
+            <Plus className="h-4 w-4" aria-hidden />
+            Add booking
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -512,6 +524,8 @@ export default function AdminBookingsPage() {
         )}
       </section>
 
+      <AddBookingModal open={addBookingOpen} onOpenChange={setAddBookingOpen} onSuccess={() => setRefreshKey((k) => k + 1)} />
+
       {/* Booking detail modal */}
       <Dialog
         open={detailOpen}
@@ -576,6 +590,41 @@ export default function AdminBookingsPage() {
                 </dd>
               </dl>
             </section>
+
+            {selectedBooking.waiver && (
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Waiver</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                      selectedBooking.waiver.status === "signed"
+                        ? "bg-green-100 text-green-800"
+                        : selectedBooking.waiver.status === "pending"
+                          ? "bg-blue-100 text-blue-800"
+                          : "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    {selectedBooking.waiver.status}
+                  </span>
+                  <Link
+                    href={`/admin/waivers/requests/${selectedBooking.waiver.requestId}`}
+                    className="text-sm text-brand-primary hover:underline"
+                  >
+                    View request
+                  </Link>
+                  {selectedBooking.waiver.status === "signed" && (
+                    <a
+                      href={`/api/waiver/pdf/${selectedBooking.waiver.requestId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-brand-primary hover:underline"
+                    >
+                      View PDF
+                    </a>
+                  )}
+                </div>
+              </section>
+            )}
 
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Party</h3>

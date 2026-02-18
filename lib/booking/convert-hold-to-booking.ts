@@ -9,6 +9,7 @@ import type { Firestore, DocumentReference } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
+import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -260,6 +261,11 @@ export async function convertHoldToBooking(
   } else if (!isDeposit) {
     manageLink = `${bookingEnv.appBaseUrl}/booking/success?payment_intent=${input.paymentIntentId}`;
   }
+  const waiverResult = await createWaiverForBooking({
+    bookingId,
+    customerEmail: customer.email,
+    customerName: customer.name,
+  });
   const emailContext = {
     boatName: boatNameForEmail ?? experienceName,
     startAt: formatSlotDateTime(startTs),
@@ -269,6 +275,7 @@ export async function convertHoldToBooking(
     cancellationPolicyText,
     isDeposit: !!isDeposit,
     manageLink,
+    waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
   };
   try {
     await sendBookingConfirmationEmail(booking as Booking, emailContext);
@@ -281,6 +288,13 @@ export async function convertHoldToBooking(
     });
   } catch (emailErr) {
     console.error("[convert-hold-to-booking] Brevo send failed", emailErr);
+  }
+  if (waiverResult?.sendSeparateWaiverInvite) {
+    try {
+      await sendWaiverInviteAndMarkSent(waiverResult);
+    } catch (waiverErr) {
+      console.error("[convert-hold-to-booking] Waiver invite send failed", waiverErr);
+    }
   }
   if (hold.marketingOptIn) {
     const listId = bookingEnv.brevoMarketingListId;

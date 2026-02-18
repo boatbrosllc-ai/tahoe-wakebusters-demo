@@ -2,6 +2,7 @@
 
 import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { location } from "@/content/location";
 
 /** Google "G" logo icon (multicolor) – used for review badge */
 function GoogleGIcon({ className }: { className?: string }) {
@@ -42,8 +43,8 @@ export function TrustRow({ className }: { className?: string }) {
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
-          <span className="ml-1 font-medium text-white">5.0</span>
-          <span className="ml-1.5 font-semibold text-white">273+ reviews</span>
+          <span className="ml-1 font-medium text-white">{location.rating}</span>
+          <span className="ml-1.5 font-semibold text-white">{location.reviewCount}+ reviews</span>
         </span>
       </span>
       <span className="text-white/50" aria-hidden>·</span>
