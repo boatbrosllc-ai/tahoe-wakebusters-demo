@@ -144,3 +144,38 @@ export async function PATCH(
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+/** DELETE /api/admin/blog/[postId] — permanently delete a post. */
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ postId: string }> }
+) {
+  const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+
+  const { postId } = await params;
+  if (!postId) {
+    return NextResponse.json({ error: "Missing postId" }, { status: 400 });
+  }
+
+  const ref = getBlogPostRef(postId);
+  const doc = await ref.get();
+  if (!doc.exists) {
+    return NextResponse.json({ error: "Post not found" }, { status: 404 });
+  }
+
+  try {
+    const title = (doc.data() as { title?: string })?.title ?? "Untitled";
+    await ref.delete();
+    await writeAuditLog({
+      actorUid: null,
+      action: "delete",
+      postId,
+      diffSummary: `Deleted: ${title}`,
+    });
+    return NextResponse.json({ deleted: true, id: postId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

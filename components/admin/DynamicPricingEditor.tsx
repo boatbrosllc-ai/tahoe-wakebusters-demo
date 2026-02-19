@@ -536,6 +536,9 @@ export function DynamicPricingEditor({
           </div>
 
           {/* Special dates – final override over default rates */}
+          <p className="text-xs text-brand-muted mb-2">
+            July 4, Memorial Day, Labor Day, Thanksgiving, Christmas, and New Year always use the <strong>holiday default</strong> price (from the rate table above) unless you add a custom range here with a different price.
+          </p>
           <div>
             <p className="text-sm font-medium text-brand-dark mb-1.5">Holidays & special dates (final override)</p>
             <p className="text-xs text-brand-muted mb-3">These override the default rates above when a date falls in a range. Set price per charter (8h, 5h, …); blank = that charter&apos;s <strong>Holiday default</strong>.</p>

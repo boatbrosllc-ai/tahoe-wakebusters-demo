@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -10,6 +10,7 @@ import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
 const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
+const HERO_CONFETTI_KEY = "boatbros_hero_confetti_done";
 
 const bullets = [
   "Lake Austin",
@@ -21,8 +22,25 @@ const bullets = [
 export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   const [videoReady, setVideoReady] = useState(false);
+
+  const handleHeroClick = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (localStorage.getItem(HERO_CONFETTI_KEY)) return;
+    localStorage.setItem(HERO_CONFETTI_KEY, "1");
+    import("canvas-confetti").then(({ default: confetti }) => {
+      const count = 120;
+      const defaults = { origin: { y: 0.6 }, startVelocity: 35 };
+      confetti({ ...defaults, particleCount: count * 0.4, spread: 80 });
+      confetti({ ...defaults, particleCount: count * 0.35, spread: 100, scalar: 1.1 });
+      confetti({ ...defaults, particleCount: count * 0.25, spread: 120, scalar: 0.9 });
+    });
+  }, []);
+
   return (
-    <section className="relative min-h-[100dvh] sm:min-h-[85vh] md:min-h-[82vh] lg:min-h-[80vh] xl:min-h-[85vh] 2xl:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
+    <section
+      className="relative min-h-[100dvh] sm:min-h-[85vh] md:min-h-[82vh] lg:min-h-[80vh] xl:min-h-[85vh] 2xl:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark"
+      onClick={handleHeroClick}
+    >
       {/* Background video: no poster; smooth fade-in when ready */}
       <div className="absolute inset-0">
         <video

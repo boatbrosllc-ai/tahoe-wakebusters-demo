@@ -503,6 +503,23 @@ export default function CalendarsPage() {
     return map;
   }, [filteredSlots]);
 
+  /** One slot per booking per day (deduplicated) — avoids duplicate rows when one booking has multiple experience slots. */
+  const uniqueBookedSlotsByDay = useMemo(() => {
+    const map = new Map<string, SlotDto[]>();
+    bookedSlotsByDay.forEach((slots, day) => {
+      const seen = new Set<string>();
+      const unique: SlotDto[] = [];
+      for (const s of slots) {
+        const key = s.bookingId ?? s.bookingSummary?.bookingId ?? s.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(s);
+      }
+      map.set(day, unique);
+    });
+    return map;
+  }, [bookedSlotsByDay]);
+
   const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate)?.slots ?? [] : [];
 
   const blockDate = async (dateStr: string) => {
@@ -1180,7 +1197,7 @@ export default function CalendarsPage() {
                     ))}
                     {calendarDays.map((cell) => {
                     const daySlots = slotsByDate.get(cell.dateStr)?.slots ?? [];
-                    const bookedForDay = bookedSlotsByDay.get(cell.dateStr) ?? [];
+                    const bookedForDay = uniqueBookedSlotsByDay.get(cell.dateStr) ?? [];
                     const isPast = cell.isPast;
                     const isToday = cell.isCurrentMonth && cell.dateStr === todayStr;
                     const cellBusy = blocking === `date-${cell.dateStr}`;
@@ -1297,7 +1314,7 @@ export default function CalendarsPage() {
                   Bookings on this day
                 </p>
                 {(() => {
-                  const dayBookings = bookedSlotsByDay.get(selectedDate) ?? [];
+                  const dayBookings = uniqueBookedSlotsByDay.get(selectedDate) ?? [];
                   if (dayBookings.length === 0) {
                     return (
                       <p className="py-4 text-center text-sm text-brand-muted rounded-xl bg-brand-bg/30 border border-brand-dark/10">

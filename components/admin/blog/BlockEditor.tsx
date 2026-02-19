@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import type { ContentBlock } from "@/lib/blog/types";
 import {
@@ -13,6 +13,7 @@ import {
   CalloutBlockEditor,
   FaqBlockEditor,
 } from "./blocks";
+import { Plus } from "lucide-react";
 
 export interface BlockEditorProps {
   blocks: ContentBlock[];
@@ -89,23 +90,66 @@ export function BlockEditor({ blocks, onChange, className }: BlockEditorProps) {
   );
 
   const h1Count = blocks.filter((b) => b.type === "heading" && (b as { level?: number }).level === 1).length;
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) setAddMenuOpen(false);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [addMenuOpen]);
+
+  const addBlockAt = useCallback(
+    (index: number, type: ContentBlock["type"]) => {
+      const newBlock = createBlock(type);
+      const next = [...blocks];
+      next.splice(index + 1, 0, newBlock);
+      onChange(next);
+      setAddMenuOpen(false);
+    },
+    [blocks, onChange]
+  );
 
   return (
     <div className={cn("space-y-4", className)}>
       {blocks.length === 0 ? (
-        <div className="rounded-xl border-2 border-dashed border-brand-dark/20 bg-brand-bg/30 p-8 text-center">
-          <p className="text-sm text-brand-muted mb-4">Start with a block. Choose one below:</p>
+        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 p-8 sm:p-10 text-center">
+          <p className="text-slate-700 font-medium mb-1">Start your post</p>
+          <p className="text-slate-500 text-sm mb-5">Choose a block to add content</p>
           <div className="flex flex-wrap justify-center gap-2">
-            {BLOCK_TYPES.map(({ type, label }) => (
+            {BLOCK_TYPES.slice(0, 4).map(({ type, label }) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => onChange([createBlock(type)])}
-                className="rounded-lg border border-brand-dark/20 bg-white px-4 py-2 text-sm text-brand-dark hover:bg-brand-primary/10 hover:border-brand-primary/30 transition-colors"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-brand-primary/10 hover:border-brand-primary/40 transition-colors"
               >
-                + {label}
+                {label}
               </button>
             ))}
+          </div>
+          <div className="mt-3">
+            <div className="relative inline-block" ref={addMenuRef}>
+              <button
+                type="button"
+                onClick={() => setAddMenuOpen((o) => !o)}
+                className="text-sm text-brand-primary hover:underline"
+              >
+                + More block types
+              </button>
+              {addMenuOpen && (
+                <div className="absolute left-0 top-full mt-1 py-1 min-w-[140px] rounded-lg border border-slate-200 bg-white shadow-lg z-10">
+                  {BLOCK_TYPES.slice(4).map(({ type, label }) => (
+                    <button key={type} type="button" onClick={() => { onChange([createBlock(type)]); setAddMenuOpen(false); }} className="block w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 rounded-none first:rounded-t-lg last:rounded-b-lg">
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       ) : (
@@ -198,18 +242,25 @@ export function BlockEditor({ blocks, onChange, className }: BlockEditorProps) {
         ))
       )}
       {blocks.length > 0 && (
-        <div className="pt-4 flex flex-wrap gap-2">
-          <span className="text-xs text-brand-muted self-center mr-2">Add block:</span>
-          {BLOCK_TYPES.map(({ type, label }) => (
+        <div className="pt-4 mt-4">
+          <div className="relative inline-block" ref={addMenuRef}>
             <button
-              key={type}
               type="button"
-              onClick={() => addBlock(blocks.length - 1, type)}
-              className="rounded-lg border border-brand-dark/20 bg-white px-3 py-2 text-sm text-brand-dark hover:bg-brand-bg/50 hover:border-brand-primary/30 transition-colors"
+              onClick={() => setAddMenuOpen((o) => !o)}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors"
             >
-              + {label}
+              <Plus className="h-4 w-4" /> Add block
             </button>
-          ))}
+            {addMenuOpen && (
+              <div className="absolute left-0 top-full mt-1 py-1 min-w-[160px] rounded-lg border border-slate-200 bg-white shadow-lg z-10">
+                {BLOCK_TYPES.map(({ type, label }) => (
+                  <button key={type} type="button" onClick={() => addBlockAt(blocks.length - 1, type)} className="block w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 rounded-none first:rounded-t-lg last:rounded-b-lg">
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

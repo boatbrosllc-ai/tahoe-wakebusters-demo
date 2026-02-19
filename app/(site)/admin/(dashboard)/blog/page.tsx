@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Plus, Search, ExternalLink, RefreshCw, Pencil, FileText } from "lucide-react";
+import { Plus, Search, ExternalLink, RefreshCw, Pencil, FileText, Archive, Trash2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -97,6 +97,36 @@ export default function AdminBlogPage() {
     setError(null);
     fetchPosts().catch((e) => setError(e instanceof Error ? e.message : "Error")).finally(() => setLoading(false));
   };
+
+  const handleArchive = useCallback(async (postId: string) => {
+    try {
+      const res = await fetch(`/api/admin/blog/${postId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action: "archive" }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Archive failed");
+      }
+      await fetchPosts();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Archive failed");
+    }
+  }, [fetchPosts]);
+
+  const handleDelete = useCallback(async (postId: string, title: string) => {
+    if (!confirm(`Permanently delete "${title || "Untitled"}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/admin/blog/${postId}`, { method: "DELETE", credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Delete failed");
+      await fetchPosts();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }, [fetchPosts]);
 
   const filtered = posts;
 
@@ -256,14 +286,36 @@ export default function AdminBlogPage() {
                       Edit in code
                     </span>
                   ) : (
-                    <Link
-                      href={`/admin/blog/${post.id}`}
-                      className={cn(buttonVariants({ variant: "default", size: "sm" }), "gap-2 min-h-[40px] sm:min-h-[44px]")}
-                      aria-label={`Edit post: ${(post.title || "Untitled").slice(0, 50)}`}
-                    >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden />
-                      Edit
-                    </Link>
+                    <>
+                      {post.status !== "archived" && (
+                        <button
+                          type="button"
+                          onClick={() => handleArchive(post.id)}
+                          className="p-2 rounded-lg text-brand-muted hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                          title="Archive post"
+                          aria-label="Archive post"
+                        >
+                          <Archive className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(post.id, post.title)}
+                        className="p-2 rounded-lg text-brand-muted hover:text-red-600 hover:bg-red-50 transition-colors"
+                        title="Delete post"
+                        aria-label="Delete post"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                      <Link
+                        href={`/admin/blog/${post.id}`}
+                        className={cn(buttonVariants({ variant: "default", size: "sm" }), "gap-2 min-h-[40px] sm:min-h-[44px]")}
+                        aria-label={`Edit post: ${(post.title || "Untitled").slice(0, 50)}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        Edit
+                      </Link>
+                    </>
                   )}
                 </div>
               </li>

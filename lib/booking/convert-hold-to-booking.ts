@@ -7,7 +7,7 @@
 
 import type { Firestore, DocumentReference } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { sendBookingConfirmationEmail, upsertBrevoContact } from "@/lib/booking/brevo";
+import { sendBookingConfirmationEmail, sendBookingConfirmationCopyToBusiness, upsertBrevoContact } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
@@ -267,6 +267,7 @@ export async function convertHoldToBooking(
       subject: "Booking Confirmation – Boat Bros ATX",
       bookingId,
     });
+    await sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext);
   } catch (emailErr) {
     console.error("[convert-hold-to-booking] Brevo send failed", emailErr);
   }

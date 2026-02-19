@@ -50,6 +50,39 @@ function isDateInHolidayRange(
 
 const DEFAULT_WEEKEND_DAYS = [0, 6]; // Sun, Sat
 
+/** True if date (YYYY-MM-DD) is a default US holiday: July 4, Memorial Day, Labor Day, Thanksgiving, Christmas (24–26), New Year (Dec 31 / Jan 1). */
+function isDefaultUSHoliday(iso: string): boolean {
+  const parts = iso.split("-");
+  if (parts.length < 3) return false;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) return false;
+
+  if (month === 7 && day === 4) return true; // July 4
+  if (month === 12 && day >= 24 && day <= 26) return true; // Christmas Eve, Day, day after
+  if (month === 12 && day === 31) return true; // New Year's Eve
+  if (month === 1 && day === 1) return true; // New Year's Day
+
+  // Memorial Day: last Monday of May
+  const mayLast = new Date(year, 4, 31);
+  while (mayLast.getDay() !== 1) mayLast.setDate(mayLast.getDate() - 1);
+  if (month === 5 && day === mayLast.getDate()) return true;
+
+  // Labor Day: first Monday of September
+  const sepFirst = new Date(year, 8, 1);
+  while (sepFirst.getDay() !== 1) sepFirst.setDate(sepFirst.getDate() + 1);
+  if (month === 9 && day === sepFirst.getDate()) return true;
+
+  // Thanksgiving: fourth Thursday of November
+  const nov1 = new Date(year, 10, 1);
+  const firstThu = 1 + ((4 - nov1.getDay() + 7) % 7);
+  const fourthThu = firstThu + 21;
+  if (month === 11 && day >= fourthThu && day <= fourthThu + 3) return true;
+
+  return false;
+}
+
 /**
  * Effective rate price: holidays first, then weekend day, then Fri/Sun tier, then weekday base.
  * weekendDays: day numbers (0=Sun … 6=Sat) that use weekend price (e.g. [6] = Saturday only).
@@ -80,6 +113,9 @@ export function getEffectiveRatePriceCents(
       if (cents != null) return cents;
     }
   }
+  // Default US holidays (July 4, Memorial Day, Labor Day, Thanksgiving, Christmas, New Year) use holiday price when set
+  if (rate.priceHolidayCents != null && isDefaultUSHoliday(iso)) return rate.priceHolidayCents;
+
   const day = date.getDay();
   const weekend = weekendDays && weekendDays.length > 0 ? weekendDays : DEFAULT_WEEKEND_DAYS;
   if (weekend.includes(day) && rate.priceWeekendCents != null) return rate.priceWeekendCents;

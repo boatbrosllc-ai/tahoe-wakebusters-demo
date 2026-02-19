@@ -5,10 +5,10 @@ import {
   buildSlotId,
   getSlotGrid,
   getSlotGridForStartTimes,
+  getSlotGridWakeBoard,
   getSlotGridWithSaturdayOnlyRestriction,
   getSlotStartEnd,
   parseSlotId,
-  WAKEBOARD_SATURDAY_START_TIMES,
 } from "@/lib/booking/experience-slots";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
@@ -284,7 +284,7 @@ export async function GET(request: NextRequest) {
         })
       );
 
-      // Per-boat grid: wake/wakesurf boat gets restricted times on Saturday only; other days hourly. Boats with allowedStartTimes use those every day.
+      // Per-boat grid: wake boats use Saturday-only expanded times (9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm) on Saturday and allowedStartTimes (or hourly) on weekdays. Other boats with allowedStartTimes use those every day.
       const boatDocs = await Promise.all(boatIds.map((id) => db.collection("boats").doc(id).get()));
       const gridByBoatId = new Map<string, import("@/lib/booking/experience-slots").SlotGridItem[]>();
       for (let i = 0; i < boatIds.length; i++) {
@@ -295,10 +295,10 @@ export async function GET(request: NextRequest) {
         let grid: import("@/lib/booking/experience-slots").SlotGridItem[];
         if (durationsUnique.length === 0) {
           grid = [];
+        } else if (isWakeBoat) {
+          grid = getSlotGridWakeBoard(start, end, durationsUnique, allowedEveryDay ?? undefined);
         } else if (allowedEveryDay?.length) {
           grid = getSlotGridForStartTimes(start, end, durationsUnique, allowedEveryDay);
-        } else if (isWakeBoat) {
-          grid = getSlotGridWithSaturdayOnlyRestriction(start, end, durationsUnique, WAKEBOARD_SATURDAY_START_TIMES);
         } else {
           grid = getSlotGrid(start, end, durationsUnique);
         }

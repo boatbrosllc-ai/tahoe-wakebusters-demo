@@ -237,3 +237,60 @@ export function getSlotGridWithSaturdayOnlyRestriction(
   }
   return out;
 }
+
+/**
+ * Wake board boats: on Saturday use full Saturday times (9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm);
+ * on other days use weekdayStartTimes if provided (e.g. 9, 9:30, 10, 10:30), otherwise hourly.
+ */
+export function getSlotGridWakeBoard(
+  startDate: Date,
+  endDate: Date,
+  durationHoursList: number[],
+  weekdayStartTimes?: { hour: number; minute: number }[]
+): SlotGridItem[] {
+  const out: SlotGridItem[] = [];
+  const now = new Date();
+  const todayStr = getTodayDateStr(now);
+  const startStr = getDateStrInSlotTimezone(startDate);
+  const endStr = getDateStrInSlotTimezone(endDate);
+  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
+    const isSaturday = isSaturdayInSlotTimezone(dateStr);
+    if (isSaturday) {
+      for (const durationHours of durationHoursList) {
+        for (const { hour: startHour, minute: startMinute } of WAKEBOARD_SATURDAY_START_TIMES) {
+          const startDecimal = startHour + startMinute / 60;
+          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (dateStr === todayStr) {
+            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
+            if (slotStart < now) continue;
+          }
+          out.push({ dateStr, startHour, startMinute, durationHours });
+        }
+      }
+    } else if (weekdayStartTimes?.length) {
+      for (const durationHours of durationHoursList) {
+        for (const { hour: startHour, minute: startMinute } of weekdayStartTimes) {
+          const startDecimal = startHour + startMinute / 60;
+          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (dateStr === todayStr) {
+            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
+            if (slotStart < now) continue;
+          }
+          out.push({ dateStr, startHour, startMinute, durationHours });
+        }
+      }
+    } else {
+      for (const durationHours of durationHoursList) {
+        const latestStart = getLatestStartHourForDuration(durationHours);
+        for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
+          if (dateStr === todayStr) {
+            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, 0);
+            if (slotStart < now) continue;
+          }
+          out.push({ dateStr, startHour, startMinute: 0, durationHours });
+        }
+      }
+    }
+  }
+  return out;
+}

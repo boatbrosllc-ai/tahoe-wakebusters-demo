@@ -116,6 +116,37 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   }
 }
 
+const BUSINESS_EMAIL = "boatbrosllc@gmail.com";
+
+/**
+ * Send a copy of the booking confirmation to the business (boatbrosllc@gmail.com) so they know they have a new booking.
+ * Same HTML as customer; subject indicates new booking. Does not throw so customer flow is not blocked.
+ */
+export async function sendBookingConfirmationCopyToBusiness(booking: Booking, context: BookingEmailContext): Promise<void> {
+  const html = renderBookingConfirmationHtml(booking, context);
+  const customerName = booking.customer?.name?.trim() ?? "Guest";
+  const { boatName, startAt } = context;
+  const subject = `New booking: ${boatName} – ${startAt} – ${customerName}`;
+  try {
+    const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        sender: getSender(),
+        to: [{ email: BUSINESS_EMAIL }],
+        subject,
+        htmlContent: html,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[brevo] sendBookingConfirmationCopyToBusiness", res.status, text);
+    }
+  } catch (err) {
+    console.error("[brevo] sendBookingConfirmationCopyToBusiness", err);
+  }
+}
+
 /**
  * Send booking reminder (1-week, 24h, or day-of). Uses reminder-emails HTML.
  */

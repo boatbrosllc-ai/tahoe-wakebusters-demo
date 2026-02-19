@@ -261,6 +261,8 @@ export async function POST(request: NextRequest) {
           subject: "Booking Confirmation – Boat Bros ATX",
           bookingId,
         });
+        const { sendBookingConfirmationCopyToBusiness } = await import("@/lib/booking/brevo");
+        await sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext);
       } catch (emailErr) {
         console.error("[stripe-webhook] Brevo send failed", emailErr);
       }
