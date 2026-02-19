@@ -57,6 +57,10 @@ export interface ListingBoat {
    * Omit for default hourly grid. Each entry: { hour: 0–23, minute: 0 | 30 } in America/Chicago.
    */
   allowedStartTimes?: { hour: number; minute: number }[];
+  /** Optional custom line under the boat name on the public boat page (e.g. "Lake Austin tritoon rental · Captain included"). */
+  heroSubtitle?: string;
+  /** Max guests for display and generated description (e.g. "up to 14 guests"). Defaults to 14 when omitted. */
+  capacity?: number;
 }
 
 /** Calendar override: one doc per boatType, field rates = { [date YYYY-MM-DD]: hourlyRateCents }. Overrides always win. */

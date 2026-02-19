@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import Image from "next/image";
 import { ChevronRight, ChevronLeft, Calendar } from "lucide-react";
 import { getBoatBySlug } from "@/lib/booking/get-boats-public";
+import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { brand } from "@/content/brand";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
@@ -200,13 +201,12 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
 
   const typeLabel = boatTypeLabel(boat.boatType);
 
-  const bodyDescription =
-    boat.description?.trim() ||
-    `${boat.name} is part of the Boat Bros Lake Austin fleet. Captain-included ${typeLabel.toLowerCase()} rental.${boat.experiences.length > 0 ? ` Book for ${boat.experiences.map((e) => e.title).join(", ")}.` : ""} Every Lake Austin boat rental with Boat Bros includes a licensed captain—no boating license required.`;
+  const bodyDescription = getDisplayDescription(boat);
 
   const serviceDescription =
-    boat.description?.trim() ||
-    `Captained ${typeLabel.toLowerCase()} boat rental on Lake Austin. ${boat.name} is available for ${boat.experiences.length > 0 ? boat.experiences.map((e) => e.title).join(", ") : "selected experiences"}. Captain included.`;
+    boat.experiences.length > 0
+      ? `${getDisplayDescription(boat).split(/\n\n+/)[0].trim()} Available for ${boat.experiences.map((e) => e.title).join(", ")}. Captain included.`
+      : getDisplayDescription(boat).split(/\n\n+/)[0].trim();
 
   return (
     <>
@@ -240,16 +240,11 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
               </span>
             </nav>
             <div className="mt-6 sm:mt-8 text-center">
-              {boat.boatType && (
-                <span className="inline-block text-[11px] font-semibold uppercase tracking-wider text-brand-primary mb-3">
-                  {typeLabel}
-                </span>
-              )}
               <h1 id="boat-hero-heading" className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl lg:text-4xl">
                 {boat.name}
               </h1>
               <p className="mt-2 text-white/85 text-base sm:text-lg max-w-xl mx-auto">
-                Lake Austin {typeLabel.toLowerCase()} rental · Captain included · No license required
+                {boat.heroSubtitle?.trim() || `Lake Austin ${typeLabel.toLowerCase()} rental · Captain included · No license required`}
               </p>
               {boat.experiences.length > 0 && (
                 <div className="mt-6 flex flex-wrap items-center justify-center gap-2 sm:gap-3">

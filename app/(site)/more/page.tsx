@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   Home,
   Compass,
+  Ship,
   CalendarCheck,
   BookOpen,
   Newspaper,
@@ -34,6 +35,12 @@ const pageLinks = [
     label: "Experiences",
     icon: Compass,
     description: "Browse pontoon, wake, sunset & more on Lake Austin",
+  },
+  {
+    href: "/boats",
+    label: "Our Boats",
+    icon: Ship,
+    description: "Meet our fleet — pontoon, tritoon & wake boats",
   },
   {
     href: "/booking",

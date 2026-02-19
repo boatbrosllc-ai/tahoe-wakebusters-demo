@@ -152,7 +152,12 @@ export default function AdminBoatsPage() {
                       <span className="ml-2 text-xs text-brand-muted">· {item.experienceIds.length} listing(s)</span>
                     ) : null}
                   </div>
-                  <div className="shrink-0">
+                  <div className="shrink-0 flex items-center gap-2">
+                    {item.slug && (
+                      <a href={`/boats/${item.slug}`} target="_blank" rel="noopener noreferrer">
+                        <Button variant="ghost" size="sm" className="min-h-[40px] sm:min-h-0 text-brand-muted hover:text-brand-dark">View</Button>
+                      </a>
+                    )}
                     <Link href={`/admin/boats/${item.id}`}>
                       <Button variant="outline" size="sm" className="min-h-[40px] sm:min-h-0">Edit</Button>
                     </Link>

@@ -9,6 +9,7 @@ export interface PublicBoatListItem {
   description?: string;
   photos: string[];
   boatType?: string;
+  capacity?: number;
   experienceIds: string[];
 }
 
@@ -25,6 +26,8 @@ export interface PublicBoatBySlug {
   description?: string;
   photos: string[];
   boatType?: string;
+  heroSubtitle?: string;
+  capacity?: number;
   experienceIds: string[];
   experiences: ExperienceRef[];
 }
@@ -54,6 +57,7 @@ export async function getListingBoatsForPublic(): Promise<PublicBoatListItem[]> 
       description: boat.description,
       photos: Array.isArray(boat.photos) ? boat.photos.filter((x): x is string => typeof x === "string") : [],
       boatType: boat.boatType,
+      capacity: boat.capacity,
       experienceIds: Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [],
     });
   }
@@ -102,6 +106,8 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
     description: boat.description,
     photos: Array.isArray(boat.photos) ? boat.photos.filter((x): x is string => typeof x === "string") : [],
     boatType: boat.boatType,
+    heroSubtitle: boat.heroSubtitle,
+    capacity: boat.capacity,
     experienceIds,
     experiences,
   };

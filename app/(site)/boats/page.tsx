@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
 import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
+import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { brand } from "@/content/brand";
 import { ChevronRight } from "lucide-react";
@@ -66,7 +67,7 @@ export default async function BoatsHubPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
               {boats.map((boat) => {
                 const imageUrl = boat.photos[0] ? getDisplayImageUrl(boat.photos[0]) : "/photos/IMG_3160.webp";
-                const desc = shortDescription(boat.description);
+                const desc = shortDescription(getDisplayDescription(boat));
                 return (
                   <Link
                     key={boat.id}
@@ -84,11 +85,6 @@ export default async function BoatsHubPage() {
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-20% via-black/40 to-transparent" />
                       <div className="absolute inset-0 flex flex-col justify-end p-4 sm:p-5">
-                        {boat.boatType && (
-                          <span className="text-[11px] text-white/80 uppercase tracking-wide mb-0.5" aria-hidden>
-                            {boat.boatType}
-                          </span>
-                        )}
                         <h3 className="font-display text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                           {boat.name}
                         </h3>

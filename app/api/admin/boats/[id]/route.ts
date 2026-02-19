@@ -21,11 +21,14 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
     const s = b.slug.trim();
     out.slug = s ? s.toLowerCase().replace(/\s+/g, "-") : undefined;
   }
-  if (typeof b.description === "string") out.description = b.description.trim() || undefined;
+  if (typeof b.description === "string") out.description = b.description.trim();
   if (Array.isArray(b.photos)) out.photos = b.photos.filter((x): x is string => typeof x === "string");
   if (typeof b.active === "boolean") out.active = b.active;
   if (typeof b.boatType === "string") out.boatType = b.boatType.trim() || undefined;
   if (Array.isArray(b.experienceIds)) out.experienceIds = b.experienceIds.filter((x): x is string => typeof x === "string");
+  if (typeof b.heroSubtitle === "string") out.heroSubtitle = b.heroSubtitle.trim();
+  if (b.capacity === null) out.capacity = null;
+  else if (typeof b.capacity === "number" && b.capacity > 0) out.capacity = b.capacity;
   const filtered = stripUndefined(out as Record<string, unknown>);
   return Object.keys(filtered).length ? (filtered as Partial<ListingBoat>) : null;
 }

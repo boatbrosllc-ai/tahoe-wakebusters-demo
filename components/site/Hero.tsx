@@ -40,6 +40,13 @@ export function Hero() {
     };
   }, []);
 
+  // Smooth crossfade: start fade only after video has begun playing so the first frame is painted (avoids poster flash).
+  const handleVideoReady = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setVideoReady(true));
+    });
+  }, []);
+
   const handleHeroClick = useCallback(() => {
     if (typeof window === "undefined") return;
     if (localStorage.getItem(HERO_CONFETTI_KEY)) return;
@@ -58,11 +65,11 @@ export function Hero() {
       className="relative min-h-[100dvh] sm:min-h-[85vh] md:min-h-[82vh] lg:min-h-[80vh] xl:min-h-[85vh] 2xl:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark"
       onClick={handleHeroClick}
     >
-      {/* Background: poster image shows immediately; video fades in when ready for a smooth, fast hero */}
+      {/* Background: poster shows first; smooth crossfade to video once it's playing (no flash). */}
       <div className="absolute inset-0">
-        {/* Poster: visible until video has buffered enough to play, or if video fails */}
+        {/* Poster: fades out over same duration as video fades in for a smooth crossfade */}
         <div
-          className={`absolute inset-0 w-full h-full transition-opacity duration-700 ease-out ${videoReady && !videoError ? "opacity-0" : "opacity-100"}`}
+          className={`absolute inset-0 w-full h-full transition-[opacity] duration-[1200ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] ${videoReady && !videoError ? "opacity-0 pointer-events-none" : "opacity-100"}`}
           aria-hidden
         >
           <Image
@@ -74,7 +81,7 @@ export function Hero() {
             priority
           />
         </div>
-        {/* Video: load with encoded URL; on error we keep showing poster */}
+        {/* Video: fades in smoothly once playback has started (first frame painted) */}
         {!videoError && (
           <video
             autoPlay
@@ -83,9 +90,9 @@ export function Hero() {
             playsInline
             preload="auto"
             poster={HERO_VIDEO_POSTER}
-            onCanPlay={() => setVideoReady(true)}
+            onPlaying={handleVideoReady}
             onError={() => setVideoError(true)}
-            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-out ${videoReady ? "opacity-100" : "opacity-0"}`}
+            className={`absolute inset-0 w-full h-full object-cover transition-[opacity] duration-[1200ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] ${videoReady ? "opacity-100" : "opacity-0"}`}
             aria-hidden
           >
             <source src={HERO_VIDEO_SRC_ENCODED} type="video/webm" />
