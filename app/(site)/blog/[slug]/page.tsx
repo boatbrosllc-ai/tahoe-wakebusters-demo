@@ -53,7 +53,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const firestorePost = await getPublishedPostBySlug(slug);
   if (firestorePost) {
     const title = `${(firestorePost.title as string) ?? "Post"} | The Dock | ${brand.companyName}`;
-    const description = ((firestorePost.seo as { metaDescription?: string })?.metaDescription ?? firestorePost.excerpt ?? "").slice(0, 160);
+    const descRaw = (firestorePost.seo as { metaDescription?: string })?.metaDescription ?? (firestorePost.excerpt as string | undefined) ?? "";
+    const description = String(descRaw).slice(0, 160);
     const canonical = `${baseUrl}/blog/${firestorePost.slug}`;
     const cover = firestorePost.coverImage as { url?: string } | null;
     const ogImage = cover?.url;
@@ -267,7 +268,7 @@ export default async function BlogPostPage({ params }: Props) {
           <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.faqJsonLd) }} />
         )}
         <ReadingProgress />
-        <FirestoreBlogPostView post={firestorePost} />
+        <FirestoreBlogPostView post={firestorePost as import("@/components/site/FirestoreBlogPostView").FirestorePost} />
       </>
     );
   }

@@ -6,7 +6,7 @@ import { computeSeoScoreFromPost } from "@/lib/blog/seo-score";
 
 interface SeoScoreCardProps {
   post: {
-    seo?: { metaTitle?: string; metaDescription?: string; focusKeyword?: string; robotsIndex?: boolean };
+    seo?: { metaTitle?: string; metaDescription?: string; focusKeyword?: string; robotsIndex?: boolean; robotsFollow?: boolean };
     stats?: { wordCount?: number; headingCounts?: { h1: number; h2: number; h3: number }; imagesCount?: number; imagesMissingAltCount?: number; internalLinksCount?: number; externalLinksCount?: number; hasFaq?: boolean };
     slug?: string;
     status?: string;
@@ -25,7 +25,10 @@ const gradeColors: Record<string, string> = {
 };
 
 export function SeoScoreCard({ post, className }: SeoScoreCardProps) {
-  const result = useMemo(() => computeSeoScoreFromPost(post), [post]);
+  const result = useMemo(
+    () => computeSeoScoreFromPost(post as Parameters<typeof computeSeoScoreFromPost>[0]),
+    [post]
+  );
 
   return (
     <div className={cn("rounded-xl border border-brand-dark/10 bg-white p-4", className)}>

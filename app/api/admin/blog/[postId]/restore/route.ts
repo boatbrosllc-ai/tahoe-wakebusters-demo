@@ -69,7 +69,7 @@ export async function POST(
   const { Timestamp } = getFirestoreExports();
   const stats = computeContentStats(content);
   const postData = postDoc.data() as Record<string, unknown>;
-  const merged = {
+  const merged: Record<string, unknown> = {
     ...postData,
     title: versionData.title ?? postData.title,
     slug: versionData.slug ?? postData.slug,
@@ -90,7 +90,7 @@ export async function POST(
     publishAt: merged.publishAt,
     lastPublishedAt: merged.lastPublishedAt,
     updatedAt: merged.updatedAt,
-  } as import("@/lib/blog/types").BlogPostDoc);
+  } as unknown as import("@/lib/blog/types").BlogPostDoc);
 
   await postRef.update({
     title: merged.title,

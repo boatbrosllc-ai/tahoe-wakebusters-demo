@@ -155,7 +155,7 @@ export async function saveVersionSnapshot(
 ): Promise<string> {
   const { Timestamp } = getFirestoreExports();
   const seo = snapshot.seo && typeof snapshot.seo === "object"
-    ? stripUndefined(snapshot.seo as Record<string, unknown>)
+    ? stripUndefined(snapshot.seo as unknown as Record<string, unknown>)
     : snapshot.seo;
   const ref = getBlogVersionsRef(postId).doc();
   await ref.set({

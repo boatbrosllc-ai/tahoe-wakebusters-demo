@@ -58,26 +58,6 @@ export function BlogEditorShell({ postId, initialPost, onBack }: BlogEditorShell
     setPublishAt(initialPost.publishAt ?? null);
   }, [initialPost]);
 
-  useEffect(() => {
-    if (!dirty) return;
-    const h = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-    };
-    window.addEventListener("beforeunload", h);
-    return () => window.removeEventListener("beforeunload", h);
-  }, [dirty]);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        if (dirty) performSave();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dirty, performSave]);
-
   const performSave = useCallback(async () => {
     setSaveStatus("saving");
     setSaveError(null);
@@ -118,6 +98,26 @@ export function BlogEditorShell({ postId, initialPost, onBack }: BlogEditorShell
       setSaveStatus("error");
     }
   }, [postId, title, slug, excerpt, coverImage, content, seo, author, taxonomy, status, publishAt]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (dirty) performSave();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dirty, performSave]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -373,7 +373,7 @@ export function BlogEditorShell({ postId, initialPost, onBack }: BlogEditorShell
                   markDirty();
                 }}
               />
-            </div>
+            </section>
           </div>
         </div>
 

@@ -8,7 +8,8 @@ import { BlogContentRenderer } from "@/components/admin/blog/BlogContentRenderer
 import { brand } from "@/content/brand";
 import type { ContentBlock } from "@/lib/blog/types";
 
-interface FirestorePost {
+export interface FirestorePost {
+  id?: string;
   title?: string;
   excerpt?: string;
   slug?: string;

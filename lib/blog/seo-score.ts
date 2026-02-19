@@ -131,7 +131,7 @@ export function computeSeoScore(
       label: "Focus keyword in title / H1",
       score: kwInTitle ? 6 : 0,
       max: 6,
-      pass: kwInTitle,
+      pass: !!kwInTitle,
       fixHint: "Include focus keyword in meta title or H1",
       field: "seo.focusKeyword",
     });
@@ -140,7 +140,7 @@ export function computeSeoScore(
       label: "Focus keyword in first 100 words",
       score: kwInFirst100 ? 6 : 0,
       max: 6,
-      pass: kwInFirst100,
+      pass: !!kwInFirst100,
       fixHint: "Mention keyword early in content",
       field: "content",
     });
@@ -149,7 +149,7 @@ export function computeSeoScore(
       label: "Focus keyword in at least one H2",
       score: kwInH2 ? 6 : 0,
       max: 6,
-      pass: kwInH2,
+      pass: !!kwInH2,
       fixHint: "Use keyword in an H2",
       field: "content",
     });
@@ -262,29 +262,31 @@ export function computeSeoScore(
 
 /** Quick score from post-like object (for client-side updates). */
 export function computeSeoScoreFromPost(post: {
-  seo?: BlogSeo;
-  stats?: BlogStats;
+  seo?: Partial<BlogSeo>;
+  stats?: Partial<BlogStats>;
   slug?: string;
   status?: string;
   content?: ContentBlock[];
   contentText?: string;
 }): SeoScoreResult {
-  const stats = post.stats ?? {
-    wordCount: 0,
-    readingTimeMinutes: 0,
-    headingCounts: { h1: 0, h2: 0, h3: 0 },
-    imagesCount: 0,
-    imagesMissingAltCount: 0,
-    internalLinksCount: 0,
-    externalLinksCount: 0,
-    hasFaq: false,
-    hasTable: false,
+  const stats: BlogStats = {
+    wordCount: post.stats?.wordCount ?? 0,
+    readingTimeMinutes: post.stats?.readingTimeMinutes ?? 0,
+    headingCounts: post.stats?.headingCounts ?? { h1: 0, h2: 0, h3: 0 },
+    imagesCount: post.stats?.imagesCount ?? 0,
+    imagesMissingAltCount: post.stats?.imagesMissingAltCount ?? 0,
+    internalLinksCount: post.stats?.internalLinksCount ?? 0,
+    externalLinksCount: post.stats?.externalLinksCount ?? 0,
+    hasFaq: post.stats?.hasFaq ?? false,
+    hasTable: post.stats?.hasTable ?? false,
   };
-  const seo = post.seo ?? {
-    metaTitle: "",
-    metaDescription: "",
-    robotsIndex: true,
-    robotsFollow: true,
+  const seo: BlogSeo = {
+    metaTitle: post.seo?.metaTitle ?? "",
+    metaDescription: post.seo?.metaDescription ?? "",
+    robotsIndex: post.seo?.robotsIndex ?? true,
+    robotsFollow: post.seo?.robotsFollow ?? true,
+    ...(post.seo?.canonicalUrl != null && { canonicalUrl: post.seo.canonicalUrl }),
+    ...(post.seo?.focusKeyword != null && { focusKeyword: post.seo.focusKeyword }),
   };
   const slug = post.slug ?? "";
   const isPublished = post.status === "published";
