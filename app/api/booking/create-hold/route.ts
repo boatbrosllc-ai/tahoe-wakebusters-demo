@@ -31,7 +31,6 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   if (!slotId) missing.push("slotId");
   if (!rateId) missing.push("rateId");
   if (partySize == null) missing.push("partySize (number)");
-  if (petsCount == null) missing.push("petsCount (number)");
   const customerDraft = o.customerDraft as { name?: string; email?: string; phone?: string } | undefined;
   if (!customerDraft || typeof customerDraft !== "object") {
     missing.push("customerDraft (object with name, email, phone)");
@@ -57,7 +56,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       rateId: rateId!,
       addonSelections,
       partySize: partySize!,
-      petsCount: petsCount!,
+      petsCount: petsCount ?? 0,
       answers,
       customerDraft: {
         name: (customerDraft!.name as string).trim(),
@@ -124,7 +123,6 @@ export async function POST(request: NextRequest) {
     const isLegacyBoat = !hasExperience && hasBoat;
 
     let capacityMax: number;
-    let petsMax: number;
     let slotsRef: import("firebase-admin").firestore.CollectionReference;
     let rate: Rate | ExperienceRate | BoatRate;
     let addonsById: Map<string, Addon | ExperienceAddon>;
@@ -156,12 +154,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Boat not available" }, { status: 400 });
       }
       capacityMax = getMaxGuestsForExperience(experience);
-      petsMax = experience.petsMax ?? 0;
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
-      }
-      if (input.petsCount > petsMax) {
-        return NextResponse.json({ error: "Pets exceed maximum" }, { status: 400 });
       }
       const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
@@ -206,12 +200,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
       }
       capacityMax = getMaxGuestsForExperience(experience);
-      petsMax = experience.petsMax ?? 0;
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
-      }
-      if (input.petsCount > petsMax) {
-        return NextResponse.json({ error: "Pets exceed maximum" }, { status: 400 });
       }
       const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
@@ -259,12 +249,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Boat not available" }, { status: 400 });
       }
       capacityMax = boat.capacityMax;
-      petsMax = boat.petsMax;
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
-      }
-      if (input.petsCount > boat.petsMax) {
-        return NextResponse.json({ error: "Pets exceed maximum" }, { status: 400 });
       }
       const rateDoc = await db.collection("boats").doc(boatId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
@@ -382,7 +368,16 @@ export async function POST(request: NextRequest) {
                 throw new Error("Slot no longer available");
               }
             }
-            // Hold doc missing → treat slot as available
+            // Slot doc says "booked" — only treat as taken if the booking still exists and is confirmed
+          } else if (slot.status === "booked" && slot.bookingId) {
+            const bookingSnap = await tx.get(db.collection("bookings").doc(slot.bookingId));
+            if (bookingSnap.exists) {
+              const b = bookingSnap.data() as { status?: string };
+              if (b.status && (BOOKING_STATUSES_SLOT_TAKEN as readonly string[]).includes(b.status)) {
+                throw new Error("Slot no longer available");
+              }
+            }
+            // Booking missing or canceled/refunded → treat slot as available, fall through
           } else if (slot.status !== "held" || !slot.holdId) {
             throw new Error("Slot no longer available");
           }
@@ -421,6 +416,7 @@ export async function POST(request: NextRequest) {
         tx.update(slotRef, {
           status: "held",
           holdId,
+          bookingId: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
         });
       } else {
@@ -448,6 +444,13 @@ export async function POST(request: NextRequest) {
           if (exp && exp <= now) return false; // expired → treat as open
           return true;
         };
+        const isBookedTrulyTaken = async (slotData: Slot): Promise<boolean> => {
+          if (slotData.status !== "booked" || !slotData.bookingId) return false;
+          const bookingSnap = await tx.get(db.collection("bookings").doc(slotData.bookingId));
+          if (!bookingSnap.exists) return false;
+          const b = bookingSnap.data() as { status?: string };
+          return !!(b.status && (BOOKING_STATUSES_SLOT_TAKEN as readonly string[]).includes(b.status));
+        };
 
         if (isListingBoatFlow && input.boatId) {
           const boatSlotsRef = db.collection("boats").doc(input.boatId).collection("slots");
@@ -460,6 +463,7 @@ export async function POST(request: NextRequest) {
             const data = doc.data() as Slot;
             if (data.status === "open") continue;
             if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
+            if (data.status === "booked" && !(await isBookedTrulyTaken(data))) continue;
             const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
             const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
             if (slotStartMs < existingEnd && slotEndMs > existingStart) {
@@ -477,6 +481,7 @@ export async function POST(request: NextRequest) {
             const data = doc.data() as Slot;
             if (data.status === "open") continue;
             if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
+            if (data.status === "booked" && !(await isBookedTrulyTaken(data))) continue;
             const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
             const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
             if (slotStartMs < existingEnd && slotEndMs > existingStart) {

@@ -46,7 +46,7 @@ export async function GET() {
         sortOrder: exp.sortOrder,
       });
     }
-    // Book Now category order: Pontoon first, then Watersports, Sunset, Holiday last
+    // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)
     const slugOrder = ["pontoon", "watersports", "sunset", "holiday"];
     const slugOrderIndex = (slug: string): number => {
       const lower = (slug ?? "").toLowerCase();
@@ -54,12 +54,12 @@ export async function GET() {
       return i >= 0 ? i : slugOrder.length;
     };
     list.sort((a, b) => {
-      const orderA = a.sortOrder ?? 999;
-      const orderB = b.sortOrder ?? 999;
-      if (orderA !== orderB) return orderA - orderB;
       const slugA = slugOrderIndex(a.slug);
       const slugB = slugOrderIndex(b.slug);
       if (slugA !== slugB) return slugA - slugB;
+      const orderA = a.sortOrder ?? 999;
+      const orderB = b.sortOrder ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
       return (a.title ?? "").localeCompare(b.title ?? "");
     });
     return NextResponse.json({ experiences: list });

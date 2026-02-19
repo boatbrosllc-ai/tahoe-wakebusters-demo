@@ -164,7 +164,6 @@ type BookingModalProps = {
   initialSelection?: BookingModalInitialSelection | null;
 };
 
-const PETS_MAX = 4;
 
 export function BookingModal({ open, onOpenChange, initialSelection }: BookingModalProps) {
   const router = useRouter();
@@ -745,17 +744,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       return;
     }
     const maxGuests = selectedExperience?.maxGuests ?? 14;
-    const maxPets = selectedExperience.petsMax ?? 0;
     if (partySize < 1 || partySize > maxGuests) {
       setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${maxGuests}.`);
       return;
     }
     if (tipChoice === null) {
       setPaymentError("Please choose Tip now or Tip later.");
-      return;
-    }
-    if (petsCount < 0 || petsCount > Math.min(maxPets, PETS_MAX)) {
-      setPaymentError(`Pets must be between 0 and ${Math.min(maxPets, PETS_MAX)}.`);
       return;
     }
     setPaymentError(null);
@@ -1216,16 +1210,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           )}
                         </div>
                         {isBooked && (
-                          <>
-                            <div className="absolute inset-0 bg-white/50 rounded-lg sm:rounded-xl pointer-events-none z-10" aria-hidden />
-                            {bookedBoatIdsForSelectedSlot.has(boat.id) && (
-                              <div className="absolute top-0 left-0 right-0 w-full aspect-[4/3] bg-brand-dark/75 flex items-center justify-center z-20 rounded-t-[6px] sm:rounded-t-[10px] overflow-hidden">
-                                <span className="text-xs sm:text-sm font-semibold text-white uppercase tracking-wide px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg bg-brand-dark border border-white/20">Booked</span>
-                              </div>
-                            )}
-                          </>
+                          <div className="absolute inset-0 flex items-center justify-center rounded-lg sm:rounded-xl bg-slate-500/70 pointer-events-none z-10" aria-hidden>
+                            <span className="text-sm sm:text-base font-bold text-white uppercase tracking-wider drop-shadow-md px-4 py-2 rounded-lg bg-slate-800/90 border border-white/30">Booked</span>
+                          </div>
                         )}
-                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-20")}>
+                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-0")}>
                           <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
                         </div>
                       </button>
@@ -1432,36 +1421,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">Party size <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
-                        <input
+                        <select
                           id="booking-party-size"
-                          type="number"
-                          min={1}
-                          max={selectedExperience?.maxGuests ?? 14}
                           value={partySize}
-                          onChange={(e) => {
-                            const max = selectedExperience?.maxGuests ?? 14;
-                            const raw = parseInt(e.target.value, 10) || 1;
-                            setPartySize(Math.min(max, Math.max(1, raw)));
-                          }}
+                          onChange={(e) => setPartySize(parseInt(e.target.value, 10) || 1)}
                           required
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
-                        />
-                        <p className="text-[11px] text-brand-muted mt-0.5">Max {selectedExperience?.maxGuests ?? 14} guests</p>
-                      </div>
-                      <div>
-                        <label htmlFor="booking-pets" className="block text-sm font-medium text-brand-dark mb-1">Pets</label>
-                        <input
-                          id="booking-pets"
-                          type="number"
-                          min={0}
-                          max={Math.min(selectedExperience?.petsMax ?? 0, PETS_MAX)}
-                          value={petsCount}
-                          onChange={(e) => setPetsCount(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
-                        />
-                        {(selectedExperience?.petsMax ?? 0) > 0 && (
-                          <p className="text-[11px] text-brand-muted mt-0.5">Max {Math.min(selectedExperience?.petsMax ?? 0, PETS_MAX)}</p>
-                        )}
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
+                          aria-describedby="booking-party-size-hint"
+                        >
+                          {Array.from({ length: selectedExperience?.maxGuests ?? 14 }, (_, i) => i + 1).map((n) => (
+                            <option key={n} value={n}>
+                              {n} {n === 1 ? "guest" : "guests"}
+                            </option>
+                          ))}
+                        </select>
+                        <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">Max {selectedExperience?.maxGuests ?? 14} guests</p>
                       </div>
                     </div>
                     {addonsLoading ? (
