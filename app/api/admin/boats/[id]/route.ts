@@ -15,7 +15,7 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<strin
 function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
-  const out: ReturnType<typeof parseBody> = {};
+  const out: Record<string, unknown> = {};
   if (typeof b.name === "string") out.name = b.name.trim();
   if (typeof b.slug === "string") {
     const s = b.slug.trim();
@@ -29,7 +29,7 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (typeof b.heroSubtitle === "string") out.heroSubtitle = b.heroSubtitle.trim();
   if (b.capacity === null) out.capacity = null;
   else if (typeof b.capacity === "number" && b.capacity > 0) out.capacity = b.capacity;
-  const filtered = stripUndefined(out as Record<string, unknown>);
+  const filtered = stripUndefined(out);
   return Object.keys(filtered).length ? (filtered as Partial<ListingBoat>) : null;
 }
 
