@@ -129,6 +129,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     slotsByDate,
     slotsLength = 0,
     datePrices,
+    holidayDateStrings,
     todayStr,
     handleDayClick,
     selectedSlotInline,
