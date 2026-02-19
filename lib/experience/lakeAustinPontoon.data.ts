@@ -36,7 +36,7 @@ export const SOCIAL_PROOF = [
   { label: "273+", sub: "Google reviews" },
   { label: "Top-rated", sub: "on Lake Austin" },
   { label: "Captain-led", sub: "" },
-  { label: "Free lily pad", sub: "" },
+  { label: "Lily pad included", sub: "" },
   { label: "Cooler Included", sub: "" },
 ];
 export const SOCIAL_AVATARS = [
@@ -61,9 +61,9 @@ export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
     "Spend the day on a premium pontoon with a dedicated captain. Cruise Lake Austin, anchor at a party cove, swim off the giant lily pad, and enjoy premium sound. Everything’s included — you just show up.",
   /** SEO-rich paragraphs for the experience section (things to do, where captains go, lunch, etc.). */
   seoParagraphs: [
-    "On a Lake Austin pontoon rental you can swim, float on the lily pad, play music on our Bluetooth system, and anchor in popular coves. Many groups bring games, snacks, and drinks in a cooler—we provide the cooler and ice so you can pack lunch and beverages (no glass). Our captained pontoon rentals are ideal for birthdays, bachelorette parties, and family days on the water in Austin, TX.",
-    "Your captain knows Lake Austin and can take you to Party Cove, quieter inlets, and scenic spots along the shoreline. You don’t need a boating license; the captain handles docking, navigation, and safety so you can relax. Life jackets are on board, and we include fuel, so the price you see is what you pay for the experience.",
-    "Plan lunch your way: pack a cooler with sandwiches and drinks (we include the cooler and ice), or time your trip around a stop if you’d like. Lake Austin has calm water and easy access from Austin—perfect for a half-day or full-day pontoon rental. Book your Lake Austin pontoon experience below and we’ll take care of the rest.",
+    "Step aboard a captained Lake Austin pontoon rental and experience Austin from the water. Cruise past waterfront homes, anchor in popular coves, and enjoy the calm, scenic stretches that make Lake Austin one of the best boating destinations in Texas. Whether your group wants a lively atmosphere or a relaxed cruise, your captain guides the experience so every moment feels effortless.",
+    "Lake Austin is known for its smooth water, warm weather, and easy access from central Austin, making it perfect for birthdays, bachelorette parties, celebrations, or simply spending a day outside with friends and family. Many groups rotate between cruising, swimming, relaxing, and enjoying music while taking in the views along the shoreline.",
+    "Because every Boat Bros charter is fully captained, there's nothing you need to manage. Your captain handles navigation, positioning, and timing while you focus on enjoying the lake. The result is a seamless, premium Lake Austin pontoon experience designed to help your group relax, celebrate, and create unforgettable memories on the water.",
   ],
   features: [
     { icon: "captain", text: "Private captain included" },

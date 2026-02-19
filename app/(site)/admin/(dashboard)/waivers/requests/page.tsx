@@ -90,6 +90,12 @@ export default function WaiverRequestsPage() {
   const [list, setList] = useState<RequestItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** When API returns 503, optional hint (e.g. Firebase setup steps). */
+  const [errorHint, setErrorHint] = useState<string | null>(null);
+  /** When API returns 503, optional firebaseStatus.summary (specific reason, e.g. key truncated on Netlify). */
+  const [errorFirebaseSummary, setErrorFirebaseSummary] = useState<string | null>(null);
+  /** Actual error message from server (errorDetail) so we can show the real cause. */
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -125,6 +131,10 @@ export default function WaiverRequestsPage() {
 
   const fetchList = useCallback(() => {
     setLoading(true);
+    setError(null);
+    setErrorHint(null);
+    setErrorFirebaseSummary(null);
+    setErrorDetail(null);
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
     if (debouncedSearch) params.set("search", debouncedSearch);
@@ -132,7 +142,16 @@ export default function WaiverRequestsPage() {
     fetch(`/api/admin/waiver-requests${qs ? `?${qs}` : ""}`, { credentials: "include" })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error ?? "Failed to load");
+        if (!res.ok) {
+          if (data.firebaseStatus && typeof data.firebaseStatus.summary === "string") {
+            setErrorFirebaseSummary(data.firebaseStatus.summary.trim());
+          }
+          if (typeof data.hint === "string" && data.hint.trim()) setErrorHint(data.hint.trim());
+          if (typeof data.errorDetail === "string" && data.errorDetail.trim()) {
+            setErrorDetail(data.errorDetail.trim());
+          }
+          throw new Error(data.error ?? "Failed to load");
+        }
         return data.requests ?? [];
       })
       .then(setList)
@@ -322,8 +341,24 @@ export default function WaiverRequestsPage() {
       )}
 
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800">
-          {error}
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+          <p className="font-medium">{error}</p>
+          {errorDetail && errorDetail !== error && (
+            <p className="mt-2 rounded-lg bg-amber-100/80 px-3 py-2 text-amber-900 text-xs font-mono break-words" title="Actual error from server">
+              {errorDetail}
+            </p>
+          )}
+          {errorFirebaseSummary && !errorDetail && (
+            <p className="mt-2 rounded-lg bg-amber-100/80 px-3 py-2 text-amber-900 font-medium">
+              {errorFirebaseSummary}
+            </p>
+          )}
+          {errorHint && !errorFirebaseSummary && !errorDetail && (
+            <p className="mt-2 text-amber-800/90 whitespace-pre-line text-xs">{errorHint}</p>
+          )}
+          <p className="mt-3 text-xs text-amber-700">
+            Waiver tracking uses the same Firebase/Firestore as bookings and experiences. If those work, the same env vars should work here. On <strong>Netlify</strong>: do not set <code className="rounded bg-amber-100 px-1 py-0.5">FIREBASE_SERVICE_ACCOUNT_JSON_PATH</code>. Use <code className="rounded bg-amber-100 px-1 py-0.5">FIREBASE_PROJECT_ID</code>, <code className="rounded bg-amber-100 px-1 py-0.5">FIREBASE_CLIENT_EMAIL</code>, and <code className="rounded bg-amber-100 px-1 py-0.5">FIREBASE_PRIVATE_KEY</code> (one line, <code className="rounded bg-amber-100 px-1 py-0.5">\n</code> for newlines). Redeploy after changing env.
+          </p>
         </div>
       )}
 

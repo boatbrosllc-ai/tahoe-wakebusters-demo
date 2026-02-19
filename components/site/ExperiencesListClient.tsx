@@ -148,12 +148,21 @@ export function ExperiencesListClient() {
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.4, delay: 0.08 }}
           >
-            <Link
-              href="/lake-austin-pontoon-rentals"
-              className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
-            >
-              Lake Austin Pontoon Rentals
-            </Link>
+            <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+              <Link
+                href="/lake-austin-pontoon-rentals"
+                className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
+              >
+                Lake Austin Pontoon Rentals
+              </Link>
+              <span aria-hidden>·</span>
+              <Link
+                href="/boats"
+                className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
+              >
+                Meet our boats
+              </Link>
+            </span>
           </motion.p>
 
           {firstData && (

@@ -20,7 +20,7 @@ const BOOKING_SECTION_ID = "booking-preview";
 const PONTOON_SOCIAL_PROOF = {
   rating: 4.9,
   ratingCount: "500+ 5-star days",
-  stats: ["Top-rated on Lake Austin", "Captain-led", "Free lily pad"],
+  stats: ["Top-rated on Lake Austin", "Captain-led", "Lily pad included"],
 };
 
 /** Fallback hero title by slug when experience.title is missing (like pontoon "Lake Austin Luxury Pontoon"). */
@@ -37,6 +37,25 @@ const HERO_SUBTITLE_BY_SLUG = {
   watersports: "Wake surf, wakeboard, and tubing. Captain-led on Lake Austin.",
   sunset: "Golden hour on the water. Captain included. Book your sunset.",
   holiday: "Seasonal holiday lights and festive cruises.",
+};
+
+/** Experience overview for watersports: same structure as pontoon (headline, story, seoParagraphs, timeline). */
+const WATERSPORTS_OVERVIEW = {
+  headline: "The experience",
+  story:
+    "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Experienced drivers available. Great for thrill-seekers and families who want action on the water.",
+  seoParagraphs: [
+    "Tow boats for wakeboarding, surfing, and tubing. On a Lake Austin wake boat rental you get a dedicated captain and a boat built for tow sports—wakeboard, wakesurf, or tube with your crew. We provide the boat and the driver; you bring the energy. Ideal for thrill-seekers and families who want action on the water.",
+    "Your captain knows Lake Austin and can take you to the best water for your chosen activity. Life jackets are on board, and we include fuel so the price you see is what you pay. No boating license needed—the captain handles everything so you can focus on the ride.",
+    "Book your Lake Austin wake boat experience below and we'll take care of the rest.",
+  ],
+  timeline: [
+    { step: "Dock", desc: "Meet your captain" },
+    { step: "Cruise", desc: "Scenic Lake Austin" },
+    { step: "Ride", desc: "Wake surf, wakeboard & tube" },
+    { step: "Swap", desc: "Rotate riders, chill on the boat" },
+    { step: "Return", desc: "Back to the dock" },
+  ],
 };
 
 function getHeroTitle(experience) {
@@ -115,6 +134,16 @@ export function ExperienceListingPageContent(props) {
   const rawGallery = experience.gallery ?? [];
   const overviewImageUrl = rawGallery[0];
   const overviewImageAlt = experience.title ? `${experience.title} experience` : undefined;
+
+  // Watersports: use same section structure as pontoon (headline, story, seoParagraphs, timeline)
+  const overviewHeadlineFinal =
+    slug === "watersports" ? WATERSPORTS_OVERVIEW.headline : overviewHeadline;
+  const overviewStoryFinal =
+    slug === "watersports" ? WATERSPORTS_OVERVIEW.story : overviewStory;
+  const overviewTimelineFinal =
+    slug === "watersports" ? WATERSPORTS_OVERVIEW.timeline : overviewTimeline;
+  const overviewSeoParagraphs =
+    slug === "watersports" ? WATERSPORTS_OVERVIEW.seoParagraphs : undefined;
 
   // Gallery: skip first (hero); map to { url, alt }
   const galleryImages =
@@ -202,9 +231,10 @@ export function ExperienceListingPageContent(props) {
 
       <ExperienceOverview
         overviewImageUrl={overviewImageUrl}
-        headline={overviewHeadline}
-        story={overviewStory}
-        timeline={overviewTimeline}
+        headline={overviewHeadlineFinal}
+        story={overviewStoryFinal}
+        seoParagraphs={overviewSeoParagraphs}
+        timeline={overviewTimelineFinal}
         imageAlt={overviewImageAlt}
       />
 

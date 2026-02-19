@@ -68,6 +68,8 @@
 - [x] **FAQs / blog / contact / our-story / booking / more:** Keywords + stronger descriptions + openGraph added.
 - [x] **Keywords meta:** Added on homepage, layout, experiences, pontoon, FAQs, contact, our-story, booking, blog, more.
 - [x] **Sitemap & robots:** app/sitemap.ts and app/robots.ts added for crawlability.
+- [x] **Our Boats hub (/boats):** Title "Our Boats | Lake Austin Boat Rentals | Boat Bros"; meta and keywords include "Lake Austin boat rentals", "our boats", "Lake Austin fleet", "captained boat rental Lake Austin"; canonical and openGraph set.
+- [x] **Boat pillar pages (/boats/[slug]):** One page per listing boat. Title pattern "[Boat Name] | Lake Austin [Type] Rental | Boat Bros" (type from boatType: pontoon, wake, tritoon). Meta description and keywords vary by boat type (pontoon/wake/tritoon from Tier 1–2). BreadcrumbList (Home → Our Boats → [Boat Name]) and Service JSON-LD on each pillar. FAQ section with 4 common questions. URL uses Firestore boat slug; nav and footer link to hub; experiences page has "Meet our boats"; booking modal shows "View boat details" to pillar when boat has slug.
 
 ---
 

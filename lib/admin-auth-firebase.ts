@@ -7,7 +7,7 @@
 
 import "server-only";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin"; // same app used for Firestore
-import { safeHasFirebaseConfig } from "@/lib/booking/env";
+import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 
 const COOKIE_NAME = "admin_session";
 const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
@@ -72,10 +72,17 @@ export async function requireAdminSession(cookieHeader: string | null): Promise<
     });
   }
   if (!safeHasFirebaseConfig()) {
+    let firebaseStatus: ReturnType<typeof getFirebaseConfigStatus> | undefined;
+    try {
+      firebaseStatus = getFirebaseConfigStatus();
+    } catch {
+      // ignore
+    }
     return new Response(
       JSON.stringify({
         error: "Firebase/Firestore not configured for server.",
         hint: FIREBASE_SETUP_HINT,
+        ...(firebaseStatus && { firebaseStatus }),
       }),
       { status: 503, headers: { "Content-Type": "application/json" } }
     );

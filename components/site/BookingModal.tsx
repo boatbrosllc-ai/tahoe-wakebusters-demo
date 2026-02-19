@@ -31,6 +31,7 @@ interface ExperienceItem {
 interface BoatOption {
   id: string;
   name: string;
+  slug?: string;
   photos: string[];
   fromPriceCents: number | null;
   rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
@@ -849,17 +850,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       onOpenChange={onOpenChange}
       className={cn(
         "w-[calc(100vw-2rem)] max-w-md max-h-[85dvh]",
-        "md:max-w-2xl md:max-h-[88vh]",
-        "lg:max-w-3xl"
+        "md:max-w-2xl md:max-h-[85dvh]",
+        "lg:max-w-3xl lg:max-h-[85dvh]"
       )}
     >
       <div
         className={cn(
-          "flex flex-col overflow-hidden max-h-[90vh] md:max-h-[88vh] min-h-[260px]",
+          "flex flex-col overflow-hidden min-h-[260px] max-h-[85dvh]",
           step === 4 && paymentPhase === "success"
-            ? "h-auto min-h-0 max-h-[90vh] md:max-h-[88vh]"
+            ? "h-auto min-h-0"
             : step === 4
-              ? "h-[78dvh] min-h-[380px] sm:h-[75dvh] sm:min-h-[400px] md:h-[70vh] md:min-h-[420px] lg:h-[75vh] lg:min-h-[480px]"
+              ? "h-[70dvh] min-h-[380px] sm:min-h-[400px] md:min-h-[420px] max-h-[85dvh]"
               : "flex-1 min-h-0"
         )}
       >
@@ -906,8 +907,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           </div>
         )}
 
-        {/* Sliding panels — fixed height on step 4 so inner scroll works */}
-        <div className={cn("flex flex-col overflow-hidden min-h-0 flex-1", step === 4 && "min-h-0")}>
+        {/* Sliding panels — constrained height so calendar/boat steps scroll and bottom buttons stay visible */}
+        <div
+          className={cn(
+            "flex flex-col overflow-hidden min-h-0 flex-1",
+            step !== 4 && "max-h-[calc(85dvh-11rem)]",
+            step === 4 && "min-h-0"
+          )}
+        >
           <div
             className={cn(
               "flex w-[400%] transition-transform duration-300 ease-out items-stretch h-full min-h-0",
@@ -977,7 +984,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {/* Step 2: Date & time — duration, calendar, time; then continue to boat */}
             <div
               className={cn(
-                "w-1/4 shrink-0 px-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
+                "w-1/4 shrink-0 px-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 transition-[min-height] duration-300 pb-2",
                 panel2Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
@@ -1103,10 +1110,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                             isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
-                            isHoliday && !isPast && "ring-1.5 ring-amber-400/80 bg-amber-50/80 border-amber-300/60",
+                            isHoliday && !isPast && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
                             isAvailable && !isHoliday &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                            isAvailable && isHoliday && "text-amber-900 border-amber-400/60 hover:bg-amber-100 active:scale-[0.98]",
+                            isAvailable && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >
@@ -1167,17 +1174,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 type="button"
                 onClick={handleStep2Next}
                 disabled={!canGoFromStep2}
-                className="mt-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                className="mt-4 mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
               >
                 Continue
               </button>
-              <p className="text-center text-[11px] text-brand-muted mt-2">Then choose your boat</p>
+              <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>
             </div>
 
             {/* Step 3: Boat — only boats available for the selected date/time */}
             <div
               className={cn(
-                "w-1/4 shrink-0 pl-1 overflow-y-auto flex flex-col transition-[min-height] duration-300",
+                "w-1/4 shrink-0 pl-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 transition-[min-height] duration-300 pb-2",
                 panel3Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
@@ -1240,7 +1247,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 type="button"
                 onClick={handleStep3Next}
                 disabled={!canGoFromStep3}
-                className="mt-auto w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="mt-auto mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
               >
                 Continue to checkout
               </button>
@@ -1269,7 +1276,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
                         <h3 className="font-bold text-brand-dark text-lg leading-tight">{selectedExperience.title}</h3>
                         {selectedBoat && (
-                          <p className="text-sm font-medium text-brand-dark/80 mt-0.5">{selectedBoat.name}</p>
+                          <p className="text-sm font-medium text-brand-dark/80 mt-0.5">
+                            {selectedBoat.name}
+                            {selectedBoat.slug && (
+                              <>
+                                {" · "}
+                                <a href={`/boats/${selectedBoat.slug}`} className="text-brand-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded" target="_blank" rel="noopener noreferrer">
+                                  View boat details
+                                </a>
+                              </>
+                            )}
+                          </p>
                         )}
                         <p className="text-sm text-brand-muted mt-2 flex items-center gap-1.5">
                           <span>{new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>

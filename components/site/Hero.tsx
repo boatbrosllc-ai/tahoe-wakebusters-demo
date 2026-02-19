@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -10,6 +10,10 @@ import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
 const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
+/** Encoded for use in video src and preload (spaces and special chars). */
+const HERO_VIDEO_SRC_ENCODED = encodeURI(HERO_VIDEO_SRC);
+/** Poster shown until video is ready or if video fails to load. */
+const HERO_VIDEO_POSTER = "/photos/IMG_2123.webp";
 const HERO_CONFETTI_KEY = "boatbros_hero_confetti_done";
 
 const bullets = [
@@ -22,6 +26,19 @@ const bullets = [
 export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   const [videoReady, setVideoReady] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+
+  // Start loading the hero video as soon as the component mounts (faster first frame).
+  useEffect(() => {
+    const link = document.createElement("link");
+    link.rel = "preload";
+    link.as = "video";
+    link.href = HERO_VIDEO_SRC_ENCODED;
+    document.head.appendChild(link);
+    return () => {
+      document.head.removeChild(link);
+    };
+  }, []);
 
   const handleHeroClick = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -41,20 +58,39 @@ export function Hero() {
       className="relative min-h-[100dvh] sm:min-h-[85vh] md:min-h-[82vh] lg:min-h-[80vh] xl:min-h-[85vh] 2xl:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark"
       onClick={handleHeroClick}
     >
-      {/* Background video: no poster; smooth fade-in when ready */}
+      {/* Background: poster image shows immediately; video fades in when ready for a smooth, fast hero */}
       <div className="absolute inset-0">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-          onCanPlay={() => setVideoReady(true)}
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-out ${videoReady ? "opacity-100" : "opacity-0"}`}
+        {/* Poster: visible until video has buffered enough to play, or if video fails */}
+        <div
+          className={`absolute inset-0 w-full h-full transition-opacity duration-700 ease-out ${videoReady && !videoError ? "opacity-0" : "opacity-100"}`}
           aria-hidden
         >
-          <source src={HERO_VIDEO_SRC} type="video/webm" />
-        </video>
+          <Image
+            src={HERO_VIDEO_POSTER}
+            alt=""
+            fill
+            className="object-cover object-center"
+            sizes="100vw"
+            priority
+          />
+        </div>
+        {/* Video: load with encoded URL; on error we keep showing poster */}
+        {!videoError && (
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            poster={HERO_VIDEO_POSTER}
+            onCanPlay={() => setVideoReady(true)}
+            onError={() => setVideoError(true)}
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-out ${videoReady ? "opacity-100" : "opacity-0"}`}
+            aria-hidden
+          >
+            <source src={HERO_VIDEO_SRC_ENCODED} type="video/webm" />
+          </video>
+        )}
         <div className="absolute inset-0 bg-black/50 sm:bg-black/45" />
         <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/75 via-brand-dark/50 to-brand-dark/90" />
       </div>

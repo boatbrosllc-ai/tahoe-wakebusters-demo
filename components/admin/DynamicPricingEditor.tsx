@@ -163,7 +163,7 @@ function MonthCalendar({
                   );
                 }
                 let bg = "bg-white";
-                if (c.isHoliday) bg = "bg-amber-200/90 text-amber-900";
+                if (c.isHoliday) bg = "bg-violet-200/90 text-violet-900";
                 else if (c.dayType === "weekend") bg = "bg-sky-100/80 text-sky-800";
                 else if (c.dayType === "friSun") bg = "bg-violet-100/80 text-violet-800";
                 return (
@@ -353,6 +353,12 @@ export function DynamicPricingEditor({
       });
   }, [holidayDates]);
 
+  // Duration columns in special-dates table: order by length (3h, 4h, 5h, 6h, 8h)
+  const ratesByDuration = useMemo(
+    () => [...rates].sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0)),
+    [rates]
+  );
+
   return (
     <div className="space-y-8">
       {boatHint && (
@@ -541,7 +547,7 @@ export function DynamicPricingEditor({
           </p>
           <div>
             <p className="text-sm font-medium text-brand-dark mb-1.5">Holidays & special dates (final override)</p>
-            <p className="text-xs text-brand-muted mb-3">These override the default rates above when a date falls in a range. Set price per charter (8h, 5h, …); blank = that charter&apos;s <strong>Holiday default</strong>.</p>
+            <p className="text-xs text-brand-muted mb-3">These override the default rates above when a date falls in a range. Set price per charter (columns ordered by length: 3h, 4h, 5h, 6h, 8h, …); blank = that charter&apos;s <strong>Holiday default</strong>.</p>
 
             {/* Add toolbar – above table */}
             <div className="rounded-lg border border-brand-dark/10 bg-brand-bg/30 p-3 mb-3">
@@ -604,7 +610,7 @@ export function DynamicPricingEditor({
                     <th className="text-left py-2.5 px-3 font-medium text-brand-muted whitespace-nowrap w-28 sm:w-auto min-w-[7rem]" title="Range name">Name</th>
                     <th className="text-left py-2.5 px-3 font-medium text-brand-muted whitespace-nowrap w-36 sm:w-auto min-w-[8.5rem]" title="Date or range">Dates</th>
                     <th className="text-left py-2.5 px-3 font-medium text-brand-muted w-20" title="Repeat every year">Yearly</th>
-                    {rates.map((r, ri) => (
+                    {ratesByDuration.map((r, ri) => (
                       <th key={ri} className="text-left py-2.5 px-2 font-medium text-brand-muted border-l border-brand-dark/10 min-w-[4.5rem] w-20 text-xs" title={r.displayName || `${r.durationHours ?? "?"}h`}>
                         {r.durationHours ?? "?"}h
                       </th>
@@ -615,7 +621,7 @@ export function DynamicPricingEditor({
                 <tbody>
                 {rangesWithIndex.length === 0 ? (
                   <tr>
-                    <td colSpan={4 + rates.length} className="py-6 px-3 text-center text-sm text-brand-muted">
+                    <td colSpan={4 + ratesByDuration.length} className="py-6 px-3 text-center text-sm text-brand-muted">
                       No special dates yet. Use the buttons above to add holidays or a custom range.
                     </td>
                   </tr>
@@ -655,7 +661,7 @@ export function DynamicPricingEditor({
                           <span className="text-xs text-brand-muted">Yearly</span>
                         </label>
                       </td>
-                      {rates.map((r, ri) => {
+                      {ratesByDuration.map((r, ri) => {
                         const durationHours = r.durationHours ?? 0;
                         const perDurCents = h.priceCentsByDuration?.[durationHours];
                         const effective = perDurCents ?? (r.priceHolidayCents ?? r.priceWeekendCents ?? r.priceFriSunCents ?? r.priceCents);
@@ -699,7 +705,7 @@ export function DynamicPricingEditor({
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-white border border-brand-dark/20" /> Weekday</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-sky-100" /> Weekend</span>
                   {friSunDays.length > 0 && <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-violet-100" /> Fri/Sun</span>}
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-amber-200/90" /> Holiday</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-violet-200/90" /> Holiday</span>
                 </div>
               </div>
             </div>

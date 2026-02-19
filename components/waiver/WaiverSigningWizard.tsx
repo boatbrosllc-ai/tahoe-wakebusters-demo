@@ -52,15 +52,16 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
 
   const { template, bookingSummary } = data;
   const clausesWithInitials = template.clauses.filter((c) => c.requiresInitials);
-  const requirePhone = !!template.requiredFields?.phone;
-  const requireDob = !!template.requiredFields?.dob;
+  /** All info fields are required to move forward. */
+  const requirePhone = true;
+  const requireDob = true;
 
   const canProceedFromInfo =
     signer.name.trim().length > 0 &&
     signer.email.trim().length > 0 &&
     EMAIL_REGEX.test(signer.email.trim()) &&
-    (!requirePhone || signer.phone.trim().length > 0) &&
-    (!requireDob || signer.dob.trim().length > 0);
+    signer.phone.trim().length > 0 &&
+    signer.dob.trim().length > 0;
   const canProceedFromTerms =
     termsAccepted &&
     (clausesWithInitials.length === 0 ||
@@ -69,18 +70,21 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
   const canProceedFromSign =
     !!signatureDataUrl && (!requireTyped || typedName.trim().length > 0);
 
-  /** On step 0 and 1, allow click so we can show validation errors; on step 2 disable until ready to submit. */
+  /** Disable Next until all required fields for the current step are valid; allow click on step 0/1 to show validation errors. */
   const nextDisabled =
-    submitting || (step === 2 && !canProceedFromSign);
+    submitting ||
+    (step === 0 && !canProceedFromInfo) ||
+    (step === 1 && !canProceedFromTerms) ||
+    (step === 2 && !canProceedFromSign);
 
-  /** Validate step 0 and return first error field id for focus */
+  /** Validate step 0 and return first error field id for focus. All fields are required. */
   function validateStep0(): keyof typeof fieldErrors | null {
     const err: typeof fieldErrors = {};
     if (!signer.name.trim()) err.name = "Full name is required.";
     if (!signer.email.trim()) err.email = "Email is required.";
     else if (!EMAIL_REGEX.test(signer.email.trim())) err.email = "Please enter a valid email address.";
-    if (requirePhone && !signer.phone.trim()) err.phone = "Phone number is required.";
-    if (requireDob && !signer.dob.trim()) err.dob = "Date of birth is required.";
+    if (!signer.phone.trim()) err.phone = "Phone number is required.";
+    if (!signer.dob.trim()) err.dob = "Date of birth is required.";
     setFieldErrors(err);
     if (err.name) return "name";
     if (err.email) return "email";
@@ -268,43 +272,39 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                 />
                 {fieldErrors.email && <p id="waiver-email-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.email}</p>}
               </div>
-              {requirePhone && (
-                <div>
-                  <label htmlFor="waiver-phone" className={labelClass}>Phone <span className="text-red-600" aria-hidden>*</span></label>
-                  <input
-                    ref={phoneRef}
-                    id="waiver-phone"
-                    type="tel"
-                    autoComplete="tel"
-                    value={signer.phone}
-                    onChange={(e) => { setSigner((s) => ({ ...s, phone: e.target.value })); setFieldErrors((prev) => (prev.phone ? { ...prev, phone: undefined } : prev)); }}
-                    onBlur={() => { if (requirePhone && !signer.phone.trim()) setFieldErrors((prev) => ({ ...prev, phone: "Phone number is required." })); }}
-                    className={cn(inputClass, fieldErrors.phone && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
-                    placeholder="(555) 123-4567"
-                    aria-invalid={fieldErrors.phone ? "true" : undefined}
-                    aria-describedby={fieldErrors.phone ? "waiver-phone-error" : undefined}
-                  />
-                  {fieldErrors.phone && <p id="waiver-phone-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.phone}</p>}
-                </div>
-              )}
-              {requireDob && (
-                <div className="min-w-0 w-full">
-                  <label htmlFor="waiver-dob" className={labelClass}>Date of birth <span className="text-red-600" aria-hidden>*</span></label>
-                  <input
-                    ref={dobRef}
-                    id="waiver-dob"
-                    type="date"
-                    value={signer.dob}
-                    onChange={(e) => { setSigner((s) => ({ ...s, dob: e.target.value })); setFieldErrors((prev) => (prev.dob ? { ...prev, dob: undefined } : prev)); }}
-                    onBlur={() => { if (requireDob && !signer.dob.trim()) setFieldErrors((prev) => ({ ...prev, dob: "Date of birth is required." })); }}
-                    className={cn(inputClass, "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border", fieldErrors.dob && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
-                    aria-label="Date of birth"
-                    aria-invalid={fieldErrors.dob ? "true" : undefined}
-                    aria-describedby={fieldErrors.dob ? "waiver-dob-error" : undefined}
-                  />
-                  {fieldErrors.dob && <p id="waiver-dob-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.dob}</p>}
-                </div>
-              )}
+              <div>
+                <label htmlFor="waiver-phone" className={labelClass}>Phone <span className="text-red-600" aria-hidden>*</span></label>
+                <input
+                  ref={phoneRef}
+                  id="waiver-phone"
+                  type="tel"
+                  autoComplete="tel"
+                  value={signer.phone}
+                  onChange={(e) => { setSigner((s) => ({ ...s, phone: e.target.value })); setFieldErrors((prev) => (prev.phone ? { ...prev, phone: undefined } : prev)); }}
+                  onBlur={() => { if (!signer.phone.trim()) setFieldErrors((prev) => ({ ...prev, phone: "Phone number is required." })); }}
+                  className={cn(inputClass, fieldErrors.phone && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
+                  placeholder="(555) 123-4567"
+                  aria-invalid={fieldErrors.phone ? "true" : undefined}
+                  aria-describedby={fieldErrors.phone ? "waiver-phone-error" : undefined}
+                />
+                {fieldErrors.phone && <p id="waiver-phone-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.phone}</p>}
+              </div>
+              <div className="min-w-0 w-full">
+                <label htmlFor="waiver-dob" className={labelClass}>Date of birth <span className="text-red-600" aria-hidden>*</span></label>
+                <input
+                  ref={dobRef}
+                  id="waiver-dob"
+                  type="date"
+                  value={signer.dob}
+                  onChange={(e) => { setSigner((s) => ({ ...s, dob: e.target.value })); setFieldErrors((prev) => (prev.dob ? { ...prev, dob: undefined } : prev)); }}
+                  onBlur={() => { if (!signer.dob.trim()) setFieldErrors((prev) => ({ ...prev, dob: "Date of birth is required." })); }}
+                  className={cn(inputClass, "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border", fieldErrors.dob && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
+                  aria-label="Date of birth"
+                  aria-invalid={fieldErrors.dob ? "true" : undefined}
+                  aria-describedby={fieldErrors.dob ? "waiver-dob-error" : undefined}
+                />
+                {fieldErrors.dob && <p id="waiver-dob-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.dob}</p>}
+              </div>
             </div>
           </div>
         )}

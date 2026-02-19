@@ -299,16 +299,16 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   className={cn(
                                     "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full",
                                     darkCard ? "min-h-[44px] sm:min-h-[52px]" : "min-h-[36px] sm:min-h-[40px]",
-                                    isHoliday && "ring-1.5 ring-amber-400/80 ring-offset-1 ring-offset-transparent",
-                                    darkCard && isHoliday && !isPast && "bg-amber-500/15 border-amber-400/40",
-                                    !darkCard && isHoliday && !isPast && "bg-amber-50/80 border-amber-300/60",
+                                    isHoliday && "ring-1.5 ring-violet-400/80 ring-offset-1 ring-offset-transparent",
+                                    darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
+                                    !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
                                     darkCard
                                       ? cn(
                                           isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
                                           !isPast && !isAvailable && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
                                           isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
                                           isAvailable && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                          isAvailable && isHoliday && "text-white border-amber-400/60 hover:bg-amber-500/25",
+                                          isAvailable && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                           isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                         )
                                       : cn(
@@ -316,7 +316,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                           !isPast && !isAvailable && !isFullyBooked && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
                                           isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
                                           isAvailable && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
-                                          isAvailable && isHoliday && "text-amber-900 border-amber-400/60 hover:bg-amber-100",
+                                          isAvailable && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
                                           isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                         )
                                   )}
@@ -552,16 +552,16 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     title={isHoliday ? "Holiday pricing" : undefined}
                                     className={cn(
                                       "rounded border min-h-[36px] sm:min-h-[40px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full",
-                                      isHoliday && !isPast && "ring-1.5 ring-amber-400/80",
-                                      darkCard && isHoliday && !isPast && "bg-amber-500/15 border-amber-400/40",
-                                      !darkCard && isHoliday && !isPast && "bg-amber-50/80 border-amber-300/60",
+                                      isHoliday && !isPast && "ring-1.5 ring-violet-400/80",
+                                      darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
+                                      !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
                                       darkCard
                                         ? cn(
                                             isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
                                             !isPast && !isAvailable && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
                                             isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
                                             isAvailable && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                            isAvailable && isHoliday && "text-white border-amber-400/60 hover:bg-amber-500/25",
+                                            isAvailable && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                             isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                           )
                                         : cn(
@@ -569,7 +569,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                             !isPast && !isAvailable && !isFullyBooked && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
                                             isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
                                             isAvailable && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
-                                            isAvailable && isHoliday && "text-amber-900 border-amber-400/60 hover:bg-amber-100",
+                                            isAvailable && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
                                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                           )
                                     )}
@@ -899,9 +899,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               cell.isCurrentMonth && isPast && "text-brand-muted/60",
                               isClickable && "cursor-pointer hover:ring-2 hover:ring-brand-primary/30",
                               isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/10",
-                              isHoliday && cell.isCurrentMonth && !isPast && "ring-1.5 ring-amber-400/80 bg-amber-50/80 border border-amber-200/60",
+                              isHoliday && cell.isCurrentMonth && !isPast && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border border-violet-200/60",
                               hasOpen && cell.isCurrentMonth && !isPast && !isHoliday && "bg-green-50/80 hover:bg-green-100 text-green-900",
-                              hasOpen && cell.isCurrentMonth && !isPast && isHoliday && "hover:bg-amber-100/80 text-amber-900",
+                              hasOpen && cell.isCurrentMonth && !isPast && isHoliday && "hover:bg-violet-100/80 text-violet-900",
                               hasBooked && !hasOpen && cell.isCurrentMonth && !isPast && "bg-brand-dark/5 text-brand-muted"
                             )}
                           >
@@ -925,7 +925,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         Available (times in day)
                       </span>
                       <span className="flex items-center gap-2">
-                        <span className="h-3 w-3 rounded bg-amber-100 border border-amber-300" aria-hidden />
+                        <span className="h-3 w-3 rounded bg-violet-100 border border-violet-300" aria-hidden />
                         Holiday pricing
                       </span>
                       <span className="flex items-center gap-2">

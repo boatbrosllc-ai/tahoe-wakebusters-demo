@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 const navLinks = [
   { href: "/experiences", label: "Experiences" },
+  { href: "/boats", label: "Our Boats" },
   { href: "/our-story", label: "Our Story" },
   { href: "/blog", label: "The Dock" },
   { href: "/faqs", label: "FAQs" },
@@ -149,17 +150,28 @@ export function Header() {
           </Link>
         </div>
 
-        {/* Desktop: nav links – centered */}
+        {/* Desktop: nav links – centered; active page styled to stand out */}
         <nav className="hidden lg:flex items-center justify-center gap-1 shrink-0 absolute left-1/2 -translate-x-1/2" aria-label="Main">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="shrink-0 px-3 py-3 rounded-lg text-base font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap"
-            >
-              {link.label}
-            </Link>
-          ))}
+          {navLinks.map((link) => {
+            const isActive =
+              pathname === link.href ||
+              (link.href !== "/" && pathname.startsWith(link.href + "/"));
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={cn(
+                  "shrink-0 px-3 py-3 rounded-lg text-base font-medium transition-colors whitespace-nowrap",
+                  isActive
+                    ? "text-white bg-white/20 font-semibold"
+                    : "text-white/90 hover:text-white hover:bg-white/10"
+                )}
+                aria-current={isActive ? "page" : undefined}
+              >
+                {link.label}
+              </Link>
+            );
+          })}
         </nav>
 
         {/* Right: icons + CTA – compact on mobile, no wrap */}

@@ -9,7 +9,7 @@ export interface SocialProofStripProps {
   rating?: number;
   /** Count line from business (e.g. "500+ 5-star days"). Shown as label; if it contains a space, first token is label, rest is sub. */
   ratingCount?: string;
-  /** Stat pills from business (e.g. "Top-rated on Lake Austin", "Captain-led", "Free lily pad"). "X on Y" → label "X", sub "Y". */
+  /** Stat pills from business (e.g. "Top-rated on Lake Austin", "Captain-led", "Lily pad included"). "X on Y" → label "X", sub "Y". */
   stats?: string[];
   /** Tagline for the avatars block (e.g. "Loved by locals & visitors"). */
   tagline?: string;

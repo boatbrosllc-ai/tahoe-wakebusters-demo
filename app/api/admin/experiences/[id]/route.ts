@@ -10,18 +10,30 @@ import type {
   ExperienceSeasonal,
 } from "@/lib/booking/types";
 
-/** Remove undefined from object so Firestore update/set accepts it. Leaves null and other values. */
-function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
+/** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
+function stripUndefined<T>(obj: T): T {
+  if (obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) =>
+      item !== null && typeof item === "object" && Object.getPrototypeOf(item) === Object.prototype
+        ? stripUndefined(item as Record<string, unknown>)
+        : item
+    ) as T;
+  }
+  if (obj === null || typeof obj !== "object" || Object.getPrototypeOf(obj) !== Object.prototype) {
+    return obj;
+  }
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
     if (v === undefined) continue;
     out[k] =
       v !== null &&
       typeof v === "object" &&
-      !Array.isArray(v) &&
       Object.getPrototypeOf(v) === Object.prototype
         ? stripUndefined(v as Record<string, unknown>)
-        : v;
+        : Array.isArray(v)
+          ? stripUndefined(v)
+          : v;
   }
   return out as T;
 }
@@ -144,12 +156,15 @@ function parseBody(
             ) as Record<number, number>
           : undefined;
         const priceCentsByDuration = byDur && Object.keys(byDur).length > 0 ? byDur : undefined;
+        const priceCents = typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined;
+        const label = typeof x.label === "string" ? x.label : undefined;
+        const recurring = (x as { recurring?: boolean }).recurring === true;
         return {
-          label: typeof x.label === "string" ? x.label : undefined,
           start: typeof x.start === "string" ? x.start : "",
           end: typeof x.end === "string" ? x.end : "",
-          recurring: (x as { recurring?: boolean }).recurring === true,
-          priceCents: typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined,
+          ...(label != null && label !== "" && { label }),
+          ...(recurring && { recurring: true }),
+          ...(typeof priceCents === "number" && { priceCents }),
           ...(priceCentsByDuration && { priceCentsByDuration }),
         };
       });

@@ -80,12 +80,15 @@ function parseBody(
               ) as Record<number, number>
             : undefined;
           const priceCentsByDuration = byDur && Object.keys(byDur).length > 0 ? byDur : undefined;
+          const priceCents = typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined;
+          const label = typeof x.label === "string" ? x.label : undefined;
+          const recurring = (x as { recurring?: boolean }).recurring === true;
           return {
-            label: typeof x.label === "string" ? x.label : undefined,
             start: typeof x.start === "string" ? x.start : "",
             end: typeof x.end === "string" ? x.end : "",
-            recurring: (x as { recurring?: boolean }).recurring === true,
-            priceCents: typeof (x as { priceCents?: number }).priceCents === "number" ? (x as { priceCents: number }).priceCents : undefined,
+            ...(label != null && label !== "" && { label }),
+            ...(recurring && { recurring: true }),
+            ...(typeof priceCents === "number" && { priceCents }),
             ...(priceCentsByDuration && { priceCentsByDuration }),
           };
         })

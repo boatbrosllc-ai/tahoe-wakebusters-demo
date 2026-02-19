@@ -147,7 +147,7 @@ export interface Experience {
   rating?: number;
   /** Social proof: e.g. "500+ 5-star days". */
   ratingCount?: string;
-  /** Short stat pills (e.g. "Top-rated on Lake Austin", "Captain-led", "Free lily pad"). */
+  /** Short stat pills (e.g. "Top-rated on Lake Austin", "Captain-led", "Lily pad included"). */
   stats?: string[];
   /** Tagline above or with title (e.g. "Loved by locals & visitors"). */
   tagline?: string;

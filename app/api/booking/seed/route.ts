@@ -11,9 +11,19 @@ const SLOT_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours per slot
 const FIRST_SLOT_HOUR = 9;
 const LAST_SLOT_HOUR = 17;
 
+/** Slug for public /boats page; must be set for boats to appear on "Our Boats". */
+function slugFromName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
 const BOATS = [
   {
     name: "Long Pontoon",
+    slug: "long-pontoon",
     timezone: "America/Chicago",
     capacityMax: 14,
     petsMax: 4,
@@ -22,6 +32,7 @@ const BOATS = [
   },
   {
     name: "Wake Board",
+    slug: "wake-board",
     timezone: "America/Chicago",
     capacityMax: 14,
     petsMax: 0,
@@ -30,6 +41,7 @@ const BOATS = [
   },
   {
     name: "Lake Austin Pontoon",
+    slug: "lake-austin-pontoon",
     timezone: "America/Chicago",
     capacityMax: 14,
     petsMax: 4,
@@ -65,16 +77,33 @@ export async function POST(request: NextRequest) {
     const boatIds: string[] = [];
 
     for (const boatConfig of BOATS) {
+      const slug = (boatConfig as { slug?: string }).slug ?? slugFromName(boatConfig.name);
       const boatsSnap = await db.collection("boats").where("name", "==", boatConfig.name).limit(1).get();
       let boatId: string;
       if (!boatsSnap.empty) {
         boatId = boatsSnap.docs[0].id;
+        const boatRef = db.collection("boats").doc(boatId);
+        const existing = boatsSnap.docs[0].data();
+        // Ensure existing seed boats appear on public /boats page (isListingBoat + slug)
+        const updates: Record<string, unknown> = {};
+        if (existing.isListingBoat !== true) updates.isListingBoat = true;
+        if (!existing.slug || typeof existing.slug !== "string") updates.slug = slug;
+        if (!Array.isArray(existing.photos)) updates.photos = [];
+        if (!Array.isArray(existing.experienceIds)) updates.experienceIds = [];
+        if (Object.keys(updates).length > 0) {
+          await boatRef.update(updates);
+        }
       } else {
         const boatRef = db.collection("boats").doc();
         boatId = boatRef.id;
+        const { slug: _s, ...rest } = boatConfig as { name: string; slug?: string; [k: string]: unknown };
         await boatRef.set({
-          ...boatConfig,
+          ...rest,
+          slug,
           active: true,
+          isListingBoat: true,
+          photos: [],
+          experienceIds: [],
         });
       }
       boatIds.push(boatId);

@@ -21,7 +21,8 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   const experienceIds = Array.isArray(b.experienceIds)
     ? b.experienceIds.filter((x): x is string => typeof x === "string")
     : [];
-  const slug = typeof b.slug === "string" ? b.slug.trim() || undefined : undefined;
+  const slugRaw = typeof b.slug === "string" ? b.slug.trim() : "";
+  const slug = slugRaw ? slugRaw.toLowerCase().replace(/\s+/g, "-") : undefined;
   const description = typeof b.description === "string" ? b.description.trim() || undefined : undefined;
   const active = typeof b.active === "boolean" ? b.active : true;
   const boatType = typeof b.boatType === "string" ? b.boatType.trim() || undefined : undefined;
@@ -38,14 +39,14 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   return stripUndefined(parsed as Record<string, unknown>) as (Omit<ListingBoat, "active"> & { active?: boolean });
 }
 
-/** GET /api/admin/boats — list all listing boats */
+/** GET /api/admin/boats — list all boats (including those not yet on public Our Boats page) */
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
   try {
     const db = getDb();
-    const snap = await db.collection("boats").where("isListingBoat", "==", true).get();
+    const snap = await db.collection("boats").get();
     const list = snap.docs.map((d) => ({
       id: d.id,
       ...d.data(),

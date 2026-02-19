@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import { brand } from "@/content/brand";
 import { Hero } from "@/components/site/Hero";
 import { ExperienceChooser } from "@/components/site/ExperienceChooser";
+import { HomeOurBoats } from "@/components/site/HomeOurBoats";
 import { HowItWorks } from "@/components/site/HowItWorks";
 import { Testimonials } from "@/components/site/Testimonials";
 import { GalleryPreview } from "@/components/site/GalleryPreview";
 import { LeadCapture } from "@/components/site/LeadCapture";
 import { HomeLocation } from "@/components/site/HomeLocation";
 import { PrefetchCriticalRoutes } from "@/components/site/PrefetchCriticalRoutes";
+import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
 
 export const metadata: Metadata = {
   title: "Lake Austin Boat Rentals | Pontoon, Wake Surf & Sunset Cruises",
@@ -35,12 +37,20 @@ export const metadata: Metadata = {
   },
 };
 
-export default function HomePage() {
+export default async function HomePage() {
+  let boats: Awaited<ReturnType<typeof getListingBoatsForPublic>> = [];
+  try {
+    boats = await getListingBoatsForPublic();
+  } catch {
+    // If Firebase is unavailable (e.g. build without env), show section with CTA only
+  }
+
   return (
     <>
       <PrefetchCriticalRoutes />
       <Hero />
       <ExperienceChooser />
+      <HomeOurBoats boats={boats} />
       <HowItWorks />
       <Testimonials />
       <GalleryPreview />

@@ -102,6 +102,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         error: isFirebase ? "Waiver tracking requires Firebase." : message,
+        /** Actual error so you can see the real cause (e.g. key truncated vs permission denied). */
+        errorDetail: message,
         ...(isFirebase && { hint: FIREBASE_SETUP_HINT }),
       },
       { status: isFirebase ? 503 : 500 }

@@ -165,6 +165,74 @@ export function safeHasFirebaseConfig(): boolean {
   }
 }
 
+/** Status of Firebase env (no secrets). Use to show users why config failed (e.g. on Netlify). */
+export type FirebaseConfigStatus = {
+  projectIdSet: boolean;
+  clientEmailSet: boolean;
+  serviceAccountPathSet: boolean;
+  privateKeyStatus: "ok" | "missing" | "truncated" | "invalid" | "file_missing";
+  summary: string;
+};
+
+export function getFirebaseConfigStatus(): FirebaseConfigStatus {
+  const projectIdSet = !!(getEnv("FIREBASE_PROJECT_ID") ?? "").trim();
+  const clientEmailSet = !!(getEnv("FIREBASE_CLIENT_EMAIL") ?? "").trim();
+  const serviceAccountPathSet = !!(bookingEnv.firebaseServiceAccountPath ?? "").trim();
+  let privateKeyStatus: FirebaseConfigStatus["privateKeyStatus"] = "missing";
+  try {
+    if (serviceAccountPathSet) {
+      const path = require("path") as typeof import("path");
+      const fs = require("fs") as typeof import("fs");
+      const resolved = path.isAbsolute(bookingEnv.firebaseServiceAccountPath!)
+        ? bookingEnv.firebaseServiceAccountPath!
+        : path.join(process.cwd(), bookingEnv.firebaseServiceAccountPath!);
+      if (!fs.existsSync(resolved)) {
+        privateKeyStatus = "file_missing";
+      } else {
+        privateKeyStatus = "ok";
+      }
+    } else {
+      const k = getEnv("FIREBASE_PRIVATE_KEY");
+      if (!k || !k.trim()) {
+        privateKeyStatus = "missing";
+      } else {
+        const out = normalizePemKey(k);
+        if (out.length < 200 || !out.includes("-----END")) {
+          const fromFile = readFirebasePrivateKeyFromEnvFile();
+          if (fromFile && fromFile.length >= 200 && fromFile.includes("-----END")) privateKeyStatus = "ok";
+          else privateKeyStatus = "truncated";
+        } else if (!out.startsWith("-----BEGIN") || !out.includes("-----END")) {
+          privateKeyStatus = "invalid";
+        } else {
+          privateKeyStatus = "ok";
+        }
+      }
+    }
+  } catch {
+    privateKeyStatus = "invalid";
+  }
+  const usePath = serviceAccountPathSet && privateKeyStatus === "ok";
+  const useVars = projectIdSet && clientEmailSet && privateKeyStatus === "ok";
+  const summary = usePath || useVars
+    ? "ok"
+    : serviceAccountPathSet && privateKeyStatus === "file_missing"
+      ? "FIREBASE_SERVICE_ACCOUNT_JSON_PATH is set but the file does not exist at runtime (e.g. on Netlify). Use FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY instead."
+      : !projectIdSet || !clientEmailSet
+        ? "Set FIREBASE_PROJECT_ID and FIREBASE_CLIENT_EMAIL (and FIREBASE_PRIVATE_KEY, or FIREBASE_SERVICE_ACCOUNT_JSON_PATH)."
+        : privateKeyStatus === "truncated"
+          ? "FIREBASE_PRIVATE_KEY is truncated. On Netlify use one line with \\n for newlines (e.g. -----BEGIN PRIVATE KEY-----\\nMIIE...\\n-----END PRIVATE KEY-----\\n). No quotes."
+          : privateKeyStatus === "invalid"
+            ? "FIREBASE_PRIVATE_KEY is invalid. Use the full PEM on one line with \\n for newlines."
+            : "Set FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH).";
+  return {
+    projectIdSet,
+    clientEmailSet,
+    serviceAccountPathSet,
+    privateKeyStatus,
+    summary,
+  };
+}
+
 export function hasStripeConfig(): boolean {
   try {
     bookingEnv.stripeSecretKey;

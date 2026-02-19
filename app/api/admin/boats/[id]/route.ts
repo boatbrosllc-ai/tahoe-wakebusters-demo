@@ -17,7 +17,10 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   const b = body as Record<string, unknown>;
   const out: ReturnType<typeof parseBody> = {};
   if (typeof b.name === "string") out.name = b.name.trim();
-  if (typeof b.slug === "string") out.slug = b.slug.trim() || undefined;
+  if (typeof b.slug === "string") {
+    const s = b.slug.trim();
+    out.slug = s ? s.toLowerCase().replace(/\s+/g, "-") : undefined;
+  }
   if (typeof b.description === "string") out.description = b.description.trim() || undefined;
   if (Array.isArray(b.photos)) out.photos = b.photos.filter((x): x is string => typeof x === "string");
   if (typeof b.active === "boolean") out.active = b.active;
