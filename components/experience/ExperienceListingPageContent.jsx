@@ -108,10 +108,6 @@ export function ExperienceListingPageContent(props) {
   const steps = experience.steps ?? [];
   const overviewHeadline = descriptionFirstLine || experience.title;
   const overviewStory = descriptionRest || experience.subtitle || "";
-  const overviewFeatures =
-    steps.length > 0
-      ? steps.map((s) => ({ icon: "sparkles", text: s.description || s.label }))
-      : undefined;
   const overviewTimeline =
     steps.length > 0
       ? steps.map((s) => ({ step: s.label, desc: s.description || "" }))
@@ -208,7 +204,6 @@ export function ExperienceListingPageContent(props) {
         overviewImageUrl={overviewImageUrl}
         headline={overviewHeadline}
         story={overviewStory}
-        features={overviewFeatures}
         timeline={overviewTimeline}
         imageAlt={overviewImageAlt}
       />

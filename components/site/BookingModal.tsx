@@ -188,6 +188,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [viewMonthMonth, setViewMonthMonth] = useState(today.month);
   const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
@@ -416,6 +417,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!selectedExperience?.id || !selectedRateIdForCalendar) {
       setDatePrices({});
+      setHolidayDateStrings(new Set());
       return;
     }
     const rateIdQ = `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}`;
@@ -426,8 +428,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .then((data) => {
         if (data.prices && typeof data.prices === "object") setDatePrices(data.prices);
         else setDatePrices({});
+        if (Array.isArray(data?.holidayDateStrings)) {
+          setHolidayDateStrings(new Set(data.holidayDateStrings));
+        } else {
+          setHolidayDateStrings(new Set());
+        }
       })
-      .catch(() => setDatePrices({}));
+      .catch(() => {
+        setDatePrices({});
+        setHolidayDateStrings(new Set());
+      });
   }, [selectedExperience?.id, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar]);
 
 
@@ -1076,6 +1086,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const priceCents = datePrices[dateStr];
+                      const isHoliday = holidayDateStrings.has(dateStr);
                       return (
                         <button
                           key={dateStr}
@@ -1086,13 +1097,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
+                          title={isHoliday ? "Holiday pricing" : undefined}
                           className={cn(
                             "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                             isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
-                            isAvailable &&
+                            isHoliday && !isPast && "ring-1.5 ring-amber-400/80 bg-amber-50/80 border-amber-300/60",
+                            isAvailable && !isHoliday &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                            isAvailable && isHoliday && "text-amber-900 border-amber-400/60 hover:bg-amber-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >

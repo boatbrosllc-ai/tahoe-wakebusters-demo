@@ -37,6 +37,7 @@ export const SOCIAL_PROOF = [
   { label: "Top-rated", sub: "on Lake Austin" },
   { label: "Captain-led", sub: "" },
   { label: "Free lily pad", sub: "" },
+  { label: "Cooler Included", sub: "" },
 ];
 export const SOCIAL_AVATARS = [
   "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&crop=face",
@@ -45,15 +46,30 @@ export const SOCIAL_AVATARS = [
 ];
 export const SOCIAL_LINE = "Loved by locals & visitors";
 
-export const EXPERIENCE_OVERVIEW = {
+export interface ExperienceOverviewData {
+  headline: string;
+  story: string;
+  seoParagraphs?: string[];
+  features: { icon: string; text: string }[];
+  timeline: { step: string; desc: string }[];
+  imageUrl: string;
+}
+
+export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
   headline: "The experience",
   story:
     "Spend the day on a premium pontoon with a dedicated captain. Cruise Lake Austin, anchor at a party cove, swim off the giant lily pad, and enjoy premium sound. Everything’s included — you just show up.",
+  /** SEO-rich paragraphs for the experience section (things to do, where captains go, lunch, etc.). */
+  seoParagraphs: [
+    "On a Lake Austin pontoon rental you can swim, float on the lily pad, play music on our Bluetooth system, and anchor in popular coves. Many groups bring games, snacks, and drinks in a cooler—we provide the cooler and ice so you can pack lunch and beverages (no glass). Our captained pontoon rentals are ideal for birthdays, bachelorette parties, and family days on the water in Austin, TX.",
+    "Your captain knows Lake Austin and can take you to Party Cove, quieter inlets, and scenic spots along the shoreline. You don’t need a boating license; the captain handles docking, navigation, and safety so you can relax. Life jackets are on board, and we include fuel, so the price you see is what you pay for the experience.",
+    "Plan lunch your way: pack a cooler with sandwiches and drinks (we include the cooler and ice), or time your trip around a stop if you’d like. Lake Austin has calm water and easy access from Austin—perfect for a half-day or full-day pontoon rental. Book your Lake Austin pontoon experience below and we’ll take care of the rest.",
+  ],
   features: [
     { icon: "captain", text: "Private captain included" },
     { icon: "sound", text: "Premium Bluetooth sound system" },
     { icon: "lily", text: "Giant floating lily pad" },
-    { icon: "cooler", text: "Cooler + ice + bottled water" },
+    { icon: "cooler", text: "Cooler. Ice included." },
     { icon: "fuel", text: "Fuel included" },
     { icon: "sparkles", text: "Good vibes" },
   ],
@@ -99,7 +115,7 @@ export const GALLERY_CATEGORIES = ["Vibes", "Boat", "Lake Days", "Sunset"] as co
 export const INCLUDED_ITEMS = [
   { icon: "captain", title: "Licensed captain", desc: "Your captain handles everything." },
   { icon: "fuel", title: "Fuel included", desc: "No surprise fuel fees." },
-  { icon: "cooler", title: "Cooler & ice", desc: "Bottled water provided." },
+  { icon: "cooler", title: "Cooler", desc: "Ice included." },
   { icon: "sound", title: "Premium sound", desc: "Bluetooth stereo on board." },
   { icon: "lily", title: "Lily pad", desc: "Giant floating mat for swimming." },
   { icon: "lifejacket", title: "Life jackets", desc: "USCG-approved for all ages." },
@@ -175,12 +191,12 @@ export const FAQ_ITEMS = [
   {
     question: "What's included?",
     answer:
-      "Your rental includes a licensed captain, fuel, cooler with ice and bottled water, premium Bluetooth sound system, and a giant floating lily pad. Life jackets are on board for all guests.",
+      "Your rental includes a licensed captain, fuel, cooler (ice included), premium Bluetooth sound system, and a giant floating lily pad. Life jackets are on board for all guests.",
   },
   {
     question: "Can we bring drinks?",
     answer:
-      "Yes. You may bring your own drinks and snacks. Glass is not allowed on the boat; please use cans or plastic. We provide ice and water.",
+      "Yes. You may bring your own drinks and snacks. Glass is not allowed on the boat; please use cans or plastic. We provide ice.",
   },
   {
     question: "Where do we meet?",

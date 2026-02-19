@@ -11,7 +11,6 @@ import { Dialog } from "@/components/ui/dialog";
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
 const TEXAS_SALES_TAX_RATE = 0.0825;
-const PETS_MAX = 4;
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
@@ -137,7 +136,6 @@ export function InlineBookingDetailsStep({
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [partySize, setPartySize] = useState(1);
-  const [petsCount, setPetsCount] = useState(0);
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
   const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
   const [tipPercent, setTipPercent] = useState(20);
@@ -213,10 +211,6 @@ export function InlineBookingDetailsStep({
       setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${experienceMaxGuests}.`);
       return;
     }
-    if (petsCount < 0 || petsCount > Math.min(experiencePetsMax, PETS_MAX)) {
-      setPaymentError(`Pets must be between 0 and ${Math.min(experiencePetsMax, PETS_MAX)}.`);
-      return;
-    }
     setPaymentError(null);
     setPaymentPhase("loading");
     const addonList = Object.entries(addonSelections)
@@ -233,7 +227,7 @@ export function InlineBookingDetailsStep({
           slotId: slot.id,
           rateId,
           partySize,
-          petsCount,
+          petsCount: 0,
           addonSelections: addonList,
           customerDraft: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           marketingOptIn,
@@ -488,19 +482,6 @@ export function InlineBookingDetailsStep({
                 aria-label="Party size"
               />
               <p className="text-[11px] text-brand-muted mt-0.5">Max {experienceMaxGuests} guests</p>
-            </div>
-            <div>
-              <label htmlFor="inline-booking-pets" className="block text-xs font-medium text-brand-dark mb-1">Pets</label>
-              <input
-                id="inline-booking-pets"
-                type="number"
-                min={0}
-                max={Math.min(experiencePetsMax, PETS_MAX)}
-                value={petsCount}
-                onChange={(e) => setPetsCount(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
-                aria-label="Number of pets"
-              />
             </div>
           </div>
           {displayAddons.length > 0 && (

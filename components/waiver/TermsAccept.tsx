@@ -7,6 +7,8 @@ interface TermsAcceptProps {
   termsHtml: string;
   onAcceptChange: (accepted: boolean) => void;
   requiredScrollToBottom?: boolean;
+  /** When set, show below the checkbox (e.g. "Please scroll to the bottom and agree to continue.") */
+  error?: string | null;
   className?: string;
 }
 
@@ -14,6 +16,7 @@ export function TermsAccept({
   termsHtml,
   onAcceptChange,
   requiredScrollToBottom = true,
+  error,
   className,
 }: TermsAcceptProps) {
   const [scrolledToBottom, setScrolledToBottom] = useState(false);
@@ -59,13 +62,19 @@ export function TermsAccept({
           checked={checked}
           onChange={(e) => setChecked(e.target.checked)}
           disabled={!canAccept}
-          className="mt-1.5 h-5 w-5 shrink-0 rounded border-brand-dark/30 text-brand-primary focus:ring-2 focus:ring-brand-primary"
-          aria-describedby={requiredScrollToBottom && !scrolledToBottom ? undefined : "terms-agree-desc"}
+          className={cn("mt-1.5 h-5 w-5 shrink-0 rounded border-brand-dark/30 text-brand-primary focus:ring-2 focus:ring-brand-primary", error && "border-red-500")}
+          aria-describedby={[requiredScrollToBottom && !scrolledToBottom ? undefined : "terms-agree-desc", error ? "terms-error" : undefined].filter(Boolean).join(" ") || undefined}
+          aria-invalid={error ? "true" : undefined}
         />
         <span id="terms-agree-desc" className="text-sm text-brand-dark pt-0.5">
           I have read and agree to the terms and conditions above.
         </span>
       </label>
+      {error && (
+        <p id="terms-error" className="text-sm text-red-600 font-medium" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

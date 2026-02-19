@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 
 function toISODate(d: Date): string {
@@ -68,14 +68,18 @@ export async function GET(request: NextRequest) {
     }
     start.setHours(0, 0, 0, 0);
     const prices: Record<string, number> = {};
+    const holidayDateStrings: string[] = [];
     for (let i = 0; i < days; i++) {
       const d = new Date(start);
       d.setDate(d.getDate() + i);
       const dateStr = toISODate(d);
       prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
+      if (isDateInAnyHolidayRange(dateStr, holidayDates) || isDefaultUSHoliday(dateStr)) {
+        holidayDateStrings.push(dateStr);
+      }
     }
 
-    return NextResponse.json({ prices });
+    return NextResponse.json({ prices, holidayDateStrings });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load date prices";
     console.error("[date-prices]", err);

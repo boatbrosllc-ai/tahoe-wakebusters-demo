@@ -1,28 +1,13 @@
-/**
- * Default max guests by experience slug when Firestore doesn't have maxGuests.
- * Pontoon: 14, Wake/Watersports: 8, Sunset: 6, Holiday: 10.
- */
-
-const DEFAULT_MAX_GUESTS_BY_SLUG: Record<string, number> = {
-  pontoon: 14,
-  watersports: 8,
-  sunset: 6,
-  holiday: 10,
-};
-
-const FALLBACK_MAX_GUESTS = 14;
+/** All boats support up to 14 people. */
+const MAX_GUESTS = 14;
 
 /**
  * Returns the effective max guests for an experience.
- * Uses experience.maxGuests when set, otherwise slug-based defaults so pontoon = 14, wake = 8, etc.
+ * All boats are up to 14 people.
  */
-export function getMaxGuestsForExperience(experience: {
+export function getMaxGuestsForExperience(_experience: {
   slug?: string;
   maxGuests?: number;
 }): number {
-  if (typeof experience.maxGuests === "number" && experience.maxGuests > 0) {
-    return experience.maxGuests;
-  }
-  const slug = (experience.slug ?? "").toLowerCase();
-  return DEFAULT_MAX_GUESTS_BY_SLUG[slug] ?? FALLBACK_MAX_GUESTS;
+  return MAX_GUESTS;
 }

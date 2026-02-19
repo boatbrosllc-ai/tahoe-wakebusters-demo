@@ -77,9 +77,6 @@ export async function POST(request: NextRequest) {
     if (input.partySize > maxGuests) {
       return NextResponse.json({ error: "Party size exceeds maximum" }, { status: 400 });
     }
-    if (input.petsCount > experience.petsMax) {
-      return NextResponse.json({ error: "Pets exceed maximum" }, { status: 400 });
-    }
 
     const ratesSnap = await db
       .collection("experiences")

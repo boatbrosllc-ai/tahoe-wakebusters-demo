@@ -28,7 +28,7 @@ type RateRow = {
   priceFriSunCents?: number;
   priceHolidayCents?: number;
 };
-type HolidayDateRow = { label: string; start: string; end: string; recurring?: boolean; priceCents?: number };
+type HolidayDateRow = { label: string; start: string; end: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<number, number> };
 type AddonRow = { name: string; description: string; priceCents: number; type: "toggle" | "quantity" | "tip"; maxQty: number; highlight: boolean };
 type FaqRow = { q: string; a: string };
 type TestimonialRow = { name: string; quote: string; date: string };
@@ -191,13 +191,23 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     bookingPosition: api.bookingPosition === "inline" || api.bookingPosition === "modal" ? api.bookingPosition : "sidebar",
     galleryAltTexts: Array.isArray(api.galleryAltTexts) ? api.galleryAltTexts.filter((x): x is string => typeof x === "string") : [],
     holidayDates: Array.isArray(api.holidayDates)
-      ? (api.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number }[]).map((h) => ({
-          label: typeof h.label === "string" ? h.label : "",
-          start: typeof h.start === "string" ? h.start : "",
-          end: typeof h.end === "string" ? h.end : "",
-          recurring: h.recurring === true,
-          priceCents: typeof h.priceCents === "number" ? h.priceCents : undefined,
-        }))
+      ? (api.holidayDates as { label?: string; start?: string; end?: string; recurring?: boolean; priceCents?: number; priceCentsByDuration?: Record<string, number> }[]).map((h) => {
+          const byDur = h.priceCentsByDuration && typeof h.priceCentsByDuration === "object"
+            ? Object.fromEntries(
+                Object.entries(h.priceCentsByDuration).filter(
+                  ([k, v]) => Number.isFinite(Number(k)) && typeof v === "number"
+                ).map(([k, v]) => [Number(k), v] as [number, number])
+              ) as Record<number, number>
+            : undefined;
+          return {
+            label: typeof h.label === "string" ? h.label : "",
+            start: typeof h.start === "string" ? h.start : "",
+            end: typeof h.end === "string" ? h.end : "",
+            recurring: h.recurring === true,
+            priceCents: typeof h.priceCents === "number" ? h.priceCents : undefined,
+            ...(byDur && Object.keys(byDur).length > 0 && { priceCentsByDuration: byDur }),
+          };
+        })
       : [],
     weekendDays: Array.isArray(api.weekendDays)
       ? (api.weekendDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
@@ -218,7 +228,7 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     gallery: d.gallery,
     location: { title: d.locationTitle, addressText: d.locationAddress, notes: d.locationNotes || undefined },
     maxGuests: d.maxGuests,
-    petsMax: d.petsMax,
+    petsMax: 0, // Pets are offered as add-ons only; no separate max-pets field
     included: d.included,
     whatToBring: d.whatToBring,
     rules: d.rules,
@@ -566,14 +576,11 @@ export function ExperienceForm({
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Capacity &amp; rules</h2>
+        <p className="text-sm text-brand-muted mb-3">To offer pets, add an add-on (e.g. &quot;Pet&quot; or &quot;Pets&quot;) in the Add-ons section below.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-max-guests">Max guests</label>
             <input id="exp-max-guests" type="number" min={0} className={inputClass} value={data.maxGuests || ""} onChange={(e) => update("maxGuests", parseInt(e.target.value, 10) || 0)} aria-label="Max guests" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-pets-max">Max pets</label>
-            <input id="exp-pets-max" type="number" min={0} className={inputClass} value={data.petsMax || ""} onChange={(e) => update("petsMax", parseInt(e.target.value, 10) || 0)} aria-label="Max pets" />
           </div>
         </div>
         <div>
@@ -699,12 +706,34 @@ export function ExperienceForm({
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <h2 className="text-lg font-semibold text-brand-dark">Add-ons</h2>
-        <p className="text-sm text-brand-muted">Optional extras customers can add (e.g. damage waiver). Name, price in cents, and type. Check &quot;Stand out&quot; to highlight one.</p>
+        <p className="text-sm text-brand-muted">Optional extras customers can add (e.g. damage waiver). Name, price in dollars, and type. Check &quot;Stand out&quot; to highlight one.</p>
         {data.addons.map((a, i) => (
           <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-start p-3 rounded-lg bg-brand-bg/30 border border-brand-dark/10">
             <input className={inputClass} placeholder="Name" value={a.name} onChange={(e) => setAddon(i, "name", e.target.value)} aria-label={`Add-on ${i + 1} name`} />
             <input className={inputClass} placeholder="Description" value={a.description} onChange={(e) => setAddon(i, "description", e.target.value)} aria-label={`Add-on ${i + 1} description`} />
-            <input type="number" min={0} className={inputClass} placeholder="Price cents" value={a.priceCents || ""} onChange={(e) => setAddon(i, "priceCents", parseInt(e.target.value, 10) || 0)} aria-label={`Add-on ${i + 1} price cents`} />
+            <div className="flex flex-col gap-0.5">
+              <label className="text-xs font-medium text-brand-muted">Price ($)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                className={inputClass}
+                placeholder="0.00"
+                value={a.priceCents ? (a.priceCents / 100).toFixed(2) : ""}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (raw === "") {
+                    setAddon(i, "priceCents", 0);
+                    return;
+                  }
+                  const dollars = parseFloat(raw);
+                  if (!Number.isNaN(dollars) && dollars >= 0) {
+                    setAddon(i, "priceCents", Math.round(dollars * 100));
+                  }
+                }}
+                aria-label={`Add-on ${i + 1} price in dollars`}
+              />
+            </div>
             <select className={inputClass} value={a.type} onChange={(e) => setAddon(i, "type", e.target.value as AddonRow["type"])} aria-label={`Add-on ${i + 1} type`}>
               <option value="toggle">Toggle</option>
               <option value="quantity">Quantity</option>

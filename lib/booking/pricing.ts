@@ -32,7 +32,7 @@ function toMonthDay(iso: string): string {
 }
 
 /** True if date (YYYY-MM-DD) falls in range, or if recurring and (month-day) falls in range every year. Empty end = single day (end = start). */
-function isDateInHolidayRange(
+export function isDateInHolidayRange(
   iso: string,
   start: string,
   end: string,
@@ -48,10 +48,16 @@ function isDateInHolidayRange(
   return md >= mdStart || md <= mdEnd;
 }
 
+/** True if date (YYYY-MM-DD) falls within any of the experience's holiday date ranges. */
+export function isDateInAnyHolidayRange(iso: string, holidayDates?: ExperienceHolidayDate[]): boolean {
+  if (!holidayDates?.length) return false;
+  return holidayDates.some((h) => isDateInHolidayRange(iso, h.start, h.end, h.recurring));
+}
+
 const DEFAULT_WEEKEND_DAYS = [0, 6]; // Sun, Sat
 
 /** True if date (YYYY-MM-DD) is a default US holiday: July 4, Memorial Day, Labor Day, Thanksgiving, Christmas (24–26), New Year (Dec 31 / Jan 1). */
-function isDefaultUSHoliday(iso: string): boolean {
+export function isDefaultUSHoliday(iso: string): boolean {
   const parts = iso.split("-");
   if (parts.length < 3) return false;
   const year = parseInt(parts[0], 10);

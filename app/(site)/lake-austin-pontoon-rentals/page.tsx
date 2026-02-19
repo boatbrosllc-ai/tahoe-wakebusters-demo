@@ -233,7 +233,7 @@ export default function LakeAustinPontoonRentalsPage() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-brand-primary shrink-0 mt-2" aria-hidden />
-                Cooler, ice, and bottled water
+                Cooler. Ice included.
               </li>
               <li className="flex items-start gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-brand-primary shrink-0 mt-2" aria-hidden />

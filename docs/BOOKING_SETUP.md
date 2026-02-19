@@ -256,6 +256,7 @@ To release expired holds periodically, call `POST /api/booking/cleanup-holds` wi
 
 - **Deposit:** Customer pays 50% via Payment Element; card is saved for off-session use. Booking is created with status `final_due` and `finalChargeAt` = trip start − 48 hours.
 - **Final charge cron:** Call `POST /api/booking/run-final-charges` with `Authorization: Bearer CRON_SECRET` (e.g. every 15–30 minutes). It attempts off-session final charge for bookings where `status === "final_due"` and `finalChargeAt <= now`. Webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) marks the booking `final_paid`.
+- **Final payment request email (48h before trip):** Call `POST /api/booking/final-payment-reminder-cron` with `Authorization: Bearer CRON_SECRET` (e.g. hourly). Finds `final_due` bookings whose trip is in 46–50 hours, sends one email per booking with a secure “Pay now” link to `/booking/manage?token=...`. After they pay on that page, the Stripe webhook marks the booking `final_paid`. Requires `MANAGE_BOOKING_SECRET` and `APP_BASE_URL`. Tracks `finalPaymentRequestSentAt` on the booking so each customer gets only one email.
 - **Manage booking:** Set `MANAGE_BOOKING_SECRET` in env. Confirmation email includes a signed link to `/booking/manage?token=...` where the customer can update card or pay remaining balance.
 - **Firestore index:** For `run-final-charges` you may need a composite index on `bookings`: `status` (Ascending) + `finalChargeAt` (Ascending). If the query fails, use the link in the error to create the index in Firebase Console.
 

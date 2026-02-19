@@ -27,6 +27,11 @@ export const metadata: Metadata = {
     title: "Lake Austin Boat Rentals | Pontoon, Wake & Sunset | Boat Bros",
     description:
       "Lake Austin boat rentals with captain. Pontoon, wake surf, sunset cruises. Book online. Boat Bros ATX.",
+    images: [{ url: "/photos/IMG_3160.webp", width: 1200, height: 630, alt: "Lake Austin pontoon – Boat Bros ATX" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: ["/photos/IMG_3160.webp"],
   },
 };
 

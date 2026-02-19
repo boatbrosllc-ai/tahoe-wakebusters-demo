@@ -129,6 +129,7 @@ export function ExperienceCalendarSection({
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
   const [directDiscountCode, setDirectDiscountCode] = useState("");
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   /** When using inline step-2 (onOpenInModal), the slot chosen for "Continue to choose your boat". */
   const [selectedSlotInline, setSelectedSlotInline] = useState<SlotDto | null>(null);
   /** When true, show "Choose your boat" inline on the page instead of opening the modal. */
@@ -298,6 +299,7 @@ export function ExperienceCalendarSection({
   useEffect(() => {
     if (!experienceId) {
       setDatePrices({});
+      setHolidayDateStrings(new Set());
       return;
     }
     const start = new Date(dateRange.start + "T00:00:00");
@@ -311,8 +313,16 @@ export function ExperienceCalendarSection({
       .then((data) => {
         if (data?.prices && typeof data.prices === "object") setDatePrices(data.prices);
         else setDatePrices({});
+        if (Array.isArray(data?.holidayDateStrings)) {
+          setHolidayDateStrings(new Set(data.holidayDateStrings));
+        } else {
+          setHolidayDateStrings(new Set());
+        }
       })
-      .catch(() => setDatePrices({}));
+      .catch(() => {
+        setDatePrices({});
+        setHolidayDateStrings(new Set());
+      });
   }, [experienceId, dateRange.start, dateRange.end, rateIdForPricing]);
 
   // When only one rate, auto-select duration so calendar shows availability without an extra click
@@ -582,6 +592,7 @@ export function ExperienceCalendarSection({
     slotsByDate,
     slotsLength: slots.length,
     datePrices,
+    holidayDateStrings,
     todayStr,
     handleDayClick,
     selectedSlotInline,

@@ -194,7 +194,6 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
   );
 
   const [partySize, setPartySize] = useState(2);
-  const [petsCount, setPetsCount] = useState(0);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim());
   const showEmailError = customer.email.length > 0 && !emailValid;
@@ -209,8 +208,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
     emailValid &&
     cancellationAck &&
     partySize >= 1 &&
-    partySize <= detail.boat.capacityMax &&
-    petsCount <= detail.boat.petsMax;
+    partySize <= detail.boat.capacityMax;
 
   const currentStep = !boatId ? 1 : !selectedSlot ? 2 : !selectedRateId ? 3 : 4;
   const steps = [
@@ -245,7 +243,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
           rateId: selectedRateId,
           addonSelections: addonSelections.filter((s) => s.qty > 0),
           partySize,
-          petsCount,
+          petsCount: 0,
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
@@ -446,7 +444,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                 <section className="rounded-2xl border border-brand-dark/10 bg-white p-6 shadow-soft">
                   <h2 className="text-xl font-semibold text-brand-dark mb-4">Duration</h2>
                   <div className="flex flex-wrap gap-2">
-                    {detail.rates.map((r) => (
+                    {[...detail.rates].sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0)).map((r) => (
                       <button
                         key={r.id}
                         type="button"
@@ -578,21 +576,6 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                       />
                       <p className="mt-1 text-xs text-brand-muted">Max {detail.boat.capacityMax}</p>
                     </div>
-                    <div>
-                      <label htmlFor="booking-pets" className="mb-1.5 block text-sm font-medium text-brand-dark">Pets</label>
-                      <input
-                        id="booking-pets"
-                        type="number"
-                        min={0}
-                        max={detail.boat.petsMax}
-                        value={petsCount}
-                        onChange={(e) => setPetsCount(Math.min(detail.boat.petsMax, Math.max(0, parseInt(e.target.value, 10) || 0)))}
-                        className="w-full rounded-xl border border-brand-dark/15 bg-white px-4 py-3 text-brand-dark placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20"
-                        placeholder="e.g. 0"
-                        aria-label="Number of pets"
-                      />
-                      <p className="mt-1 text-xs text-brand-muted">Max {detail.boat.petsMax}</p>
-                    </div>
                   </div>
                   <label className="mt-4 flex items-start gap-3 cursor-pointer">
                     <input
@@ -645,7 +628,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                     .join(", ")}
                 </li>
               )}
-              <li><span className="text-brand-muted">Party:</span> {partySize} {petsCount > 0 && `, ${petsCount} pet(s)`}</li>
+              <li><span className="text-brand-muted">Party:</span> {partySize}</li>
             </ul>
           )}
           {orderSummaryTotalCents > 0 && (

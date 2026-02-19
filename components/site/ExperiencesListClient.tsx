@@ -13,43 +13,6 @@ import { motion, useReducedMotion } from "framer-motion";
 
 type ListingData = { title?: string; subtitle?: string; heroUrl?: string };
 
-/** Most popular ribbon badge with swing + scale animation; respects reduced motion. */
-function MostPopularBadge() {
-  const reducedMotion = useReducedMotion();
-  return (
-    <motion.div
-      className="absolute top-0 right-0 z-30 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 origin-[85%_15%]"
-      style={{ rotate: 16 }}
-      animate={
-        reducedMotion
-          ? { rotate: 16, scale: 1 }
-          : {
-              rotate: [14, 22, 14],
-              scale: [1, 1.04, 1],
-            }
-      }
-      transition={
-        reducedMotion
-          ? {}
-          : {
-              rotate: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
-              scale: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
-            }
-      }
-      whileHover={reducedMotion ? {} : { rotate: 22, scale: 1.08 }}
-      aria-hidden
-    >
-      <Image
-        src="/photos/most popular.png"
-        alt=""
-        fill
-        className="object-contain drop-shadow-xl transition-[filter] duration-500 group-hover:drop-shadow-2xl"
-        sizes="(max-width: 640px) 208px, (max-width: 1024px) 288px, 384px"
-      />
-    </motion.div>
-  );
-}
-
 export function ExperiencesListClient() {
   const [order, setOrder] = useState<string[] | null>(null);
   const [listingBySlug, setListingBySlug] = useState<Record<string, ListingData>>({});
@@ -94,14 +57,17 @@ export function ExperiencesListClient() {
     });
   }, [order]);
 
+  /** All boats are up to 14 people; use this for every experience card. */
+  const CAPACITY_ALL = "Up to 14";
+
   const experienceWithListingData = (exp: Experience): Experience => {
     const listing = listingBySlug[exp.slug];
-    if (!listing) return exp;
     return {
       ...exp,
-      title: listing.title?.trim() || exp.title,
-      shortDescription: listing.subtitle?.trim() || exp.shortDescription,
-      heroImage: listing.heroUrl || exp.heroImage,
+      title: listing?.title?.trim() || exp.title,
+      shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
+      heroImage: listing?.heroUrl || exp.heroImage,
+      capacity: CAPACITY_ALL, // All boats up to 14
     };
   };
 
@@ -206,7 +172,18 @@ export function ExperiencesListClient() {
                 {/* Ring overlay so pink outline stays on top of image */}
                 <div className="absolute inset-0 rounded-2xl ring-4 ring-brand-secondary pointer-events-none z-20 transition-all duration-300 group-hover:ring-brand-secondary/90" aria-hidden />
                 {firstData.slug === "pontoon" && (
-                  <MostPopularBadge />
+                  <div
+                    className="absolute top-0 right-0 z-30 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
+                    aria-hidden
+                  >
+                    <Image
+                      src="/photos/most popular.png"
+                      alt=""
+                      fill
+                      className="object-contain drop-shadow-xl transition-[filter] duration-500 group-hover:drop-shadow-2xl"
+                      sizes="(max-width: 640px) 208px, (max-width: 1024px) 288px, 384px"
+                    />
+                  </div>
                 )}
                 <div className="relative overflow-hidden rounded-2xl aspect-[4/3] sm:aspect-[5/2] min-h-[280px] sm:min-h-[300px] lg:min-h-[320px] z-0">
                   <Image

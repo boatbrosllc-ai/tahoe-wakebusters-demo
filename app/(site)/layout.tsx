@@ -24,6 +24,13 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     siteName: brand.companyName,
+    /** Default share preview: pontoon cover so link previews (e.g. text/SMS) show the pontoon, not the most-popular badge. */
+    images: [{ url: "/photos/IMG_3160.webp", width: 1200, height: 630, alt: "Lake Austin pontoon – Boat Bros ATX" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    /** Same image for Twitter/DMs so shared links show pontoon cover. */
+    images: ["/photos/IMG_3160.webp"],
   },
   robots: "index, follow",
 };

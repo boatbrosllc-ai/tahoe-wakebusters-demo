@@ -91,7 +91,6 @@ export function ExperienceBookingCard({
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [partySize, setPartySize] = useState(2);
-  const [petsCount, setPetsCount] = useState(0);
   const [holdId, setHoldId] = useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [pricing, setPricing] = useState<{ totalCents: number; currency: string } | null>(null);
@@ -173,8 +172,7 @@ export function ExperienceBookingCard({
     emailValid &&
     cancellationAck &&
     partySize >= 1 &&
-    partySize <= maxGuests &&
-    petsCount <= petsMax;
+    partySize <= maxGuests;
 
   const addonsTotalCents = useMemo(
     () =>
@@ -200,7 +198,7 @@ export function ExperienceBookingCard({
           rateId: selectedRateId,
           addonSelections: addonSelections.filter((s) => s.qty > 0),
           partySize,
-          petsCount,
+          petsCount: 0,
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
@@ -482,7 +480,7 @@ export function ExperienceBookingCard({
       <div className="mb-4">
         <p className="text-sm font-medium text-brand-dark mb-2">Duration</p>
         <div className="flex flex-wrap gap-2">
-          {rates.map((r) => (
+          {[...rates].sort((a, b) => a.durationHours - b.durationHours).map((r) => (
             <button
               key={r.id}
               type="button"
@@ -590,20 +588,6 @@ export function ExperienceBookingCard({
               className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-brand-dark placeholder:text-brand-muted/70"
               placeholder="e.g. 4"
               aria-label="Party size"
-            />
-          </div>
-          <div>
-            <label htmlFor="exp-booking-pets" className="block text-xs text-brand-muted mb-1">Pets</label>
-            <input
-              id="exp-booking-pets"
-              type="number"
-              min={0}
-              max={petsMax}
-              value={petsCount}
-              onChange={(e) => setPetsCount(Math.min(petsMax, Math.max(0, parseInt(e.target.value, 10) || 0)))}
-              className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-brand-dark placeholder:text-brand-muted/70"
-              placeholder="e.g. 0"
-              aria-label="Number of pets"
             />
           </div>
         </div>

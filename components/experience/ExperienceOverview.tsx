@@ -2,26 +2,9 @@
 
 import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
-import {
-  User,
-  Music,
-  Sun,
-  Beer,
-  Fuel,
-  Sparkles,
-} from "lucide-react";
 import { EXPERIENCE_OVERVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-
-const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
-  captain: User,
-  sound: Music,
-  lily: Sun,
-  cooler: Beer,
-  fuel: Fuel,
-  sparkles: Sparkles,
-};
 
 const ease = [0.22, 1, 0.36, 1];
 
@@ -29,7 +12,8 @@ export interface ExperienceOverviewProps {
   overviewImageUrl?: string;
   headline?: string;
   story?: string;
-  features?: { icon: string; text: string }[];
+  /** SEO-rich body paragraphs (things to do, where captains go, lunch, etc.). */
+  seoParagraphs?: string[];
   timeline?: { step: string; desc: string }[];
   imageAlt?: string;
 }
@@ -38,7 +22,7 @@ export function ExperienceOverview({
   overviewImageUrl,
   headline,
   story,
-  features: featuresProp,
+  seoParagraphs: seoParagraphsProp,
   timeline: timelineProp,
   imageAlt,
 }: ExperienceOverviewProps = {}) {
@@ -46,7 +30,7 @@ export function ExperienceOverview({
   const imageSrc = overviewImageUrl ? getDisplayImageUrl(overviewImageUrl) : EXPERIENCE_OVERVIEW.imageUrl;
   const headlineText = headline ?? EXPERIENCE_OVERVIEW.headline;
   const storyText = story ?? EXPERIENCE_OVERVIEW.story;
-  const features = featuresProp?.length ? featuresProp : EXPERIENCE_OVERVIEW.features;
+  const seoParagraphs = seoParagraphsProp?.length ? seoParagraphsProp : EXPERIENCE_OVERVIEW.seoParagraphs ?? [];
   const timeline = timelineProp?.length ? timelineProp : EXPERIENCE_OVERVIEW.timeline;
 
   return (
@@ -93,27 +77,22 @@ export function ExperienceOverview({
             >
               {storyText}
             </motion.p>
-            <ul className="mt-8 space-y-3">
-              {features.map((f, i) => {
-                const Icon = iconMap[f.icon] ?? User;
-                return (
-                  <li key={f.text}>
-                    <motion.span
-                      className="flex items-center gap-3 text-white/90"
-                      initial={reduceMotion ? false : { opacity: 0, x: 16 }}
-                      whileInView={reduceMotion ? {} : { opacity: 1, x: 0 }}
-                      viewport={{ once: true, amount: 0.2 }}
-                      transition={{ duration: 0.5, delay: 0.05 * i, ease }}
-                    >
-                      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-primary/20 text-brand-primary">
-                        <Icon className="h-4 w-4" />
-                      </span>
-                      <span>{f.text}</span>
-                    </motion.span>
-                  </li>
-                );
-              })}
-            </ul>
+            {seoParagraphs.length > 0 && (
+              <div className="mt-6 space-y-4 max-w-xl">
+                {seoParagraphs.map((paragraph, i) => (
+                  <motion.p
+                    key={i}
+                    className="text-white/75 text-base leading-relaxed"
+                    initial={reduceMotion ? false : { opacity: 0, y: 14 }}
+                    whileInView={reduceMotion ? {} : { opacity: 1, y: 0 }}
+                    viewport={{ once: true, amount: 0.2 }}
+                    transition={{ duration: 0.5, delay: 0.12 + 0.05 * i, ease }}
+                  >
+                    {paragraph}
+                  </motion.p>
+                ))}
+              </div>
+            )}
             <div className="mt-10">
               <p className="text-white/70 text-sm font-medium uppercase tracking-wider mb-4">
                 What you&apos;ll do

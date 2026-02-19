@@ -9,7 +9,10 @@ import { renderBookingConfirmationHtml } from "./email-templates";
 import {
   buildReminderHtml,
   getReminderSubject,
+  buildFinalPaymentRequestHtml,
+  getFinalPaymentRequestSubject,
   type BookingReminderParams,
+  type FinalPaymentRequestParams,
   type ReminderType,
 } from "./reminder-emails";
 import type { Booking } from "./types";
@@ -170,6 +173,30 @@ export async function sendBookingReminderEmail(
     const text = await res.text();
     console.error("[brevo] sendBookingReminderEmail", type, res.status, text);
     throw new Error(`Brevo reminder send failed: ${res.status}`);
+  }
+}
+
+/**
+ * Send "final payment request" email (48h before trip) to customers with final_due status.
+ * Includes a secure link to pay remaining balance; after payment, webhook marks booking final_paid.
+ */
+export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestParams): Promise<void> {
+  const html = buildFinalPaymentRequestHtml(params);
+  const subject = getFinalPaymentRequestSubject();
+  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      sender: getSender(),
+      to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("[brevo] sendFinalPaymentRequestEmail", res.status, text);
+    throw new Error(`Brevo send failed: ${res.status}`);
   }
 }
 

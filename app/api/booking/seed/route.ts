@@ -15,7 +15,7 @@ const BOATS = [
   {
     name: "Long Pontoon",
     timezone: "America/Chicago",
-    capacityMax: 16,
+    capacityMax: 14,
     petsMax: 4,
     defaultLocationText: "Lake Austin — we'll send exact meeting point after booking.",
     cancellationPolicyText: "Cancel 24h before for full refund. See terms for details.",
@@ -23,7 +23,7 @@ const BOATS = [
   {
     name: "Wake Board",
     timezone: "America/Chicago",
-    capacityMax: 8,
+    capacityMax: 14,
     petsMax: 0,
     defaultLocationText: "Lake Austin — we'll send exact meeting point after booking.",
     cancellationPolicyText: "Cancel 24h before for full refund. See terms for details.",

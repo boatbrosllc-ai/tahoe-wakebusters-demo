@@ -8,6 +8,10 @@ interface SignaturePadProps {
   typedName?: string;
   onTypedNameChange?: (value: string) => void;
   requireTypedName?: boolean;
+  /** Shown below the signature canvas when signature is required but missing */
+  signatureError?: string | null;
+  /** Shown below the typed name input when required but empty */
+  typedNameError?: string | null;
   className?: string;
 }
 
@@ -16,6 +20,8 @@ export function SignaturePad({
   typedName = "",
   onTypedNameChange,
   requireTypedName = false,
+  signatureError,
+  typedNameError,
   className,
 }: SignaturePadProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -111,7 +117,7 @@ export function SignaturePad({
       <p className="text-sm text-brand-muted">
         Use your finger or mouse to sign in the box below.
       </p>
-      <div className="border-2 border-brand-dark/20 rounded-xl overflow-hidden bg-white touch-none">
+      <div className={cn("border-2 rounded-xl overflow-hidden bg-white touch-none", signatureError ? "border-red-500" : "border-brand-dark/20")}>
         <canvas
           ref={canvasRef}
           className="w-full block touch-none"
@@ -124,8 +130,12 @@ export function SignaturePad({
           onTouchMove={move}
           onTouchEnd={end}
           aria-label="Sign here with your finger or mouse"
+          aria-invalid={signatureError ? "true" : undefined}
         />
       </div>
+      {signatureError && (
+        <p className="text-sm text-red-600 font-medium" role="alert">{signatureError}</p>
+      )}
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -144,9 +154,17 @@ export function SignaturePad({
             type="text"
             value={typedName}
             onChange={(e) => onTypedNameChange(e.target.value)}
-            className="w-full rounded-xl border border-brand-dark/20 px-4 py-3 text-base text-brand-dark placeholder:text-brand-muted focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20 min-h-[48px] touch-manipulation"
+            className={cn(
+              "w-full rounded-xl border px-4 py-3 text-base text-brand-dark placeholder:text-brand-muted focus:outline-none focus:ring-2 min-h-[48px] touch-manipulation",
+              typedNameError ? "border-red-500 focus:border-red-500 focus:ring-red-500/20" : "border-brand-dark/20 focus:border-brand-primary focus:ring-brand-primary/20"
+            )}
             placeholder="Type your full name"
+            aria-invalid={typedNameError ? "true" : undefined}
+            aria-describedby={typedNameError ? "typed-name-error" : undefined}
           />
+          {typedNameError && (
+            <p id="typed-name-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{typedNameError}</p>
+          )}
         </div>
       )}
     </div>

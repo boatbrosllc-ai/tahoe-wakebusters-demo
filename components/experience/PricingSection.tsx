@@ -36,7 +36,7 @@ export function PricingSection({ id }: { id?: string }) {
           viewport={{ once: true }}
           transition={{ duration: 0.5, delay: 0.1 }}
         >
-          All trips include captain, fuel, cooler & ice, sound system, and lily pad.
+          All trips include captain, fuel, cooler (ice included), sound system, and lily pad.
         </motion.p>
         <motion.div
           className="max-w-2xl rounded-2xl border border-white/20 bg-white/5 backdrop-blur-sm p-6 sm:p-8"

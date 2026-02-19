@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { experiences, formatExperiencePriceLabel } from "@/content/experiences";
 import type { Experience } from "@/content/experiences";
 import { getDisplayImageUrl } from "@/lib/utils";
@@ -11,8 +11,6 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 
 export function ExperienceChooser() {
   const [listingBySlug, setListingBySlug] = useState<Record<string, { title?: string; subtitle?: string; heroMedia?: { url?: string } }>>({});
-  const reducedMotion = useReducedMotion();
-
   useEffect(() => {
     fetch("/api/experiences")
       .then((res) => res.json())
@@ -27,14 +25,17 @@ export function ExperienceChooser() {
       .catch(() => setListingBySlug({}));
   }, []);
 
+  /** All boats are up to 14 people. */
+  const CAPACITY_ALL = "Up to 14";
+
   const experienceWithListingData = (exp: Experience): Experience => {
     const listing = listingBySlug[exp.slug];
-    if (!listing) return exp;
     return {
       ...exp,
-      title: listing.title?.trim() || exp.title,
-      shortDescription: listing.subtitle?.trim() || exp.shortDescription,
-      heroImage: listing.heroMedia?.url || exp.heroImage,
+      title: listing?.title?.trim() || exp.title,
+      shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
+      heroImage: listing?.heroMedia?.url || exp.heroImage,
+      capacity: CAPACITY_ALL,
     };
   };
 
@@ -92,24 +93,9 @@ export function ExperienceChooser() {
               className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-secondary/20 hover:-translate-y-1 hover:ring-brand-secondary/90"
               aria-label={`${pontoonData.title} — view details`}
             >
-              {/* Most popular tag: overlapping top-right; swing animation */}
-              <motion.div
-                className="absolute top-0 right-0 z-20 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 origin-[85%_15%]"
-                style={{ rotate: 16 }}
-                animate={
-                  reducedMotion
-                    ? { rotate: 16, scale: 1 }
-                    : { rotate: [14, 22, 14], scale: [1, 1.04, 1] }
-                }
-                transition={
-                  reducedMotion
-                    ? {}
-                    : {
-                        rotate: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
-                        scale: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
-                      }
-                }
-                whileHover={reducedMotion ? {} : { rotate: 22, scale: 1.08 }}
+              {/* Most popular tag: overlapping top-right; scaled for mobile vs desktop */}
+              <div
+                className="absolute top-0 right-0 z-20 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
                 aria-hidden
               >
                 <Image
@@ -119,7 +105,7 @@ export function ExperienceChooser() {
                   className="object-contain drop-shadow-xl transition-[filter] duration-500 group-hover:drop-shadow-2xl"
                   sizes="(max-width: 640px) 208px, (max-width: 1024px) 288px, 384px"
                 />
-              </motion.div>
+              </div>
               <div className="relative overflow-hidden rounded-2xl aspect-[4/3] sm:aspect-[5/2] min-h-[280px] sm:min-h-[300px] lg:min-h-[320px]">
                 <Image
                   src={getDisplayImageUrl(pontoonData.heroImage)}

@@ -101,7 +101,6 @@ export function ExperienceCalendarPage({
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [partySize, setPartySize] = useState(2);
-  const [petsCount, setPetsCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -266,8 +265,7 @@ export function ExperienceCalendarPage({
     emailValid &&
     cancellationAck &&
     partySize >= 1 &&
-    partySize <= maxGuests &&
-    petsCount <= petsMax;
+    partySize <= maxGuests;
 
   const addonsTotalCents = useMemo(
     () =>
@@ -294,7 +292,7 @@ export function ExperienceCalendarPage({
           rateId: rateIdForSlot,
           addonSelections: addonSelections.filter((s) => s.qty > 0),
           partySize,
-          petsCount,
+          petsCount: 0,
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
@@ -419,19 +417,6 @@ export function ExperienceCalendarPage({
                             onChange={(e) => setPartySize(Math.min(maxGuests, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                             className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
                             aria-labelledby="compact-party-label"
-                          />
-                        </div>
-                        <div>
-                          <label id="compact-pets-label" className="block text-xs text-brand-muted mb-1">Pets</label>
-                          <input
-                            id="compact-pets"
-                            type="number"
-                            min={0}
-                            max={petsMax}
-                            value={petsCount}
-                            onChange={(e) => setPetsCount(Math.min(petsMax, Math.max(0, parseInt(e.target.value, 10) || 0)))}
-                            className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
-                            aria-labelledby="compact-pets-label"
                           />
                         </div>
                       </div>
@@ -704,19 +689,6 @@ export function ExperienceCalendarPage({
                           onChange={(e) => setPartySize(Math.min(maxGuests, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                           className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
                           aria-labelledby="calendar-party-label"
-                        />
-                      </div>
-                      <div>
-                        <label id="calendar-pets-label" className="block text-xs text-brand-muted mb-1">Pets</label>
-                        <input
-                          id="calendar-pets"
-                          type="number"
-                          min={0}
-                          max={petsMax}
-                          value={petsCount}
-                          onChange={(e) => setPetsCount(Math.min(petsMax, Math.max(0, parseInt(e.target.value, 10) || 0)))}
-                          className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-sm"
-                          aria-labelledby="calendar-pets-label"
                         />
                       </div>
                     </div>

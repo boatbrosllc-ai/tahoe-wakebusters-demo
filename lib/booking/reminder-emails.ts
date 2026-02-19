@@ -224,3 +224,57 @@ export function getReminderSubject(type: ReminderType, experienceName: string): 
       return `Reminder: ${experienceName} – Boat Bros ATX`;
   }
 }
+
+/** Params for the "final payment request" email (48h before trip, deposit paid / final_due). */
+export interface FinalPaymentRequestParams {
+  to: string;
+  customerName: string;
+  experienceName: string;
+  tripDate: string;
+  startTime: string;
+  /** Formatted amount, e.g. "$150.00" */
+  amountFormatted: string;
+  /** Full URL to pay (manage booking page with token). */
+  payLink: string;
+}
+
+const FINAL_PAYMENT_SUBJECT = "Complete your payment – Boat Bros ATX";
+
+export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams): string {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${BASE_STYLES}">
+  <div style="padding: 24px 16px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="${CONTAINER}">
+      <tr>
+        ${reminderHeaderHtml("Final payment due – 48 hours until your trip")}
+      </tr>
+      <tr>
+        <td style="padding: 28px;">
+          <p style="margin:0 0 16px;font-size:16px;color:${DARK};line-height:1.5;">Hi ${escapeHtml(params.customerName)},</p>
+          <p style="margin:0 0 16px;font-size:15px;color:${MUTED};line-height:1.6;">Your <strong style="color:${DARK};">${escapeHtml(params.experienceName)}</strong> is in 48 hours—<strong style="color:${DARK};">${escapeHtml(params.tripDate)}</strong> at <strong style="color:${DARK};">${escapeHtml(params.startTime)}</strong>. Please complete your remaining balance so you&apos;re all set.</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f0fdf4; border-radius: 12px; margin: 20px 0; border: 1px solid rgba(34,197,94,0.3);">
+            <tr>
+              <td style="padding: 20px 24px;">
+                <p style="margin: 0 0 8px; font-size: 14px; font-weight: 600; color: ${DARK};">Remaining balance</p>
+                <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: ${DARK};">${escapeHtml(params.amountFormatted)}</p>
+                <a href="${escapeHtml(params.payLink)}" target="_blank" rel="noopener" style="display: inline-block; background: ${PRIMARY}; color: #fff; padding: 14px 28px; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px;">Pay now</a>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;font-size:14px;color:${MUTED};line-height:1.6;">This link takes you to your booking where you can pay securely. After payment, your booking will be marked paid and you&apos;re good to go.</p>
+          <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you on the water!</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Boat Bros ATX</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>`.trim();
+}
+
+export function getFinalPaymentRequestSubject(): string {
+  return FINAL_PAYMENT_SUBJECT;
+}
