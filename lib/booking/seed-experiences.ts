@@ -60,15 +60,15 @@ const EXPERIENCES: Omit<Experience, "id">[] = [
     title: "Lake Austin WaterSports Charter",
     subtitle: "Tow boats for wakeboarding, surfing, and tubing.",
     descriptionLong:
-      "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Experienced drivers available. Great for thrill-seekers and families who want action on the water.",
+      "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Captain included. Great for thrill-seekers and families who want action on the water.",
     heroMedia: { type: "image", url: "/photos/Thomas_2.14.1.webp" },
     gallery: ["/photos/Thomas_2.14.1.webp", "/photos/DSC00513%20(3).webp", "/photos/DSC00539.webp", "/photos/IMG_2123.webp"],
     location: { title: "Lake Austin", addressText: "We'll send exact meeting point after booking." },
     maxGuests: 8,
     petsMax: 0,
-    included: ["Wakeboard & surf gear", "Tubes", "Life vests", "Driver optional"],
+    included: ["Wakeboard & surf gear", "Tubes", "Life vests", "Captain included"],
     whatToBring: ["Swimwear", "Sunscreen", "Valid ID"],
-    rules: ["No glass", "Life vests when in water", "Follow driver instructions"],
+    rules: ["No glass", "Life vests when in water", "Follow captain instructions"],
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [
       { q: "Is equipment included?", a: "Yes. Wakeboards, surf board, and tubes are included. Life vests in all sizes provided." },

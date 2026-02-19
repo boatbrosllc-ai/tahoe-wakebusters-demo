@@ -63,7 +63,7 @@ export function SocialProofStrip({ rating, ratingCount, stats, tagline }: Social
     >
       {/* Mobile: horizontal scroll with plenty of padding so nothing is cut off; touch-friendly */}
       <div className="w-full overflow-x-auto overflow-y-hidden scrollbar-hide sm:overflow-visible social-proof-scroll">
-        <div className="flex flex-nowrap sm:flex-wrap items-center gap-6 sm:gap-8 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(2rem,calc(env(safe-area-inset-right)+1rem))] py-1 min-w-max sm:min-w-0 sm:max-w-7xl sm:mx-auto sm:px-6 lg:px-8 sm:py-0 sm:pl-6 sm:pr-8">
+        <div className="flex flex-nowrap sm:flex-wrap items-center justify-center gap-6 sm:gap-8 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(2rem,calc(env(safe-area-inset-right)+1rem))] py-1 min-w-max sm:min-w-0 sm:max-w-7xl sm:mx-auto sm:px-6 lg:px-8 sm:py-0 sm:pl-6 sm:pr-8">
           {items.map((item, i) => (
             <div
               key={`${item.label}-${i}`}

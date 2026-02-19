@@ -85,7 +85,7 @@ export async function createWaiverForBooking(
       const parsed = b.slotId ? parseSlotId(b.slotId) : null;
       if (parsed) {
         tripDate = parsed.dateStr;
-        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         startTime = formatBookingTime(start);
         endTime = formatBookingTime(end);
       }

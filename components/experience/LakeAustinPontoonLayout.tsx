@@ -60,7 +60,7 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
         id={BOOKING_SECTION_ID}
         className="relative -mt-12 sm:-mt-32 lg:-mt-40 z-10 max-w-7xl mx-auto px-5 sm:px-6 lg:px-8 pt-4 sm:pt-0 pb-8"
       >
-        <div className="flex justify-end">
+        <div className="flex justify-center">
           <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0">
             <ExperienceCalendarSection
               firestoreSlug="pontoon"

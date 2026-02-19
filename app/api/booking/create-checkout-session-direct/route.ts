@@ -127,7 +127,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Slot no longer available" }, { status: 409 });
       }
     } else {
-      slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
+      slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
     }
     if (!isSeasonalAllowed(experience, slotStart)) {
       return NextResponse.json({ error: "Experience not available for this date" }, { status: 400 });
@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
             const b = doc.data() as { slotId?: string };
             const p = b.slotId ? parseSlotId(b.slotId) : null;
             if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
             }
@@ -211,7 +211,7 @@ export async function POST(request: NextRequest) {
             const b = doc.data() as { slotId?: string };
             const p = b.slotId ? parseSlotId(b.slotId) : null;
             if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
             }
@@ -226,7 +226,8 @@ export async function POST(request: NextRequest) {
         const { start: slotStartDate, end: slotEndDate } = getSlotStartEnd(
           parsed.dateStr,
           parsed.startHour,
-          parsed.durationHours
+          parsed.durationHours,
+          parsed.startMinute ?? 0
         );
         const slotStartMs = slotStartDate.getTime();
         const slotEndMs = slotEndDate.getTime();
@@ -274,7 +275,7 @@ export async function POST(request: NextRequest) {
             const b = doc.data() as { slotId?: string };
             const p = b.slotId ? parseSlotId(b.slotId) : null;
             if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
             }
@@ -287,7 +288,7 @@ export async function POST(request: NextRequest) {
             const b = doc.data() as { slotId?: string };
             const p = b.slotId ? parseSlotId(b.slotId) : null;
             if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours);
+            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
             }

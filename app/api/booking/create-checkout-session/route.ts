@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
       if (hasExperience && "priceCents" in rate) {
         const parsed = parseSlotId(hold.slotId);
         if (parsed) {
-          const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours).start;
+          const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
           const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
           const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
           if (experience) {

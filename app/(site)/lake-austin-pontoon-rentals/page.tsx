@@ -41,7 +41,7 @@ const PONTOON_FAQ: FAQItem[] = [
   },
   {
     question: "How many guests fit?",
-    answer: "Our pontoons typically fit 10–12 guests depending on the boat. Check the experience page or contact us for your group size.",
+    answer: "Our pontoons typically fit up to 14 guests depending on the boat. Check the experience page or contact us for your group size.",
   },
   {
     question: "Is alcohol allowed?",

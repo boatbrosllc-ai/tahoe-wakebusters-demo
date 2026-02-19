@@ -45,6 +45,15 @@ export function formatBookingTime(d: Date): string {
 }
 
 /**
+ * Time only, safe for invalid dates (returns "—" instead of "Invalid Date").
+ * Use in admin/list when slotId may be malformed.
+ */
+export function formatBookingTimeSafe(d: Date): string {
+  if (typeof d?.getTime !== "function" || Number.isNaN(d.getTime())) return "—";
+  return formatBookingTime(d);
+}
+
+/**
  * Date only (e.g. "Sat, Mar 15, 2025"). Use when time is shown separately.
  */
 export function formatBookingDate(d: Date): string {

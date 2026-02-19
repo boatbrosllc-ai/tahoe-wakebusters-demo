@@ -69,7 +69,11 @@ export function ExperiencesListClient() {
   };
 
   const pontoonExperience = sortedExperiences.find((e) => e.slug === "pontoon");
-  const rest = sortedExperiences.filter((e) => e.slug !== "pontoon");
+  const restUnsorted = sortedExperiences.filter((e) => e.slug !== "pontoon");
+  // Wake Surf (watersports) always second after Pontoon on mobile and desktop
+  const watersports = restUnsorted.find((e) => e.slug === "watersports");
+  const restOthers = restUnsorted.filter((e) => e.slug !== "watersports");
+  const rest = watersports ? [watersports, ...restOthers] : restUnsorted;
   const firstData = pontoonExperience ? experienceWithListingData(pontoonExperience) : null;
 
   const contentWidth = "max-w-5xl mx-auto px-6 sm:px-8 lg:px-10";

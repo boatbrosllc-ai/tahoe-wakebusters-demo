@@ -19,14 +19,14 @@ export const HERO = {
 export const BOOKING_PREVIEW = {
   durations: [2, 4, 6, 8] as const,
   minGuests: 1,
-  maxGuests: 12,
+  maxGuests: 14,
   trustLine: "Instant confirmation • No hidden fees",
 };
 
 /** Starting price by duration (hours) — UI only. */
 export const PRICING_MAP: Record<number, number> = {
-  2: 399,
-  4: 649,
+  2: 450,
+  4: 450,
   6: 899,
   8: 1099,
 };
@@ -190,7 +190,7 @@ export const FAQ_ITEMS = [
   {
     question: "How many people?",
     answer:
-      "Our pontoon can accommodate up to 12 guests. For larger groups, we can discuss multiple boats.",
+      "Our pontoon can accommodate up to 14 guests. For larger groups, we can discuss multiple boats.",
   },
   {
     question: "What if weather is bad?",

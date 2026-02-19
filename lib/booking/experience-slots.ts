@@ -1,10 +1,10 @@
 /**
  * Experience slot grid: all dates are available until booked or blocked.
- * Slot id format: YYYY-MM-DD-startHour-durationHours (e.g. 2025-02-10-13-3).
+ * Slot id format: YYYY-MM-DD-startHour-durationHours (e.g. 2025-02-10-13-3) for :00 starts,
+ * or YYYY-MM-DD-startHour-minute-durationHours (e.g. 2025-02-10-9-30-4) for :30 starts.
  *
  * Operating hours: 7am–7pm (Austin, America/Chicago). Start times are every hour from 7am
- * up to the latest start that still finishes by 7pm (e.g. 8hr charter can only start by 11am).
- * Slot hours are always interpreted in America/Chicago so they display correctly everywhere.
+ * unless a boat defines allowedStartTimes (e.g. wakeboard: 9, 9:30, 10, 10:30, 15, 15:30, 16).
  */
 
 /** Business timezone for slot times (Austin). */
@@ -20,7 +20,9 @@ export const EXPERIENCE_START_HOURS = Array.from(
   (_, i) => OPERATING_START_HOUR + i
 ) as number[];
 
-export function parseSlotId(slotId: string): { dateStr: string; startHour: number; durationHours: number } | null {
+export type ParsedSlotId = { dateStr: string; startHour: number; startMinute: number; durationHours: number };
+
+export function parseSlotId(slotId: string): ParsedSlotId | null {
   const parts = slotId.split("-");
   if (parts.length < 5) return null;
   const y = parts[0];
@@ -28,13 +30,17 @@ export function parseSlotId(slotId: string): { dateStr: string; startHour: numbe
   const d = parts[2].padStart(2, "0");
   const dateStr = `${y}-${m}-${d}`;
   const startHour = parseInt(parts[3], 10);
-  const durationHours = parseInt(parts[4], 10);
+  // 5 parts: YYYY-MM-DD-H-duration → minute 0. 6 parts: YYYY-MM-DD-H-M-duration → minute M.
+  const durationHours = parts.length === 5 ? parseInt(parts[4], 10) : parseInt(parts[5], 10);
+  const startMinute = parts.length === 6 ? parseInt(parts[4], 10) : 0;
   if (Number.isNaN(startHour) || Number.isNaN(durationHours)) return null;
+  if (parts.length === 6 && (Number.isNaN(startMinute) || (startMinute !== 0 && startMinute !== 30))) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
-  return { dateStr, startHour, durationHours };
+  return { dateStr, startHour, startMinute: parts.length === 6 ? startMinute : 0, durationHours };
 }
 
-export function buildSlotId(dateStr: string, startHour: number, durationHours: number): string {
+export function buildSlotId(dateStr: string, startHour: number, durationHours: number, startMinute?: number): string {
+  if (startMinute === 30) return `${dateStr}-${startHour}-30-${durationHours}`;
   return `${dateStr}-${startHour}-${durationHours}`;
 }
 
@@ -55,13 +61,13 @@ function getCentralOffsetHoursForDate(dateStr: string): number {
 }
 
 /**
- * Returns start and end Date for a slot. Hours are interpreted in America/Chicago
- * so that 7 = 7am Central (not server/UTC), fixing display as 1am in Central when server is UTC.
+ * Returns start and end Date for a slot. Hours/minutes are interpreted in America/Chicago.
  */
-export function getSlotStartEnd(dateStr: string, startHour: number, durationHours: number): { start: Date; end: Date } {
+export function getSlotStartEnd(dateStr: string, startHour: number, durationHours: number, startMinute: number = 0): { start: Date; end: Date } {
   const offsetHours = getCentralOffsetHoursForDate(dateStr);
   const utcHour = startHour - offsetHours;
-  const utcDate = new Date(dateStr + "T" + String(utcHour).padStart(2, "0") + ":00:00.000Z");
+  const minStr = startMinute === 30 ? "30" : "00";
+  const utcDate = new Date(dateStr + "T" + String(utcHour).padStart(2, "0") + ":" + minStr + ":00.000Z");
   const start = new Date(utcDate.getTime());
   const end = new Date(start.getTime() + durationHours * 60 * 60 * 1000);
   return { start, end };
@@ -107,14 +113,16 @@ function nextDateStr(dateStr: string): string {
   return `${ny}-${nm}-${nd}`;
 }
 
-/** Generate (dateStr, startHour, durationHours) for the given range; excludes past times only for today.
- * Date iteration uses America/Chicago for start/end so day boundaries match the business timezone regardless of server TZ. */
+export type SlotGridItem = { dateStr: string; startHour: number; startMinute: number; durationHours: number };
+
+/** Generate (dateStr, startHour, startMinute, durationHours) for the given range; excludes past times only for today.
+ * Default: hourly starts (startMinute 0). */
 export function getSlotGrid(
   startDate: Date,
   endDate: Date,
   durationHoursList: number[]
-): { dateStr: string; startHour: number; durationHours: number }[] {
-  const out: { dateStr: string; startHour: number; durationHours: number }[] = [];
+): SlotGridItem[] {
+  const out: SlotGridItem[] = [];
   const now = new Date();
   const todayStr = getTodayDateStr(now);
   const startStr = getDateStrInSlotTimezone(startDate);
@@ -124,10 +132,106 @@ export function getSlotGrid(
       const latestStart = getLatestStartHourForDuration(durationHours);
       for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
         if (dateStr === todayStr) {
-          const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours);
+          const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, 0);
           if (slotStart < now) continue;
         }
-        out.push({ dateStr, startHour, durationHours });
+        out.push({ dateStr, startHour, startMinute: 0, durationHours });
+      }
+    }
+  }
+  return out;
+}
+
+/** Allowed start times for wakeboard boat on Saturday only: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm (America/Chicago). */
+export const WAKEBOARD_SATURDAY_START_TIMES: { hour: number; minute: number }[] = [
+  { hour: 9, minute: 0 },
+  { hour: 9, minute: 30 },
+  { hour: 10, minute: 0 },
+  { hour: 10, minute: 30 },
+  { hour: 15, minute: 0 },
+  { hour: 15, minute: 30 },
+  { hour: 16, minute: 0 },
+];
+
+/** True if dateStr (YYYY-MM-DD) is a Saturday in America/Chicago. */
+export function isSaturdayInSlotTimezone(dateStr: string): boolean {
+  const offsetHours = getCentralOffsetHoursForDate(dateStr);
+  const utcHour = 12 - offsetHours;
+  const iso = dateStr + "T" + String(utcHour).padStart(2, "0") + ":00:00.000Z";
+  const d = new Date(iso);
+  return d.getUTCDay() === 6;
+}
+
+/**
+ * Generate slot grid only at the given start times (e.g. wakeboard: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm).
+ * Use for boats with restricted start times every day; excludes past times for today.
+ */
+export function getSlotGridForStartTimes(
+  startDate: Date,
+  endDate: Date,
+  durationHoursList: number[],
+  allowedStartTimes: { hour: number; minute: number }[]
+): SlotGridItem[] {
+  const out: SlotGridItem[] = [];
+  const now = new Date();
+  const todayStr = getTodayDateStr(now);
+  const startStr = getDateStrInSlotTimezone(startDate);
+  const endStr = getDateStrInSlotTimezone(endDate);
+  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
+    for (const durationHours of durationHoursList) {
+      for (const { hour: startHour, minute: startMinute } of allowedStartTimes) {
+        const startDecimal = startHour + startMinute / 60;
+        if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+        if (dateStr === todayStr) {
+          const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
+          if (slotStart < now) continue;
+        }
+        out.push({ dateStr, startHour, startMinute, durationHours });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * For boats that have Saturday-only restricted times (e.g. wakesurf): use saturdayStartTimes on Saturdays,
+ * and the default hourly grid on all other days. Other boats unaffected.
+ */
+export function getSlotGridWithSaturdayOnlyRestriction(
+  startDate: Date,
+  endDate: Date,
+  durationHoursList: number[],
+  saturdayStartTimes: { hour: number; minute: number }[]
+): SlotGridItem[] {
+  const out: SlotGridItem[] = [];
+  const now = new Date();
+  const todayStr = getTodayDateStr(now);
+  const startStr = getDateStrInSlotTimezone(startDate);
+  const endStr = getDateStrInSlotTimezone(endDate);
+  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
+    const isSaturday = isSaturdayInSlotTimezone(dateStr);
+    if (isSaturday) {
+      for (const durationHours of durationHoursList) {
+        for (const { hour: startHour, minute: startMinute } of saturdayStartTimes) {
+          const startDecimal = startHour + startMinute / 60;
+          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (dateStr === todayStr) {
+            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
+            if (slotStart < now) continue;
+          }
+          out.push({ dateStr, startHour, startMinute, durationHours });
+        }
+      }
+    } else {
+      for (const durationHours of durationHoursList) {
+        const latestStart = getLatestStartHourForDuration(durationHours);
+        for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
+          if (dateStr === todayStr) {
+            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, 0);
+            if (slotStart < now) continue;
+          }
+          out.push({ dateStr, startHour, startMinute: 0, durationHours });
+        }
       }
     }
   }

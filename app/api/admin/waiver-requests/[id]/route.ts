@@ -35,7 +35,7 @@ export async function GET(
       let startTime: string | undefined;
       let endTime: string | undefined;
       if (parsed) {
-        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         startTime = formatBookingTime(start);
         endTime = formatBookingTime(end);
       }

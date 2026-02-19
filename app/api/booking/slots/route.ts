@@ -4,8 +4,11 @@ import { hasFirebaseConfig } from "@/lib/booking/env";
 import {
   buildSlotId,
   getSlotGrid,
+  getSlotGridForStartTimes,
+  getSlotGridWithSaturdayOnlyRestriction,
   getSlotStartEnd,
   parseSlotId,
+  WAKEBOARD_SATURDAY_START_TIMES,
 } from "@/lib/booking/experience-slots";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
@@ -145,6 +148,11 @@ export async function GET(request: NextRequest) {
           const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
           return parseSlotId(normalized);
         }
+        if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+          const parts = cleaned.split("-");
+          const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
+          return parseSlotId(normalized);
+        }
         return null;
       };
       const mergeBookingSlot = (doc: { id: string; data: () => Record<string, unknown> }) => {
@@ -155,8 +163,21 @@ export async function GET(request: NextRequest) {
         const parsed = parseSlotIdRelaxed(slotIdRaw);
         if (!parsed) return;
         if (parsed.dateStr < startDate || parsed.dateStr > endDate) return;
-        const { start: slotStart, end: slotEnd } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours);
+        let slotStart: Date;
+        let slotEnd: Date;
+        try {
+          const se = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          slotStart = se.start;
+          slotEnd = se.end;
+          if (Number.isNaN(slotStart.getTime()) || Number.isNaN(slotEnd.getTime())) {
+            slotStart = new Date(parsed.dateStr + "T12:00:00.000Z");
+            slotEnd = new Date(slotStart.getTime() + parsed.durationHours * 60 * 60 * 1000);
+          }
+        } catch {
+          slotStart = new Date(parsed.dateStr + "T12:00:00.000Z");
+          slotEnd = new Date(slotStart.getTime() + parsed.durationHours * 60 * 60 * 1000);
+        }
+        const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         // Only mark the specific boat that has the booking; fallback to first boat if boatId missing or not in list.
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
         const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : boatIds[0];
@@ -263,7 +284,26 @@ export async function GET(request: NextRequest) {
         })
       );
 
-      const grid = durationsUnique.length > 0 ? getSlotGrid(start, end, durationsUnique) : [];
+      // Per-boat grid: wake/wakesurf boat gets restricted times on Saturday only; other days hourly. Boats with allowedStartTimes use those every day.
+      const boatDocs = await Promise.all(boatIds.map((id) => db.collection("boats").doc(id).get()));
+      const gridByBoatId = new Map<string, import("@/lib/booking/experience-slots").SlotGridItem[]>();
+      for (let i = 0; i < boatIds.length; i++) {
+        const bid = boatIds[i];
+        const boatData = boatDocs[i]?.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string } | undefined;
+        const allowedEveryDay = boatData?.allowedStartTimes;
+        const isWakeBoat = boatData?.boatType === "wake";
+        let grid: import("@/lib/booking/experience-slots").SlotGridItem[];
+        if (durationsUnique.length === 0) {
+          grid = [];
+        } else if (allowedEveryDay?.length) {
+          grid = getSlotGridForStartTimes(start, end, durationsUnique, allowedEveryDay);
+        } else if (isWakeBoat) {
+          grid = getSlotGridWithSaturdayOnlyRestriction(start, end, durationsUnique, WAKEBOARD_SATURDAY_START_TIMES);
+        } else {
+          grid = getSlotGrid(start, end, durationsUnique);
+        }
+        gridByBoatId.set(bid, grid);
+      }
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
       try {
         const blocksSnap = await db
@@ -294,21 +334,22 @@ export async function GET(request: NextRequest) {
       }
       const slots: SlotRow[] = [];
       for (const bid of boatIds) {
+        const grid = gridByBoatId.get(bid) ?? [];
         const takenRanges = [
           ...Array.from(existingByBoatAndKey.values())
             .filter((s) => s.boatId === bid && s.status !== "open")
             .map((s) => ({ start: new Date(s.startAt).getTime(), end: new Date(s.endAt).getTime() })),
           ...(blockRangesByBoat.get(bid) ?? []),
         ];
-        for (const { dateStr, startHour, durationHours } of grid) {
-          const slotId = buildSlotId(dateStr, startHour, durationHours);
+        for (const { dateStr, startHour, startMinute, durationHours } of grid) {
+          const slotId = buildSlotId(dateStr, startHour, durationHours, startMinute);
           const key = `${bid}:${slotId}`;
           const existing = existingByBoatAndKey.get(key);
           if (existing) {
             slots.push(existing);
             continue;
           }
-          const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, durationHours);
+          const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
           const overlapsTaken = takenRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);

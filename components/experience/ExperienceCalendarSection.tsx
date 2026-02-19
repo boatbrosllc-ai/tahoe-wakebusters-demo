@@ -293,7 +293,8 @@ export function ExperienceCalendarSection({
     return ids;
   }, [selectedSlotInline?.startAt, slots]);
 
-  // Fetch admin-configured day pricing (weekend/holiday/weekday) for the visible calendar range
+  // Fetch listing (experience) day pricing so calendar shows the same numbers as the listing page
+  const rateIdForPricing = selectedDurationForModal != null ? rates.find((r) => r.durationHours === selectedDurationForModal)?.id : undefined;
   useEffect(() => {
     if (!experienceId) {
       setDatePrices({});
@@ -302,8 +303,9 @@ export function ExperienceCalendarSection({
     const start = new Date(dateRange.start + "T00:00:00");
     const end = new Date(dateRange.end + "T00:00:00");
     const days = Math.min(90, Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1));
+    const rateQ = rateIdForPricing ? `&rateId=${encodeURIComponent(rateIdForPricing)}` : "";
     fetch(
-      `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&days=${days}`
+      `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&days=${days}${rateQ}`
     )
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -311,7 +313,14 @@ export function ExperienceCalendarSection({
         else setDatePrices({});
       })
       .catch(() => setDatePrices({}));
-  }, [experienceId, dateRange.start, dateRange.end]);
+  }, [experienceId, dateRange.start, dateRange.end, rateIdForPricing]);
+
+  // When only one rate, auto-select duration so calendar shows availability without an extra click
+  useEffect(() => {
+    if (rates.length === 1 && selectedDurationForModal === null) {
+      setSelectedDurationForModal(rates[0].durationHours);
+    }
+  }, [rates, selectedDurationForModal]);
 
   /** Aggregates slots by date across all boats (no boatId in fetch = all boats). Full only when no open slots on that day. */
   const slotsByDate = useMemo(() => {
@@ -571,6 +580,7 @@ export function ExperienceCalendarSection({
     selectedDate,
     openCountByDateForDuration,
     slotsByDate,
+    slotsLength: slots.length,
     datePrices,
     todayStr,
     handleDayClick,

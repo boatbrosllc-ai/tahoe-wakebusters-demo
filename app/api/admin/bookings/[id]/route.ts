@@ -11,7 +11,7 @@ function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Dat
   return null;
 }
 
-function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; durationHours: number } | null {
+function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; startMinute: number; durationHours: number } | null {
   if (!slotId || typeof slotId !== "string") return null;
   const trimmed = slotId.trim();
   if (!trimmed) return null;
@@ -21,6 +21,11 @@ function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: st
   if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
     const parts = cleaned.split("-");
     const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    return parseSlotId(normalized);
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
     return parseSlotId(normalized);
   }
   return null;
@@ -75,7 +80,7 @@ export async function GET(
     if (parsed) {
       if (!startDate) startDate = parsed.dateStr;
       durationHours = parsed.durationHours;
-      const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+      const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
       startTime = formatBookingTime(start);
       endTime = formatBookingTime(end);
     }

@@ -4,6 +4,24 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import type { Booking } from "@/lib/booking/types";
 
+/** Relaxed slotId parse (e.g. "2026-2-20-17-3") so pontoon/legacy bookings still show. */
+function parseSlotIdRelaxed(slotId: string): ReturnType<typeof parseSlotId> {
+  const parsed = parseSlotId(slotId);
+  if (parsed) return parsed;
+  const cleaned = slotId.replace(/\s/g, "");
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    return parseSlotId(normalized);
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
+    return parseSlotId(normalized);
+  }
+  return null;
+}
+
 /** GET: unified calendar events (bookings + blocks) for admin week/timeline view.
  * Query: experienceId, from (YYYY-MM-DD), to (YYYY-MM-DD), boatId (optional).
  * Returns { events: [{ id, type: 'booking'|'block', startAt, endAt, boatId, boatName?, title, ... }] }
@@ -90,12 +108,29 @@ export async function GET(request: NextRequest) {
 
     bookingsSnap.docs.forEach((doc) => {
       const b = doc.data() as Booking & { startDateStr?: string };
-      const parsed = parseSlotId(b.slotId ?? "");
-      if (!parsed) return;
-      const dateStr = parsed.dateStr;
-      if (dateStr < fromStr || dateStr > toStr) return;
-      const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+      const parsed = parseSlotIdRelaxed(b.slotId ?? "");
+      const dateStr = parsed?.dateStr ?? (b.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(b.startDateStr) ? b.startDateStr : null);
+      if (!dateStr || dateStr < fromStr || dateStr > toStr) return;
       if (boatIdParam && b.boatId !== boatIdParam) return;
+      let start: Date;
+      let end: Date;
+      if (parsed) {
+        try {
+          const se = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          start = se.start;
+          end = se.end;
+          if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            start = new Date(dateStr + "T12:00:00.000Z");
+            end = new Date(start.getTime() + (parsed.durationHours || 3) * 60 * 60 * 1000);
+          }
+        } catch {
+          start = new Date(dateStr + "T12:00:00.000Z");
+          end = new Date(start.getTime() + (parsed.durationHours || 3) * 60 * 60 * 1000);
+        }
+      } else {
+        start = new Date(dateStr + "T12:00:00.000Z");
+        end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
+      }
       const title = b.customer?.name?.trim() || b.customer?.email || "Booking";
       events.push({
         id: `booking-${doc.id}`,

@@ -4,7 +4,7 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
-import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -13,7 +13,7 @@ function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Dat
 }
 
 /** Parse slotId (handles "2026-2-27-11-6" and "2026-02-27-11-6") for trip date and times. */
-function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; durationHours: number } | null {
+function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; startMinute: number; durationHours: number } | null {
   if (!slotId || typeof slotId !== "string") return null;
   const trimmed = slotId.trim();
   if (!trimmed) return null;
@@ -23,6 +23,11 @@ function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: st
   if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
     const parts = cleaned.split("-");
     const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    return parseSlotId(normalized);
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
     return parseSlotId(normalized);
   }
   return null;
@@ -169,9 +174,9 @@ export async function GET(request: NextRequest) {
       let durationHours: number | null = null;
       if (parsed) {
         durationHours = parsed.durationHours;
-        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
-        startTime = formatBookingTime(start);
-        endTime = formatBookingTime(end);
+        const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+        startTime = formatBookingTimeSafe(start);
+        endTime = formatBookingTimeSafe(end);
       }
       const addonMap = b.experienceId ? experienceAddons.get(b.experienceId) : undefined;
       const addonsWithNames: AddonWithName[] = (b.addonSelections ?? []).map((sel: AddonSelection) => ({

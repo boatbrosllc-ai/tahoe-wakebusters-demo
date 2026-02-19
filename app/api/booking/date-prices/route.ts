@@ -46,9 +46,11 @@ export async function GET(request: NextRequest) {
     const friSunDays = exp.friSunDays;
 
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ExperienceRate & { id: string }));
+    // Default to first rate by duration (smallest) so calendar prices are deterministic when no rateId is passed.
+    const sortedRates = [...rates].sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0));
     const chosenRate = rateIdParam
-      ? rates.find((r) => r.id === rateIdParam) ?? rates[0]
-      : rates[0];
+      ? rates.find((r) => r.id === rateIdParam) ?? sortedRates[0]
+      : sortedRates[0];
     const rateForPricing = {
       priceCents: chosenRate.priceCents,
       priceWeekendCents: chosenRate.priceWeekendCents,

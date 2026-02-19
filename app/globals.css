@@ -112,13 +112,13 @@
   .skeleton-reveal-stage-1 { animation-delay: 100ms; }
   .skeleton-reveal-stage-2 { animation-delay: 200ms; }
 
-  /* View Transitions API – smooth crossfade between pages (ignored if unsupported) */
+  /* View Transitions API – snappy crossfade (used if re-enabled in SiteChrome) */
   @supports (view-transition-name: root) {
     ::view-transition-old(root) {
-      animation: view-transition-fade-out 0.2s ease-out forwards;
+      animation: view-transition-fade-out 0.1s ease-out forwards;
     }
     ::view-transition-new(root) {
-      animation: view-transition-fade-in 0.25s ease-out 0.05s both;
+      animation: view-transition-fade-in 0.12s ease-out 0.02s both;
     }
   }
   @keyframes view-transition-fade-out {

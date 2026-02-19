@@ -52,6 +52,11 @@ export interface ListingBoat {
   priceOverrides?: BoatPriceOverride[];
   /** Boat type for the pricing calendar (e.g. "pontoon", "wake", "tritoon"). Calendar overrides apply by boat type. */
   boatType?: string;
+  /**
+   * When set, only these start times are bookable for this boat (e.g. wakeboard: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm).
+   * Omit for default hourly grid. Each entry: { hour: 0–23, minute: 0 | 30 } in America/Chicago.
+   */
+  allowedStartTimes?: { hour: number; minute: number }[];
 }
 
 /** Calendar override: one doc per boatType, field rates = { [date YYYY-MM-DD]: hourlyRateCents }. Overrides always win. */

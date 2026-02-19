@@ -489,10 +489,12 @@ export default function CalendarsPage() {
     if (rangeSectionOpen) setRangePickerMonth(calendarMonth);
   }, [rangeSectionOpen, calendarMonth]);
 
+  /** Slots that have a booking (booked or blocked with a booking) — shown on each calendar day card. */
   const bookedSlotsByDay = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
     for (const s of filteredSlots) {
-      if (s.status !== "booked") continue;
+      const hasBooking = s.status === "booked" || !!(s.bookingId ?? s.bookingSummary?.bookingId);
+      if (!hasBooking) continue;
       const day = getSlotCalendarDate(s);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
@@ -1182,10 +1184,6 @@ export default function CalendarsPage() {
                     const isPast = cell.isPast;
                     const isToday = cell.isCurrentMonth && cell.dateStr === todayStr;
                     const cellBusy = blocking === `date-${cell.dateStr}`;
-                    const openCount = cell.openCount;
-                    const bookedCount = cell.bookedCount;
-                    const heldCount = cell.heldCount;
-                    const blockedCount = cell.blockedCount;
                     return (
                       <div
                         key={cell.dateStr + cell.day}
@@ -1262,43 +1260,6 @@ export default function CalendarsPage() {
                               )}
                             </>
                           ) : null}
-                          {/* Summary line — colored by status */}
-                          {daySlots.length > 0 && (
-                            <div className="mt-auto pt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
-                              {bookedCount > 0 && (
-                                <span
-                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
-                                  style={{ backgroundColor: `${STATUS_COLORS.booked.bg}25`, color: STATUS_COLORS.booked.text }}
-                                >
-                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.booked.bg }} /> {bookedCount} booked
-                                </span>
-                              )}
-                              {openCount > 0 && (
-                                <span
-                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
-                                  style={{ backgroundColor: `${STATUS_COLORS.open.bg}25`, color: STATUS_COLORS.open.text }}
-                                >
-                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.open.bg }} /> {openCount} available
-                                </span>
-                              )}
-                              {heldCount > 0 && (
-                                <span
-                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium"
-                                  style={{ backgroundColor: `${STATUS_COLORS.held.bg}25`, color: STATUS_COLORS.held.text }}
-                                >
-                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.held.bg }} /> {heldCount} held
-                                </span>
-                              )}
-                              {blockedCount > 0 && (
-                                <span
-                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium text-slate-600"
-                                  style={{ backgroundColor: `${STATUS_COLORS.blocked.bg}25` }}
-                                >
-                                  <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS.blocked.bg }} /> {blockedCount} blocked
-                                </span>
-                              )}
-                            </div>
-                          )}
                           {daySlots.length === 0 && !isPast && <span className="text-[10px] italic text-brand-muted mt-auto">No slots</span>}
                         </div>
                       </div>
@@ -1324,18 +1285,7 @@ export default function CalendarsPage() {
               })
             : undefined
         }
-        description={
-          selectedDate
-            ? (() => {
-                const booked = bookedSlotsByDay.get(selectedDate) ?? [];
-                const daySlots = slotsByDate.get(selectedDate);
-                const open = daySlots?.open ?? 0;
-                const held = daySlots?.held ?? 0;
-                const blocked = daySlots?.blocked ?? 0;
-                return `${booked.length} booked${open > 0 ? ` · ${open} available` : ""}${held > 0 ? ` · ${held} held` : ""}${blocked > 0 ? ` · ${blocked} blocked` : ""}`;
-              })()
-            : undefined
-        }
+        description={selectedDate ? "Bookings and time slots for this day." : undefined}
       >
         <div className="space-y-4">
           {selectedDate && (

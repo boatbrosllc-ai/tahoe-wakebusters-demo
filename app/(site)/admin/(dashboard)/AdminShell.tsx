@@ -18,6 +18,7 @@ import {
   X,
   Tag,
   FileSignature,
+  FileText,
 } from "lucide-react";
 import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
     links: [
       { href: "/admin/experiences", label: "Listings", icon: List },
       { href: "/admin/boats", label: "Boats", icon: Ship },
+      { href: "/admin/blog", label: "Blog Studio", icon: FileText },
     ],
   },
   {

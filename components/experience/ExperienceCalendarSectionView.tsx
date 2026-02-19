@@ -48,6 +48,7 @@ export interface ExperienceCalendarSectionViewProps {
   selectedDate: string | null;
   openCountByDateForDuration: Map<string, number>;
   slotsByDate: Map<string, { open: number; held: number; booked: number; blocked: number }>;
+  slotsLength?: number;
   datePrices: Record<string, number>;
   todayStr: string;
   handleDayClick: (dateStr: string) => void;
@@ -125,6 +126,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     selectedDate,
     openCountByDateForDuration,
     slotsByDate,
+    slotsLength = 0,
     datePrices,
     todayStr,
     handleDayClick,
@@ -281,7 +283,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               const entry = slotsByDate.get(dateStr);
                               const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                               const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
-                              const isAvailable = !isPast && openForDuration > 0;
+                              const hasPriceForDay = typeof datePrices[dateStr] === "number";
+                              const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
                               const priceCents = datePrices[dateStr];
                               return (
                                 <button
@@ -523,7 +526,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const entry = slotsByDate.get(dateStr);
                                 const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                                 const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
-                                const isAvailable = !isPast && openForDuration > 0;
+                                const hasPriceForDay = typeof datePrices[dateStr] === "number";
+                                const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
                                 const priceCents = datePrices[dateStr];
                                 return (
                                   <button

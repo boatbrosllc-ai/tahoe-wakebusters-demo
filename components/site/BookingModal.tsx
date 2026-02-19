@@ -231,10 +231,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  // Define before any hook that may reference it (avoids TDZ)
-  const ratesForSelection = selectedBoat
-    ? (selectedBoat.rates as RateOption[])
-    : experienceRates;
+  // Always use listing (experience) rates for duration and pricing — never boat rates.
+  // Calendar and checkout must show the numbers from the listing page (experience rates).
+  const ratesForSelection = experienceRates;
   useEffect(() => {
     if (ratesForSelection.length === 0) return;
     const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);

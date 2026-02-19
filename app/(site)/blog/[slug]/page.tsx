@@ -10,6 +10,8 @@ import {
   getBlogPostsByCategory,
   type BlogBodyBlock,
 } from "@/content/blog";
+import { getPublishedPostBySlug } from "@/lib/blog/firestore";
+import { FirestoreBlogPostView } from "@/components/site/FirestoreBlogPostView";
 import { Clock, Anchor, ArrowLeft, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReadingProgress } from "@/components/site/ReadingProgress";
@@ -24,30 +26,55 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  const post = getBlogPostBySlug(slug);
-  if (!post)
-    return { title: "The Dock" };
-  const title = `${post.title} | The Dock | ${brand.companyName}`;
-  const description = post.excerpt.slice(0, 160);
-  const canonical = `${baseUrl}/blog/${post.slug}`;
-  const ogImage = post.image ? `${baseUrl}${post.image}` : undefined;
-  return {
-    title,
-    description,
-    keywords: post.seoKeywords ?? [],
-    openGraph: {
-      title: post.title,
+  const staticPost = getBlogPostBySlug(slug);
+  if (staticPost) {
+    const title = `${staticPost.title} | The Dock | ${brand.companyName}`;
+    const description = staticPost.excerpt.slice(0, 160);
+    const canonical = `${baseUrl}/blog/${staticPost.slug}`;
+    const ogImage = staticPost.image ? `${baseUrl}${staticPost.image}` : undefined;
+    return {
+      title,
       description,
-      url: canonical,
-      type: "article",
-      publishedTime: post.date,
-      modifiedTime: post.dateModified,
-      authors: post.author ? [post.author] : undefined,
-      images: ogImage ? [{ url: ogImage, alt: post.imageAlt ?? post.title }] : undefined,
-    },
-    alternates: { canonical },
-    robots: "index, follow",
-  };
+      keywords: staticPost.seoKeywords ?? [],
+      openGraph: {
+        title: staticPost.title,
+        description,
+        url: canonical,
+        type: "article",
+        publishedTime: staticPost.date,
+        modifiedTime: staticPost.dateModified,
+        authors: staticPost.author ? [staticPost.author] : undefined,
+        images: ogImage ? [{ url: ogImage, alt: staticPost.imageAlt ?? staticPost.title }] : undefined,
+      },
+      alternates: { canonical },
+      robots: "index, follow",
+    };
+  }
+  const firestorePost = await getPublishedPostBySlug(slug);
+  if (firestorePost) {
+    const title = `${(firestorePost.title as string) ?? "Post"} | The Dock | ${brand.companyName}`;
+    const description = ((firestorePost.seo as { metaDescription?: string })?.metaDescription ?? firestorePost.excerpt ?? "").slice(0, 160);
+    const canonical = `${baseUrl}/blog/${firestorePost.slug}`;
+    const cover = firestorePost.coverImage as { url?: string } | null;
+    const ogImage = cover?.url;
+    return {
+      title,
+      description,
+      openGraph: {
+        title: firestorePost.title as string,
+        description,
+        url: canonical,
+        type: "article",
+        publishedTime: (firestorePost.lastPublishedAt as string) ?? undefined,
+        modifiedTime: (firestorePost.updatedAt as string) ?? undefined,
+        authors: (firestorePost.author as { name?: string })?.name ? [(firestorePost.author as { name: string }).name] : undefined,
+        images: ogImage ? [{ url: ogImage, alt: (firestorePost.coverImage as { alt?: string })?.alt ?? (firestorePost.title as string) }] : undefined,
+      },
+      alternates: { canonical },
+      robots: (firestorePost.seo as { robotsIndex?: boolean })?.robotsIndex !== false ? "index, follow" : "noindex, nofollow",
+    };
+  }
+  return { title: "The Dock" };
 }
 
 function ArticleJsonLd({
@@ -223,7 +250,29 @@ function Block({ block }: { block: BlogBodyBlock }) {
 
 export default async function BlogPostPage({ params }: Props) {
   const { slug } = await params;
-  const post = getBlogPostBySlug(slug);
+  const staticPost = getBlogPostBySlug(slug);
+  const firestorePost = !staticPost ? await getPublishedPostBySlug(slug) : null;
+
+  if (firestorePost) {
+    const schema = firestorePost.schema as { articleJsonLd?: object; breadcrumbJsonLd?: object; faqJsonLd?: object } | undefined;
+    return (
+      <>
+        {schema?.articleJsonLd && (
+          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.articleJsonLd) }} />
+        )}
+        {schema?.breadcrumbJsonLd && (
+          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.breadcrumbJsonLd) }} />
+        )}
+        {schema?.faqJsonLd && (
+          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.faqJsonLd) }} />
+        )}
+        <ReadingProgress />
+        <FirestoreBlogPostView post={firestorePost} />
+      </>
+    );
+  }
+
+  const post = staticPost;
   if (!post) notFound();
 
   const canonical = `${baseUrl}/blog/${post.slug}`;

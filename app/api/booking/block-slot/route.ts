@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
-    const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours);
+    const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
 
     if (boatId) {
       const boatRef = db.collection("boats").doc(boatId);

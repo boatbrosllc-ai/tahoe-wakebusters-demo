@@ -33,7 +33,7 @@ export function NavProgress() {
   useEffect(() => {
     if (pathname !== prevPathnameRef.current) {
       prevPathnameRef.current = pathname;
-      const t = setTimeout(() => setNavigating(false), 120);
+      const t = setTimeout(() => setNavigating(false), 0);
       return () => clearTimeout(t);
     }
   }, [pathname]);
