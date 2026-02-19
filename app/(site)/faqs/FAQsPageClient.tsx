@@ -7,17 +7,23 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { BookingCTA } from "@/components/site/BookingCTA";
-import { HelpCircle, Anchor, FileText, MapPin, CloudRain, Sparkles } from "lucide-react";
+import { HelpCircle, FileText, MapPin, CloudRain, Sparkles } from "lucide-react";
 import type { FaqItem } from "@/content/faqs";
 import { cn } from "@/lib/utils";
 
 const icons: Record<string, React.ComponentType<{ className?: string }>> = {
-  "what-included": Sparkles,
-  "need-license": Anchor,
-  "cancel-reschedule": FileText,
-  "where-pickup": MapPin,
-  weather: CloudRain,
-  bring: HelpCircle,
+  "cancellation-policy": FileText,
+  "bad-weather": CloudRain,
+  "tipping-captain": Sparkles,
+  "where-meet-park": MapPin,
+  gas: Sparkles,
+  pets: HelpCircle,
+  "kid-life-vests": HelpCircle,
+  "what-do-on-lake": Sparkles,
+  swim: Sparkles,
+  fish: HelpCircle,
+  radio: Sparkles,
+  "lost-found": HelpCircle,
 };
 
 export function FAQsPageClient({ faqs }: { faqs: FaqItem[] }) {
