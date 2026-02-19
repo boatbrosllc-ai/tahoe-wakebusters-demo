@@ -234,6 +234,20 @@ export async function GET(request: NextRequest) {
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
       bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));
 
+      /** Map (boatId:normalizedSlotId) -> booking doc id so slot docs can resolve correct bookingId when they store a different id (e.g. Stripe). */
+      const bookingIdByBoatAndSlot = new Map<string, string>();
+      allBookingDocs.forEach((doc) => {
+        const b = doc.data() as { boatId?: string; slotId?: string; slot_id?: string };
+        const slotIdRaw = normalizeSlotId(b.slotId ?? b.slot_id);
+        if (!slotIdRaw) return;
+        const parsed = parseSlotIdRelaxed(slotIdRaw);
+        if (!parsed) return;
+        const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+        const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
+        const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : boatIds[0];
+        if (bid) bookingIdByBoatAndSlot.set(`${bid}:${slotIdNorm}`, doc.id);
+      });
+
       /** Safely get Date from Firestore Timestamp or ISO string (avoids 500 on malformed docs). */
       const toDateSafe = (v: unknown): Date | null => {
         if (!v) return null;
@@ -268,6 +282,10 @@ export async function GET(request: NextRequest) {
             const updatedAtIso = updatedAt?.toDate?.()?.toISOString?.() ?? null;
             // "booked" on slot docs is not trusted: only bookings collection is source of truth. Stale slot docs show as open.
             const status = data.status === "booked" ? "open" : data.status;
+            // Resolve bookingId from bookings collection so admin calendar detail fetch works (slot doc may store non-doc id).
+            const parsedSlot = parseSlotIdRelaxed(doc.id);
+            const slotIdNorm = parsedSlot ? buildSlotId(parsedSlot.dateStr, parsedSlot.startHour, parsedSlot.durationHours, parsedSlot.startMinute ?? 0) : doc.id;
+            const resolvedBookingId = bookingIdByBoatAndSlot.get(`${bid}:${slotIdNorm}`) ?? data.bookingId;
             existingByBoatAndKey.set(key, {
               id: doc.id,
               dateStr: dateStrFromSlotId(doc.id),
@@ -275,7 +293,7 @@ export async function GET(request: NextRequest) {
               endAt: endAtDate.toISOString(),
               status,
               holdId: data.holdId,
-              bookingId: data.bookingId,
+              bookingId: resolvedBookingId,
               updatedAt: updatedAtIso,
               boatId: bid,
               experienceId,
@@ -436,9 +454,11 @@ export async function GET(request: NextRequest) {
       .where("boatId", "==", boatId)
       .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
       .get();
-    const legacyBookedSlotIds = new Set(
-      legacyBookingsSnap.docs.map((d) => (d.data() as { slotId?: string }).slotId).filter(Boolean) as string[]
-    );
+    const legacyBookedSlotIdToBookingId = new Map<string, string>();
+    legacyBookingsSnap.docs.forEach((d) => {
+      const slotId = (d.data() as { slotId?: string }).slotId;
+      if (slotId) legacyBookedSlotIdToBookingId.set(slotId, d.id);
+    });
     const slotsRef = db.collection("boats").doc(boatId!).collection("slots");
     const snap = await slotsRef
       .where("startAt", ">=", Timestamp.fromDate(start))
@@ -451,8 +471,9 @@ export async function GET(request: NextRequest) {
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
       const parsed = parseSlotId(doc.id);
-      const fromBooking = legacyBookedSlotIds.has(doc.id);
+      const fromBooking = legacyBookedSlotIdToBookingId.has(doc.id);
       const status = fromBooking ? "booked" : data.status === "booked" ? "open" : data.status;
+      const resolvedBookingId = fromBooking ? legacyBookedSlotIdToBookingId.get(doc.id) : data.bookingId;
       return {
         id: doc.id,
         dateStr: parsed?.dateStr ?? doc.id.slice(0, 10),
@@ -460,7 +481,7 @@ export async function GET(request: NextRequest) {
         endAt: endAt.toDate().toISOString(),
         status,
         holdId: data.holdId,
-        bookingId: data.bookingId,
+        bookingId: resolvedBookingId ?? data.bookingId,
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
       };
     });

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus } from "lucide-react";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
 
@@ -95,6 +96,7 @@ export default function AdminBookingsPage() {
   const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
   const [addBookingOpen, setAddBookingOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [customerSearch, setCustomerSearch] = useState("");
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -137,19 +139,17 @@ export default function AdminBookingsPage() {
   }, [webhookEventsOpen]);
 
   function exportCsv() {
-    const headers = ["Date", "Trip date", "Experience", "Party", "Pets", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
-    const rows = list.map((b) => {
+    const headers = ["Date", "Trip date", "Experience", "Party (guests)", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
+    const rows = filteredList.map((b) => {
       const date = b.createdAt ? new Date(b.createdAt).toISOString() : "";
       const tripDate = b.startDate ?? "";
       const party = b.partySize != null ? String(b.partySize) : "";
-      const pets = b.petsCount != null ? String(b.petsCount) : "";
       const amount = b.pricing ? (b.pricing.totalCents / 100).toFixed(2) : "";
       return [
         date,
         tripDate,
         b.experienceName ?? "",
         party,
-        pets,
         b.customer?.name ?? "",
         b.customer?.email ?? "",
         b.customer?.phone ?? "",
@@ -162,6 +162,61 @@ export default function AdminBookingsPage() {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `bookings-${fromDate || "all"}-${toDate || "all"}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function exportFinancialsCsv() {
+    const headers = [
+      "Booking ID",
+      "Created",
+      "Trip date",
+      "Trip time",
+      "Experience",
+      "Boat",
+      "Customer name",
+      "Email",
+      "Phone",
+      "Party size",
+      "Subtotal (USD)",
+      "Tax (USD)",
+      "Fees (USD)",
+      "Total (USD)",
+      "Status",
+      "Stripe Payment Intent ID",
+    ];
+    const rows = filteredList.map((b) => {
+      const created = b.createdAt ? new Date(b.createdAt).toISOString().slice(0, 10) : "";
+      const tripTime = [b.startTime, b.endTime].filter(Boolean).join(" – ") || "";
+      const subtotal = b.pricing?.subtotalCents != null ? (b.pricing.subtotalCents / 100).toFixed(2) : "";
+      const tax = b.pricing?.taxCents != null ? (b.pricing.taxCents / 100).toFixed(2) : "";
+      const fees = b.pricing?.feesCents != null ? (b.pricing.feesCents / 100).toFixed(2) : "";
+      const total = b.pricing?.totalCents != null ? (b.pricing.totalCents / 100).toFixed(2) : "";
+      const piId = b.stripe?.paymentIntentId ?? b.stripe?.finalPaymentIntentId ?? b.stripe?.depositPaymentIntentId ?? "";
+      return [
+        b.id,
+        created,
+        b.startDate ?? "",
+        tripTime,
+        b.experienceName ?? "",
+        b.boatName ?? "",
+        b.customer?.name ?? "",
+        b.customer?.email ?? "",
+        b.customer?.phone ?? "",
+        b.partySize != null ? String(b.partySize) : "",
+        subtotal,
+        tax,
+        fees,
+        total,
+        b.status ?? "",
+        piId,
+      ];
+    });
+    const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `financial-export-${fromTripDate || fromDate || "all"}-${toTripDate || toDate || "all"}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   }
@@ -186,7 +241,24 @@ export default function AdminBookingsPage() {
     setDetailOpen(true);
   };
 
-  const calendarBookings: AdminBookingCalendarItem[] = list.map((b) => ({
+  const filteredList = (() => {
+    const q = customerSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((b) => {
+      const name = (b.customer?.name ?? "").toLowerCase();
+      const email = (b.customer?.email ?? "").toLowerCase();
+      const phone = (b.customer?.phone ?? "").replace(/\D/g, "");
+      const qNorm = q.replace(/\D/g, "");
+      return name.includes(q) || email.includes(q) || phone.includes(qNorm) || (qNorm.length >= 4 && phone.includes(qNorm));
+    });
+  })();
+
+  // Calendar shows only confirmed bookings (paid, deposit_paid, final_due, final_paid, final_processing).
+  // Excludes canceled, refunded, final_failed, final_requires_action so the calendar isn’t cluttered with non-trips.
+  const confirmedForCalendar = filteredList.filter((b) =>
+    BOOKING_STATUSES_SLOT_TAKEN.includes(b.status as (typeof BOOKING_STATUSES_SLOT_TAKEN)[number])
+  );
+  const calendarBookings: AdminBookingCalendarItem[] = confirmedForCalendar.map((b) => ({
     id: b.id,
     experienceName: b.experienceName,
     customer: b.customer,
@@ -253,6 +325,21 @@ export default function AdminBookingsPage() {
                 By day
               </button>
             </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3 sm:gap-4">
+            <label htmlFor="customer-search" className="text-sm font-medium text-brand-dark sr-only sm:not-sr-only">Search customer</label>
+            <span className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-brand-muted pointer-events-none" aria-hidden />
+              <input
+                id="customer-search"
+                type="search"
+                placeholder="Search customer (name, email, phone)"
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                className={cn(inputClass, "min-w-[180px] sm:min-w-[200px] pl-9")}
+                aria-label="Search by customer name, email, or phone"
+              />
+            </span>
           </div>
           <div className="flex flex-wrap items-end gap-3 sm:gap-4">
             <label htmlFor="status" className="text-sm font-medium text-brand-dark">Status</label>
@@ -324,9 +411,15 @@ export default function AdminBookingsPage() {
               />
             </div>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="ml-auto transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]">
-            Export CSV
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
+            <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]">
+              Export CSV
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={exportFinancialsCsv} disabled={list.length === 0} className="inline-flex items-center gap-1.5 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]" title="Tax-ready financial export (subtotal, tax, fees, total). Open in Excel or Google Sheets.">
+              <FileSpreadsheet className="w-4 h-4" aria-hidden />
+              Export financials (CSV)
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -347,7 +440,7 @@ export default function AdminBookingsPage() {
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
           <p className="text-brand-muted text-sm">No bookings yet.</p>
           <p className="mt-2 text-brand-muted text-xs max-w-md mx-auto">
-            When you have bookings, the list shows <strong>Trip</strong> (date & time), <strong>Party</strong> (guests & pets), and more. Click any row to see full details (add-ons, notes, payment breakdown).
+            When you have bookings, the list shows <strong>Trip</strong> (date & time), <strong>Party</strong> (guests), and more. Offer pets via add-ons on the experience. Click any row to see full details (add-ons, notes, payment breakdown).
           </p>
           <p className="mt-3 text-brand-muted text-xs max-w-md mx-auto">
             If you have payments in Stripe but don&apos;t see them here, open <strong>Webhook events</strong> below and look for that payment&apos;s event — the <strong>error</strong> field explains why (e.g. Hold not found, Hold already converted).
@@ -355,8 +448,20 @@ export default function AdminBookingsPage() {
         </div>
       )}
 
-      {!loading && !error && list.length > 0 && viewMode === "list" && (
+      {!loading && !error && list.length > 0 && filteredList.length === 0 && (
+        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
+          <p className="text-brand-muted text-sm">No bookings match your customer search.</p>
+          <p className="mt-1 text-brand-muted text-xs">Try a different name, email, or phone number, or clear the search box.</p>
+        </div>
+      )}
+
+      {!loading && !error && list.length > 0 && filteredList.length > 0 && viewMode === "list" && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
+          {customerSearch.trim() && (
+            <p className="px-4 py-2 text-xs text-brand-muted bg-brand-bg/50 border-b border-brand-dark/10">
+              Showing {filteredList.length} of {list.length} bookings
+            </p>
+          )}
           <div className="overflow-x-auto -mx-px">
             <table className="w-full min-w-[800px] text-sm">
               <thead>
@@ -371,7 +476,7 @@ export default function AdminBookingsPage() {
                 </tr>
               </thead>
               <tbody>
-                {list.map((b) => (
+                {filteredList.map((b) => (
                   <tr
                     key={b.id}
                     onClick={() => {
@@ -401,14 +506,7 @@ export default function AdminBookingsPage() {
                       {b.boatName && <span className="block text-brand-muted text-xs">{b.boatName}</span>}
                     </td>
                     <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      {b.partySize != null ? (
-                        <>
-                          {b.partySize} guest{b.partySize !== 1 ? "s" : ""}
-                          {b.petsCount > 0 && <span className="block text-brand-muted text-xs">{b.petsCount} pet{b.petsCount !== 1 ? "s" : ""}</span>}
-                        </>
-                      ) : (
-                        "—"
-                      )}
+                      {b.partySize != null ? `${b.partySize} guest${b.partySize !== 1 ? "s" : ""}` : "—"}
                     </td>
                     <td className="px-3 py-3 sm:px-4 sm:py-4">
                       <span className="font-medium text-brand-dark">{b.customer?.name || "—"}</span>
@@ -632,12 +730,6 @@ export default function AdminBookingsPage() {
                 <dt className="text-brand-muted">Guests</dt>
                 <dd className="text-brand-dark">
                   {selectedBooking.partySize != null ? `${selectedBooking.partySize} guest${selectedBooking.partySize !== 1 ? "s" : ""}` : "—"}
-                </dd>
-                <dt className="text-brand-muted">Pets</dt>
-                <dd className="text-brand-dark">
-                  {selectedBooking.petsCount != null && selectedBooking.petsCount > 0
-                    ? `${selectedBooking.petsCount} pet${selectedBooking.petsCount !== 1 ? "s" : ""}`
-                    : "None"}
                 </dd>
               </dl>
             </section>

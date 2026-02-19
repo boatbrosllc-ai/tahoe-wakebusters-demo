@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { formatBookingTime, formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import Link from "next/link";
 import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette } from "lucide-react";
@@ -43,8 +44,32 @@ function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+/** Format slot start time in America/Chicago. Prefers slot id so display is correct even if startAt is wrong in DB. */
+function formatSlotTime(slot: SlotDto): string {
+  const parsed = parseSlotId(slot.id);
+  if (parsed) {
+    const { start } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute);
+    return formatBookingTime(start);
+  }
+  return formatBookingTimeFromIso(slot.startAt);
+}
+
+/** Duration label for a slot, e.g. "2 hr" or "4 hr", from slot id or start/end times. */
+function getSlotDurationLabel(slot: SlotDto): string {
+  const parsed = parseSlotId(slot.id);
+  if (parsed?.durationHours != null) {
+    return parsed.durationHours === 1 ? "1 hr" : `${parsed.durationHours} hr`;
+  }
+  if (slot.startAt && slot.endAt) {
+    const start = new Date(slot.startAt).getTime();
+    const end = new Date(slot.endAt).getTime();
+    const hours = (end - start) / (60 * 60 * 1000);
+    if (hours > 0) {
+      const h = Math.round(hours * 10) / 10;
+      return h === 1 ? "1 hr" : `${h} hr`;
+    }
+  }
+  return "";
 }
 
 function getMonthRange(month: Date): { start: string; end: string } {
@@ -399,7 +424,7 @@ export default function CalendarsPage() {
       entry.slots.push(s);
       if (s.status === "open") entry.open++;
       else if (s.status === "held") entry.held++;
-      else if (s.status === "booked") entry.booked++;
+      else if (s.status === "booked" && s.bookingSummary) entry.booked++;
       else entry.blocked++;
     }
     map.forEach((entry) => entry.slots.sort((a, b) => a.startAt.localeCompare(b.startAt)));
@@ -490,11 +515,11 @@ export default function CalendarsPage() {
   }, [rangeSectionOpen, calendarMonth]);
 
   /** Slots that have a booking (booked or blocked with a booking) — shown on each calendar day card. */
+  /** Only slots that have a confirmed booking in our bookings list (single source of truth). */
   const bookedSlotsByDay = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
     for (const s of filteredSlots) {
-      const hasBooking = s.status === "booked" || !!(s.bookingId ?? s.bookingSummary?.bookingId);
-      if (!hasBooking) continue;
+      if (!s.bookingSummary) continue;
       const day = getSlotCalendarDate(s);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
@@ -1235,7 +1260,7 @@ export default function CalendarsPage() {
                                 const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
                                 const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
                                 const cellKey = `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}-${slot.bookingId ?? "n"}-${idx}`;
-                                const bookingId = slot.bookingId ?? slot.bookingSummary?.bookingId;
+                                const bookingId = slot.bookingSummary?.bookingId ?? slot.bookingId;
                                 return (
                                   <button
                                     key={cellKey}
@@ -1255,7 +1280,7 @@ export default function CalendarsPage() {
                                     }}
                                     title={bookingId ? "View booking details" : undefined}
                                   >
-                                    <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatTime(slot.startAt)}</span>
+                                    <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatSlotTime(slot)}{getSlotDurationLabel(slot) ? ` · ${getSlotDurationLabel(slot)}` : ""}</span>
                                     {(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name) && (
                                       <span className="block truncate opacity-90 text-brand-dark">{(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name)}</span>
                                     )}
@@ -1326,7 +1351,7 @@ export default function CalendarsPage() {
                     <ul className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
                       {dayBookings.map((slot) => {
                         const summary = slot.bookingSummary;
-                        const bookingId = slot.bookingId ?? summary?.bookingId;
+                        const bookingId = summary?.bookingId ?? slot.bookingId;
                         const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
                         const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
                         const expName = slot.experienceId && experienceNames.has(slot.experienceId) ? experienceNames.get(slot.experienceId) : null;
@@ -1349,7 +1374,10 @@ export default function CalendarsPage() {
                               }}
                             >
                               <span className="shrink-0 h-2 w-2 rounded-full" style={{ backgroundColor: boatColor }} aria-hidden />
-                              <span className="font-semibold text-brand-dark tabular-nums text-sm">{formatTime(slot.startAt)}</span>
+                              <span className="font-semibold text-brand-dark tabular-nums text-sm">{formatSlotTime(slot)}</span>
+                              {getSlotDurationLabel(slot) && (
+                                <span className="text-xs text-brand-muted font-normal">· {getSlotDurationLabel(slot)}</span>
+                              )}
                               {expName && <span className="text-xs text-brand-muted">{expName}</span>}
                               <span className="text-sm text-brand-dark">
                                 {summary?.boatName ?? (slot.boatId ? boatNames.get(slot.boatId) ?? slot.boatId : "—")}
@@ -1473,7 +1501,7 @@ export default function CalendarsPage() {
           setBookingDetailOpen(open);
           if (!open) setBookingDetailId(null);
         }}
-        title="Booking details"
+        title={bookingDetail ? "Booking details" : bookingDetailId ? "Booking not found" : "Booking details"}
         description={bookingDetail ? `${bookingDetail.experienceName} · ${bookingDetail.startDate ?? ""} ${bookingDetail.startTime ?? ""}` : undefined}
       >
         <div className="space-y-4">
@@ -1508,7 +1536,7 @@ export default function CalendarsPage() {
                   {bookingDetail.customer?.phone && <span className="text-brand-muted">{bookingDetail.customer.phone}</span>}
                 </div>
                 {bookingDetail.partySize != null && (
-                  <p className="text-brand-muted">Party: {bookingDetail.partySize} guest{bookingDetail.partySize !== 1 ? "s" : ""}{bookingDetail.petsCount > 0 ? ` · ${bookingDetail.petsCount} pet${bookingDetail.petsCount !== 1 ? "s" : ""}` : ""}</p>
+                  <p className="text-brand-muted">Party: {bookingDetail.partySize} guest{bookingDetail.partySize !== 1 ? "s" : ""}</p>
                 )}
                 {bookingDetail.pricing?.totalCents != null && (
                   <p className="font-semibold text-brand-dark">{formatCents(bookingDetail.pricing.totalCents)}</p>
@@ -1603,7 +1631,21 @@ export default function CalendarsPage() {
             </>
           )}
           {!bookingDetailLoading && !bookingDetail && bookingDetailId && (
-            <p className="py-6 text-center text-sm text-brand-muted">Booking not found.</p>
+            <div className="py-6 text-center space-y-4">
+              <p className="text-sm text-brand-muted">
+                This slot is linked to a booking that no longer exists. It may have been canceled or deleted.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setBookingDetailOpen(false);
+                  setBookingDetailId(null);
+                }}
+              >
+                Close
+              </Button>
+            </div>
           )}
         </div>
       </Dialog>
