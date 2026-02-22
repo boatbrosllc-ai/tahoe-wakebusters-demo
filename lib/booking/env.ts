@@ -3,11 +3,6 @@
  * All must be set for the booking flow to work; validated at runtime where used.
  */
 
-const LOG_ENDPOINT = "http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624";
-function logEnv(m: string, data: Record<string, unknown>) {
-  fetch(LOG_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "env.ts", message: m, data, timestamp: Date.now() }) }).catch(() => {});
-}
-
 function getEnv(name: string): string | undefined {
   return process.env[name];
 }
@@ -78,15 +73,9 @@ export const bookingEnv = {
       const resolved = path.isAbsolute(keyPath) ? keyPath : path.join(process.cwd(), keyPath);
       const raw = fs.readFileSync(resolved, "utf8");
       const out = normalizePemKey(raw);
-      // #region agent log
-      logEnv("firebasePrivateKey from file", { hypothesisId: "H1", source: "file", normLen: out.length });
-      // #endregion
       return out;
     }
     let k = getEnv("FIREBASE_PRIVATE_KEY");
-    // #region agent log
-    logEnv("firebasePrivateKey getter", { hypothesisId: "H1", keyDefined: !!k, rawLen: k?.length ?? 0 });
-    // #endregion
     if (!k) return undefined;
     let out = normalizePemKey(k);
     // If env loader truncated (multi-line .env often keeps only first line), read full key from .env.local
@@ -94,9 +83,6 @@ export const bookingEnv = {
       const fromFile = readFirebasePrivateKeyFromEnvFile();
       if (fromFile && fromFile.length >= 200 && fromFile.includes("-----END")) {
         out = fromFile;
-        // #region agent log
-        logEnv("firebasePrivateKey from .env.local fallback", { hypothesisId: "H1", source: "envFile", normLen: out.length });
-        // #endregion
       } else {
         throw new Error(
           "FIREBASE_PRIVATE_KEY is truncated (multi-line .env often keeps only the first line). " +
@@ -104,10 +90,6 @@ export const bookingEnv = {
             "(2) Put the entire key on one line in .env with literal \\n for newlines."
         );
       }
-    } else {
-      // #region agent log
-      logEnv("firebasePrivateKey after normalize", { hypothesisId: "H1", normLen: out.length, startsWithBegin: out.startsWith("-----BEGIN"), hasNewline: out.includes("\n") });
-      // #endregion
     }
     if (!out.startsWith("-----BEGIN") || !out.includes("-----END")) {
       throw new Error(

@@ -27,20 +27,6 @@ function formatStripeError(e: unknown): Record<string, unknown> {
   };
 }
 
-// #region agent log
-async function debugLog(message: string, data: Record<string, unknown>) {
-  try {
-    await fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location: "create-checkout-session/route.ts", message, data, timestamp: Date.now() }),
-    });
-  } catch {
-    // ignore
-  }
-}
-// #endregion
-
 function parseBody(body: unknown): { holdId: string; embedded?: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
@@ -54,29 +40,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const input = parseBody(body);
-    // #region agent log
-    await debugLog("create-checkout-session entry", {
-      hasInput: !!input,
-      holdId: input?.holdId ?? null,
-      hypothesisId: "H3",
-    });
-    // #endregion
     if (!input) {
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
-    // #region agent log
-    await debugLog("create-checkout before getDb", { holdId: input.holdId, embedded: input.embedded, hypothesisId: "H1" });
-    // #endregion
     const db = getDb();
     const { Timestamp } = getFirestoreExports();
     const holdRef = db.collection("holds").doc(input.holdId);
     const holdSnap = await holdRef.get();
-    // #region agent log
-    await debugLog("hold fetch result", {
-      holdExists: holdSnap.exists,
-      hypothesisId: "H3",
-    });
-    // #endregion
     if (!holdSnap.exists) {
       return NextResponse.json({ error: "Hold not found" }, { status: 404 });
     }
@@ -91,15 +61,6 @@ export async function POST(request: NextRequest) {
     const hasExperience = !!hold.experienceId;
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
-    // #region agent log
-    await debugLog("create-checkout branch", {
-      hasExperience,
-      hasBoat,
-      isListingBoatFlow,
-      rateId: hold.rateId,
-      hypothesisId: "H2",
-    });
-    // #endregion
     let rate: Rate | ExperienceRate | BoatRate;
     const addonsById = new Map<string, Addon | ExperienceAddon>();
     if (isListingBoatFlow) {
@@ -169,12 +130,6 @@ export async function POST(request: NextRequest) {
         quantity: 1,
       }];
     }
-    // #region agent log
-    await debugLog("create-checkout before Stripe", {
-      lineItemsCount: lineItems?.length ?? 0,
-      hypothesisId: "H4",
-    });
-    // #endregion
     const baseUrl = bookingEnv.appBaseUrl;
     const stripe = getStripe();
     const metadata: Record<string, string> = {
@@ -218,14 +173,6 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    // #region agent log
-    await debugLog("Stripe session created", {
-      hasUrl: !!session.url,
-      hasClientSecret: !!session.client_secret,
-      sessionId: session.id ?? null,
-      hypothesisId: "H4",
-    });
-    // #endregion
     await holdRef.update({ checkoutSessionId: session.id });
     if (input.embedded && session.client_secret) {
       return NextResponse.json({ clientSecret: session.client_secret, sessionId: session.id });
@@ -236,22 +183,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to create checkout session" }, { status: 500 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Checkout session failed";
-    const stack = err instanceof Error ? String(err.stack).slice(0, 500) : "";
-    // #region agent log
-    await debugLog("create-checkout-session threw", {
-      message: String(message),
-      stack,
-      name: err instanceof Error ? err.name : "",
-      hypothesisId: "H5",
-    }).catch(() => {});
-    try {
-      const path = require("path") as typeof import("path");
-      const fs = require("fs") as typeof import("fs");
-      const logPath = path.join(process.cwd(), ".cursor", "debug.log");
-      const line = JSON.stringify({ createCheckoutError: true, message: String(message), stack, name: err instanceof Error ? err.name : "", ts: Date.now() }) + "\n";
-      fs.appendFileSync(logPath, line);
-    } catch (_) {}
-    // #endregion
     console.error("[create-checkout-session]", err);
     // Surface error in response so modal can show it (and so we can fix .env or code)
     return NextResponse.json(

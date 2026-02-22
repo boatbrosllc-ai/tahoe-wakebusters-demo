@@ -97,19 +97,24 @@ export default function AdminBookingsPage() {
   const [addBookingOpen, setAddBookingOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const buildParams = useCallback(() => {
+  const buildParams = useCallback((cursor?: string | null) => {
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
     if (fromDate) params.set("from", fromDate);
     if (toDate) params.set("to", toDate);
     if (fromTripDate) params.set("fromTripDate", fromTripDate);
     if (toTripDate) params.set("toTripDate", toTripDate);
-    params.set("limit", "500");
+    params.set("limit", "50");
+    if (cursor) params.set("cursor", cursor);
     return params.toString();
   }, [statusFilter, fromDate, toDate, fromTripDate, toTripDate]);
 
   useEffect(() => {
+    setLoading(true);
+    setNextCursor(null);
     const qs = buildParams();
     const url = qs ? `/api/admin/bookings?${qs}` : "/api/admin/bookings";
     fetch(url, { credentials: "include" })
@@ -122,10 +127,32 @@ export default function AdminBookingsPage() {
         }
         return data;
       })
-      .then(setList)
+      .then((data) => {
+        setList(Array.isArray(data) ? data : (data.bookings ?? []));
+        setNextCursor(data.nextCursor ?? null);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))
       .finally(() => setLoading(false));
   }, [buildParams, refreshKey]);
+
+  const loadMore = useCallback(() => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const qs = buildParams(nextCursor);
+    const url = `/api/admin/bookings?${qs}`;
+    fetch(url, { credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to load more");
+        return data;
+      })
+      .then((data) => {
+        setList((prev) => [...prev, ...(Array.isArray(data) ? data : (data.bookings ?? []))]);
+        setNextCursor(data.nextCursor ?? null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Error"))
+      .finally(() => setLoadingMore(false));
+  }, [nextCursor, loadingMore, buildParams]);
 
   useEffect(() => {
     if (!webhookEventsOpen) return;
@@ -533,6 +560,30 @@ export default function AdminBookingsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {!loading && !error && nextCursor && viewMode === "list" && (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="inline-flex items-center gap-2 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            {loadingMore ? (
+              <>
+                <svg className="animate-spin h-4 w-4 text-brand-muted" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden>
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Loading…
+              </>
+            ) : (
+              "Load more"
+            )}
+          </Button>
         </div>
       )}
 

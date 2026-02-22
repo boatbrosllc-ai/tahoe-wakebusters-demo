@@ -15,12 +15,12 @@ import type { Booking } from "@/lib/booking/types";
 const LOCK_SKIP_MS = 10 * 60 * 1000; // 10 min
 const BATCH_SIZE = 40;
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 503 });
     }
     const db = getDb();
     const { Timestamp } = getFirestoreExports();
@@ -61,7 +61,6 @@ export async function POST(request: NextRequest) {
       const stripe = getStripe();
       try {
         await db.collection("bookings").doc(bookingId).update({
-          status: "final_processing",
           "stripe.finalChargeLockAt": nowTs,
           "stripe.finalChargeAttemptedAt": nowTs,
         });
@@ -72,14 +71,21 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const pi = await stripe.paymentIntents.create({
-          amount: finalCents,
-          currency: "usd",
-          customer: customerId,
-          payment_method: paymentMethodId,
-          off_session: true,
-          confirm: true,
-          metadata: { bookingId, payment_stage: "final" },
+        const pi = await stripe.paymentIntents.create(
+          {
+            amount: finalCents,
+            currency: "usd",
+            customer: customerId,
+            payment_method: paymentMethodId,
+            off_session: true,
+            confirm: true,
+            metadata: { bookingId, payment_stage: "final" },
+          },
+          { idempotencyKey: `final_charge_${bookingId}` }
+        );
+        await db.collection("bookings").doc(bookingId).update({
+          status: "final_processing",
+          "stripe.finalPaymentIntentId": pi.id,
         });
         console.log("[run-final-charges] PaymentIntent created (webhook will set final_paid)", { bookingId, piId: pi.id });
         attempted++;

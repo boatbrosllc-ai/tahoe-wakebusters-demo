@@ -304,7 +304,7 @@ export async function POST(request: NextRequest) {
     if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });
 
     const db = getDb();
-    const { Timestamp } = getFirestoreExports();
+    const { Timestamp, FieldValue } = getFirestoreExports();
 
     const expSnap = await db.collection("experiences").doc(experienceId).get();
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -352,8 +352,26 @@ export async function POST(request: NextRequest) {
       createdAt: Timestamp.now(),
     };
 
-    const ref = await db.collection("bookings").add(booking);
-    const bookingId = ref.id;
+    const bookingId = db.collection("bookings").doc().id;
+    const bookingRef = db.collection("bookings").doc(bookingId);
+    const slotRef = boatId
+      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+      : db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
+    const { start: slotStart, end: slotEnd } = getSlotStartEnd(tripDate, startHour, durationHours, 0);
+    await db.runTransaction(async (tx) => {
+      const slotSnap = await tx.get(slotRef);
+      if (slotSnap.exists && (slotSnap.data()?.status === "booked" || slotSnap.data()?.status === "held")) {
+        throw Object.assign(new Error("This time slot is already booked or held"), { code: "SLOT_CONFLICT" });
+      }
+      tx.set(bookingRef, booking);
+      tx.set(slotRef, {
+        status: "booked",
+        bookingId,
+        startAt: Timestamp.fromDate(slotStart),
+        endAt: Timestamp.fromDate(slotEnd),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
     try {
       const { createWaiverForBooking, sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
       const waiverResult = await createWaiverForBooking({
@@ -370,6 +388,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ id: bookingId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if ((err as { code?: string }).code === "SLOT_CONFLICT") {
+      return NextResponse.json({ error: message }, { status: 409 });
+    }
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(
       { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },

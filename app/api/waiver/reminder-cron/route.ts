@@ -8,10 +8,10 @@ import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
-  if (CRON_SECRET && authHeader !== `Bearer ${CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!CRON_SECRET || authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 503 });
   }
 
   const db = getDb();

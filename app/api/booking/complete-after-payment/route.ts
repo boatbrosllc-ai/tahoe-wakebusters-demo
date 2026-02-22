@@ -34,16 +34,16 @@ export async function POST(request: NextRequest) {
     let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
     if (pi.status !== "succeeded") {
       if (pi.status === "processing") {
-        await new Promise((r) => setTimeout(r, 2500));
-        pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
-      }
-      if (pi.status !== "succeeded") {
-        console.error("[complete-after-payment] payment not succeeded", { status: pi.status });
         return NextResponse.json(
-          { error: "Payment has not succeeded yet. Your booking will be created shortly—check your email and Admin." },
-          { status: 400 }
+          { processing: true, message: "Payment is processing. Your booking will be confirmed shortly." },
+          { status: 202 }
         );
       }
+      console.error("[complete-after-payment] payment not succeeded", { status: pi.status });
+      return NextResponse.json(
+        { error: "Payment has not succeeded yet. Your booking will be created shortly—check your email and Admin." },
+        { status: 400 }
+      );
     }
     const metadataHoldId = pi.metadata?.holdId;
     if (metadataHoldId !== input.holdId) {

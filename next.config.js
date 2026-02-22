@@ -6,8 +6,10 @@ const nextConfig = {
   generateBuildId: async () => null,
   images: {
     remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-      { protocol: 'http', hostname: '**' },
+      { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },
+      { protocol: 'https', hostname: 'storage.googleapis.com' },
+      { protocol: 'https', hostname: '*.appspot.com' },
+      { protocol: 'https', hostname: '*.firebasestorage.app' },
     ],
   },
   // Don't bundle firebase-admin; use Node require at runtime (server-only)

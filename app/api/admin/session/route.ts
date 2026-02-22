@@ -15,16 +15,8 @@ export async function GET(request: NextRequest) {
   }
 }
 
-const INGEST = "http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624";
-function log(location: string, message: string, data: Record<string, unknown>) {
-  fetch(INGEST, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location, message, data: { ...data, timestamp: Date.now() } }) }).catch(() => {});
-}
-
 export async function POST(request: NextRequest) {
   const allowed = getAllowedAdminEmails();
-  // #region agent log
-  log("session/route.ts:POST", "session POST entry", { hypothesisId: "H1", allowedCount: allowed.length });
-  // #endregion
   if (allowed.length === 0) {
     return NextResponse.json({ error: "Admin not configured (set ADMIN_EMAIL)" }, { status: 503 });
   }
@@ -37,18 +29,12 @@ export async function POST(request: NextRequest) {
   }
 
   const idToken = typeof body.token === "string" ? body.token.trim() : "";
-  // #region agent log
-  log("session/route.ts:POST", "token received", { hypothesisId: "H2", hasToken: !!idToken, tokenLength: idToken.length });
-  // #endregion
   if (!idToken) {
     return NextResponse.json({ error: "Missing token" }, { status: 400 });
   }
 
   try {
     const app = getFirebaseApp();
-    // #region agent log
-    log("session/route.ts:POST", "getFirebaseApp ok", { hypothesisId: "H1" });
-    // #endregion
     const serverProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
     const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
     if (serverProjectId && clientProjectId && serverProjectId !== clientProjectId) {
@@ -64,16 +50,10 @@ export async function POST(request: NextRequest) {
     }
     const decoded = await app.auth().verifyIdToken(idToken);
     const email = decoded.email?.trim().toLowerCase();
-    // #region agent log
-    log("session/route.ts:POST", "verifyIdToken ok", { hypothesisId: "H2", email, allowedMatch: allowed.includes(email ?? "") });
-    // #endregion
     if (!email || !allowed.includes(email)) {
       return NextResponse.json({ error: "Not authorized for admin" }, { status: 403 });
     }
     const sessionCookie = await createAdminSessionCookie(idToken);
-    // #region agent log
-    log("session/route.ts:POST", "createAdminSessionCookie ok", { hypothesisId: "H3" });
-    // #endregion
     const name = getAdminSessionCookieName();
     const res = NextResponse.json({ ok: true, redirect: "/admin" }, { status: 200 });
     res.cookies.set(name, sessionCookie, {
@@ -86,10 +66,6 @@ export async function POST(request: NextRequest) {
     return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // #region agent log
-    log("session/route.ts:POST", "session POST catch", { hypothesisId: "H1", H2: true, H3: true, errorMessage: message });
-    console.log("[admin/session] 401 cause:", message);
-    // #endregion
     const lower = message.toLowerCase();
     let hint: string | undefined;
     if (lower.includes("secretorprivatekey") || lower.includes("asymmetric key") || lower.includes("rs256") || lower.includes("private key")) {

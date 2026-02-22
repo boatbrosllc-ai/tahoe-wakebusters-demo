@@ -15,7 +15,7 @@ import { bookingEnv } from "@/lib/booking/env";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
-import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
+import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
 /** Legacy: full payment in one charge. */
@@ -141,21 +141,27 @@ export async function convertHoldToBooking(
   const addonsById = new Map<string, Addon | ExperienceAddon>();
   addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
   const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-  let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-  if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
-    const slotStart = (slot.startAt as { toDate(): Date }).toDate();
-    rateForPricing = {
-      ...rate,
-      priceCents: getEffectiveRatePriceCents(
-        rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number },
-        slotStart,
-        experienceForPricing.holidayDates,
-        experienceForPricing.weekendDays,
-        experienceForPricing.friSunDays
-      ),
-    };
+  let pricing: BookingPricing;
+  if (hold.pricing) {
+    pricing = hold.pricing;
+  } else {
+    console.warn("[convert-hold-to-booking] hold.pricing missing, recomputing", holdId);
+    let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+    if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
+      const slotStart = (slot.startAt as { toDate(): Date }).toDate();
+      rateForPricing = {
+        ...rate,
+        priceCents: getEffectiveRatePriceCents(
+          rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number },
+          slotStart,
+          experienceForPricing.holidayDates,
+          experienceForPricing.weekendDays,
+          experienceForPricing.friSunDays
+        ),
+      };
+    }
+    pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
   }
-  const pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
   const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
   const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
   const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
@@ -229,9 +235,8 @@ export async function convertHoldToBooking(
     const discountSnap = await db.collection("discounts").where("code", "==", holdDiscountCode).limit(1).get();
     if (!discountSnap.empty) {
       const discountRef = discountSnap.docs[0].ref;
-      const current = discountSnap.docs[0].data() as { usedCount?: number };
       await discountRef.update({
-        usedCount: (current.usedCount ?? 0) + 1,
+        usedCount: FieldValue.increment(1),
         updatedAt: FieldValue.serverTimestamp(),
       });
     }

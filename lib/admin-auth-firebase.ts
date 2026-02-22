@@ -2,7 +2,7 @@
  * Admin auth via Firebase Auth session cookie.
  * Client signs in with Firebase (email/password), sends ID token to /api/admin/session;
  * server creates a session cookie and verifies it on protected routes.
- * The super-admin email below is always allowed. ADMIN_EMAIL (if set) is also allowed.
+ * Allowed emails are read exclusively from ADMIN_EMAIL (comma-separated).
  */
 
 import "server-only";
@@ -12,27 +12,18 @@ import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/en
 const COOKIE_NAME = "admin_session";
 const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
 
-/** Single super-admin; always allowed for admin access. */
-const SUPER_ADMIN_EMAIL = "boatbrosllc@gmail.com";
-
 /** Shown when Firebase/Firestore server config is missing or invalid (503/500). */
 export const FIREBASE_SETUP_HINT =
   "Set FIREBASE_SERVICE_ACCOUNT_JSON_PATH to your service account JSON path (Firebase Console → Project settings → Service accounts → Generate new private key), or set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY. Restart the dev server.";
 
-function getAdminEmail(): string | null {
-  const email = process.env.ADMIN_EMAIL?.trim();
-  return email || null;
-}
-
-/** All emails that are allowed to access admin (super-admin + ADMIN_EMAIL if set). Exported for session route. */
+/** All emails that are allowed to access admin, read exclusively from ADMIN_EMAIL (comma-separated). Exported for session route. */
 export function getAllowedAdminEmails(): string[] {
-  const list = [SUPER_ADMIN_EMAIL.toLowerCase()];
-  const env = getAdminEmail();
-  if (env) {
-    const lower = env.toLowerCase();
-    if (!list.includes(lower)) list.push(lower);
-  }
-  return list;
+  const raw = process.env.ADMIN_EMAIL?.trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 /** Create a Firebase session cookie from an ID token. Returns cookie value or throws. */

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Discount } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,14 @@ export const dynamic = "force-dynamic";
  * Used at checkout to preview discount before creating hold (same logic as create-hold).
  */
 export async function POST(request: NextRequest) {
+  const rl = checkRateLimit(getClientKey(request));
+  if (!rl.allowed) {
+    const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+    return NextResponse.json(
+      { error: "Too many requests. Please try again in a moment." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
+  }
   try {
     const body = await request.json().catch(() => ({}));
     const codeRaw = typeof body.code === "string" ? body.code.trim() : "";

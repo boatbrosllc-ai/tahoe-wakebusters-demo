@@ -119,7 +119,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   }
 }
 
-const BUSINESS_EMAIL = "boatbrosllc@gmail.com";
+const BUSINESS_EMAIL = process.env.CONTACT_EMAIL?.trim() || "boatbrosllc@gmail.com";
 
 /**
  * Send a copy of the booking confirmation to the business (boatbrosllc@gmail.com) so they know they have a new booking.
