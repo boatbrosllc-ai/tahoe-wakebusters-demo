@@ -7,22 +7,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingReminderEmail } from "@/lib/booking/brevo";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getRequestById } from "@/lib/waiver/firestore";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
 
 const CRON_SECRET = process.env.CRON_SECRET;
-
-/** Trip start as Date in Central (Austin). Uses CST/CDT. */
-function getTripStartCentral(dateStr: string, startHour: number): Date {
-  const [, m] = dateStr.split("-").map(Number);
-  const month = m - 1; // 0-indexed
-  const isDST = month >= 3 && month <= 10; // roughly March–October Central
-  const offsetStr = isDST ? "-05:00" : "-06:00";
-  const iso = `${dateStr}T${String(startHour).padStart(2, "0")}:00:00${offsetStr}`;
-  return new Date(iso);
-}
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -46,10 +36,10 @@ function inDayOfWindow(tripStartMs: number, nowMs: number): boolean {
   return diff >= 2.5 * ONE_HOUR_MS && diff <= 3.5 * ONE_HOUR_MS;
 }
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
-  if (CRON_SECRET && authHeader !== `Bearer ${CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!CRON_SECRET || authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 503 });
   }
 
   const db = getDb();
@@ -57,7 +47,7 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const nowMs = now.getTime();
 
-  const paidStatuses = ["paid", "deposit_paid", "final_paid"];
+  const paidStatuses = ["paid", "deposit_paid", "final_paid", "final_due"];
   const snap = await db
     .collection("bookings")
     .where("status", "in", paidStatuses)
@@ -80,7 +70,7 @@ export async function POST(request: NextRequest) {
     const parsed = parseSlotId(slotId);
     if (!parsed) continue;
 
-    const tripStart = getTripStartCentral(parsed.dateStr, parsed.startHour);
+    const tripStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours ?? 2, parsed.startMinute ?? 0).start;
     const tripStartMs = tripStart.getTime();
     const startTimeStr = tripStart.toLocaleTimeString("en-US", {
       hour: "numeric",

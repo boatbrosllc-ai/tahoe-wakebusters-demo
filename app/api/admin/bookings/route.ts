@@ -52,7 +52,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
-    const limit = Math.min(parseInt(request.nextUrl.searchParams.get("limit") ?? "100", 10) || 100, 500);
+    const limit = Math.min(parseInt(request.nextUrl.searchParams.get("limit") ?? "50", 10) || 50, 200);
+    const cursorParam = request.nextUrl.searchParams.get("cursor");
     const statusFilter = request.nextUrl.searchParams.get("status"); // paid | canceled | refunded
     const experienceIdParam = request.nextUrl.searchParams.get("experienceId"); // filter by experience (e.g. for calendar)
     const fromParam = request.nextUrl.searchParams.get("from"); // booking date (createdAt)
@@ -67,43 +68,34 @@ export async function GET(request: NextRequest) {
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
-    let docs: QueryDocumentSnapshot[];
+    let query = db.collection("bookings") as FirebaseFirestore.Query;
+
     if (fromTripDate && toTripDate) {
-      const tripLimit = Math.min(limit, 500);
-      const tripDateInRange = (b: Booking) => {
-        const startDateStr = (b as { startDateStr?: string }).startDateStr;
-        const parsed = parseSlotIdForDisplay(b.slotId);
-        const tripDateNorm = normalizeTripDateStr(startDateStr ?? parsed?.dateStr ?? null);
-        if (!tripDateNorm) return false;
-        return tripDateNorm >= fromTripDate && tripDateNorm <= toTripDate;
-      };
-      let byTripDocs: QueryDocumentSnapshot[] = [];
-      try {
-        const byTripSnap = await db
-          .collection("bookings")
-          .where("startDateStr", ">=", fromTripDate)
-          .where("startDateStr", "<=", toTripDate)
-          .limit(tripLimit)
-          .get();
-        byTripDocs = byTripSnap.docs;
-      } catch {
-        // Index may be missing; fall back to createdAt + in-memory filter
-      }
-      const createdAtSnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
-      const fromCreatedAt = createdAtSnap.docs.filter((d) => tripDateInRange(d.data() as Booking));
-      const merged = new Map<string, QueryDocumentSnapshot>();
-      byTripDocs.forEach((d) => merged.set(d.id, d));
-      fromCreatedAt.forEach((d) => {
-        if (!merged.has(d.id)) merged.set(d.id, d);
-      });
-      docs = Array.from(merged.values());
+      query = query
+        .where("startDateStr", ">=", fromTripDate)
+        .where("startDateStr", "<=", toTripDate)
+        .orderBy("startDateStr", "desc");
     } else {
-      const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
-      docs = snap.docs;
+      query = query.orderBy("createdAt", "desc");
     }
 
-    if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
-    if (experienceIdParam) docs = docs.filter((d) => (d.data() as Booking).experienceId === experienceIdParam);
+    if (statusFilter) query = query.where("status", "==", statusFilter);
+    if (experienceIdParam) query = query.where("experienceId", "==", experienceIdParam);
+
+    if (cursorParam) {
+      const cursorDoc = await db.collection("bookings").doc(cursorParam).get();
+      if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+    }
+
+    const snap = await query.limit(limit + 1).get();
+    let docs = snap.docs;
+
+    let nextCursor: string | null = null;
+    if (docs.length > limit) {
+      nextCursor = docs[limit - 1].id;
+      docs = docs.slice(0, limit);
+    }
+
     if (fromDateVal || toDateVal) {
       docs = docs.filter((d) => {
         const b = d.data() as Booking;
@@ -124,7 +116,6 @@ export async function GET(request: NextRequest) {
         return true;
       });
     }
-    docs = docs.slice(0, limit);
     const experienceIds = new Set<string>();
     const boatIds = new Set<string>();
     docs.forEach((d) => {
@@ -223,21 +214,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    if (fromTripDate || toTripDate) {
-      list = list.filter((item) => {
-        const raw = item.startDate ?? item.createdAt?.slice(0, 10);
-        const tripDate = normalizeTripDateStr(raw);
-        if (!tripDate) return false;
-        if (fromTripDate && tripDate < fromTripDate) return false;
-        if (toTripDate && tripDate > toTripDate) return false;
-        return true;
-      });
-    }
-    if (experienceIdParam) {
-      list = list.filter((item) => item.experienceId === experienceIdParam);
-    }
-
-    return NextResponse.json(list);
+    return NextResponse.json({ bookings: list, nextCursor });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
