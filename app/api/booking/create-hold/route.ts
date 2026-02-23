@@ -535,7 +535,7 @@ export async function POST(request: NextRequest) {
             const bookingSnap = await tx.get(db.collection("bookings").doc(slot.bookingId));
             if (bookingSnap.exists) {
               const b = bookingSnap.data() as { status?: string };
-              if (b.status && (BOOKING_STATUSES_SLOT_TAKEN as readonly string[]).includes(b.status)) {
+              if (b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
                 throw new Error("Slot no longer available");
               }
             }
@@ -611,7 +611,7 @@ export async function POST(request: NextRequest) {
           const bookingSnap = await tx.get(db.collection("bookings").doc(slotData.bookingId));
           if (!bookingSnap.exists) return false;
           const b = bookingSnap.data() as { status?: string };
-          return !!(b.status && (BOOKING_STATUSES_SLOT_TAKEN as readonly string[]).includes(b.status));
+          return !!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never));
         };
 
         if (isListingBoatFlow && input.boatId) {

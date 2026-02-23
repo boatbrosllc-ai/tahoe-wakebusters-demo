@@ -250,7 +250,7 @@ export async function convertHoldToBooking(
   const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
     ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
     ...(hold.boatId ? { boatId: hold.boatId } : {}),
-    ...((hold as { bookingMode?: string }).bookingMode ? { bookingMode: (hold as { bookingMode?: string }).bookingMode } : {}),
+    ...((hold as { bookingMode?: "shared" | "charter" }).bookingMode ? { bookingMode: (hold as { bookingMode?: "shared" | "charter" }).bookingMode } : {}),
     slotId: hold.slotId,
     ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
     rateId: hold.rateId,
@@ -265,9 +265,9 @@ export async function convertHoldToBooking(
     status: isDeposit ? "final_due" : "paid",
     stripe: stripeBlock,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
-    ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp } : {}),
+    ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
     ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
-    createdAt: Timestamp.now(),
+    createdAt: Timestamp.now() as unknown as FirestoreTimestamp,
   };
 
   await db.runTransaction(async (tx) => {

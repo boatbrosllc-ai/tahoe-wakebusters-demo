@@ -153,6 +153,17 @@ export function ExperienceBookingCard({
     setSelectedRateId((prev) => prev ?? rates[0].id);
   }, [isTicketed, rates]);
 
+  const openSlotsByDate = useMemo(() => {
+    const map = new Map<string, SlotDto[]>();
+    for (const s of slots) {
+      if (s.status !== "open") continue;
+      const day = isoToChicagoDateStr(s.startAt);
+      if (!map.has(day)) map.set(day, []);
+      map.get(day)!.push(s);
+    }
+    return map;
+  }, [slots]);
+
   // Ticketed: auto-select the first open slot when a date is chosen (fixed departure time).
   useEffect(() => {
     if (!isTicketed || !selectedDate) return;
@@ -182,17 +193,6 @@ export function ExperienceBookingCard({
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [fetchSlots]);
-
-  const openSlotsByDate = useMemo(() => {
-    const map = new Map<string, SlotDto[]>();
-    for (const s of slots) {
-      if (s.status !== "open") continue;
-      const day = isoToChicagoDateStr(s.startAt);
-      if (!map.has(day)) map.set(day, []);
-      map.get(day)!.push(s);
-    }
-    return map;
-  }, [slots]);
 
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim());
