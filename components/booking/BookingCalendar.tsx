@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { DEFAULT_CANCELLATION_SUMMARY } from "@/lib/booking/cancellation-policy";
-import { formatBookingTimeFromIso, formatBookingDate } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 
 const SLOTS_POLL_MS = 60000;
@@ -181,7 +181,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
     const map = new Map<string, SlotDto[]>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
     }
@@ -342,7 +342,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
             <div key={s.num} className="flex items-center">
               <span
                 className={cn(
-                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors",
+                  "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors",
                   currentStep >= s.num ? "bg-brand-primary text-white" : "bg-brand-dark/10 text-brand-muted"
                 )}
               >
@@ -400,7 +400,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                           setSelectedSlot(null);
                         }}
                         className={cn(
-                          "rounded-xl border-2 px-4 py-2.5 text-sm font-medium transition-all",
+                          "rounded-xl border-2 px-4 py-2.5 text-sm font-medium transition-all min-h-[44px] touch-manipulation",
                           selectedDate === day
                             ? "border-brand-primary bg-brand-primary text-white"
                             : "border-brand-dark/15 bg-white text-brand-dark hover:border-brand-primary/50",
@@ -424,7 +424,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         type="button"
                         onClick={() => setSelectedSlot(slot)}
                         className={cn(
-                          "rounded-xl border-2 px-4 py-2 text-sm font-medium transition-all",
+                          "rounded-xl border-2 px-4 py-2 text-sm font-medium transition-all min-h-[44px] touch-manipulation",
                           selectedSlot?.id === slot.id
                             ? "border-brand-primary bg-brand-primary text-white"
                             : "border-brand-dark/15 bg-white text-brand-dark hover:border-brand-primary/50"
@@ -450,7 +450,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         type="button"
                         onClick={() => setSelectedRateId(r.id)}
                         className={cn(
-                          "rounded-xl border-2 px-4 py-3 text-sm font-medium transition-all min-w-[120px]",
+                          "rounded-xl border-2 px-4 py-3 text-sm font-medium transition-all min-w-[120px] min-h-[44px] touch-manipulation",
                           selectedRateId === r.id
                             ? "border-brand-primary bg-brand-primary text-white"
                             : "border-brand-dark/15 bg-white text-brand-dark hover:border-brand-primary/50"
@@ -482,7 +482,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                                 <button
                                   type="button"
                                   onClick={() => updateAddonQty(addon.id, Math.max(0, (addonSelections.find((s) => s.addonId === addon.id)?.qty ?? 0) - 1))}
-                                  className="h-8 w-8 rounded-lg border border-brand-dark/20 bg-white text-brand-dark font-medium hover:bg-brand-bg"
+                                  className="h-11 w-11 rounded-lg border border-brand-dark/20 bg-white text-brand-dark font-medium hover:bg-brand-bg touch-manipulation"
                                   aria-label={`Less ${addon.name}`}
                                 >
                                   −
@@ -493,13 +493,13 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                                   max={addon.maxQty ?? 10}
                                   value={addonSelections.find((s) => s.addonId === addon.id)?.qty ?? 0}
                                   onChange={(e) => updateAddonQty(addon.id, Math.min(addon.maxQty ?? 10, parseInt(e.target.value, 10) || 0))}
-                                  className="w-12 rounded-lg border border-brand-dark/15 px-2 py-1 text-center text-sm"
+                                  className="w-12 rounded-lg border border-brand-dark/15 px-2 py-1 text-center text-sm min-h-[44px]"
                                   aria-label={`Quantity for ${addon.name}`}
                                 />
                                 <button
                                   type="button"
                                   onClick={() => updateAddonQty(addon.id, Math.min(addon.maxQty ?? 10, (addonSelections.find((s) => s.addonId === addon.id)?.qty ?? 0) + 1))}
-                                  className="h-8 w-8 rounded-lg border border-brand-dark/20 bg-white text-brand-dark font-medium hover:bg-brand-bg"
+                                  className="h-11 w-11 rounded-lg border border-brand-dark/20 bg-white text-brand-dark font-medium hover:bg-brand-bg touch-manipulation"
                                   aria-label={`More ${addon.name}`}
                                 >
                                   +
@@ -570,7 +570,7 @@ export function BookingCalendar({ defaultBoatId }: { defaultBoatId?: string }) {
                         max={detail.boat.capacityMax}
                         value={partySize}
                         onChange={(e) => setPartySize(Math.min(detail.boat.capacityMax, Math.max(1, parseInt(e.target.value, 10) || 1)))}
-                        className="w-full rounded-xl border border-brand-dark/15 bg-white px-4 py-3 text-brand-dark placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20"
+                        className="w-full rounded-xl border border-brand-dark/15 bg-white px-4 py-3 text-brand-dark placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 min-h-[44px]"
                         placeholder="e.g. 4"
                         aria-label="Party size"
                       />

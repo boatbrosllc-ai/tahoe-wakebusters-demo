@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Anchor, Users, Info, ChevronDown, ChevronUp } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DynamicPricingEditor } from "@/components/admin/DynamicPricingEditor";
 import { PhotoUploader } from "@/components/admin/PhotoUploader";
@@ -73,6 +75,12 @@ export type ExperienceFormData = {
   holidayDates: HolidayDateRow[];
   weekendDays: number[];
   friSunDays: number[];
+  pricingType: "charter" | "ticketed";
+  maxCapacity: number;
+  departureHour: number;
+  departureMinute: number;
+  tripDurationHours: number;
+  showSpotsRemaining?: boolean;
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -116,6 +124,12 @@ function getDefaultFormData(): ExperienceFormData {
     holidayDates: [],
     weekendDays: [0, 6],
     friSunDays: [],
+    pricingType: "charter",
+    maxCapacity: 0,
+    departureHour: 10,
+    departureMinute: 0,
+    tripDurationHours: 1,
+    showSpotsRemaining: false,
   };
 }
 
@@ -215,6 +229,12 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     friSunDays: Array.isArray(api.friSunDays)
       ? (api.friSunDays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
       : [],
+    pricingType: api.pricingType === "ticketed" ? "ticketed" : "charter",
+    maxCapacity: typeof api.maxCapacity === "number" ? api.maxCapacity : 0,
+    departureHour: typeof api.departureHour === "number" ? api.departureHour : 10,
+    departureMinute: typeof api.departureMinute === "number" ? api.departureMinute : 0,
+    tripDurationHours: typeof api.tripDurationHours === "number" && api.tripDurationHours > 0 ? api.tripDurationHours : 1,
+    showSpotsRemaining: api.showSpotsRemaining === true,
   };
 }
 
@@ -272,6 +292,14 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     ...(d.holidayDates.length > 0 && { holidayDates: d.holidayDates.filter((h) => h.start || h.end) }),
     weekendDays: d.weekendDays.length > 0 ? d.weekendDays : [0, 6],
     ...(d.friSunDays?.length ? { friSunDays: d.friSunDays } : {}),
+    pricingType: d.pricingType,
+    ...(d.pricingType === "ticketed" && {
+      maxCapacity: d.maxCapacity || undefined,
+      departureHour: d.departureHour,
+      departureMinute: d.departureMinute,
+      tripDurationHours: d.tripDurationHours > 0 ? d.tripDurationHours : 1,
+      showSpotsRemaining: d.showSpotsRemaining ?? false,
+    }),
   };
 }
 
@@ -293,6 +321,12 @@ export function ExperienceForm({
   const [data, setData] = useState<ExperienceFormData>(() => initialData ?? getDefaultFormData());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const toggleSection = (name: string) => setCollapsedSections((prev) => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
 
   const update = <K extends keyof ExperienceFormData>(key: K, value: ExperienceFormData[K]) => {
     setData((prev) => ({ ...prev, [key]: value }));
@@ -423,7 +457,13 @@ export function ExperienceForm({
       )}
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Basics</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Basics</h2>
+          <button type="button" onClick={() => toggleSection("basics")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("basics")}>
+            {collapsedSections.has("basics") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("basics") && <div className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-slug">Slug (URL id)</label>
@@ -478,10 +518,17 @@ export function ExperienceForm({
             reorderable
           />
         </div>
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Display &amp; SEO</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Display &amp; SEO</h2>
+          <button type="button" onClick={() => toggleSection("seo")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("seo")}>
+            {collapsedSections.has("seo") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("seo") && <div className="space-y-4">
         <p className="text-sm text-brand-muted">Optional: hero overlay, meta, CTA text, testimonials, and listing page behavior.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -556,10 +603,17 @@ export function ExperienceForm({
             ))}
           </div>
         )}
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Location</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Location</h2>
+          <button type="button" onClick={() => toggleSection("location")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("location")}>
+            {collapsedSections.has("location") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("location") && <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-loc-title">Location title</label>
           <input id="exp-loc-title" className={inputClass} value={data.locationTitle} onChange={(e) => update("locationTitle", e.target.value)} aria-label="Location title" />
@@ -572,10 +626,17 @@ export function ExperienceForm({
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-loc-notes">Notes</label>
           <input id="exp-loc-notes" className={inputClass} value={data.locationNotes} onChange={(e) => update("locationNotes", e.target.value)} aria-label="Location notes" />
         </div>
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Capacity &amp; rules</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Capacity &amp; rules</h2>
+          <button type="button" onClick={() => toggleSection("capacity")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("capacity")}>
+            {collapsedSections.has("capacity") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("capacity") && <div className="space-y-4">
         <p className="text-sm text-brand-muted mb-3">To offer pets, add an add-on (e.g. &quot;Pet&quot; or &quot;Pets&quot;) in the Add-ons section below.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -613,12 +674,19 @@ export function ExperienceForm({
           ))}
           <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => addToList("rules")}>Add</Button>
         </div>
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Cancellation policy</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Cancellation policy</h2>
+          <button type="button" onClick={() => toggleSection("cancellation")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("cancellation")}>
+            {collapsedSections.has("cancellation") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("cancellation") && <div className="space-y-4">
         <p className="text-sm text-brand-muted">Only three refund options: free cancellation, partial refund, and no refund. Set the day cutoffs below.</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-free">Free cancellation — up to (days before)</label>
             <input id="exp-cp-free" type="number" min={0} className={inputClass} value={data.cancellationPolicy.freeCancelDays} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, freeCancelDays: parseInt(e.target.value, 10) || 0 })} aria-label="Free cancellation up to how many days before" />
@@ -640,10 +708,17 @@ export function ExperienceForm({
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-cp-full">Full text (shown to guests)</label>
           <textarea id="exp-cp-full" className={textareaClass} rows={2} value={data.cancellationPolicy.fullText} onChange={(e) => update("cancellationPolicy", { ...data.cancellationPolicy, fullText: e.target.value })} placeholder="e.g. Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days." aria-label="Cancellation policy full text" />
         </div>
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">FAQs</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">FAQs</h2>
+          <button type="button" onClick={() => toggleSection("faqs")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("faqs")}>
+            {collapsedSections.has("faqs") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("faqs") && <div className="space-y-4">
         {data.faqs.map((f, i) => (
           <div key={i} className="flex gap-2 items-start">
             <div className="flex-1 space-y-1">
@@ -654,16 +729,23 @@ export function ExperienceForm({
           </div>
         ))}
         <Button type="button" variant="outline" size="sm" onClick={addFaq}>Add FAQ</Button>
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Seasonal &amp; status</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Seasonal &amp; status</h2>
+          <button type="button" onClick={() => toggleSection("seasonal")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("seasonal")}>
+            {collapsedSections.has("seasonal") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("seasonal") && <div className="space-y-4">
         <div className="flex items-center gap-2">
           <input type="checkbox" id="seasonal" checked={data.seasonalEnabled} onChange={(e) => update("seasonalEnabled", e.target.checked)} />
           <label htmlFor="seasonal" className="text-sm font-medium text-brand-dark">Seasonal (limit to months)</label>
         </div>
         {data.seasonalEnabled && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-season-start">Start month (1–12)</label>
               <input id="exp-season-start" type="number" min={1} max={12} className={inputClass} value={data.seasonalStartMonth} onChange={(e) => update("seasonalStartMonth", parseInt(e.target.value, 10) || 1)} aria-label="Seasonal start month" />
@@ -682,16 +764,194 @@ export function ExperienceForm({
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
           <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Chicago" aria-label="Timezone" />
         </div>
+        </div>}
+      </section>
+
+      <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-brand-dark">Booking type</h2>
+            <p className="text-sm text-brand-muted mt-1">Choose how customers book and pay for this experience.</p>
+          </div>
+          <button type="button" onClick={() => toggleSection("bookingType")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("bookingType")}>
+            {collapsedSections.has("bookingType") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("bookingType") && <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => update("pricingType", "charter")}
+            className={cn(
+              "rounded-xl border-2 p-4 text-left transition-all",
+              data.pricingType === "charter"
+                ? "border-brand-primary bg-brand-primary/5 ring-2 ring-brand-primary/20"
+                : "border-brand-dark/15 bg-white hover:border-brand-primary/40"
+            )}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Anchor className="h-5 w-5 text-brand-primary shrink-0" aria-hidden />
+              <span className="font-semibold text-brand-dark">Charter</span>
+              {data.pricingType === "charter" && (
+                <span className="ml-auto text-[10px] font-bold bg-brand-primary text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Selected</span>
+              )}
+            </div>
+            <p className="text-sm text-brand-muted">Flat rate per booking — the whole boat is reserved exclusively for one group.</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => update("pricingType", "ticketed")}
+            className={cn(
+              "rounded-xl border-2 p-4 text-left transition-all",
+              data.pricingType === "ticketed"
+                ? "border-brand-primary bg-brand-primary/5 ring-2 ring-brand-primary/20"
+                : "border-brand-dark/15 bg-white hover:border-brand-primary/40"
+            )}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Users className="h-5 w-5 text-brand-primary shrink-0" aria-hidden />
+              <span className="font-semibold text-brand-dark">Ticketed</span>
+              {data.pricingType === "ticketed" && (
+                <span className="ml-auto text-[10px] font-bold bg-brand-primary text-white rounded px-1.5 py-0.5 uppercase tracking-wide">Selected</span>
+              )}
+            </div>
+            <p className="text-sm text-brand-muted">Per-person pricing with a fixed daily departure time and capacity limit.</p>
+          </button>
+        </div>
+
+        {data.pricingType === "ticketed" && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-5">
+            <div className="flex items-start gap-2">
+              <Info className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
+              <p className="text-sm text-amber-800">
+                Each rate price is charged <strong>per ticket</strong>. Weekend and holiday pricing overrides are disabled — all days use the same flat per-ticket rate.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-brand-dark mb-1" htmlFor="exp-max-capacity">
+                  Max tickets per departure
+                </label>
+                <input
+                  id="exp-max-capacity"
+                  type="number"
+                  min={1}
+                  className={inputClass}
+                  value={data.maxCapacity || ""}
+                  onChange={(e) => update("maxCapacity", parseInt(e.target.value, 10) || 0)}
+                  placeholder="e.g. 35"
+                  aria-label="Max tickets per departure"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-brand-dark mb-1" htmlFor="exp-trip-duration">
+                  Trip duration (hours)
+                </label>
+                <input
+                  id="exp-trip-duration"
+                  type="number"
+                  min={0.5}
+                  step={0.5}
+                  className={inputClass}
+                  value={data.tripDurationHours || ""}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    update("tripDurationHours", isNaN(val) || val <= 0 ? 1 : val);
+                  }}
+                  placeholder="e.g. 1"
+                  aria-label="Trip duration in hours"
+                />
+                <p className="text-xs text-amber-700 mt-1">Sets the slot end time (e.g. 1 = 1 hour)</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-brand-dark mb-1">
+                  Departure time
+                </label>
+                <div className="flex items-center gap-2">
+                  <select
+                    className={cn(inputClass, "flex-1 mt-0")}
+                    value={data.departureHour % 12 === 0 ? 12 : data.departureHour % 12}
+                    onChange={(e) => {
+                      const h12 = parseInt(e.target.value, 10);
+                      const isPm = data.departureHour >= 12;
+                      const h24 = isPm ? (h12 === 12 ? 12 : h12 + 12) : h12 === 12 ? 0 : h12;
+                      update("departureHour", h24);
+                    }}
+                    aria-label="Departure hour"
+                  >
+                    {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((h) => (
+                      <option key={h} value={h}>{h}</option>
+                    ))}
+                  </select>
+                  <span className="text-brand-dark font-semibold text-sm select-none">:</span>
+                  <select
+                    className={cn(inputClass, "flex-1 mt-0")}
+                    value={data.departureMinute}
+                    onChange={(e) => update("departureMinute", parseInt(e.target.value, 10))}
+                    aria-label="Departure minute"
+                  >
+                    {[0, 30].map((m) => (
+                      <option key={m} value={m}>{String(m).padStart(2, "0")}</option>
+                    ))}
+                  </select>
+                  <select
+                    className={cn(inputClass, "w-20 mt-0")}
+                    value={data.departureHour >= 12 ? "PM" : "AM"}
+                    onChange={(e) => {
+                      const isPm = e.target.value === "PM";
+                      const h12 = data.departureHour % 12 === 0 ? 12 : data.departureHour % 12;
+                      const h24 = isPm ? (h12 === 12 ? 12 : h12 + 12) : h12 === 12 ? 0 : h12;
+                      update("departureHour", h24);
+                    }}
+                    aria-label="AM or PM"
+                  >
+                    <option value="AM">AM</option>
+                    <option value="PM">PM</option>
+                  </select>
+                </div>
+                <p className="text-xs text-amber-700 mt-1.5">
+                  {(() => {
+                    const h = data.departureHour;
+                    const m = data.departureMinute;
+                    const h12 = h % 12 === 0 ? 12 : h % 12;
+                    const ampm = h >= 12 ? "PM" : "AM";
+                    return `Daily departure at ${h12}:${String(m).padStart(2, "0")} ${ampm} · ${data.timezone || "set timezone above"}`;
+                  })()}
+                </p>
+              </div>
+            </div>
+            <label className="flex items-start gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                checked={data.showSpotsRemaining ?? false}
+                onChange={(e) => update("showSpotsRemaining", e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-medium text-amber-800">Show spots remaining on booking calendar</span>
+                <span className="block text-xs text-amber-700 mt-0.5">When enabled, customers see &lsquo;X of 12 spots left&rsquo; on the calendar</span>
+              </span>
+            </label>
+          </div>
+        )}
+        </div>}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-6">
-        <div>
-          <h2 className="text-lg font-semibold text-brand-dark">Rates & calendar</h2>
-          <p className="text-sm text-brand-muted mt-1">
-            Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced.
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-brand-dark">Rates & calendar</h2>
+            <p className="text-sm text-brand-muted mt-1">
+              {data.pricingType === "ticketed"
+                ? "Set per-ticket prices for each duration. Weekend and holiday overrides are hidden — all days use the same rate."
+                : "Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced."}
+            </p>
+          </div>
+          <button type="button" onClick={() => toggleSection("rates")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark shrink-0" aria-expanded={!collapsedSections.has("rates")}>
+            {collapsedSections.has("rates") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
         </div>
-        <DynamicPricingEditor
+        {!collapsedSections.has("rates") && <DynamicPricingEditor
           rates={data.rates}
           onRatesChange={(rates) => setData((prev) => ({ ...prev, rates }))}
           holidayDates={data.holidayDates}
@@ -701,11 +961,18 @@ export function ExperienceForm({
           friSunDays={data.friSunDays}
           onFriSunDaysChange={(friSunDays) => setData((prev) => ({ ...prev, friSunDays }))}
           boatHint={false}
-        />
+          hideCalendar={data.pricingType === "ticketed"}
+        />}
       </section>
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
-        <h2 className="text-lg font-semibold text-brand-dark">Add-ons</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-brand-dark">Add-ons</h2>
+          <button type="button" onClick={() => toggleSection("addons")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("addons")}>
+            {collapsedSections.has("addons") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </button>
+        </div>
+        {!collapsedSections.has("addons") && <div className="space-y-4">
         <p className="text-sm text-brand-muted">Optional extras customers can add (e.g. damage waiver). Name, price in dollars, and type. Check &quot;Stand out&quot; to highlight one.</p>
         {data.addons.map((a, i) => (
           <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-start p-3 rounded-lg bg-brand-bg/30 border border-brand-dark/10">
@@ -748,6 +1015,7 @@ export function ExperienceForm({
           </div>
         ))}
         <Button type="button" variant="outline" size="sm" onClick={addAddon}>Add add-on</Button>
+        </div>}
       </section>
 
       <div className="flex gap-3">

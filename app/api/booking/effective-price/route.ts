@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import { getExperienceBySlug } from "@/content/experiences";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 
 export async function GET(request: NextRequest) {
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
     }
 
     const exp = expSnap.data() as Experience;
+    const isTicketed = exp.pricingType === "ticketed";
     const rate = rateSnap.data() as ExperienceRate & { id: string };
     if (!rate.active) {
       return NextResponse.json({ error: "Rate not available" }, { status: 400 });
@@ -39,6 +41,14 @@ export async function GET(request: NextRequest) {
     const date = new Date(dateStr + "T12:00:00");
     if (isNaN(date.getTime())) {
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+    }
+
+    // Ticketed: use content fromPriceCents override when available so the checkout preview
+    // matches the listing page and calendar (same override applied in date-prices API).
+    if (isTicketed) {
+      const contentExp = getExperienceBySlug(exp.slug ?? "");
+      const priceCents = contentExp?.fromPriceCents ?? rate.priceCents;
+      return NextResponse.json({ priceCents });
     }
 
     const priceCents = getEffectiveRatePriceCents(

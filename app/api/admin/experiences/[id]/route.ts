@@ -76,6 +76,11 @@ function parseBody(
   weekendDays: number[];
   friSunDays: number[];
   sortOrder: number;
+  pricingType: "charter" | "ticketed";
+  maxCapacity: number;
+  departureHour: number;
+  departureMinute: number;
+  tripDurationHours: number;
 }> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -207,6 +212,11 @@ function parseBody(
     if (arr.length > 0) out.weekendDays = Array.from(new Set(arr)).sort((a, b) => a - b);
   }
   if (typeof b.sortOrder === "number") out.sortOrder = b.sortOrder;
+  if (b.pricingType === "ticketed" || b.pricingType === "charter") out.pricingType = b.pricingType;
+  if (typeof b.maxCapacity === "number" && b.maxCapacity >= 0) out.maxCapacity = Math.floor(b.maxCapacity);
+  if (typeof b.departureHour === "number") out.departureHour = Math.min(23, Math.max(0, Math.floor(b.departureHour)));
+  if (typeof b.departureMinute === "number") out.departureMinute = Math.min(59, Math.max(0, Math.floor(b.departureMinute)));
+  if (typeof b.tripDurationHours === "number" && b.tripDurationHours > 0) out.tripDurationHours = b.tripDurationHours;
   return Object.keys(out).length ? out : null;
 }
 
@@ -240,9 +250,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  // #region agent log
-  fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:PATCH", message: "PATCH started", data: {}, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
-  // #endregion
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
   const { id } = await params;
@@ -259,18 +266,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
-  // #region agent log
-  const { rates: parsedRates, addons: parsedAddons, ...expFields } = parsed;
-  const firstRate = Array.isArray(parsedRates) && parsedRates[0];
-  const rateHasUndefined = firstRate ? Object.entries(firstRate).some(([, v]) => v === undefined) : false;
-  fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:parsed", message: "parsed body", data: { expFieldsKeys: Object.keys(expFields), ratesLen: Array.isArray(parsedRates) ? parsedRates.length : 0, firstRateKeys: firstRate ? Object.keys(firstRate) : [], rateHasUndefined }, timestamp: Date.now(), hypothesisId: "B" }) }).catch(() => {});
-  // #endregion
-
   try {
     const db = getDb();
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:getDb", message: "getDb done", data: {}, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
-    // #endregion
     const expRef = db.collection("experiences").doc(id);
     const expSnap = await expRef.get();
     if (!expSnap.exists) {
@@ -278,14 +275,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     const { rates, addons, ...expFieldsInner } = parsed;
     if (Object.keys(expFieldsInner).length > 0) {
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:beforeUpdate", message: "about to expRef.update", data: {}, timestamp: Date.now(), hypothesisId: "C" }) }).catch(() => {});
-      // #endregion
       const expPayload = stripUndefined(expFieldsInner as Record<string, unknown>) as Partial<Experience>;
       await expRef.update(expPayload);
-      // #region agent log
-      fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:afterUpdate", message: "expRef.update done", data: {}, timestamp: Date.now(), hypothesisId: "C" }) }).catch(() => {});
-      // #endregion
     }
     if (Array.isArray(rates)) {
       const ratesRef = expRef.collection("rates");
@@ -293,12 +284,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       for (const d of existing.docs) await d.ref.delete();
       for (let ri = 0; ri < rates.length; ri++) {
         const r = rates[ri];
-        // #region agent log
-        if (ri === 0) {
-          const hasUndef = Object.entries(r).some(([, v]) => v === undefined);
-          fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:beforeRateSet", message: "before ratesRef.doc().set", data: { rateKeys: Object.keys(r), hasUndefined: hasUndef }, timestamp: Date.now(), hypothesisId: "B" }) }).catch(() => {});
-        }
-        // #endregion
         await ratesRef.doc().set({ ...stripUndefined(r as Record<string, unknown>), active: true });
       }
     }
@@ -312,11 +297,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     return NextResponse.json({ id });
   } catch (err) {
-    // #region agent log
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const errName = err instanceof Error ? err.name : "";
-    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experiences/[id]/route.ts:catch", message: "PATCH error", data: { errMsg, errName }, timestamp: Date.now(), hypothesisId: "A" }) }).catch(() => {});
-    // #endregion
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(

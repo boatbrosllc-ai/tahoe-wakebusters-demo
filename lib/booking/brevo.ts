@@ -41,6 +41,8 @@ export interface BookingEmailContext {
   waiverSigningUrl?: string;
   /** Shareable waiver link for other party members (when partySize > 1). */
   waiverGroupSigningUrl?: string;
+  /** "ticketed" for ticket-based experiences; "charter" (or undefined) for boat charters. */
+  pricingType?: "charter" | "ticketed";
 }
 
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";

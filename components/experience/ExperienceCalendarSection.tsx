@@ -7,7 +7,7 @@ import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
 
@@ -19,6 +19,10 @@ export interface SlotDto {
   endAt: string;
   status: SlotStatus;
   boatId?: string;
+  spotsRemaining?: number;
+  isCharterLocked?: boolean;
+  showSpotsRemaining?: boolean;
+  maxCapacity?: number;
 }
 
 function formatTime(iso: string) {
@@ -123,6 +127,10 @@ export function ExperienceCalendarSection({
   /** When loading by firestoreSlug, full experience + addons from API (for inline details step when onOpenInModal). */
   const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number } | null>(null);
   const [fetchedAddons, setFetchedAddons] = useState<{ id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[]>([]);
+  const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | undefined>(undefined);
+  const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(undefined);
+  const [fetchedDepartureMinute, setFetchedDepartureMinute] = useState<number | undefined>(undefined);
+  const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [selectedDurationForModal, setSelectedDurationForModal] = useState<number | null>(null);
@@ -151,6 +159,9 @@ export function ExperienceCalendarSection({
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+  const [bookingMode, setBookingMode] = useState<"shared" | "charter">("shared");
+  const [autoSwitchBanner, setAutoSwitchBanner] = useState(false);
+  const [fetchedShowSpotsRemaining, setFetchedShowSpotsRemaining] = useState(false);
 
   useEffect(() => {
     if (experienceIdProp) {
@@ -180,8 +191,13 @@ export function ExperienceCalendarSection({
               maxGuests: typeof exp.maxGuests === "number" ? exp.maxGuests : 0,
               petsMax: typeof exp.petsMax === "number" ? exp.petsMax : 0,
             });
+            setFetchedPricingType(exp.pricingType ?? undefined);
+            setFetchedDepartureHour(exp.pricingType === "ticketed" && typeof exp.departureHour === "number" ? exp.departureHour : undefined);
+            setFetchedDepartureMinute(exp.pricingType === "ticketed" && typeof exp.departureMinute === "number" ? exp.departureMinute : undefined);
+            setFetchedShowSpotsRemaining(exp.showSpotsRemaining === true);
           } else {
             setFetchedExperience(null);
+            setFetchedPricingType(undefined);
           }
           if (Array.isArray(data.addons)) {
             setFetchedAddons(
@@ -224,6 +240,16 @@ export function ExperienceCalendarSection({
     };
   }, [experienceId]);
 
+  const isTicketed = fetchedPricingType === "ticketed";
+
+  const departureTimeLabel = useMemo(() => {
+    if (!isTicketed || fetchedDepartureHour == null) return null;
+    const min = fetchedDepartureMinute ?? 0;
+    const period = fetchedDepartureHour < 12 ? "AM" : "PM";
+    const h12 = fetchedDepartureHour % 12 === 0 ? 12 : fetchedDepartureHour % 12;
+    return `${h12}:${String(min).padStart(2, "0")} ${period}`;
+  }, [isTicketed, fetchedDepartureHour, fetchedDepartureMinute]);
+
   const dateRange = useMemo(() => getDateRangeForMonth(calendarMonth), [calendarMonth]);
 
   const fetchSlots = useCallback(() => {
@@ -257,42 +283,55 @@ export function ExperienceCalendarSection({
       .finally(() => setInlineBoatsLoading(false));
   }, [showInlineBoatStep, experienceId]);
 
-  /** Boat IDs that have the selected slot's start time OPEN (for inline boat step). */
+  /**
+   * Boat IDs that have an OPEN slot matching the selected slot's exact start AND end time.
+   * Matching on both startAt + endAt (i.e. same duration) prevents cross-duration false negatives
+   * where a boat's longer-duration slot is blocked while the selected duration is still open.
+   */
   const availableBoatIdsForInlineSlot = useMemo(() => {
     if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
     const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
     const ids = new Set<string>();
     for (const s of slots) {
       const boatId = (s as SlotDto & { boatId?: string }).boatId;
       if (!boatId || s.status !== "open") continue;
-      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+      if (new Date(s.startAt).getTime() !== startMs) continue;
+      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
+      ids.add(boatId);
     }
     return ids;
-  }, [selectedSlotInline?.startAt, slots]);
-  /** Boat IDs unavailable (held/blocked) at the selected time. */
+  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
+  /** Boat IDs unavailable (held/blocked) for the exact selected slot (same start + end time). */
   const unavailableBoatIdsForInlineSlot = useMemo(() => {
     if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
     const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
     const ids = new Set<string>();
     for (const s of slots) {
       const boatId = (s as SlotDto & { boatId?: string }).boatId;
       if (!boatId || s.status === "open") continue;
-      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+      if (new Date(s.startAt).getTime() !== startMs) continue;
+      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
+      ids.add(boatId);
     }
     return ids;
-  }, [selectedSlotInline?.startAt, slots]);
-  /** Boat IDs booked at the selected time (show "Booked" overlay). */
+  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
+  /** Boat IDs booked for the exact selected slot (show "Booked" overlay). */
   const bookedBoatIdsForInlineSlot = useMemo(() => {
     if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
     const startMs = new Date(selectedSlotInline.startAt).getTime();
+    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
     const ids = new Set<string>();
     for (const s of slots) {
       const boatId = (s as SlotDto & { boatId?: string }).boatId;
       if (!boatId || s.status !== "booked") continue;
-      if (new Date(s.startAt).getTime() === startMs) ids.add(boatId);
+      if (new Date(s.startAt).getTime() !== startMs) continue;
+      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
+      ids.add(boatId);
     }
     return ids;
-  }, [selectedSlotInline?.startAt, slots]);
+  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
 
   // Fetch listing (experience) day pricing so calendar shows the same numbers as the listing page
   const rateIdForPricing = selectedDurationForModal != null ? rates.find((r) => r.durationHours === selectedDurationForModal)?.id : undefined;
@@ -318,10 +357,16 @@ export function ExperienceCalendarSection({
         } else {
           setHolidayDateStrings(new Set());
         }
+        if (data?.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object") {
+          setTicketsAvailableByDate(data.ticketsAvailableByDate as Record<string, number>);
+        } else {
+          setTicketsAvailableByDate({});
+        }
       })
       .catch(() => {
         setDatePrices({});
         setHolidayDateStrings(new Set());
+        setTicketsAvailableByDate({});
       });
   }, [experienceId, dateRange.start, dateRange.end, rateIdForPricing]);
 
@@ -332,6 +377,14 @@ export function ExperienceCalendarSection({
     }
   }, [rates, selectedDurationForModal]);
 
+  // Ticketed: skip the duration step — jump straight to the calendar (step 1)
+  useEffect(() => {
+    if (isTicketed && onOpenInModal && inlineStepIndex === 0) {
+      goToInlineStep(1);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTicketed, onOpenInModal]);
+
   /** Aggregates slots by date across all boats (no boatId in fetch = all boats). Full only when no open slots on that day. */
   const slotsByDate = useMemo(() => {
     const map = new Map<
@@ -339,7 +392,7 @@ export function ExperienceCalendarSection({
       { open: number; held: number; booked: number; blocked: number }
     >();
     for (const s of slots) {
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
       const entry = map.get(day)!;
       if (s.status === "open") entry.open++;
@@ -354,13 +407,30 @@ export function ExperienceCalendarSection({
     const map = new Map<string, SlotDto[]>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
     }
     map.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
   }, [slots]);
+
+  const slotDataByDate = useMemo(() => {
+    if (!isTicketed) return new Map<string, { spotsRemaining: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
+    const map = new Map<string, { spotsRemaining: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
+    for (const s of slots) {
+      const dateStr = isoToChicagoDateStr(s.startAt);
+      if (!map.has(dateStr)) {
+        map.set(dateStr, {
+          // null means the API hasn't returned capacity data — treat as available
+          spotsRemaining: typeof s.spotsRemaining === "number" ? s.spotsRemaining : null,
+          isCharterLocked: s.isCharterLocked ?? false,
+          showSpotsRemaining: s.showSpotsRemaining ?? false,
+        });
+      }
+    }
+    return map;
+  }, [slots, isTicketed]);
 
   const selectedDateOpenSlots = useMemo(
     () => (selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : []),
@@ -422,7 +492,7 @@ export function ExperienceCalendarSection({
       if (s.status !== "open") continue;
       const dur = parseSlotId(s.id)?.durationHours;
       if (dur !== selectedDurationForModal) continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       map.set(day, (map.get(day) ?? 0) + 1);
     }
     return map;
@@ -497,6 +567,27 @@ export function ExperienceCalendarSection({
 
   const handleDayClick = (dateStr: string) => {
     setSelectedDate(dateStr);
+    // Ticketed: fixed departure time — skip time/boat steps and open modal directly
+    if (isTicketed && onOpenInModal) {
+      const slotData = slotDataByDate.get(dateStr);
+      if (bookingMode === "shared" && slotData?.spotsRemaining === 0) {
+        if (slotData.isCharterLocked) return; // fully blocked — do nothing
+        // Auto-switch to charter
+        setBookingMode("charter");
+        setAutoSwitchBanner(true);
+        // Fall through to proceed with date selection in charter mode
+      }
+      const openSlots = openSlotsByDate.get(dateStr) ?? [];
+      if (openSlots.length > 0) {
+        onOpenInModal({
+          date: dateStr,
+          slotId: openSlots[0].id,
+          experienceId: experienceId ?? undefined,
+          experienceSlug: experienceSlug ?? undefined,
+        });
+      }
+      return;
+    }
     if (onOpenInModal) {
       setSelectedSlotInline(null);
       return;
@@ -631,6 +722,15 @@ export function ExperienceCalendarSection({
     directCheckoutLoading,
     setDirectCheckoutLoading,
     bookHref,
+    isTicketed,
+    departureTimeLabel,
+    ticketsAvailableByDate,
+    bookingMode,
+    setBookingMode: (mode: "shared" | "charter") => { setBookingMode(mode); setAutoSwitchBanner(false); },
+    autoSwitchBanner,
+    setAutoSwitchBanner,
+    showSpotsRemaining: fetchedShowSpotsRemaining,
+    slotDataByDate,
   };
   return React.createElement(ExperienceCalendarSectionView, viewProps);
 }

@@ -172,9 +172,13 @@ export function computePricing(params: {
   rate: Rate | RateLike;
   addons: { addon: AddonLike; qty: number }[];
   currency?: string;
+  /** Ticket quantity for ticketed experiences — multiplies the base rate. Defaults to 1 (charter). */
+  qty?: number;
 }): BookingPricing {
   const { rate, addons, currency = "usd" } = params;
-  const baseCents = "basePriceCents" in rate && rate.basePriceCents != null ? rate.basePriceCents : (rate as RateLike).priceCents ?? 0;
+  const ticketQty = params.qty != null && params.qty > 0 ? params.qty : 1;
+  const unitCents = "basePriceCents" in rate && rate.basePriceCents != null ? rate.basePriceCents : (rate as RateLike).priceCents ?? 0;
+  const baseCents = unitCents * ticketQty;
   let subtotalCents = baseCents;
   for (const { addon, qty } of addons) {
     subtotalCents += addon.priceCents * qty;

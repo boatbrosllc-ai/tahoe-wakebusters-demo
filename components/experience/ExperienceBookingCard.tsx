@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { formatBookingTimeFromIso, formatBookingDate } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
+
+function formatDepartureTime(hour: number, minute: number): string {
+  const period = hour < 12 ? "AM" : "PM";
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}:${String(minute).padStart(2, "0")} ${period}`;
+}
 
 const SLOTS_POLL_MS = 60000;
 
@@ -62,6 +68,10 @@ interface ExperienceBookingCardProps {
   addons: AddonDto[];
   maxGuests: number;
   petsMax: number;
+  pricingType?: "charter" | "ticketed";
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
   /** Pre-select this date when provided (e.g. from calendar section click). */
   initialDate?: string;
   className?: string;
@@ -75,9 +85,19 @@ export function ExperienceBookingCard({
   addons,
   maxGuests,
   petsMax,
+  pricingType,
+  maxCapacity,
+  departureHour,
+  departureMinute,
   initialDate,
   className,
 }: ExperienceBookingCardProps) {
+  const isTicketed = pricingType === "ticketed";
+  const effectiveMax = isTicketed ? 36 : maxGuests;
+  const departurTimeLabel = useMemo(() => {
+    if (!isTicketed || departureHour == null) return null;
+    return formatDepartureTime(departureHour, departureMinute ?? 0);
+  }, [isTicketed, departureHour, departureMinute]);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -127,6 +147,20 @@ export function ExperienceBookingCard({
     if (initialDate) setSelectedDate(initialDate);
   }, [initialDate]);
 
+  // Ticketed: auto-select the single rate (no duration picker shown).
+  useEffect(() => {
+    if (!isTicketed || rates.length === 0) return;
+    setSelectedRateId((prev) => prev ?? rates[0].id);
+  }, [isTicketed, rates]);
+
+  // Ticketed: auto-select the first open slot when a date is chosen (fixed departure time).
+  useEffect(() => {
+    if (!isTicketed || !selectedDate) return;
+    const daySlots = openSlotsByDate.get(selectedDate) ?? [];
+    if (daySlots.length > 0) setSelectedSlot(daySlots[0]);
+    else setSelectedSlot(null);
+  }, [isTicketed, selectedDate, openSlotsByDate]);
+
   useEffect(() => {
     let t: ReturnType<typeof setInterval> | null = null;
     const schedule = () => {
@@ -153,7 +187,7 @@ export function ExperienceBookingCard({
     const map = new Map<string, SlotDto[]>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
     }
@@ -172,7 +206,7 @@ export function ExperienceBookingCard({
     emailValid &&
     cancellationAck &&
     partySize >= 1 &&
-    partySize <= maxGuests;
+    partySize <= effectiveMax;
 
   const addonsTotalCents = useMemo(
     () =>
@@ -182,7 +216,9 @@ export function ExperienceBookingCard({
       }, 0),
     [addons, addonSelections]
   );
-  const orderSummaryTotalCents = selectedRate ? selectedRate.priceCents + addonsTotalCents : 0;
+  const orderSummaryTotalCents = selectedRate
+    ? (isTicketed ? selectedRate.priceCents * partySize : selectedRate.priceCents) + addonsTotalCents
+    : 0;
 
   const handleCreateHoldAndCheckout = async () => {
     if (!selectedSlot || !selectedRateId || !customer.name.trim() || !customer.email.trim() || !customer.phone.trim() || !cancellationAck) return;
@@ -449,54 +485,73 @@ export function ExperienceBookingCard({
       {/* Time */}
       {selectedDate && (
         <div className="mb-4">
-          <p className="text-sm font-medium text-brand-dark mb-2">Pick a time</p>
-          <div className="flex flex-wrap gap-2">
-            {selectedDaySlots
-              .filter((s) => !selectedRate || s.id.endsWith("-" + selectedRate.durationHours))
-              .slice(0, 12)
-              .map((slot) => (
-                <button
-                  key={slot.id}
-                  type="button"
-                  onClick={() => setSelectedSlot(slot)}
-                  className={cn(
-                    "rounded-xl border px-3 py-2 text-sm font-medium",
-                    selectedSlot?.id === slot.id
-                      ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
-                      : "border-brand-dark/15 text-brand-dark hover:border-brand-primary/50"
-                  )}
-                >
-                  {formatTime(slot.startAt)}
-                </button>
-              ))}
-            {selectedDaySlots.length === 0 && !slotsLoading && (
-              <p className="text-brand-muted text-sm">No slots for this duration on this day.</p>
-            )}
-          </div>
+          {isTicketed ? (
+            departurTimeLabel ? (
+              <div className="rounded-xl border-2 border-brand-primary/30 bg-brand-primary/5 px-4 py-3">
+                <p className="text-xs font-semibold text-brand-muted uppercase tracking-wider mb-0.5">Departure time</p>
+                <p className="text-base font-bold text-brand-dark">{departurTimeLabel}</p>
+                {slotsLoading && <p className="text-xs text-brand-muted mt-1">Checking availability…</p>}
+                {!slotsLoading && selectedDaySlots.length === 0 && (
+                  <p className="text-xs text-amber-700 mt-1">No availability this day — please pick another date.</p>
+                )}
+              </div>
+            ) : (
+              slotsLoading ? <p className="text-xs text-brand-muted">Loading times…</p> : null
+            )
+          ) : (
+            <>
+              <p className="text-sm font-medium text-brand-dark mb-2">Pick a time</p>
+              <div className="flex flex-wrap gap-2">
+                {selectedDaySlots
+                  .filter((s) => !selectedRate || s.id.endsWith("-" + selectedRate.durationHours))
+                  .slice(0, 12)
+                  .map((slot) => (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      onClick={() => setSelectedSlot(slot)}
+                      className={cn(
+                        "rounded-xl border px-3 py-2 text-sm font-medium",
+                        selectedSlot?.id === slot.id
+                          ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
+                          : "border-brand-dark/15 text-brand-dark hover:border-brand-primary/50"
+                      )}
+                    >
+                      {formatTime(slot.startAt)}
+                    </button>
+                  ))}
+                {selectedDaySlots.length === 0 && !slotsLoading && (
+                  <p className="text-brand-muted text-sm">No slots for this duration on this day.</p>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 
-      {/* Duration */}
-      <div className="mb-4">
-        <p className="text-sm font-medium text-brand-dark mb-2">Duration</p>
-        <div className="flex flex-wrap gap-2">
-          {[...rates].sort((a, b) => a.durationHours - b.durationHours).map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setSelectedRateId(r.id)}
-              className={cn(
-                "rounded-xl border px-3 py-2 text-sm font-medium",
-                selectedRateId === r.id
-                  ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
-                  : "border-brand-dark/15 text-brand-dark"
-              )}
-            >
-              {r.displayName} — ${(r.priceCents / 100).toFixed(0)}
-            </button>
-          ))}
+      {/* Duration — hidden for ticketed experiences */}
+      {!isTicketed && (
+        <div className="mb-4">
+          <p className="text-sm font-medium text-brand-dark mb-2">Duration</p>
+          <div className="flex flex-wrap gap-2">
+            {[...rates].sort((a, b) => a.durationHours - b.durationHours).map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setSelectedRateId(r.id)}
+                className={cn(
+                  "rounded-xl border px-3 py-2 text-sm font-medium",
+                  selectedRateId === r.id
+                    ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
+                    : "border-brand-dark/15 text-brand-dark"
+                )}
+              >
+                {r.displayName} — ${(r.priceCents / 100).toFixed(0)}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Add-ons */}
       {addons.length > 0 && (
@@ -577,17 +632,19 @@ export function ExperienceBookingCard({
         />
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label htmlFor="exp-booking-party-size" className="block text-xs text-brand-muted mb-1">Party size</label>
+            <label htmlFor="exp-booking-party-size" className="block text-xs text-brand-muted mb-1">
+              {isTicketed ? "Tickets" : "Party size"}
+            </label>
             <input
               id="exp-booking-party-size"
               type="number"
               min={1}
-              max={maxGuests}
+              max={effectiveMax}
               value={partySize}
-              onChange={(e) => setPartySize(Math.min(maxGuests, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+              onChange={(e) => setPartySize(Math.min(effectiveMax, Math.max(1, parseInt(e.target.value, 10) || 1)))}
               className="w-full rounded-xl border border-brand-dark/15 px-4 py-2 text-brand-dark placeholder:text-brand-muted/70"
-              placeholder="e.g. 4"
-              aria-label="Party size"
+              placeholder={isTicketed ? "# tickets" : "e.g. 4"}
+              aria-label={isTicketed ? "Number of tickets" : "Party size"}
             />
           </div>
         </div>
@@ -603,6 +660,11 @@ export function ExperienceBookingCard({
 
       {/* Live total */}
       <div className="border-t border-brand-dark/10 pt-4 mb-4">
+        {isTicketed && selectedRate && (
+          <p className="text-xs text-brand-muted mb-1">
+            {partySize} {partySize === 1 ? "ticket" : "tickets"} × ${(selectedRate.priceCents / 100).toFixed(0)}/ticket
+          </p>
+        )}
         <div className="flex justify-between text-sm text-brand-dark">
           <span>Estimated total</span>
           <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)} + tax at checkout</span>

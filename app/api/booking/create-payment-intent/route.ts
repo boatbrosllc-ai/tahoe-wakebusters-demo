@@ -118,7 +118,10 @@ export async function POST(request: NextRequest) {
     const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);
     const depositCents = Math.round(totalCents * 0.5);
     const finalCents = totalCents - depositCents;
-    const payFullAmount = input.payFullAmount;
+    // Shared ticketed experiences always charge full — no deposit option.
+    const payFullAmount = (hold as { bookingMode?: string }).bookingMode === "shared"
+      ? true
+      : input.payFullAmount;
     const chargeCents = payFullAmount ? totalCents : depositCents;
 
     const stripe = getStripe();

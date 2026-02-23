@@ -126,6 +126,11 @@ function parseBody(
   const defaultRateId = typeof b.defaultRateId === "string" ? b.defaultRateId.trim() || undefined : undefined;
   const bookingPosition = b.bookingPosition === "inline" || b.bookingPosition === "modal" ? b.bookingPosition : b.bookingPosition === "sidebar" ? "sidebar" : undefined;
   const galleryAltTexts = Array.isArray(b.galleryAltTexts) ? b.galleryAltTexts.filter((x): x is string => typeof x === "string") : undefined;
+  const pricingType = b.pricingType === "ticketed" ? "ticketed" as const : undefined;
+  const maxCapacity = b.pricingType === "ticketed" && typeof b.maxCapacity === "number" && b.maxCapacity > 0 ? b.maxCapacity : undefined;
+  const departureHour = b.pricingType === "ticketed" && typeof b.departureHour === "number" ? Math.min(23, Math.max(0, Math.floor(b.departureHour))) : undefined;
+  const departureMinute = b.pricingType === "ticketed" && typeof b.departureMinute === "number" ? Math.min(59, Math.max(0, Math.floor(b.departureMinute))) : undefined;
+  const tripDurationHours = b.pricingType === "ticketed" && typeof b.tripDurationHours === "number" && b.tripDurationHours > 0 ? b.tripDurationHours : undefined;
   return {
     slug,
     title,
@@ -159,6 +164,11 @@ function parseBody(
     bookingPosition,
     galleryAltTexts,
     holidayDates,
+    pricingType,
+    maxCapacity,
+    departureHour,
+    departureMinute,
+    tripDurationHours,
   };
 }
 
@@ -177,6 +187,7 @@ export async function GET(request: NextRequest) {
         slug: data.slug ?? "",
         title: data.title ?? "",
         active: data.active === true,
+        pricingType: data.pricingType === "ticketed" ? "ticketed" : undefined,
         heroUrl: typeof heroMedia === "string" ? heroMedia : undefined,
         sortOrder: typeof data.sortOrder === "number" ? data.sortOrder : undefined,
       };
@@ -249,6 +260,11 @@ export async function POST(request: NextRequest) {
       ...(parsed.bookingPosition != null && { bookingPosition: parsed.bookingPosition }),
       ...(parsed.galleryAltTexts != null && parsed.galleryAltTexts.length > 0 && { galleryAltTexts: parsed.galleryAltTexts }),
       ...(parsed.holidayDates != null && parsed.holidayDates.length > 0 && { holidayDates: parsed.holidayDates }),
+      ...(parsed.pricingType != null && { pricingType: parsed.pricingType }),
+      ...(parsed.maxCapacity != null && { maxCapacity: parsed.maxCapacity }),
+      ...(parsed.departureHour != null && { departureHour: parsed.departureHour }),
+      ...(parsed.tripDurationHours != null && { tripDurationHours: parsed.tripDurationHours }),
+      ...(parsed.departureMinute != null && { departureMinute: parsed.departureMinute }),
     };
     const ref = db.collection("experiences").doc();
     await ref.set(exp);

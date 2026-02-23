@@ -113,6 +113,8 @@ export interface InlineBookingDetailsStepProps {
   addons: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
   onBack: () => void;
   onSuccess: () => void;
+  bookingMode?: "shared" | "charter";
+  spotsRemaining?: number;
 }
 
 export function InlineBookingDetailsStep({
@@ -130,6 +132,8 @@ export function InlineBookingDetailsStep({
   addons,
   onBack,
   onSuccess,
+  bookingMode,
+  spotsRemaining,
 }: InlineBookingDetailsStepProps) {
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState("");
@@ -156,6 +160,18 @@ export function InlineBookingDetailsStep({
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (bookingMode === "shared") {
+      setPayFullAmount(true);
+    } else {
+      setPayFullAmount(false);
+    }
+  }, [bookingMode]);
+
+  const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
+    ? Math.min(experienceMaxGuests, spotsRemaining)
+    : experienceMaxGuests;
 
   const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
 
@@ -207,8 +223,8 @@ export function InlineBookingDetailsStep({
       setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
       return;
     }
-    if (partySize < 1 || partySize > experienceMaxGuests) {
-      setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${experienceMaxGuests}.`);
+    if (partySize < 1 || partySize > effectiveMaxGuests) {
+      setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${effectiveMaxGuests}.`);
       return;
     }
     setPaymentError(null);
@@ -234,6 +250,7 @@ export function InlineBookingDetailsStep({
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
           ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
+          bookingMode: bookingMode ?? "charter",
         }),
       });
       const holdData = await holdRes.json();
@@ -465,23 +482,27 @@ export function InlineBookingDetailsStep({
         {/* Party & add-ons */}
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Party & add-ons</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div>
               <label htmlFor="inline-booking-party-size" className="block text-xs font-medium text-brand-dark mb-1">Party size *</label>
               <input
                 id="inline-booking-party-size"
                 type="number"
                 min={1}
-                max={experienceMaxGuests}
+                max={effectiveMaxGuests}
                 value={partySize}
                 onChange={(e) => {
                   const raw = parseInt(e.target.value, 10) || 1;
-                  setPartySize(Math.min(experienceMaxGuests, Math.max(1, raw)));
+                  setPartySize(Math.min(effectiveMaxGuests, Math.max(1, raw)));
                 }}
                 className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
                 aria-label="Party size"
               />
-              <p className="text-[11px] text-brand-muted mt-0.5">Max {experienceMaxGuests} guests</p>
+              <p className="text-[11px] text-brand-muted mt-0.5">
+                {bookingMode === "shared" && typeof spotsRemaining === "number"
+                  ? `Max ${effectiveMaxGuests} remaining spots`
+                  : `Max ${effectiveMaxGuests} guests`}
+              </p>
             </div>
           </div>
           {displayAddons.length > 0 && (
@@ -504,7 +525,7 @@ export function InlineBookingDetailsStep({
                       <button
                         type="button"
                         onClick={() => setAddonSelections((prev) => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] ?? 0) - 1) }))}
-                        className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 text-xs font-medium disabled:opacity-40"
+                        className="rounded min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation text-brand-muted hover:text-red-600 hover:bg-red-50 text-xs font-medium disabled:opacity-40"
                         disabled={qty === 0}
                         aria-label="Remove one"
                       >
@@ -513,7 +534,7 @@ export function InlineBookingDetailsStep({
                       <button
                         type="button"
                         onClick={() => setAddonSelections((prev) => ({ ...prev, [addon.id]: Math.min(effectiveMax, (prev[addon.id] ?? 0) + 1) }))}
-                        className="rounded p-1 text-brand-muted hover:text-brand-primary hover:bg-brand-primary/10 text-xs font-medium disabled:opacity-40"
+                        className="rounded min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation text-brand-muted hover:text-brand-primary hover:bg-brand-primary/10 text-xs font-medium disabled:opacity-40"
                         disabled={qty >= effectiveMax}
                         aria-label="Add one"
                       >
@@ -569,33 +590,42 @@ export function InlineBookingDetailsStep({
         </div>
 
         {/* Payment amount */}
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => setPayFullAmount(false)}
-              className={cn(
-                "rounded-xl border-2 py-3 px-3 text-left text-sm",
-                !payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
-              )}
-            >
-              <span className="font-semibold">Pay 50% deposit</span>
-              <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPayFullAmount(true)}
-              className={cn(
-                "rounded-xl border-2 py-3 px-3 text-left text-sm",
-                payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
-              )}
-            >
-              <span className="font-semibold">Pay full amount</span>
-              <span className="block text-xs text-brand-muted">${(priceSummary.totalCents / 100).toFixed(2)} now</span>
-            </button>
+        {bookingMode !== "shared" ? (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setPayFullAmount(false)}
+                className={cn(
+                  "rounded-xl border-2 py-3 px-3 text-left text-sm",
+                  !payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
+                )}
+              >
+                <span className="font-semibold">Pay 50% deposit</span>
+                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPayFullAmount(true)}
+                className={cn(
+                  "rounded-xl border-2 py-3 px-3 text-left text-sm",
+                  payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
+                )}
+              >
+                <span className="font-semibold">Pay full amount</span>
+                <span className="block text-xs text-brand-muted">${(priceSummary.totalCents / 100).toFixed(2)} now</span>
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
+            <div className="rounded-xl border-2 border-brand-primary bg-brand-primary/10 py-3 px-3 text-sm">
+              <span className="font-semibold">Pay in full · ${(priceSummary.totalCents / 100).toFixed(2)}</span>
+            </div>
+          </div>
+        )}
 
         {/* Discount */}
         <div>
@@ -610,7 +640,7 @@ export function InlineBookingDetailsStep({
                 setAppliedDiscountError(null);
               }}
               placeholder="Enter code"
-              className="flex-1 rounded-lg border border-brand-dark/10 px-3 py-2 text-sm"
+              className="flex-1 rounded-lg border border-brand-dark/10 px-3 py-2 text-sm min-h-[44px]"
             />
             <button
               type="button"
@@ -640,7 +670,7 @@ export function InlineBookingDetailsStep({
                   setAppliedDiscountLoading(false);
                 }
               }}
-              className="rounded-lg border-2 border-brand-primary bg-brand-primary text-white font-semibold px-3 py-2 text-sm disabled:opacity-50"
+              className="rounded-lg border-2 border-brand-primary bg-brand-primary text-white font-semibold px-3 py-2 text-sm min-h-[44px] disabled:opacity-50"
             >
               Apply
             </button>
@@ -656,7 +686,7 @@ export function InlineBookingDetailsStep({
             value={howDidYouHear}
             onChange={(e) => setHowDidYouHear(e.target.value)}
             placeholder="How did you hear about us?"
-            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm min-h-[44px]"
           />
           <textarea
             value={comments}
@@ -685,7 +715,7 @@ export function InlineBookingDetailsStep({
 
       {/* Pay block */}
       <div className="shrink-0 pt-3 border-t-2 border-brand-dark/10 bg-white">
-        <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex items-center justify-between gap-3">
+        <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold text-brand-dark">{payFullAmount ? "Total due" : "Deposit due"}</p>
             <p className="text-xl font-bold text-brand-primary">
@@ -695,7 +725,7 @@ export function InlineBookingDetailsStep({
           <button
             type="button"
             onClick={handleProceedToPayment}
-            className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
+            className="w-full sm:w-auto sm:shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
           >
             Proceed to payment
           </button>

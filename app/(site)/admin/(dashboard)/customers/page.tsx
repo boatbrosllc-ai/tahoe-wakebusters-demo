@@ -83,36 +83,57 @@ export default function AdminCustomersPage() {
           </div>
         )}
         {!loading && !error && filtered.length > 0 && (
-          <div className="overflow-x-auto -mx-px">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Name</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Email</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark hidden sm:table-cell">Phone</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-center font-medium text-brand-dark">Bookings</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Total spent</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark hidden md:table-cell">Last booking</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((c) => (
-                  <tr key={c.email} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 font-medium text-brand-dark">{c.name || "—"}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      <a href={`mailto:${c.email}`} className="text-brand-primary hover:underline break-all">
-                        {c.email}
-                      </a>
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted hidden sm:table-cell">{c.phone || "—"}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-center text-brand-dark">{c.bookingCount}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">{formatCents(c.totalSpentCents)}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted hidden md:table-cell">{formatDate(c.lastBookingAt)}</td>
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto -mx-px">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Name</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Email</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark hidden sm:table-cell">Phone</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-center font-medium text-brand-dark">Bookings</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Total spent</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark hidden md:table-cell">Last booking</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filtered.map((c) => (
+                    <tr key={c.email} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 font-medium text-brand-dark">{c.name || "—"}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        <a href={`mailto:${c.email}`} className="text-brand-primary hover:underline break-all">
+                          {c.email}
+                        </a>
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted hidden sm:table-cell">{c.phone || "—"}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-center text-brand-dark">{c.bookingCount}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">{formatCents(c.totalSpentCents)}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted hidden md:table-cell">{formatDate(c.lastBookingAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-brand-dark/5">
+              {filtered.map((c) => (
+                <div key={c.email} className="px-4 py-3 space-y-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-semibold text-brand-dark text-sm">{c.name || "—"}</span>
+                    <span className="font-semibold text-brand-dark text-sm shrink-0">{formatCents(c.totalSpentCents)}</span>
+                  </div>
+                  <a href={`mailto:${c.email}`} className="block text-xs text-brand-primary hover:underline break-all">
+                    {c.email}
+                  </a>
+                  <p className="text-xs text-brand-muted">
+                    {c.bookingCount} booking{c.bookingCount !== 1 ? "s" : ""}
+                    {c.lastBookingAt ? ` · Last: ${formatDate(c.lastBookingAt)}` : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

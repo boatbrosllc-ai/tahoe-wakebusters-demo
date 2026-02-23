@@ -62,14 +62,16 @@ function getCentralOffsetHoursForDate(dateStr: string): number {
 
 /**
  * Returns start and end Date for a slot. Hours/minutes are interpreted in America/Chicago.
+ * Uses Date.UTC so hour overflow (e.g. 18 CST = UTC+24 → rolls to midnight next day) is handled
+ * correctly instead of building an invalid ISO string like "T24:00:00.000Z".
  */
 export function getSlotStartEnd(dateStr: string, startHour: number, durationHours: number, startMinute: number = 0): { start: Date; end: Date } {
   const offsetHours = getCentralOffsetHoursForDate(dateStr);
   const utcHour = startHour - offsetHours;
-  const minStr = startMinute === 30 ? "30" : "00";
-  const utcDate = new Date(dateStr + "T" + String(utcHour).padStart(2, "0") + ":" + minStr + ":00.000Z");
-  const start = new Date(utcDate.getTime());
-  const end = new Date(start.getTime() + durationHours * 60 * 60 * 1000);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const startMs = Date.UTC(y, m - 1, d, utcHour, startMinute, 0, 0);
+  const start = new Date(startMs);
+  const end = new Date(startMs + durationHours * 60 * 60 * 1000);
   return { start, end };
 }
 
@@ -234,6 +236,30 @@ export function getSlotGridWithSaturdayOnlyRestriction(
         }
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Generate one slot per calendar date for ticketed experiences with a fixed departure time.
+ * Skips today's slot if the departure has already passed (DST-aware via getSlotStartEnd).
+ */
+export function getTicketedSlotGrid(
+  startDate: Date,
+  endDate: Date,
+  durationHours: number,
+  departureHour: number,
+  departureMinute: number = 0
+): SlotGridItem[] {
+  const out: SlotGridItem[] = [];
+  const now = new Date();
+  const todayStr = getTodayDateStr(now);
+  const startStr = getDateStrInSlotTimezone(startDate);
+  const endStr = getDateStrInSlotTimezone(endDate);
+  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
+    const { start: slotStart } = getSlotStartEnd(dateStr, departureHour, durationHours, departureMinute);
+    if (dateStr === todayStr && slotStart < now) continue;
+    out.push({ dateStr, startHour: departureHour, startMinute: departureMinute, durationHours });
   }
   return out;
 }

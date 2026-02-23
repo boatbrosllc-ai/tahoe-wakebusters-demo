@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
@@ -128,7 +128,7 @@ export function ExperienceCalendarPage({
     const slot = slots.find((s) => s.id === urlSlotId && s.status === "open");
     if (slot) {
       setSelectedSlot(slot);
-      const dateStr = slot.startAt.slice(0, 10);
+      const dateStr = isoToChicagoDateStr(slot.startAt);
       setSelectedDate(dateStr);
       const d = new Date(slot.startAt);
       setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
@@ -139,7 +139,7 @@ export function ExperienceCalendarPage({
     const map = new Map<string, SlotDto[]>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
     }
@@ -150,7 +150,7 @@ export function ExperienceCalendarPage({
   const slotsByStatusByDate = useMemo(() => {
     const map = new Map<string, { open: SlotDto[]; held: SlotDto[]; booked: SlotDto[]; blocked: SlotDto[] }>();
     for (const s of slots) {
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: [], held: [], booked: [], blocked: [] });
       const entry = map.get(day)!;
       if (s.status === "open") entry.open.push(s);

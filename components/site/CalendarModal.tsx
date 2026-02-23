@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 
@@ -149,7 +149,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
     for (const s of slots) {
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: 0 });
       if (s.status === "open") map.get(day)!.open++;
     }
@@ -160,7 +160,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     const map = new Map<string, SlotDto[]>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(s);
     }

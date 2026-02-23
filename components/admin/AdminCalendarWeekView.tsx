@@ -5,11 +5,12 @@ import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime"
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { Clock, Ship, Lock, User } from "lucide-react";
 
 const HOUR_START = 7;
-const HOUR_END = 24;
+const HOUR_END = 21; // 9 pm
 const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i);
+const CELL_H = 56; // px per hour
+const TOTAL_GRID_H = HOURS.length * CELL_H;
 
 type CalendarEvent = {
   id: string;
@@ -25,6 +26,11 @@ type CalendarEvent = {
   status?: string;
 };
 
+type PositionedEvent = CalendarEvent & {
+  col: number;
+  numCols: number;
+};
+
 function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -33,22 +39,52 @@ function formatTime(iso: string): string {
   return formatBookingTimeFromIso(iso);
 }
 
-/** Week start (Sunday) containing the given date */
 function getWeekStart(d: Date): Date {
   const date = new Date(d);
-  const day = date.getDay();
-  date.setDate(date.getDate() - day);
+  date.setDate(date.getDate() - date.getDay());
   date.setHours(0, 0, 0, 0);
   return date;
 }
 
+function isToday(d: Date): boolean {
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
+/** Assign column positions to avoid visual overlaps. Returns min number of columns needed. */
+function resolveOverlaps(events: CalendarEvent[]): PositionedEvent[] {
+  if (events.length === 0) return [];
+  const sorted = [...events].sort(
+    (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+  );
+
+  // Greedy column assignment: find first column whose last event ended by this one's start
+  const colEnds: number[] = [];
+  const colAssign: number[] = [];
+
+  for (const ev of sorted) {
+    const s = new Date(ev.startAt).getTime();
+    const e = new Date(ev.endAt).getTime();
+    let col = colEnds.findIndex((end) => end <= s);
+    if (col === -1) col = colEnds.length;
+    colEnds[col] = e;
+    colAssign.push(col);
+  }
+
+  const numCols = colEnds.length;
+  return sorted.map((ev, i) => ({ ...ev, col: colAssign[i], numCols }));
+}
+
 interface AdminCalendarWeekViewProps {
-  experienceId: string;
+  experienceId?: string;
+  experienceIds?: string[];
   boatList: { id: string; name: string }[];
   weekStart: Date;
-  /** When set, only show events for these boat IDs; when undefined, show all. */
   selectedBoatIds?: string[];
-  /** Map boat index (in boatList) to CSS color for event bars. */
   boatColorByIndex?: Record<number, string>;
   onPrevWeek: () => void;
   onNextWeek: () => void;
@@ -58,6 +94,7 @@ interface AdminCalendarWeekViewProps {
 
 export function AdminCalendarWeekView({
   experienceId,
+  experienceIds,
   boatList,
   weekStart,
   selectedBoatIds,
@@ -67,12 +104,19 @@ export function AdminCalendarWeekView({
   onBookingClick,
   onRefresh,
 }: AdminCalendarWeekViewProps) {
+  const resolvedExperienceIds =
+    experienceIds && experienceIds.length > 0
+      ? experienceIds
+      : experienceId
+      ? [experienceId]
+      : [];
+
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [newBlockOpen, setNewBlockOpen] = useState(false);
-  const [newBlockStart, setNewBlockStart] = useState<string>("");
-  const [newBlockEnd, setNewBlockEnd] = useState<string>("");
-  const [newBlockBoatId, setNewBlockBoatId] = useState<string>("");
+  const [newBlockStart, setNewBlockStart] = useState("");
+  const [newBlockEnd, setNewBlockEnd] = useState("");
+  const [newBlockBoatId, setNewBlockBoatId] = useState("");
   const [newBlockNote, setNewBlockNote] = useState("");
   const [newBlockSaving, setNewBlockSaving] = useState(false);
   const [blockDetailOpen, setBlockDetailOpen] = useState(false);
@@ -84,17 +128,50 @@ export function AdminCalendarWeekView({
   const fromStr = toDateStr(weekStart);
   const toStr = toDateStr(new Date(weekEnd.getTime() - 1));
 
+  const resolvedIdsKey = resolvedExperienceIds.join(",");
   const fetchEvents = useCallback(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:133',message:'fetchEvents called',hypothesisId:'C-D',data:{resolvedExperienceIds,fromStr,toStr,weekStartISO:weekStart.toISOString()},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    if (resolvedExperienceIds.length === 0) {
+      setEvents([]);
+      return;
+    }
     setEventsLoading(true);
-    fetch(
-      `/api/admin/calendar-events?experienceId=${encodeURIComponent(experienceId)}&from=${fromStr}&to=${toStr}`,
-      { credentials: "include" }
+    Promise.all(
+      resolvedExperienceIds.map((expId) =>
+        fetch(
+          `/api/admin/calendar-events?experienceId=${encodeURIComponent(expId)}&from=${fromStr}&to=${toStr}`,
+          { credentials: "include" }
+        )
+          .then((r) => r.json())
+          .then((d: { events?: CalendarEvent[] }) => {
+            // #region agent log
+            fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:145',message:'API response per experienceId',hypothesisId:'D-E',data:{expId,eventsReturned:d.events?.length??0,sampleEvents:(d.events??[]).slice(0,3).map(e=>({id:e.id,type:e.type,startAt:e.startAt,title:e.title})),errorField:(d as {error?:string}).error??null},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
+            return d.events ?? [];
+          })
+          .catch(() => [] as CalendarEvent[])
+      )
     )
-      .then((res) => res.json())
-      .then((data) => setEvents(data.events ?? []))
-      .catch(() => setEvents([]))
+      .then((arrays) => {
+        const merged: CalendarEvent[] = [];
+        const seen = new Set<string>();
+        for (const arr of arrays)
+          for (const ev of arr)
+            if (!seen.has(ev.id)) {
+              seen.add(ev.id);
+              merged.push(ev);
+            }
+        merged.sort((a, b) => a.startAt.localeCompare(b.startAt));
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:167',message:'merged events set',hypothesisId:'E',data:{totalMerged:merged.length,weekStartISO:weekStart.toISOString(),events:merged.map(e=>({id:e.id,startAt:e.startAt,title:e.title,type:e.type}))},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+        setEvents(merged);
+      })
       .finally(() => setEventsLoading(false));
-  }, [experienceId, fromStr, toStr]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedIdsKey, fromStr, toStr]);
 
   useEffect(() => {
     fetchEvents();
@@ -106,31 +183,40 @@ export function AdminCalendarWeekView({
     return d;
   });
 
-  /** Position event in the grid: dayIndex 0-6, top % and height % from HOUR_START to HOUR_END */
-  function getEventStyle(ev: CalendarEvent): { dayIndex: number; topPct: number; heightPct: number } {
-    const start = new Date(ev.startAt);
-    const end = new Date(ev.endAt);
-    const dayIndex = Math.floor((start.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
-    const clampedDay = Math.max(0, Math.min(6, dayIndex));
-    const dayStart = new Date(weekStart);
-    dayStart.setDate(dayStart.getDate() + clampedDay);
-    dayStart.setHours(HOUR_START, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setHours(HOUR_END, 0, 0, 0);
-    const rangeMs = dayEnd.getTime() - dayStart.getTime();
-    const topPct = ((start.getTime() - dayStart.getTime()) / rangeMs) * 100;
-    const heightPct = ((end.getTime() - start.getTime()) / rangeMs) * 100;
-    return { dayIndex: clampedDay, topPct: Math.max(0, topPct), heightPct: Math.min(100 - topPct, heightPct) };
+  /** Convert an ISO time to top-offset px and height px within the grid */
+  function eventPx(startIso: string, endIso: string): { top: number; height: number } {
+    const s = new Date(startIso);
+    const e = new Date(endIso);
+    const startMin = s.getHours() * 60 + s.getMinutes() - HOUR_START * 60;
+    const endMin = e.getHours() * 60 + e.getMinutes() - HOUR_START * 60;
+    const top = Math.max(0, (startMin / 60) * CELL_H);
+    const height = Math.max(22, ((endMin - startMin) / 60) * CELL_H);
+    return { top, height };
   }
+
+  const filteredEvents = useMemo(() => {
+    if (!selectedBoatIds?.length) return events;
+    return events.filter((ev) => !ev.boatId || selectedBoatIds.includes(ev.boatId));
+  }, [events, selectedBoatIds]);
+
+  /** Group events by day index (0-6) */
+  const eventsByDay = useMemo<PositionedEvent[][]>(() => {
+    const byDay: CalendarEvent[][] = [[], [], [], [], [], [], []];
+    for (const ev of filteredEvents) {
+      const s = new Date(ev.startAt);
+      const idx = Math.floor((s.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
+      if (idx >= 0 && idx < 7) byDay[idx].push(ev);
+    }
+    return byDay.map(resolveOverlaps);
+  }, [filteredEvents, weekStart]);
 
   const handleCellClick = (dayIndex: number, hour: number) => {
     const d = new Date(weekStart);
     d.setDate(d.getDate() + dayIndex);
     d.setHours(hour, 0, 0, 0);
-    const start = new Date(d);
     const end = new Date(d);
-    end.setHours(end.getHours() + 1, 0, 0, 0);
-    setNewBlockStart(start.toISOString().slice(0, 16));
+    end.setHours(end.getHours() + 1);
+    setNewBlockStart(d.toISOString().slice(0, 16));
     setNewBlockEnd(end.toISOString().slice(0, 16));
     setNewBlockBoatId(boatList[0]?.id ?? "");
     setNewBlockNote("");
@@ -139,9 +225,7 @@ export function AdminCalendarWeekView({
 
   const createBlock = async () => {
     if (!newBlockStart || !newBlockEnd) return;
-    const start = new Date(newBlockStart);
-    const end = new Date(newBlockEnd);
-    if (start >= end) return;
+    if (new Date(newBlockStart) >= new Date(newBlockEnd)) return;
     setNewBlockSaving(true);
     try {
       const res = await fetch("/api/admin/blocks", {
@@ -150,8 +234,8 @@ export function AdminCalendarWeekView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           experienceId,
-          startAt: start.toISOString(),
-          endAt: end.toISOString(),
+          startAt: new Date(newBlockStart).toISOString(),
+          endAt: new Date(newBlockEnd).toISOString(),
           boatId: newBlockBoatId || undefined,
           note: newBlockNote.trim() || undefined,
         }),
@@ -161,14 +245,18 @@ export function AdminCalendarWeekView({
       fetchEvents();
       onRefresh();
     } catch (e) {
-      console.error(e);
       alert(e instanceof Error ? e.message : "Failed to create block");
     } finally {
       setNewBlockSaving(false);
     }
   };
 
-  const updateBlock = async (blockId: string, startAt: string, endAt: string, note: string) => {
+  const updateBlock = async (
+    blockId: string,
+    startAt: string,
+    endAt: string,
+    note: string
+  ) => {
     setEditBlockSaving(true);
     try {
       const res = await fetch(`/api/admin/blocks/${blockId}`, {
@@ -183,7 +271,6 @@ export function AdminCalendarWeekView({
       fetchEvents();
       onRefresh();
     } catch (e) {
-      console.error(e);
       alert(e instanceof Error ? e.message : "Failed to update block");
     } finally {
       setEditBlockSaving(false);
@@ -193,131 +280,269 @@ export function AdminCalendarWeekView({
   const deleteBlock = async (blockId: string) => {
     if (!confirm("Delete this block?")) return;
     try {
-      const res = await fetch(`/api/admin/blocks/${blockId}`, { method: "DELETE", credentials: "include" });
+      const res = await fetch(`/api/admin/blocks/${blockId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       setBlockDetailOpen(false);
       setSelectedBlock(null);
       fetchEvents();
       onRefresh();
     } catch (e) {
-      console.error(e);
       alert(e instanceof Error ? e.message : "Failed to delete block");
     }
   };
 
-  const filteredEvents = useMemo(() => {
-    if (!selectedBoatIds?.length) return events;
-    return events.filter((ev) => ev.boatId && selectedBoatIds.includes(ev.boatId));
-  }, [events, selectedBoatIds]);
-
-  const eventsByDay = useCallback(() => {
-    const byDay: CalendarEvent[][] = [[], [], [], [], [], [], []];
-    filteredEvents.forEach((ev) => {
-      const { dayIndex } = getEventStyle(ev);
-      byDay[dayIndex].push(ev);
-    });
-    return byDay;
-  }, [filteredEvents]);
+  // Date range label
+  const weekEndDisplay = new Date(weekEnd);
+  weekEndDisplay.setDate(weekEndDisplay.getDate() - 1);
+  const startLabel = weekStart.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const endLabel = weekEndDisplay.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 
   return (
-    <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
-      <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-brand-dark/10 bg-white/95">
+    <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden flex flex-col">
+      {/* ── Toolbar ── */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-brand-dark/10 bg-white/95 shrink-0">
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onPrevWeek} aria-label="Previous week">←</Button>
-          <span className="min-w-[180px] text-center text-sm font-semibold text-brand-dark">
-            {weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} – {weekEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          <Button variant="outline" size="sm" onClick={onPrevWeek} aria-label="Previous week">
+            ←
+          </Button>
+          <span className="min-w-[200px] text-center text-sm font-semibold text-brand-dark">
+            {startLabel} – {endLabel}
           </span>
-          <Button variant="outline" size="sm" onClick={onNextWeek} aria-label="Next week">→</Button>
+          <Button variant="outline" size="sm" onClick={onNextWeek} aria-label="Next week">
+            →
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              /* jump back to current week — parent handles this via props */
+              const d = new Date();
+              const ws = getWeekStart(d);
+              // We can't directly call setWeekStart since it's owned by the parent,
+              // but we can reset by navigating: calculate delta in weeks
+              const delta =
+                Math.round(
+                  (ws.getTime() - weekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)
+                );
+              for (let i = 0; i < Math.abs(delta); i++) {
+                delta > 0 ? onNextWeek() : onPrevWeek();
+              }
+            }}
+            className="text-xs"
+          >
+            Today
+          </Button>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           {boatList.length > 1 && Object.keys(boatColorByIndex).length > 0 && (
-            <>
+            <div className="flex flex-wrap items-center gap-2">
               {boatList.map((boat, idx) => (
                 <span
                   key={boat.id}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium"
+                  className="inline-flex items-center gap-1.5 text-[11px] font-medium"
                   style={{ color: boatColorByIndex[idx] ?? "inherit" }}
                 >
-                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: boatColorByIndex[idx] }} /> {boat.name}
+                  <span
+                    className="h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: boatColorByIndex[idx] }}
+                  />
+                  {boat.name}
                 </span>
               ))}
-            </>
+            </div>
           )}
-          <span className="text-xs text-brand-muted">Click an empty time to add a block</span>
+          <span className="hidden sm:inline text-xs text-brand-muted">
+            Click a slot to add a block
+          </span>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        {eventsLoading ? (
-          <div className="min-h-[400px] flex items-center justify-center text-brand-muted text-sm">Loading…</div>
-        ) : (
-          <div className="min-w-[700px] flex">
-            <div className="w-14 shrink-0 border-r border-brand-dark/10 py-2">
-              {HOURS.map((h) => (
-                <div key={h} className="h-12 text-[10px] text-brand-muted pl-1" style={{ minHeight: 48 }}>
-                  {h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`}
-                </div>
-              ))}
-            </div>
-            <div className="flex-1 grid grid-cols-7 gap-px bg-brand-dark/10">
-              {days.map((d, dayIndex) => (
-                <div key={dayIndex} className="bg-white min-h-[600px] relative" style={{ minHeight: (HOUR_END - HOUR_START) * 48 }}>
-                  <div className="sticky top-0 z-10 bg-white border-b border-brand-dark/10 py-1.5 text-center text-xs font-semibold text-brand-dark">
-                    {d.toLocaleDateString("en-US", { weekday: "short" })}
-                    <span className="block text-brand-muted font-normal">{d.getDate()}</span>
+
+      {/* ── Grid ── */}
+      {eventsLoading ? (
+        <div className="min-h-[400px] flex items-center justify-center text-brand-muted text-sm">
+          Loading…
+        </div>
+      ) : (
+        <div className="overflow-auto flex-1">
+          <div className="min-w-[640px]">
+            {/* Sticky day-header row */}
+            <div className="sticky top-0 z-20 bg-white border-b border-brand-dark/10 grid grid-cols-[48px_repeat(7,1fr)]">
+              {/* Corner */}
+              <div className="border-r border-brand-dark/10" />
+              {days.map((d, i) => {
+                const today = isToday(d);
+                return (
+                  <div
+                    key={i}
+                    className={cn(
+                      "py-2 text-center border-r border-brand-dark/10 last:border-r-0",
+                      today && "bg-brand-primary/5"
+                    )}
+                  >
+                    <p
+                      className={cn(
+                        "text-[11px] font-medium uppercase tracking-wide",
+                        today ? "text-brand-primary" : "text-brand-muted"
+                      )}
+                    >
+                      {d.toLocaleDateString("en-US", { weekday: "short" })}
+                    </p>
+                    <p
+                      className={cn(
+                        "text-base font-bold leading-tight mt-0.5",
+                        today
+                          ? "text-white bg-brand-primary rounded-full h-7 w-7 flex items-center justify-center mx-auto"
+                          : "text-brand-dark"
+                      )}
+                    >
+                      {d.getDate()}
+                    </p>
                   </div>
-                  {HOURS.map((hour) => (
-                    <button
-                      key={hour}
-                      type="button"
-                      className="h-12 w-full text-left hover:bg-brand-primary/5 border-b border-brand-dark/5 transition-colors"
-                      style={{ minHeight: 48 }}
-                      onClick={() => handleCellClick(dayIndex, hour)}
-                      aria-label={`Add block at ${d.toLocaleDateString()} ${hour}:00`}
-                    />
-                  ))}
-                  {eventsByDay()[dayIndex]?.map((ev) => {
-                    const { topPct, heightPct } = getEventStyle(ev);
-                    const isBooking = ev.type === "booking";
-                    const boatIdx = ev.boatId ? boatList.findIndex((b) => b.id === ev.boatId) : -1;
-                    const barColor = boatIdx >= 0 && boatColorByIndex[boatIdx] ? boatColorByIndex[boatIdx] : (isBooking ? "rgb(59 130 246)" : "rgb(0 28 48 / 0.15)");
-                    return (
+                );
+              })}
+            </div>
+
+            {/* Scrollable body */}
+            <div className="grid grid-cols-[48px_repeat(7,1fr)]">
+              {/* Time labels */}
+              <div className="border-r border-brand-dark/10">
+                {HOURS.map((h) => (
+                  <div
+                    key={h}
+                    className="flex items-start justify-end pr-2 pt-1 text-[10px] text-brand-muted select-none"
+                    style={{ height: CELL_H }}
+                  >
+                    {h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`}
+                  </div>
+                ))}
+              </div>
+
+              {/* Day columns */}
+              {days.map((d, dayIndex) => {
+                const today = isToday(d);
+                const positioned = eventsByDay[dayIndex] ?? [];
+                return (
+                  <div
+                    key={dayIndex}
+                    className={cn(
+                      "relative border-r border-brand-dark/10 last:border-r-0",
+                      today && "bg-brand-primary/[0.02]"
+                    )}
+                    style={{ height: TOTAL_GRID_H }}
+                  >
+                    {/* Hour cell backgrounds & click targets */}
+                    {HOURS.map((hour) => (
                       <button
-                        key={ev.id}
+                        key={hour}
                         type="button"
-                        className="absolute left-0.5 right-0.5 rounded-md text-left overflow-hidden z-20 text-[10px] font-medium px-1.5 py-0.5"
+                        onClick={() => handleCellClick(dayIndex, hour)}
+                        aria-label={`Add block ${d.toLocaleDateString()} ${hour}:00`}
+                        className="absolute inset-x-0 border-b border-brand-dark/[0.06] hover:bg-brand-primary/5 transition-colors"
                         style={{
-                          top: `${topPct}%`,
-                          height: `${Math.max(18, heightPct)}%`,
-                          minHeight: 20,
-                          backgroundColor: `${barColor}18`,
-                          borderColor: `${barColor}99`,
-                          color: boatIdx >= 0 && boatColorByIndex[boatIdx] ? barColor : (isBooking ? "rgb(30 58 138)" : "rgb(0 28 48)"),
-                          borderWidth: 1,
-                          borderLeftWidth: 3,
+                          top: (hour - HOUR_START) * CELL_H,
+                          height: CELL_H,
                         }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isBooking && ev.bookingId) onBookingClick(ev.bookingId);
-                          if (!isBooking && ev.blockId) {
-                            setSelectedBlock(ev);
-                            setBlockDetailOpen(true);
-                          }
-                        }}
-                      >
-                        <span className="truncate block">{ev.title}</span>
-                        {ev.boatName && <span className="truncate block text-[9px] opacity-90">{ev.boatName}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
+                      />
+                    ))}
+
+                    {/* Events */}
+                    {positioned.map((ev) => {
+                      const { top, height } = eventPx(ev.startAt, ev.endAt);
+                      const isBooking = ev.type === "booking";
+                      const boatIdx = ev.boatId
+                        ? boatList.findIndex((b) => b.id === ev.boatId)
+                        : -1;
+                      const accentColor =
+                        boatIdx >= 0 && boatColorByIndex[boatIdx]
+                          ? boatColorByIndex[boatIdx]
+                          : isBooking
+                          ? "rgb(59 130 246)"
+                          : "rgb(100 116 139)";
+
+                      const colW = 100 / ev.numCols;
+                      const colL = (ev.col / ev.numCols) * 100;
+                      // Add a small gap between adjacent columns
+                      const GAP = 2; // px
+
+                      return (
+                        <button
+                          key={ev.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isBooking && ev.bookingId) onBookingClick(ev.bookingId);
+                            if (!isBooking && ev.blockId) {
+                              setSelectedBlock(ev);
+                              setBlockDetailOpen(true);
+                            }
+                          }}
+                          className={cn(
+                            "absolute z-10 overflow-hidden rounded-md text-left transition-opacity hover:opacity-90 active:opacity-75",
+                            "flex flex-col justify-start"
+                          )}
+                          style={{
+                            top: top + 1,
+                            height: height - 2,
+                            left: `calc(${colL}% + ${GAP}px)`,
+                            width: `calc(${colW}% - ${GAP * 2}px)`,
+                            backgroundColor: `color-mix(in srgb, ${accentColor} 12%, white)`,
+                            borderLeft: `3px solid ${accentColor}`,
+                            boxShadow: `0 1px 3px 0 color-mix(in srgb, ${accentColor} 20%, transparent)`,
+                            padding: "3px 5px",
+                          }}
+                        >
+                          <span
+                            className="block text-[11px] font-semibold leading-tight truncate"
+                            style={{ color: accentColor }}
+                          >
+                            {ev.title}
+                          </span>
+                          {height > 38 && (
+                            <span
+                              className="block text-[10px] leading-tight truncate mt-0.5 opacity-80"
+                              style={{ color: accentColor }}
+                            >
+                              {formatTime(ev.startAt)} – {formatTime(ev.endAt)}
+                            </span>
+                          )}
+                          {height > 56 && ev.boatName && (
+                            <span
+                              className="block text-[10px] leading-tight truncate opacity-70"
+                              style={{ color: accentColor }}
+                            >
+                              {ev.boatName}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* New block modal */}
-      <Dialog open={newBlockOpen} onOpenChange={setNewBlockOpen} title="New block" description="Block this time so it’s not bookable.">
+      <Dialog
+        open={newBlockOpen}
+        onOpenChange={setNewBlockOpen}
+        title="New block"
+        description="Block this time slot so it's not bookable."
+        fullScreenOnMobile
+      >
         <div className="space-y-4">
           <label className="block">
             <span className="text-xs font-medium text-brand-muted">Start</span>
@@ -347,7 +572,9 @@ export function AdminCalendarWeekView({
               >
                 <option value="">All boats</option>
                 {boatList.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
                 ))}
               </select>
             </label>
@@ -363,17 +590,32 @@ export function AdminCalendarWeekView({
             />
           </label>
           <div className="flex gap-2 justify-end">
-            <Button variant="outline" size="sm" onClick={() => setNewBlockOpen(false)}>Cancel</Button>
-            <Button size="sm" onClick={createBlock} disabled={newBlockSaving || !newBlockStart || !newBlockEnd}>
+            <Button variant="outline" size="sm" onClick={() => setNewBlockOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={createBlock}
+              disabled={newBlockSaving || !newBlockStart || !newBlockEnd}
+            >
               {newBlockSaving ? "Saving…" : "Create block"}
             </Button>
           </div>
         </div>
       </Dialog>
 
-      {/* Block detail / edit modal */}
-      <Dialog open={blockDetailOpen} onOpenChange={(open) => { setBlockDetailOpen(open); if (!open) setSelectedBlock(null); }} title="Edit block" description={selectedBlock?.title ?? ""}>
-        {selectedBlock && selectedBlock.blockId && (
+      {/* Block edit modal */}
+      <Dialog
+        open={blockDetailOpen}
+        onOpenChange={(open) => {
+          setBlockDetailOpen(open);
+          if (!open) setSelectedBlock(null);
+        }}
+        title="Edit block"
+        description={selectedBlock?.title ?? ""}
+        fullScreenOnMobile
+      >
+        {selectedBlock?.blockId && (
           <BlockEditForm
             blockId={selectedBlock.blockId}
             startAt={selectedBlock.startAt}
@@ -402,7 +644,7 @@ function BlockEditForm({
   startAt: string;
   endAt: string;
   note: string;
-  onSave: (id: string, startAt: string, endAt: string, note: string) => Promise<void>;
+  onSave: (id: string, s: string, e: string, note: string) => Promise<void>;
   onDelete: () => void;
   saving: boolean;
 }) {
@@ -413,23 +655,54 @@ function BlockEditForm({
     <div className="space-y-4">
       <label className="block">
         <span className="text-xs font-medium text-brand-muted">Start</span>
-        <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm" />
+        <input
+          type="datetime-local"
+          value={start}
+          onChange={(e) => setStart(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+        />
       </label>
       <label className="block">
         <span className="text-xs font-medium text-brand-muted">End</span>
-        <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm" />
+        <input
+          type="datetime-local"
+          value={end}
+          onChange={(e) => setEnd(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+        />
       </label>
       <label className="block">
         <span className="text-xs font-medium text-brand-muted">Note</span>
-        <input type="text" value={noteVal} onChange={(e) => setNoteVal(e.target.value)} className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm" />
+        <input
+          type="text"
+          value={noteVal}
+          onChange={(e) => setNoteVal(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+        />
       </label>
-      <div className="flex gap-2 justify-between">
-        <Button variant="outline" size="sm" className="border-red-300 text-red-700" onClick={onDelete}>Delete block</Button>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => onSave(blockId, new Date(start).toISOString(), new Date(end).toISOString(), noteVal)} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-red-300 text-red-700 hover:bg-red-50"
+          onClick={onDelete}
+        >
+          Delete block
+        </Button>
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() =>
+            onSave(
+              blockId,
+              new Date(start).toISOString(),
+              new Date(end).toISOString(),
+              noteVal
+            )
+          }
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
       </div>
     </div>
   );

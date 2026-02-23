@@ -249,7 +249,8 @@ export default function AdminFinancialsPage() {
           <h2 className="px-4 py-4 sm:px-6 border-b border-brand-dark/10 text-lg font-semibold text-brand-dark">
             By experience
           </h2>
-          <div className="overflow-x-auto -mx-px">
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto -mx-px">
             <table className="w-full min-w-[400px] text-sm">
               <thead>
                 <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
@@ -271,6 +272,18 @@ export default function AdminFinancialsPage() {
               </tbody>
             </table>
           </div>
+          {/* Mobile card list */}
+          <div className="md:hidden divide-y divide-brand-dark/5">
+            {byExperience.map((row) => (
+              <div key={row.experienceId} className="flex items-center justify-between px-4 py-3 gap-3">
+                <span className="font-semibold text-brand-dark text-sm">{row.experienceName}</span>
+                <div className="text-right shrink-0">
+                  <p className="font-semibold text-brand-dark text-sm">{formatCents(row.revenueCents)}</p>
+                  <p className="text-xs text-brand-muted">{row.bookingCount} booking{row.bookingCount !== 1 ? "s" : ""}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -281,44 +294,71 @@ export default function AdminFinancialsPage() {
         {recent.length === 0 ? (
           <div className="p-6 sm:p-8 text-center text-brand-muted text-sm">No transactions yet.</div>
         ) : (
-          <div className="overflow-x-auto -mx-px">
-            <table className="w-full min-w-[520px] text-sm">
-              <thead>
-                <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Date</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Amount</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((r) => (
-                  <tr key={r.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap">{formatDate(r.createdAt)}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">{r.experienceName ?? "—"}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark break-all">{r.customerEmail || "—"}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">
-                      {formatCents(r.totalCents)}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                          r.status === "paid"
-                            ? "bg-green-100 text-green-800"
-                            : r.status === "canceled"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-gray-100 text-gray-800"
-                        }`}
-                      >
-                        {r.status}
-                      </span>
-                    </td>
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto -mx-px">
+              <table className="w-full min-w-[520px] text-sm">
+                <thead>
+                  <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Date</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Amount</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recent.map((r) => (
+                    <tr key={r.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap">{formatDate(r.createdAt)}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">{r.experienceName ?? "—"}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark break-all">{r.customerEmail || "—"}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">
+                        {formatCents(r.totalCents)}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            r.status === "paid"
+                              ? "bg-green-100 text-green-800"
+                              : r.status === "canceled"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-gray-100 text-gray-800"
+                          }`}
+                        >
+                          {r.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Mobile card list */}
+            <div className="md:hidden divide-y divide-brand-dark/5">
+              {recent.map((r) => (
+                <div key={r.id} className="px-4 py-3 space-y-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-semibold text-brand-dark text-sm">{r.experienceName ?? "—"}</span>
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${
+                        r.status === "paid"
+                          ? "bg-green-100 text-green-800"
+                          : r.status === "canceled"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-gray-100 text-gray-800"
+                      }`}
+                    >
+                      {r.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-brand-muted">{formatDate(r.createdAt)}</p>
+                  <p className="text-xs text-brand-muted break-all">{r.customerEmail || "—"}</p>
+                  <p className="text-right font-semibold text-brand-dark text-sm">{formatCents(r.totalCents)}</p>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -352,7 +392,8 @@ export default function AdminFinancialsPage() {
               <h2 className="px-4 py-4 sm:px-6 border-b border-brand-dark/10 text-lg font-semibold text-brand-dark">
                 Recent Stripe activity
               </h2>
-              <div className="overflow-x-auto -mx-px">
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto -mx-px">
                 <table className="w-full min-w-[520px] text-sm">
                   <thead>
                     <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
@@ -389,6 +430,27 @@ export default function AdminFinancialsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              {/* Mobile card list */}
+              <div className="md:hidden divide-y divide-brand-dark/5">
+                {data.stripe.recentTransactions.map((t) => (
+                  <div key={t.id} className="px-4 py-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-brand-muted">
+                        {new Date(t.created * 1000).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </span>
+                      <span className="text-xs font-medium text-brand-dark capitalize">{t.type}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="text-brand-muted text-xs">Net: {formatCents(t.net)} · Fee: {formatCents(t.fee)}</span>
+                      <span className="font-semibold text-brand-dark">{formatCents(t.amount)}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

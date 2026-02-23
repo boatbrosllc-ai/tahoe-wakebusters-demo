@@ -10,7 +10,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -26,6 +26,10 @@ interface ExperienceItem {
   petsMax: number;
   fromPriceCents: number | null;
   active: boolean;
+  pricingType?: "charter" | "ticketed";
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 interface BoatOption {
@@ -190,17 +194,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
+  const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
   const openSlotsForDate = useMemo(() => {
     if (!selectedDate) return [];
     return monthSlots.filter(
-      (s) => s.startAt.startsWith(selectedDate) && s.status === "open"
+      (s) => isoToChicagoDateStr(s.startAt) === selectedDate && s.status === "open"
     );
   }, [selectedDate, monthSlots]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
+  const [ticketCounts, setTicketCounts] = useState<{ total: number; sold: number; onHold: number; available: number } | null>(null);
+  const [ticketCountsLoading, setTicketCountsLoading] = useState(false);
   // Step 4 form
   const [partySize, setPartySize] = useState(1);
   const [petsCount, setPetsCount] = useState(0);
@@ -235,11 +242,35 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   // Always use listing (experience) rates for duration and pricing — never boat rates.
   // Calendar and checkout must show the numbers from the listing page (experience rates).
   const ratesForSelection = experienceRates;
+
+  /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
+  const isTicketed = selectedExperience?.pricingType === "ticketed";
+  /** Max sellable tickets (ticketed) or max guests (charter). */
+  const ticketMax = isTicketed ? 36 : (selectedExperience?.maxGuests ?? 14);
+
+  /** For ticketed experiences: format departure time from departureHour/departureMinute. */
+  const departurTimeLabel = useMemo(() => {
+    if (!isTicketed || selectedExperience?.departureHour == null) return null;
+    const h = selectedExperience.departureHour;
+    const m = selectedExperience.departureMinute ?? 0;
+    const period = h < 12 ? "AM" : "PM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+  }, [isTicketed, selectedExperience?.departureHour, selectedExperience?.departureMinute]);
+
   useEffect(() => {
     if (ratesForSelection.length === 0) return;
     const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
     if (!valid) setSelectedRateIdForCalendar(null);
   }, [ratesForSelection, selectedRateIdForCalendar]);
+
+  // Ticketed: auto-select the single rate when rates load (no duration picker shown).
+  useEffect(() => {
+    if (!isTicketed || ratesForSelection.length === 0) return;
+    if (!selectedRateIdForCalendar) {
+      setSelectedRateIdForCalendar(ratesForSelection[0].id);
+    }
+  }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
   const dateOptions = useMemo(
     () => getDaysInMonth(viewMonthYear, viewMonthMonth),
@@ -419,6 +450,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     if (!selectedExperience?.id || !selectedRateIdForCalendar) {
       setDatePrices({});
       setHolidayDateStrings(new Set());
+      setTicketsAvailableByDate({});
       return;
     }
     const rateIdQ = `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}`;
@@ -434,10 +466,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         } else {
           setHolidayDateStrings(new Set());
         }
+        if (data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object") {
+          setTicketsAvailableByDate(data.ticketsAvailableByDate);
+        } else {
+          setTicketsAvailableByDate({});
+        }
       })
       .catch(() => {
         setDatePrices({});
         setHolidayDateStrings(new Set());
+        setTicketsAvailableByDate({});
       });
   }, [selectedExperience?.id, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar]);
 
@@ -471,6 +509,29 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!selectedDate) setSelectedSlot(null);
   }, [selectedDate]);
+
+  // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice)
+  useEffect(() => {
+    if (!isTicketed || !selectedDate || openSlotsForDate.length === 0) return;
+    setSelectedSlot(openSlotsForDate[0]);
+  }, [isTicketed, selectedDate, openSlotsForDate]);
+
+  // Ticketed: fetch ticket availability counts when date changes
+  useEffect(() => {
+    if (!isTicketed || !selectedDate || !selectedExperience?.id) {
+      setTicketCounts(null);
+      return;
+    }
+    setTicketCountsLoading(true);
+    setTicketCounts(null);
+    fetch(`/api/booking/ticket-availability?experienceId=${encodeURIComponent(selectedExperience.id)}&date=${encodeURIComponent(selectedDate)}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data && typeof data.total === "number") setTicketCounts(data);
+      })
+      .catch(() => {})
+      .finally(() => setTicketCountsLoading(false));
+  }, [isTicketed, selectedDate, selectedExperience?.id]);
 
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
@@ -523,7 +584,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       { open: number; held: number; booked: number; blocked: number }
     >();
     for (const s of monthSlots) {
-      const day = s.startAt.slice(0, 10);
+      const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
       const e = map.get(day)!;
       if (s.status === "open") e.open++;
@@ -555,12 +616,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     });
   }, [openSlotsForDate, rateForCalendar?.durationHours]);
   const selectedRateId = useMemo(() => {
+    // Ticketed: rate is already auto-selected by selectedRateIdForCalendar — do not try to match by slot duration
+    if (isTicketed) return selectedRateIdForCalendar;
     if (!selectedSlot || ratesForSelection.length === 0) return null;
     const parsed = parseSlotId(selectedSlot.id);
     const durationHours = parsed?.durationHours ?? 0;
     const rate = ratesForSelection.find((r) => r.durationHours === durationHours);
     return rate?.id ?? null;
-  }, [selectedSlot, ratesForSelection]);
+  }, [isTicketed, selectedRateIdForCalendar, selectedSlot, ratesForSelection]);
 
   const selectedRate = useMemo(
     () => (selectedRateId ? ratesForSelection.find((r) => r.id === selectedRateId) ?? null : null),
@@ -575,7 +638,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
 
   // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
   const priceSummary = useMemo(() => {
-    const rateCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
+    const unitCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
+    // Ticketed: multiply per-ticket price by ticket count; charter: flat rate
+    const rateCents = isTicketed ? unitCents * partySize : unitCents;
     const addonLines = displayAddons
       .filter((a) => (addonSelections[a.id] ?? 0) > 0)
       .map((a) => ({
@@ -591,8 +656,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
     const discountCents = appliedDiscount?.discountCents ?? 0;
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
+    const baseLabel = selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental");
+    const rateLabel = isTicketed
+      ? `${partySize} ticket${partySize !== 1 ? "s" : ""} × $${(unitCents / 100).toFixed(0)}/ticket`
+      : baseLabel;
     return {
-      rateLabel: selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental"),
+      rateLabel,
       rateCents,
       addonLines,
       salesTaxCents,
@@ -600,7 +669,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       discountCents,
       totalCents,
     };
-  }, [effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
+  }, [isTicketed, partySize, effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
 
   // When opened with initialSelection (slot pre-picked) and boat was also pre-picked, go to step 4.
   // When opened from listing calendar (date + slot, no boatId), stay at step 3 so user picks boat first.
@@ -709,10 +778,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setStep(2);
   };
 
-  /** Step 2 (date & time): continue to boat selection when date and slot are chosen. */
-  const canGoFromStep2 = !!(selectedDate && selectedSlot);
+  /** Step 2 (date & time): continue to boat selection (charter) or directly to step 4 (ticketed). */
+  const canGoFromStep2 = !!(selectedDate && selectedSlot) &&
+    !(isTicketed && ticketCounts != null && ticketCounts.available === 0);
   const handleStep2Next = () => {
-    if (canGoFromStep2) setStep(3);
+    if (!canGoFromStep2) return;
+    if (isTicketed) {
+      setStep(4);
+      setPaymentPhase("form");
+    } else {
+      setStep(3);
+    }
   };
 
   /** Step 3 (boat): continue only when an available boat is chosen (or experience has no boats). */
@@ -754,9 +830,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
       return;
     }
-    const maxGuests = selectedExperience?.maxGuests ?? 14;
-    if (partySize < 1 || partySize > maxGuests) {
-      setPaymentError(partySize < 1 ? "Party size is required." : `Party size must be between 1 and ${maxGuests}.`);
+    if (partySize < 1 || partySize > ticketMax) {
+      const label = isTicketed ? "ticket count" : "party size";
+      setPaymentError(partySize < 1 ? `A ${label} is required.` : `${isTicketed ? "Ticket count" : "Party size"} must be between 1 and ${ticketMax}.`);
       return;
     }
     if (tipChoice === null) {
@@ -786,6 +862,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
           ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
+          bookingMode: isTicketed ? "shared" : "charter",
         }),
       });
       const holdData = await holdRes.json();
@@ -802,7 +879,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: newHoldId, payFullAmount }),
+        body: JSON.stringify({ holdId: newHoldId, payFullAmount: isTicketed ? true : payFullAmount }),
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
@@ -832,10 +909,19 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
   };
 
-  const stepTitles = ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
-  const stepCount = isCalendarFirstFlow ? 2 : 4;
-  const stepIndex = isCalendarFirstFlow ? (step === 3 ? 1 : 2) : step;
-  const stepTitle = isCalendarFirstFlow ? (step === 3 ? "Choose your boat" : "Details & payment") : stepTitles[step - 1];
+  const stepTitles = isTicketed
+    ? ["Pick category", "Pick date", "Details & payment", "Details & payment"]
+    : ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
+  // Ticketed: 3 steps (category → date → payment); no boat step
+  const stepCount = isCalendarFirstFlow ? 2 : isTicketed ? 3 : 4;
+  const stepIndex = isCalendarFirstFlow
+    ? (step === 3 ? 1 : 2)
+    : isTicketed
+      ? (step === 1 ? 1 : step === 2 ? 2 : 3)
+      : step;
+  const stepTitle = isCalendarFirstFlow
+    ? (step === 3 ? "Choose your boat" : "Details & payment")
+    : stepTitles[step - 1];
 
   // Smart modal: min-height per step to fit content (step 2 compact when no boats; step 4 content-fitting)
   // Only the active panel contributes to height so the modal grows per step
@@ -843,6 +929,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const panel2Collapsed = step !== 2;
   const panel3Collapsed = step !== 3;
   const panel4Collapsed = step !== 4;
+
+  // Ticket selector max — capped to live availability when loaded
+  const availableTickets = ticketCounts?.available ?? ticketMax;
+  const effectiveTicketMax = Math.min(ticketMax, availableTickets);
 
   return (
     <Dialog
@@ -876,7 +966,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {(isCalendarFirstFlow ? [3, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
+            {(isCalendarFirstFlow ? [3, 4] : isTicketed ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
                 key={`step-dot-${stepIdx}`}
                 className={cn(
@@ -965,7 +1055,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           ) : null}
                           {exp.fromPriceCents != null && (
                             <span className="text-sm font-medium text-white/95 mt-1">
-                              {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents)}
+                              {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents, exp.pricingType)}
                             </span>
                           )}
                         </div>
@@ -989,7 +1079,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               )}
             >
               <div className="space-y-3 md:space-y-4">
-                {ratesForSelection.length > 0 && (
+                {ratesForSelection.length > 0 && !isTicketed && (
                   <div>
                     <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
                     <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:gap-2 md:gap-3">
@@ -1083,14 +1173,19 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         rateForCalendar?.durationHours != null
                           ? monthSlots.filter(
                               (s) =>
-                                s.startAt.startsWith(dateStr) &&
+                                isoToChicagoDateStr(s.startAt) === dateStr &&
                                 s.status === "open" &&
                                 parseSlotId(s.id)?.durationHours === rateForCalendar.durationHours
                             ).length
                           : entry?.open ?? 0;
-                      const isAvailable = !isPast && openForDuration > 0;
+                      const ticketsLeft = isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
+                      const isAvailable = !isPast && (isTicketed
+                        ? (ticketsLeft === null ? openForDuration > 0 : ticketsLeft > 0 && openForDuration > 0)
+                        : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
-                      const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                      const isFullyBooked = !isPast && (isTicketed
+                        ? (ticketsLeft !== null ? ticketsLeft === 0 && openForDuration > 0 : false)
+                        : (takenCount > 0 && openForDuration === 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const priceCents = datePrices[dateStr];
                       const isHoliday = holidayDateStrings.has(dateStr);
@@ -1123,7 +1218,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             <span className={cn(
                               "block text-[11px] sm:text-sm font-bold leading-none mt-0.5",
                               isSelected ? "text-brand-primary" : "text-emerald-800"
-                            )}>${(priceCents / 100).toFixed(0)}</span>
+                            )}>
+                              ${(priceCents / 100).toFixed(0)}{isTicketed && <span className="text-[8px] sm:text-[10px] font-normal">/ea</span>}
+                            </span>
+                          )}
+                          {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && (
+                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">{ticketsLeft} left</span>
                           )}
                           {isFullyBooked && (
                             <span className="block text-[8px] sm:text-xs font-semibold text-amber-700 leading-none mt-0.5">Full</span>
@@ -1135,36 +1235,71 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 </div>
                 {selectedDate && (
                   <div className="min-h-[2.5rem] transition-[opacity] duration-150 ease-out">
-                    <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
-                    {slotsLoading ? (
-                      <p className="text-xs text-brand-muted">Loading times…</p>
-                    ) : (() => {
-                      const slotsForDay = openSlotsByTime
-                        .filter((s) => s.startAt.startsWith(selectedDate))
-                        .sort((a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt));
-                      return slotsForDay.length === 0 ? (
-                        <p className="text-xs text-brand-muted">No open slots this day.</p>
+                    {isTicketed ? (
+                      departurTimeLabel ? (
+                        <div className="rounded-xl border-2 border-brand-primary/30 bg-brand-primary/5 px-4 py-3">
+                          <p className="text-xs font-semibold text-brand-muted uppercase tracking-wider mb-0.5">Departure time</p>
+                          <p className="text-base font-bold text-brand-dark">{departurTimeLabel}</p>
+                          {(slotsLoading || ticketCountsLoading) && (
+                            <p className="text-xs text-brand-muted mt-1">Checking availability…</p>
+                          )}
+                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length === 0 && (
+                            <p className="text-xs text-amber-700 mt-1">No availability this day — please pick another date.</p>
+                          )}
+                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length > 0 && ticketCounts && (
+                            <div className="mt-2 flex items-center gap-2">
+                              <div className="flex-1 h-1.5 rounded-full bg-brand-dark/10 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-brand-primary transition-all"
+                                  style={{ width: `${Math.round(((ticketCounts.total - ticketCounts.available) / ticketCounts.total) * 100)}%` }}
+                                />
+                              </div>
+                              <p className="text-xs font-semibold text-brand-dark whitespace-nowrap">
+                                {ticketCounts.available} / {ticketCounts.total} tickets left
+                              </p>
+                            </div>
+                          )}
+                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length > 0 && !ticketCounts && (
+                            <p className="text-xs text-emerald-700 mt-1 font-medium">Available</p>
+                          )}
+                        </div>
                       ) : (
-                      <div className="flex flex-wrap gap-1.5 md:gap-2">
-                        {slotsForDay.map((slot) => {
-                          const isSelected = selectedSlot?.startAt === slot.startAt;
-                          return (
-                            <button
-                              key={slot.startAt}
-                              type="button"
-                              onClick={() => setSelectedSlot(slot)}
-                              className={cn(
-                                "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all",
-                                isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
-                              )}
-                            >
-                              {slot.timeLabel}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                    })()}
+                        slotsLoading ? <p className="text-xs text-brand-muted">Loading times…</p> : null
+                      )
+                    ) : (
+                      <>
+                      <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
+                      {slotsLoading ? (
+                        <p className="text-xs text-brand-muted">Loading times…</p>
+                      ) : (() => {
+                        const slotsForDay = openSlotsByTime
+                          .filter((s) => isoToChicagoDateStr(s.startAt) === selectedDate)
+                          .sort((a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt));
+                        return slotsForDay.length === 0 ? (
+                          <p className="text-xs text-brand-muted">No open slots this day.</p>
+                        ) : (
+                        <div className="flex flex-wrap gap-1.5 md:gap-2">
+                          {slotsForDay.map((slot) => {
+                            const isSelected = selectedSlot?.startAt === slot.startAt;
+                            return (
+                              <button
+                                key={slot.startAt}
+                                type="button"
+                                onClick={() => setSelectedSlot(slot)}
+                                className={cn(
+                                  "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all",
+                                  isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
+                                )}
+                              >
+                                {slot.timeLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                      })()}
+                      </>
+                    )}
                   </div>
                 )}
                 </>
@@ -1178,7 +1313,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               >
                 Continue
               </button>
-              <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>
+              {!isTicketed && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
             </div>
 
             {/* Step 3: Boat — only boats available for the selected date/time */}
@@ -1269,6 +1404,88 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     role="region"
                     aria-label="Booking details form"
                   >
+                    {/* Tickets & add-ons — shown first for ticketed experiences */}
+                    {isTicketed && (
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Tickets &amp; add-ons</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">
+                              Tickets <span className="text-red-500 font-semibold" aria-hidden>*</span>
+                            </label>
+                            <select
+                              id="booking-party-size"
+                              value={Math.min(partySize, effectiveTicketMax)}
+                              onChange={(e) => setPartySize(parseInt(e.target.value, 10) || 1)}
+                              required
+                              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
+                              aria-describedby="booking-party-size-hint"
+                            >
+                              {Array.from({ length: effectiveTicketMax }, (_, i) => i + 1).map((n) => (
+                                <option key={n} value={n}>
+                                  {n} {n === 1 ? "ticket" : "tickets"}
+                                </option>
+                              ))}
+                            </select>
+                            <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">
+                              {ticketCounts != null
+                                ? `${ticketCounts.available} of ${ticketCounts.total} tickets available`
+                                : `Max ${ticketMax} tickets`}
+                            </p>
+                          </div>
+                          {rateForCalendar && (
+                            <div className="flex flex-col justify-end pb-5">
+                              <p className="text-xs text-brand-muted mb-0.5">Per ticket</p>
+                              <p className="text-lg font-bold text-brand-dark">${((effectiveRateCents ?? rateForCalendar.priceCents) / 100).toFixed(0)}</p>
+                            </div>
+                          )}
+                        </div>
+                        {addonsLoading ? (
+                          <p className="text-sm text-brand-muted mt-3">Loading add-ons…</p>
+                        ) : displayAddons.length > 0 ? (
+                          <div className="mt-3 space-y-1.5">
+                            {displayAddons.map((addon) => {
+                              const rawQty = addonSelections[addon.id] ?? 0;
+                              const name = addon.name.toLowerCase();
+                              const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                              const qty = Math.min(rawQty, effectiveMax);
+                              return (
+                                <button
+                                  key={addon.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setAddonQtyModalAddon(addon);
+                                    setAddonQtyModalQty(Math.min(rawQty || 1, effectiveMax));
+                                  }}
+                                  className={cn(
+                                    "w-full flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all",
+                                    addon.highlight
+                                      ? qty > 0
+                                        ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
+                                        : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
+                                      : qty > 0
+                                        ? "border-brand-primary/40 bg-brand-primary/5"
+                                        : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
+                                  )}
+                                >
+                                  <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
+                                    {addon.name}
+                                    {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
+                                    {qty > 0 && (
+                                      <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>
+                                    )}
+                                  </span>
+                                  <span className="text-sm font-semibold text-brand-primary shrink-0">
+                                    +${(addon.priceCents / 100).toFixed(0)}{qty > 1 ? ` × ${qty}` : ""}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+
                     {/* Order summary — always at top so user sees what they're booking */}
                     {selectedExperience && selectedDate && selectedSlot && selectedRate && (
                       <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden shrink-0">
@@ -1288,12 +1505,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             )}
                           </p>
                         )}
-                        <p className="text-sm text-brand-muted mt-2 flex items-center gap-1.5">
+                        <p className="text-sm text-brand-muted mt-2 flex items-center gap-1.5 flex-wrap">
                           <span>{new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
                           <span aria-hidden>·</span>
-                          <span>{formatTime(selectedSlot.startAt)}</span>
-                          <span aria-hidden>·</span>
-                          <span>{selectedRate.durationHours} hr</span>
+                          <span>{isTicketed ? (departurTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}</span>
+                          {!isTicketed && (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span>{selectedRate.durationHours} hr</span>
+                            </>
+                          )}
                         </p>
                       </div>
                       <div className="p-4 space-y-2">
@@ -1372,7 +1593,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             <span className="text-brand-muted">Total</span>
                             <span className="font-medium text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span>
                           </div>
-                          {payFullAmount ? (
+                          {(isTicketed || payFullAmount) ? (
                             <div className="flex justify-between items-baseline">
                               <span className="text-sm font-semibold text-brand-dark">Total due now</span>
                               <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
@@ -1446,12 +1667,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </label>
                   </div>
 
-                  {/* Party & add-ons */}
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Party & add-ons</p>
+                  {/* Party & add-ons — charter only (ticketed version rendered at top) */}
+                  {!isTicketed && <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Party &amp; add-ons</p>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">Party size <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
+                        <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">
+                          Party size <span className="text-red-500 font-semibold" aria-hidden>*</span>
+                        </label>
                         <select
                           id="booking-party-size"
                           value={partySize}
@@ -1460,13 +1683,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
                           aria-describedby="booking-party-size-hint"
                         >
-                          {Array.from({ length: selectedExperience?.maxGuests ?? 14 }, (_, i) => i + 1).map((n) => (
+                          {Array.from({ length: ticketMax }, (_, i) => i + 1).map((n) => (
                             <option key={n} value={n}>
                               {n} {n === 1 ? "guest" : "guests"}
                             </option>
                           ))}
                         </select>
-                        <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">Max {selectedExperience?.maxGuests ?? 14} guests</p>
+                        <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">
+                          Max {ticketMax} guests
+                        </p>
                       </div>
                     </div>
                     {addonsLoading ? (
@@ -1512,7 +1737,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         })}
                       </div>
                     ) : null}
-                  </div>
+                  </div>}
 
                   {/* Add-on quantity modal */}
                   <Dialog
@@ -1615,7 +1840,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     )}
                   </div>
 
-                  {/* Pay deposit or full */}
+                  {/* Pay deposit or full — hidden for ticketed (always full) */}
+                  {!isTicketed && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
@@ -1653,6 +1879,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       </button>
                     </div>
                   </div>
+                  )}
 
                   {/* Discount code */}
                   <div className="space-y-2 pt-1">
@@ -1752,12 +1979,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
                       <div className="min-w-0">
                         <p className="text-xs sm:text-sm font-semibold text-brand-dark">
-                          {payFullAmount ? "Total due" : "Deposit due"}
+                          {(isTicketed || payFullAmount) ? "Total due" : "Deposit due"}
                         </p>
                         <p className="text-xl sm:text-2xl font-bold text-brand-primary">
-                          ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
                         </p>
-                        {!payFullAmount && (
+                        {!isTicketed && !payFullAmount && (
                           <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
                             Remaining 50% charged 48 hours before your trip
                           </p>
@@ -1800,17 +2027,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         <p className="text-sm text-brand-muted">
                           {selectedDate && new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
                           {" · "}
-                          {formatTime(selectedSlot.startAt)}
+                          {isTicketed ? (departurTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}
                           {" · "}
                           {priceSummary.rateLabel}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold text-brand-primary">
-                          ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
                         </p>
                         <p className="text-[11px] text-brand-muted">
-                          {payFullAmount ? "Total due" : "Deposit due now"}
+                          {(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}
                         </p>
                       </div>
                     </div>
@@ -1842,8 +2069,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         </div>
                       )}
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
-                        <span>{payFullAmount ? "Total due" : "Deposit due now"}</span>
-                        <span>${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span>
+                        <span>{(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}</span>
+                        <span>${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span>
                       </div>
                     </div>
                   </div>
@@ -1982,7 +2209,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
                     <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && priceSummary.totalCents > 0 ? (
-                        payFullAmount ? (
+                        (isTicketed || payFullAmount) ? (
                           <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
                         ) : (
                           <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>

@@ -249,9 +249,9 @@ export function BoatForm({
 
       <div className="flex gap-3">
         <Link href={backHref}>
-          <Button type="button" variant="ghost">Cancel</Button>
+          <Button type="button" variant="ghost" className="min-h-[44px]">Cancel</Button>
         </Link>
-        <Button type="submit" disabled={loading}>{loading ? "Saving…" : submitLabel}</Button>
+        <Button type="submit" disabled={loading} className="min-h-[44px]">{loading ? "Saving…" : submitLabel}</Button>
       </div>
     </form>
   );

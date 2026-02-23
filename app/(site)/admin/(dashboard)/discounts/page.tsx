@@ -126,7 +126,7 @@ export default function AdminDiscountsPage() {
             Create codes to share with customers. They enter the code at checkout and the discount is applied.
           </p>
         </div>
-        <Button onClick={() => setCreateOpen((o) => !o)} className="shrink-0">
+        <Button onClick={() => setCreateOpen((o) => !o)} className="shrink-0 w-full sm:w-auto">
           {createOpen ? "Cancel" : "Create discount code"}
         </Button>
       </div>
@@ -241,57 +241,91 @@ export default function AdminDiscountsPage() {
           </div>
         )}
         {!loading && list.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Code</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Type</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Value</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Used</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Expires</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((d) => (
-                  <tr key={d.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 font-mono font-semibold text-brand-dark">{d.code}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark capitalize">{d.type}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      {d.type === "percent" ? `${d.percent ?? 0}%` : formatCents(d.valueCents ?? 0)}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      {d.usedCount}
-                      {d.maxRedemptions != null ? ` / ${d.maxRedemptions}` : ""}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted">{formatDate(d.expiresAt)}</td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4">
-                      <span
-                        className={cn(
-                          "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-                          d.active ? "bg-emerald-100 text-emerald-800" : "bg-brand-dark/10 text-brand-muted"
-                        )}
-                      >
-                        {d.active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => toggleActive(d.id, d.active)}
-                        disabled={togglingId === d.id}
-                      >
-                        {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
-                      </Button>
-                    </td>
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Code</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Type</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Value</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Used</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Expires</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {list.map((d) => (
+                    <tr key={d.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 font-mono font-semibold text-brand-dark">{d.code}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark capitalize">{d.type}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        {d.type === "percent" ? `${d.percent ?? 0}%` : formatCents(d.valueCents ?? 0)}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        {d.usedCount}
+                        {d.maxRedemptions != null ? ` / ${d.maxRedemptions}` : ""}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted">{formatDate(d.expiresAt)}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4">
+                        <span
+                          className={cn(
+                            "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
+                            d.active ? "bg-emerald-100 text-emerald-800" : "bg-brand-dark/10 text-brand-muted"
+                          )}
+                        >
+                          {d.active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => toggleActive(d.id, d.active)}
+                          disabled={togglingId === d.id}
+                        >
+                          {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Mobile card list */}
+            <div className="md:hidden space-y-3 p-4">
+              {list.map((d) => (
+                <div key={d.id} className="rounded-xl border border-brand-dark/10 bg-brand-bg/30 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-bold text-brand-dark text-sm">{d.code}</span>
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0",
+                        d.active ? "bg-emerald-100 text-emerald-800" : "bg-brand-dark/10 text-brand-muted"
+                      )}
+                    >
+                      {d.active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-brand-muted space-y-0.5">
+                    <p className="capitalize">{d.type} · {d.type === "percent" ? `${d.percent ?? 0}% off` : formatCents(d.valueCents ?? 0) + " off"}</p>
+                    <p>Used: {d.usedCount}{d.maxRedemptions != null ? ` / ${d.maxRedemptions}` : ""} · Expires: {formatDate(d.expiresAt)}</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => toggleActive(d.id, d.active)}
+                    disabled={togglingId === d.id}
+                    className="w-full min-h-[40px]"
+                  >
+                    {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

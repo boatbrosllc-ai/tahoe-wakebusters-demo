@@ -251,6 +251,7 @@ export async function POST(request: NextRequest) {
         locationText,
         cancellationPolicyText,
         waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
+        pricingType: experienceForPricing?.pricingType,
       };
       try {
         await sendBookingConfirmationEmail(booking as Booking, emailContext);

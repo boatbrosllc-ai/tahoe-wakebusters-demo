@@ -189,11 +189,11 @@ export function AddBookingModal({
     }
   };
 
-  const inputClass = "w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none";
+  const inputClass = "w-full rounded-lg border border-brand-dark/20 px-3 py-2.5 min-h-[44px] text-sm text-brand-dark focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none";
   const dialogDescription = "Enter booking details from another source (GetMyBoat, Viator, phone, etc.) to keep everything in one place.";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Add booking" description={dialogDescription}>
+    <Dialog open={open} onOpenChange={onOpenChange} title="Add booking" description={dialogDescription} fullScreenOnMobile>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -241,7 +241,7 @@ export function AddBookingModal({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label htmlFor="add-booking-date" className="block text-sm font-medium text-brand-dark mb-1">Trip date *</label>
             <input
@@ -313,7 +313,7 @@ export function AddBookingModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label htmlFor="add-booking-party" className="block text-sm font-medium text-brand-dark mb-1">Party size</label>
             <input
@@ -388,7 +388,7 @@ export function AddBookingModal({
               onChange={(e) => setBillingLine2(e.target.value)}
               className={inputClass}
             />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               <input
                 type="text"
                 placeholder="City"

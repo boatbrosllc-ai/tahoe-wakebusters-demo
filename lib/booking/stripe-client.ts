@@ -28,19 +28,26 @@ export function buildLineItems(params: {
   rate: Rate | ExperienceRate;
   addons: { addon: Addon | import("./types").ExperienceAddon; qty: number }[];
   hold: Hold;
+  /** For ticketed experiences: number of tickets purchased. Defaults to 1. */
+  ticketQty?: number;
+  /** Override the unit price in cents (e.g. per-ticket price for ticketed experiences). */
+  unitPriceCents?: number;
 }): Stripe.Checkout.SessionCreateParams.LineItem[] {
   const { pricing, rate, addons } = params;
+  const ticketQty = params.ticketQty != null && params.ticketQty > 0 ? params.ticketQty : 1;
+  const isTicketed = ticketQty > 1;
+  const unitPrice = params.unitPriceCents != null ? params.unitPriceCents : rateBaseCents(rate);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
   lineItems.push({
     price_data: {
       currency: pricing.currency,
-      unit_amount: rateBaseCents(rate),
+      unit_amount: unitPrice,
       product_data: {
-        name: `${rate.displayName} Charter`,
-        description: `${rate.durationHours} hour boat rental`,
+        name: isTicketed ? `${rate.displayName} · ${ticketQty} ticket${ticketQty !== 1 ? "s" : ""}` : `${rate.displayName} Charter`,
+        description: isTicketed ? `${rate.durationHours} hr · $${(unitPrice / 100).toFixed(0)} per ticket` : `${rate.durationHours} hour boat rental`,
       },
     },
-    quantity: 1,
+    quantity: ticketQty,
   });
   for (const { addon, qty } of addons) {
     if (qty <= 0) continue;

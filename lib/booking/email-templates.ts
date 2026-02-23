@@ -88,8 +88,10 @@ const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COL
  * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, waiverSigningUrl, waiverGroupSigningUrl } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, waiverSigningUrl, waiverGroupSigningUrl, pricingType } = context;
+  const isTicketed = pricingType === "ticketed";
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
+  const ticketCount = booking.partySize ?? 1;
   const addonsSummary =
     booking.addonSelections.length > 0
       ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
@@ -126,15 +128,16 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
           <tr>
             <td style="padding: 32px;">
               <p style="margin: 0 0 20px; font-size: 16px; color: ${DARK_COLOR}; line-height: 1.5;">Hi ${escapeHtml(booking.customer.name)},</p>
-              <p style="margin: 0 0 24px; font-size: 15px; color: ${MUTED_COLOR}; line-height: 1.6;">Your reservation is confirmed. Here are the details:</p>
+              <p style="margin: 0 0 24px; font-size: 15px; color: ${MUTED_COLOR}; line-height: 1.6;">Your ${isTicketed ? "tickets are" : "reservation is"} confirmed. Here are the details:</p>
 
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BG_LIGHT}; border-radius: 12px; margin-bottom: 24px;">
                 <tr>
                   <td style="padding: 20px 24px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Experience / Boat</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(boatName)}</td></tr>
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Date & time</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(startAt)} – ${escapeHtml(endAt)}</td></tr>
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Duration</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${duration}</td></tr>
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">${isTicketed ? "Experience" : "Experience / Boat"}</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(boatName)}</td></tr>
+                      ${isTicketed ? `<tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Tickets</strong></td><td style="padding: 6px 0; font-size: 14px; font-weight: 700; color: ${DARK_COLOR}; text-align: right;">${ticketCount} ticket${ticketCount !== 1 ? "s" : ""}</td></tr>` : ""}
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">${isTicketed ? "Departure" : "Date & time"}</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${isTicketed ? escapeHtml(startAt) : `${escapeHtml(startAt)} – ${escapeHtml(endAt)}`}</td></tr>
+                      ${!isTicketed ? `<tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Duration</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${duration}</td></tr>` : ""}
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Add-ons</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(addonsSummary)}</td></tr>
                       <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">${totalLabel}</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">$${totalPaid}</td></tr>
                     </table>

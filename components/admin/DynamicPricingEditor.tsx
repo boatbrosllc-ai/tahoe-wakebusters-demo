@@ -201,6 +201,8 @@ interface DynamicPricingEditorProps {
   friSunDays?: number[];
   onFriSunDaysChange?: (days: number[]) => void;
   boatHint?: boolean;
+  /** When true (ticketed mode), hide weekend/holiday/calendar sections — all days use the same rate. */
+  hideCalendar?: boolean;
 }
 
 export function DynamicPricingEditor({
@@ -213,6 +215,7 @@ export function DynamicPricingEditor({
   friSunDays: friSunDaysProp = [],
   onFriSunDaysChange,
   boatHint = false,
+  hideCalendar = false,
 }: DynamicPricingEditorProps) {
   const weekendDays = weekendDaysProp.length > 0 ? weekendDaysProp : [0, 6];
   const friSunDays = Array.isArray(friSunDaysProp) ? friSunDaysProp : [];
@@ -370,7 +373,12 @@ export function DynamicPricingEditor({
       {/* Rates & calendar – no inner title; parent provides "Rates & calendar" */}
       <section className="rounded-xl border border-brand-dark/10 bg-brand-bg/20 overflow-hidden">
         <div className="p-4 sm:p-6 space-y-5">
-          {onWeekendDaysChange && (
+          {hideCalendar && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Weekend and holiday pricing overrides are disabled in ticketed mode — all days charge the same per-ticket rate.
+            </div>
+          )}
+          {!hideCalendar && onWeekendDaysChange && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-brand-dark">Which days are weekend?</span>
               <div className="flex flex-wrap gap-1">
@@ -396,7 +404,7 @@ export function DynamicPricingEditor({
               </div>
             </div>
           )}
-          {onFriSunDaysChange && (
+          {!hideCalendar && onFriSunDaysChange && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-brand-dark">Which days use Fri/Sun price?</span>
               <div className="flex flex-wrap gap-1">
@@ -424,7 +432,7 @@ export function DynamicPricingEditor({
           )}
           {/* Charter durations */}
           <div>
-            <p className="text-sm font-medium text-brand-dark mb-1.5">Charter lengths</p>
+            <p className="text-sm font-medium text-brand-dark mb-1.5">{hideCalendar ? "Durations" : "Charter lengths"}</p>
             <div className="flex flex-wrap gap-2 items-center">
               {rates.map((r, i) => (
                 <span
@@ -462,14 +470,14 @@ export function DynamicPricingEditor({
 
           {/* Base prices – default; holidays/custom below override these */}
           <div>
-            <p className="text-sm font-medium text-brand-dark mb-1.5">Rates by day type (default)</p>
-            <p className="text-xs text-brand-muted mb-3">Default prices for each charter. Holidays and custom dates below override these when they apply.</p>
+            <p className="text-sm font-medium text-brand-dark mb-1.5">{hideCalendar ? "Ticket prices by duration" : "Rates by day type (default)"}</p>
+            <p className="text-xs text-brand-muted mb-3">{hideCalendar ? "Set the per-ticket price for each duration." : "Default prices for each charter. Holidays and custom dates below override these when they apply."}</p>
             <div className="overflow-x-auto rounded-xl border border-brand-dark/10">
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-brand-dark/15 bg-brand-bg/50">
-                    <th className="text-left py-3 px-3 font-medium text-brand-muted w-32">When</th>
-                    <th className="text-left py-3 px-3 font-medium text-brand-muted w-40">Days</th>
+                    {!hideCalendar && <th className="text-left py-3 px-3 font-medium text-brand-muted w-32">When</th>}
+                    {!hideCalendar && <th className="text-left py-3 px-3 font-medium text-brand-muted w-40">Days</th>}
                     {rates.map((r, i) => (
                       <th key={i} className="text-left py-3 px-3 font-medium text-brand-muted border-l border-brand-dark/10 min-w-[7rem]">
                         {r.displayName || `${r.durationHours ?? "?"}h Charter`}
@@ -480,15 +488,15 @@ export function DynamicPricingEditor({
                 <tbody>
                   {rates.length === 0 ? (
                     <tr className="bg-amber-50/30">
-                      <td colSpan={2 + rates.length} className="py-6 px-3 text-sm text-brand-muted text-center">
-                        Add a charter duration above, then set prices here.
+                      <td colSpan={(hideCalendar ? 0 : 2) + rates.length} className="py-6 px-3 text-sm text-brand-muted text-center">
+                        {hideCalendar ? "Add a duration above, then set per-ticket prices here." : "Add a charter duration above, then set prices here."}
                       </td>
                     </tr>
                   ) : (
                     <>
                       <tr className="border-b border-brand-dark/10 bg-white">
-                        <td className="py-3 px-3 font-medium text-brand-dark">Weekdays</td>
-                        <td className="py-3 px-3 text-brand-muted text-sm">{weekdayLabel}</td>
+                        {!hideCalendar && <td className="py-3 px-3 font-medium text-brand-dark">Weekdays</td>}
+                        {!hideCalendar && <td className="py-3 px-3 text-brand-muted text-sm">{weekdayLabel}</td>}
                         {rates.map((r, i) => {
                           const p = priceField(`weekday-${i}`, r.priceCents, (v) => setRateNum(i, "priceCents", v ?? 0), false);
                           return (
@@ -498,7 +506,7 @@ export function DynamicPricingEditor({
                           );
                         })}
                       </tr>
-                      <tr className="border-b border-brand-dark/10 bg-sky-50/50">
+                      {!hideCalendar && <tr className="border-b border-brand-dark/10 bg-sky-50/50">
                         <td className="py-3 px-3 font-medium text-brand-dark">Weekends</td>
                         <td className="py-3 px-3 text-brand-muted text-sm">{weekendLabel}</td>
                         {rates.map((r, i) => {
@@ -509,8 +517,8 @@ export function DynamicPricingEditor({
                             </td>
                           );
                         })}
-                      </tr>
-                      <tr className="border-b border-brand-dark/10 bg-violet-50/50">
+                      </tr>}
+                      {!hideCalendar && <tr className="border-b border-brand-dark/10 bg-violet-50/50">
                         <td className="py-3 px-3 font-medium text-brand-dark">Fri/Sun</td>
                         <td className="py-3 px-3 text-brand-muted text-sm">{friSunLabel}</td>
                         {rates.map((r, i) => {
@@ -521,8 +529,8 @@ export function DynamicPricingEditor({
                             </td>
                           );
                         })}
-                      </tr>
-                      <tr className="border-b border-brand-dark/10 bg-amber-50/50">
+                      </tr>}
+                      {!hideCalendar && <tr className="border-b border-brand-dark/10 bg-amber-50/50">
                         <td className="py-3 px-3 font-medium text-brand-dark">Holiday default</td>
                         <td className="py-3 px-3 text-brand-muted text-sm">Used for special dates below</td>
                         {rates.map((r, i) => {
@@ -533,7 +541,7 @@ export function DynamicPricingEditor({
                             </td>
                           );
                         })}
-                      </tr>
+                      </tr>}
                     </>
                   )}
                 </tbody>
@@ -542,6 +550,7 @@ export function DynamicPricingEditor({
           </div>
 
           {/* Special dates – final override over default rates */}
+          {!hideCalendar && (<>
           <p className="text-xs text-brand-muted mb-2">
             July 4, Memorial Day, Labor Day, Thanksgiving, Christmas, and New Year always use the <strong>holiday default</strong> price (from the rate table above) unless you add a custom range here with a different price.
           </p>
@@ -682,9 +691,10 @@ export function DynamicPricingEditor({
             </table>
           </div>
           </div>
+          </>)}
 
           {/* Calendar preview */}
-          {!boatHint && (
+          {!boatHint && !hideCalendar && (
             <div className="pt-4 border-t border-brand-dark/10 w-full flex flex-col items-center">
               <p className="text-sm font-medium text-brand-dark mb-2">How it looks</p>
               <p className="text-xs text-brand-muted mb-2">Which days use weekday, weekend, or holiday pricing.</p>

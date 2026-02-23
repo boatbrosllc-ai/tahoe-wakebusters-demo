@@ -8,11 +8,12 @@ import {
   getSlotGridWakeBoard,
   getSlotGridWithSaturdayOnlyRestriction,
   getSlotStartEnd,
+  getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,215 @@ export async function GET(request: NextRequest) {
       }
       const expData = expDoc.data() as { slug?: string } | undefined;
       const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
+
+      type ExpDataFull = {
+        slug?: string;
+        pricingType?: "charter" | "ticketed";
+        maxCapacity?: number;
+        departureHour?: number;
+        departureMinute?: number;
+        tripDurationHours?: number;
+        showSpotsRemaining?: boolean;
+        defaultRateId?: string;
+      };
+      const expDataFull = expData as ExpDataFull | undefined;
+
+      if (expDataFull?.pricingType === "ticketed") {
+        // --- Ticketed experience: one slot per date with capacity enrichment ---
+        const tRatesSnap = await expRef.collection("rates").where("active", "==", true).get();
+        if (tRatesSnap.empty) {
+          console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
+          return NextResponse.json({ slots: [] });
+        }
+        let tDurationHours: number;
+        // Prefer the explicit tripDurationHours on the experience doc; fall back to rate's durationHours.
+        if (typeof expDataFull.tripDurationHours === "number" && expDataFull.tripDurationHours > 0) {
+          tDurationHours = expDataFull.tripDurationHours;
+        } else if (expDataFull.defaultRateId) {
+          const defaultRate = tRatesSnap.docs.find((d) => d.id === expDataFull.defaultRateId);
+          tDurationHours = defaultRate
+            ? (defaultRate.data() as ExperienceRate).durationHours
+            : (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
+        } else {
+          tDurationHours = (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
+        }
+
+        const tDepartureHour = expDataFull.departureHour ?? 10;
+        const tDepartureMinute = expDataFull.departureMinute ?? 0;
+
+        const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
+
+        // Load boats to resolve the first boatId for slot rows
+        const tBoatsSnap = await db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("active", "==", true)
+          .where("experienceIds", "array-contains", experienceId)
+          .get();
+        let tBoatIds: string[] = tBoatsSnap.docs.map((d) => d.id);
+        if (tBoatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
+          const tBoatsBySlugSnap = await db
+            .collection("boats")
+            .where("isListingBoat", "==", true)
+            .where("active", "==", true)
+            .where("experienceIds", "array-contains", experienceSlug)
+            .get();
+          tBoatIds = tBoatsBySlugSnap.docs.map((d) => d.id);
+        }
+
+        // Relaxed slot-id parser (same logic as in the non-ticketed branch below)
+        const parseSlotIdRelaxedT = (slotIdRaw: string): ReturnType<typeof parseSlotId> => {
+          let parsed = parseSlotId(slotIdRaw);
+          if (parsed) return parsed;
+          const cleaned = slotIdRaw.replace(/\s/g, "");
+          if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+            const parts = cleaned.split("-");
+            const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+            return parseSlotId(normalized);
+          }
+          if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+            const parts = cleaned.split("-");
+            const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
+            return parseSlotId(normalized);
+          }
+          return null;
+        };
+
+        // Query bookings to build per-date capacity maps
+        const spotsByDate = new Map<string, number>();
+        const charterLockedDates = new Set<string>();
+        const processBookingForCapacity = (doc: { id: string; data: () => Record<string, unknown> }) => {
+          const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; status?: string };
+          const slotIdRaw = b.slotId ?? b.slot_id;
+          if (!slotIdRaw) return;
+          const parsed = parseSlotIdRelaxedT(slotIdRaw);
+          if (!parsed) return;
+          const { dateStr } = parsed;
+          if (b.bookingMode === "charter") {
+            charterLockedDates.add(dateStr);
+          } else {
+            spotsByDate.set(dateStr, (spotsByDate.get(dateStr) ?? 0) + (b.partySize ?? 0));
+          }
+        };
+
+        const tBookingsSnap = await db
+          .collection("bookings")
+          .where("experienceId", "==", experienceId)
+          .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+          .limit(500)
+          .get();
+        tBookingsSnap.docs.forEach(processBookingForCapacity);
+        if (experienceSlug && experienceSlug !== experienceId) {
+          const tBookingsBySlugSnap = await db
+            .collection("bookings")
+            .where("experienceId", "==", experienceSlug)
+            .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            .limit(500)
+            .get();
+          const seenTIds = new Set(tBookingsSnap.docs.map((d) => d.id));
+          tBookingsBySlugSnap.docs.forEach((doc) => {
+            if (!seenTIds.has(doc.id)) processBookingForCapacity(doc);
+          });
+        }
+
+        // Query active holds for this experience and fold non-charter holds into spotsByDate
+        const tHoldsNow = Date.now();
+        const processHoldForCapacity = (doc: { id: string; data: () => Record<string, unknown> }) => {
+          const h = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; expiresAt?: { toDate(): Date } };
+          if (h.expiresAt && h.expiresAt.toDate().getTime() < tHoldsNow) return;
+          const slotIdRaw = h.slotId ?? h.slot_id;
+          if (!slotIdRaw) return;
+          const parsed = parseSlotIdRelaxedT(slotIdRaw);
+          if (!parsed) return;
+          const { dateStr } = parsed;
+          // Charter holds do not reduce shared ticket capacity
+          if (h.bookingMode === "charter") return;
+          spotsByDate.set(dateStr, (spotsByDate.get(dateStr) ?? 0) + (h.partySize ?? 0));
+        };
+        try {
+          const tHoldsSnap = await db
+            .collection("holds")
+            .where("experienceId", "==", experienceId)
+            .where("status", "==", "active")
+            .get();
+          tHoldsSnap.docs.forEach(processHoldForCapacity);
+          if (experienceSlug && experienceSlug !== experienceId) {
+            const tHoldsBySlugSnap = await db
+              .collection("holds")
+              .where("experienceId", "==", experienceSlug)
+              .where("status", "==", "active")
+              .get();
+            const seenTHoldIds = new Set(tHoldsSnap.docs.map((d) => d.id));
+            tHoldsBySlugSnap.docs.forEach((doc) => {
+              if (!seenTHoldIds.has(doc.id)) processHoldForCapacity(doc);
+            });
+          }
+        } catch (tHoldsErr) {
+          console.warn("[slots] ticketed holds query failed:", tHoldsErr instanceof Error ? tHoldsErr.message : tHoldsErr);
+        }
+
+        // Query blocks for this experience
+        const tBlockRanges: { start: number; end: number }[] = [];
+        try {
+          const tBlocksSnap = await db
+            .collection("blocks")
+            .where("experienceId", "==", experienceId)
+            .where("startAt", "<=", Timestamp.fromDate(end))
+            .get();
+          tBlocksSnap.docs.forEach((doc) => {
+            const b = doc.data() as { startAt: { toDate(): Date }; endAt: { toDate(): Date } };
+            const blockStart = b.startAt?.toDate?.()?.getTime();
+            const blockEnd = b.endAt?.toDate?.()?.getTime();
+            if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+            tBlockRanges.push({ start: blockStart, end: blockEnd });
+          });
+        } catch (tBlocksErr) {
+          console.warn("[slots] ticketed blocks query failed:", tBlocksErr instanceof Error ? tBlocksErr.message : tBlocksErr);
+        }
+
+        // Build enriched slot rows
+        type TicketedSlotRow = SlotRow & {
+          maxCapacity: number | undefined;
+          spotsBooked: number | undefined;
+          spotsRemaining: number | undefined;
+          isCharterLocked: boolean | undefined;
+          showSpotsRemaining: boolean | undefined;
+        };
+        const tSlots: TicketedSlotRow[] = [];
+        for (const { dateStr, startHour, startMinute, durationHours: dur } of ticketedGrid) {
+          const slotId = buildSlotId(dateStr, startHour, dur, startMinute);
+          const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, dur, startMinute);
+          const slotStartMs = slotStart.getTime();
+          const slotEndMs = slotEnd.getTime();
+          const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
+          const spotsBooked = spotsByDate.get(dateStr) ?? 0;
+          const maxCapacity = expDataFull.maxCapacity ?? 0;
+          const spotsRemaining = Math.max(0, maxCapacity - spotsBooked);
+          const isCharterLocked = charterLockedDates.has(dateStr);
+          const showSpotsRemaining = expDataFull.showSpotsRemaining ?? false;
+          tSlots.push({
+            id: slotId,
+            dateStr,
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+            status: isBlocked ? "blocked" : "open",
+            holdId: null,
+            bookingId: null,
+            updatedAt: null,
+            boatId: tBoatIds[0] ?? "",
+            experienceId,
+            maxCapacity,
+            spotsBooked,
+            spotsRemaining,
+            isCharterLocked,
+            showSpotsRemaining,
+          });
+        }
+        tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
+        return NextResponse.json({ slots: tSlots }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+      }
+      // --- End ticketed branch ---
+
       const ratesSnap = await expRef.collection("rates").where("active", "==", true).get();
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
       const durationsUnique = Array.from(new Set(durations));
@@ -119,7 +329,7 @@ export async function GET(request: NextRequest) {
         if (boatIds.length === 0) return NextResponse.json({ slots: [] });
         bookingsFromFallback = mergedDocs;
       }
-      type SlotRow = { id: string; dateStr: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string; experienceId: string };
+      type SlotRow = { id: string; dateStr: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string; experienceId: string; maxCapacity?: number | undefined; spotsBooked?: number | undefined; spotsRemaining?: number | undefined; isCharterLocked?: boolean | undefined; showSpotsRemaining?: boolean | undefined };
       const existingByBoatAndKey = new Map<string, SlotRow>();
 
       /** Calendar date YYYY-MM-DD from slot id — use for grouping so bookings show on the correct day regardless of server timezone. */
@@ -132,7 +342,7 @@ export async function GET(request: NextRequest) {
       // Merge FIRST so we never overwrite with stale slot docs.
       // Only these statuses mean the slot is taken; canceled/refunded are ignored.
       const isSlotTakenStatus = (s: unknown): boolean =>
-        typeof s === "string" && (BOOKING_STATUSES_SLOT_TAKEN as readonly string[]).includes(s);
+        typeof s === "string" && BOOKING_STATUSES_SLOT_TAKEN.has(s as BookingStatus);
       const normalizeSlotId = (raw: unknown): string | null => {
         if (raw == null) return null;
         const s = String(raw).trim();

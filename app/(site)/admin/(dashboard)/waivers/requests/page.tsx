@@ -518,6 +518,7 @@ export default function WaiverRequestsPage() {
       )}
 
       <Dialog
+        fullScreenOnMobile
         open={viewModalRequestId !== null}
         onOpenChange={(open) => {
           if (!open) setViewModalRequestId(null);

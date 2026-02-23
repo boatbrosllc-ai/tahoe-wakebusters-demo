@@ -41,7 +41,7 @@ export function AdminBookingCalendar({
   /** Called when the user changes month (prev/next/today). year, month (0-indexed). */
   onMonthChange?: (year: number, month: number) => void;
 }) {
-  const cellHeight = compact ? "h-[110px]" : "h-[160px]";
+  const cellHeight = compact ? "h-[60px] sm:h-[110px]" : "h-[80px] sm:h-[160px]";
   const maxBookingsPerDay = compact ? 2 : 4;
   const [currentDate, setCurrentDate] = useState(() => {
     const now = new Date();
@@ -187,7 +187,8 @@ export function AdminBookingCalendar({
               >
                 {cell.day}
               </div>
-              <div className="flex flex-col gap-1 flex-1 overflow-hidden min-h-0">
+              {/* Desktop: full booking pills */}
+              <div className="hidden sm:flex flex-col gap-1 flex-1 overflow-hidden min-h-0">
                 {dayBookings.length === 0 ? (
                   <span className="text-xs italic text-brand-muted">No bookings</span>
                 ) : (
@@ -219,6 +220,21 @@ export function AdminBookingCalendar({
                   <span className="text-[10px] text-brand-muted mt-0.5 shrink-0">
                     +{dayBookings.length - maxBookingsPerDay} more
                   </span>
+                )}
+              </div>
+              {/* Mobile: colored dots */}
+              <div className="sm:hidden flex flex-wrap gap-1 mt-auto">
+                {dayBookings.slice(0, 5).map((booking) => (
+                  <button
+                    key={booking.id}
+                    type="button"
+                    onClick={() => onBookingClick?.(booking)}
+                    className="h-2.5 w-2.5 rounded-full bg-brand-primary/70 hover:bg-brand-primary transition-colors"
+                    aria-label={`Booking: ${booking.customer?.name}`}
+                  />
+                ))}
+                {dayBookings.length > 5 && (
+                  <span className="text-[9px] text-brand-muted">+{dayBookings.length - 5}</span>
                 )}
               </div>
             </div>

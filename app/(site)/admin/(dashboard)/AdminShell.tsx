@@ -96,81 +96,96 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen bg-brand-bg/50">
-      {/* Mobile: floating menu button */}
-      <button
-        type="button"
-        onClick={() => setSidebarOpen(true)}
-        className="fixed bottom-6 left-6 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-brand-dark text-brand-primary shadow-lg ring-2 ring-brand-primary/40 hover:bg-brand-primary hover:text-white hover:ring-brand-primary sm:hidden transition-colors"
-        aria-label="Open menu"
-      >
-        <Menu className="h-6 w-6" aria-hidden />
-      </button>
+    <div className="flex flex-col min-h-screen bg-brand-bg/50">
+      {/* Mobile top header — hidden on lg+ */}
+      <header className="lg:hidden sticky top-0 z-30 flex h-14 items-center gap-3 bg-brand-dark border-b border-white/10 px-4 shrink-0">
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-white/80 hover:bg-white/10 transition-colors"
+        >
+          <Menu className="h-6 w-6" aria-hidden />
+        </button>
+        <Link href="/" className="flex items-center gap-2 min-w-0">
+          <Image
+            src={brand.logoNavbarPath ?? brand.logoPath}
+            alt={brand.logoAlt}
+            width={32}
+            height={32}
+            className="h-8 w-8 shrink-0 object-contain rounded-lg"
+          />
+          <span className="text-xs font-medium text-brand-primary truncate">Admin</span>
+        </Link>
+      </header>
 
-      {/* Mobile overlay */}
-      <div
-        className={cn(
-          "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity sm:hidden",
-          sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
-        )}
-        onClick={() => setSidebarOpen(false)}
-        role="presentation"
-        aria-hidden
-      />
-      <aside
-        className={cn(
-          "fixed top-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col bg-brand-dark shadow-2xl transition-transform duration-200 ease-out sm:static sm:z-0 sm:h-auto sm:w-60 sm:shrink-0 sm:translate-x-0 sm:shadow-none md:w-64",
-          "border-r border-white/10",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        )}
-      >
-        {/* Sidebar header */}
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
-          <Link
-            href="/"
-            className="flex items-center gap-3 min-w-0 rounded-xl overflow-hidden p-1 -m-1 hover:bg-white/5 transition-colors"
-            aria-label={`${brand.logoAlt} home`}
-          >
-            <Image
-              src={brand.logoNavbarPath ?? brand.logoPath}
-              alt={brand.logoAlt}
-              width={40}
-              height={40}
-              className="h-10 w-10 shrink-0 object-contain rounded-xl"
-            />
-            <span className="text-xs font-medium text-brand-primary truncate">Admin</span>
-          </Link>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white/80 hover:bg-white/10 hover:text-white sm:hidden transition-colors"
-            aria-label="Close menu"
-          >
-            <X className="h-5 w-5" aria-hidden />
-          </button>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-4 flex flex-col min-h-0">
-          <NavLinks pathname={pathname} onLinkClick={() => setSidebarOpen(false)} />
-        </nav>
-        <div className="mt-auto border-t border-white/10 p-4 shrink-0">
-          <form action="/api/admin/logout" method="POST">
-            <button
-              type="submit"
-              className="w-full rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white text-left min-h-[44px] flex items-center gap-3 transition-colors"
+      {/* Sidebar + content row */}
+      <div className="flex flex-1 min-h-0">
+        {/* Mobile overlay */}
+        <div
+          className={cn(
+            "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity lg:hidden",
+            sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
+          )}
+          onClick={() => setSidebarOpen(false)}
+          role="presentation"
+          aria-hidden
+        />
+        <aside
+          className={cn(
+            "fixed top-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col bg-brand-dark shadow-2xl transition-transform duration-200 ease-out lg:static lg:z-0 lg:h-auto lg:w-64 lg:shrink-0 lg:translate-x-0 lg:shadow-none",
+            "border-r border-white/10",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          )}
+        >
+          {/* Sidebar header */}
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
+            <Link
+              href="/"
+              className="flex items-center gap-3 min-w-0 rounded-xl overflow-hidden p-1 -m-1 hover:bg-white/5 transition-colors"
+              aria-label={`${brand.logoAlt} home`}
             >
-              <LogOut className="h-5 w-5 shrink-0 text-white/60" aria-hidden />
-              Sign out
+              <Image
+                src={brand.logoNavbarPath ?? brand.logoPath}
+                alt={brand.logoAlt}
+                width={40}
+                height={40}
+                className="h-10 w-10 shrink-0 object-contain rounded-xl"
+              />
+              <span className="text-xs font-medium text-brand-primary truncate">Admin</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(false)}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white/80 hover:bg-white/10 hover:text-white lg:hidden transition-colors"
+              aria-label="Close menu"
+            >
+              <X className="h-5 w-5" aria-hidden />
             </button>
-          </form>
-        </div>
-      </aside>
+          </div>
+          <nav className="flex-1 overflow-y-auto p-4 flex flex-col min-h-0">
+            <NavLinks pathname={pathname} onLinkClick={() => setSidebarOpen(false)} />
+          </nav>
+          <div className="mt-auto border-t border-white/10 p-4 shrink-0">
+            <form action="/api/admin/logout" method="POST">
+              <button
+                type="submit"
+                className="w-full rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white text-left min-h-[44px] flex items-center gap-3 transition-colors"
+              >
+                <LogOut className="h-5 w-5 shrink-0 text-white/60" aria-hidden />
+                Sign out
+              </button>
+            </form>
+          </div>
+        </aside>
 
-      {/* Main content: full width on Calendars for a big readable calendar, constrained on other pages */}
-      <main className="min-w-0 flex-1 overflow-auto py-6 px-4 sm:py-8 sm:px-6 lg:px-8">
-        <div className={cn("mx-auto w-full", pathname === "/admin" ? "max-w-6xl" : (pathname?.includes("/admin/calendars") ||  pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
-          {children}
-        </div>
-      </main>
+        {/* Main content: full width on Calendars for a big readable calendar, constrained on other pages */}
+        <main className="min-w-0 flex-1 overflow-auto py-6 px-4 sm:py-8 sm:px-6 lg:px-8">
+          <div className={cn("mx-auto w-full", pathname === "/admin" ? "max-w-6xl" : (pathname?.includes("/admin/calendars") ||  pathname?.includes("/admin/emails")) ? "max-w-none" : "max-w-4xl")}>
+            {children}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -9,7 +9,7 @@ import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTime, formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import Link from "next/link";
-import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette, Ban, Plus, Trash2, RefreshCw } from "lucide-react";
 import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
 import { AddBookingModal } from "@/app/(site)/admin/(dashboard)/bookings/AddBookingModal";
 
@@ -38,6 +38,10 @@ interface SlotDto {
   boatId?: string;
   /** Experience (listing) id — used for block actions and "listing" label in modal. */
   experienceId?: string;
+  /** Ticketed experience capacity fields — only present on real ticketed slots from the slots API */
+  maxCapacity?: number;
+  spotsBooked?: number;
+  spotsRemaining?: number;
 }
 
 function toDateStr(d: Date): string {
@@ -172,8 +176,14 @@ export default function CalendarsPage() {
   const [experienceDocIdBySlugOrId, setExperienceDocIdBySlugOrId] = useState<Map<string, string>>(new Map());
   const [boatList, setBoatList] = useState<BoatItem[]>([]);
   const [experienceNames, setExperienceNames] = useState<Map<string, string>>(new Map());
+  /** Firestore IDs of ticketed experiences (no listing boats required — must still appear in calendar). */
+  const [ticketedExperienceIds, setTicketedExperienceIds] = useState<Set<string>>(new Set());
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [bookingsBySlotId, setBookingsBySlotId] = useState<Map<string, BookingSummary>>(new Map());
+  /** Secondary map keyed by slotId string — used to enrich real ticketed slots that have bookingId=null. */
+  const [bookingsBySlotKey, setBookingsBySlotKey] = useState<Map<string, BookingSummary>>(new Map());
+  /** Synthetic SlotDto rows built from bookings for experiences (e.g. ticketed) whose slots API doesn't emit per-booking rows. */
+  const [syntheticBookingSlots, setSyntheticBookingSlots] = useState<SlotDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [bookingsLoading, setBookingsLoading] = useState(false);
@@ -189,10 +199,12 @@ export default function CalendarsPage() {
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
   const [rangeBoatId, setRangeBoatId] = useState("");
-  const [rangeSelectStep, setRangeSelectStep] = useState<"from" | "to">("from");
-  const [rangePickerMonth, setRangePickerMonth] = useState<Date>(() => new Date());
   const [rangeLoading, setRangeLoading] = useState(false);
-  const [rangeSectionOpen, setRangeSectionOpen] = useState(false);
+  const [addBlockOpen, setAddBlockOpen] = useState(false);
+  const [blocks, setBlocks] = useState<{ id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }[]>([]);
+  const [blocksLoading, setBlocksLoading] = useState(false);
+  const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
   const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
@@ -229,6 +241,7 @@ export default function CalendarsPage() {
   /** User-assigned boat colors (boatId -> rgb). Persisted in localStorage. */
   const [boatColors, setBoatColors] = useState<Record<string, string>>({});
   const [boatColorsSectionOpen, setBoatColorsSectionOpen] = useState(false);
+  const blockPanelRef = useRef<HTMLDivElement>(null);
 
   /** Resolve color for a boat: custom if set, else default by index. */
   const getBoatColorResolved = useCallback(
@@ -271,8 +284,10 @@ export default function CalendarsPage() {
         docIds.add(docId);
       });
     });
+    // Ticketed experiences have no listing boats but still need calendar visibility
+    ticketedExperienceIds.forEach((id) => docIds.add(id));
     return Array.from(docIds);
-  }, [boatList, experienceDocIdBySlugOrId]);
+  }, [boatList, experienceDocIdBySlugOrId, ticketedExperienceIds]);
 
   const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
 
@@ -304,13 +319,16 @@ export default function CalendarsPage() {
         const expList = await experiencesRes.json();
         const expNameMap = new Map<string, string>();
         const slugOrIdToDocId = new Map<string, string>();
-        (Array.isArray(expList) ? expList : []).forEach((e: { id: string; title?: string; slug?: string }) => {
+        const ticketedIds = new Set<string>();
+        (Array.isArray(expList) ? expList : []).forEach((e: { id: string; title?: string; slug?: string; pricingType?: string }) => {
           expNameMap.set(e.id, e.title ?? e.slug ?? e.id);
           slugOrIdToDocId.set(e.id, e.id);
           if (e.slug && e.slug.trim()) slugOrIdToDocId.set(e.slug.trim(), e.id);
+          if (e.pricingType === "ticketed") ticketedIds.add(e.id);
         });
         setExperienceNames(expNameMap);
         setExperienceDocIdBySlugOrId(slugOrIdToDocId);
+        setTicketedExperienceIds(ticketedIds);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load boats");
@@ -359,24 +377,76 @@ export default function CalendarsPage() {
         { credentials: "include" }
       );
       if (!res.ok) throw new Error("Failed to load bookings");
-      const list = await res.json();
+      const data = await res.json();
+      type RawBooking = {
+        id: string;
+        slotId?: string | null;
+        experienceId?: string | null;
+        customer?: { name?: string; email?: string };
+        boatName?: string | null;
+        pricing?: { totalCents?: number };
+        status?: string;
+      };
+      const list = (Array.isArray(data) ? data : Array.isArray(data?.bookings) ? data.bookings : []) as RawBooking[];
       const map = new Map<string, BookingSummary>();
-      const statuses = [...BOOKING_STATUSES_SLOT_TAKEN];
-      (Array.isArray(list) ? list : [])
-        .filter((b: { status?: string }) => typeof b.status === "string" && (statuses as readonly string[]).includes(b.status))
-        .forEach((b: { id: string; customer?: { name?: string; email?: string }; boatName?: string | null; pricing?: { totalCents?: number }; status?: string }) => {
-          map.set(b.id, {
+      // Secondary map keyed by "experienceId:slotId" — avoids cross-experience false matches.
+      // Only used to enrich ticketed slots whose bookingId is always null in the slot grid.
+      const bySlotKey = new Map<string, BookingSummary>();
+      const statuses = Array.from(BOOKING_STATUSES_SLOT_TAKEN) as string[];
+      list
+        .filter((b) => typeof b.status === "string" && statuses.includes(b.status))
+        .forEach((b) => {
+          const summary: BookingSummary = {
             bookingId: b.id,
             customerName: b.customer?.name ?? "",
             customerEmail: b.customer?.email ?? "",
             boatName: b.boatName ?? null,
             totalCents: b.pricing?.totalCents ?? 0,
             status: b.status ?? "",
-          });
+          };
+          map.set(b.id, summary);
+          // Index by experienceId:slotId so only the correct experience's ticketed slots match
+          if (b.slotId && b.experienceId) bySlotKey.set(`${b.experienceId}:${b.slotId}`, summary);
         });
       setBookingsBySlotId(map);
+      setBookingsBySlotKey(bySlotKey);
+      // Synthesize SlotDto entries for bookings whose slotId has no corresponding slot in the
+      // current `slots` array (ticketed experiences with multiple departure times per day).
+      // Store them so enrichedSlots can merge them in.
+      const syntheticRaw = list.filter((b) => typeof b.status === "string" && statuses.includes(b.status) && !!b.slotId);
+      setSyntheticBookingSlots(
+        syntheticRaw.flatMap((b) => {
+          const sid = b.slotId!;
+          const parsed = parseSlotId(sid) ?? (() => {
+            const cleaned = sid.replace(/\s/g, "");
+            const parts = cleaned.split("-");
+            if (parts.length === 5) {
+              const norm = `${parts[0]}-${parts[1].padStart(2,"0")}-${parts[2].padStart(2,"0")}-${parts[3]}-${parts[4]}`;
+              return parseSlotId(norm);
+            }
+            return null;
+          })();
+          if (!parsed) return [];
+          try {
+            const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+            return [{
+              id: sid,
+              dateStr: parsed.dateStr,
+              startAt: start.toISOString(),
+              endAt: end.toISOString(),
+              status: "booked" as SlotStatus,
+              holdId: null,
+              bookingId: b.id,
+              experienceId: b.experienceId ?? undefined,
+              bookingSummary: b.experienceId ? (bySlotKey.get(`${b.experienceId}:${sid}`) ?? null) : null,
+            } satisfies SlotDto];
+          } catch { return []; }
+        })
+      );
     } catch {
       setBookingsBySlotId(new Map());
+      setBookingsBySlotKey(new Map());
+      setSyntheticBookingSlots([]);
     } finally {
       setBookingsLoading(false);
     }
@@ -404,28 +474,44 @@ export default function CalendarsPage() {
   }, [bookingDetailOpen, bookingDetailId]);
 
   const enrichedSlots = useMemo(() => {
-    return slots.map((s) => ({
+    // Composite key experienceId:slotId — slot ids alone are NOT globally unique across experiences
+    // (a charter boat and the sunset cruise can both have "2026-02-23-19-4")
+    const realSlotKeys = new Set(slots.map((s) => `${s.experienceId ?? ""}:${s.id}`));
+    // Enrich real slots with booking summaries.
+    // Fallback to experienceId:slotId keyed map ONLY for ticketed slots (bookingId=null in grid).
+    // Restricting to ticketed prevents cross-experience false matches for charter slots.
+    const enriched = slots.map((s) => ({
       ...s,
-      bookingSummary: s.bookingId ? bookingsBySlotId.get(s.bookingId) ?? null : null,
+      bookingSummary:
+        (s.bookingId ? (bookingsBySlotId.get(s.bookingId) ?? null) : null) ??
+        (ticketedExperienceIds.has(s.experienceId ?? "") && s.experienceId
+          ? (bookingsBySlotKey.get(`${s.experienceId}:${s.id}`) ?? null)
+          : null),
     }));
-  }, [slots, bookingsBySlotId]);
+    // Merge in synthetic booking slots for entries not already covered by the real grid
+    const extras = syntheticBookingSlots.filter((s) => !realSlotKeys.has(`${s.experienceId ?? ""}:${s.id}`));
+    const combined = [...enriched, ...extras];
+    return combined;
+  }, [slots, bookingsBySlotId, bookingsBySlotKey, syntheticBookingSlots, ticketedExperienceIds]);
 
   const filteredSlots = useMemo(() => {
     if (selectedBoatIds.size === 0) return enrichedSlots;
-    return enrichedSlots.filter((s) => s.boatId && selectedBoatIds.has(s.boatId));
+    // Always show ticketed slots (no boatId); only filter charter slots by boat
+    return enrichedSlots.filter((s) => !s.boatId || selectedBoatIds.has(s.boatId));
   }, [enrichedSlots, selectedBoatIds]);
 
   const slotsByDate = useMemo(() => {
-    const map = new Map<string, { open: number; held: number; booked: number; blocked: number; slots: SlotDto[] }>();
+    const map = new Map<string, { open: number; held: number; booked: number; slots: SlotDto[] }>();
     for (const s of filteredSlots) {
       const day = getSlotCalendarDate(s);
-      if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0, slots: [] });
+      if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, slots: [] });
       const entry = map.get(day)!;
       entry.slots.push(s);
       if (s.status === "open") entry.open++;
       else if (s.status === "held") entry.held++;
       else if (s.status === "booked" && s.bookingSummary) entry.booked++;
-      else entry.blocked++;
+      // "blocked" slots from the charter slot grid include booking-overlap entries;
+      // we intentionally skip those here — admin block counts come from the blocks state.
     }
     map.forEach((entry) => entry.slots.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
@@ -433,6 +519,26 @@ export default function CalendarsPage() {
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  /**
+   * Set of calendar days that have at least one admin-created block.
+   * Uses a Set rather than a count because blocking a day creates one doc per boat,
+   * so a count would show "3 blocked" for a single logically-blocked day.
+   */
+  const adminBlockedDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const block of blocks) {
+      const start = new Date(block.startAt);
+      const end = new Date(block.endAt);
+      const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+      const endDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
+      while (cur <= endDay) {
+        set.add(toDateStr(cur));
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+    }
+    return set;
+  }, [blocks]);
 
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
@@ -450,7 +556,7 @@ export default function CalendarsPage() {
       openCount: number;
       bookedCount: number;
       heldCount: number;
-      blockedCount: number;
+      isBlocked: boolean;
     }[] = [];
     const pushCell = (dateStr: string, day: number, isCurrentMonth: boolean, isPast: boolean) => {
       const entry = slotsByDate.get(dateStr);
@@ -462,7 +568,7 @@ export default function CalendarsPage() {
         openCount: entry?.open ?? 0,
         bookedCount: entry?.booked ?? 0,
         heldCount: entry?.held ?? 0,
-        blockedCount: entry?.blocked ?? 0,
+        isBlocked: adminBlockedDays.has(dateStr),
       });
     };
     for (let i = 0; i < startPad; i++) {
@@ -479,40 +585,11 @@ export default function CalendarsPage() {
       pushCell(toDateStr(d), d.getDate(), false, true);
     }
     return cells;
-  }, [calendarMonth, slotsByDate, todayStr]);
-
-  /** Compact day grid for range picker (no slot counts). */
-  const rangePickerDays = useMemo(() => {
-    const year = rangePickerMonth.getFullYear();
-    const month = rangePickerMonth.getMonth();
-    const first = new Date(year, month, 1);
-    const last = new Date(year, month + 1, 0);
-    const startPad = first.getDay();
-    const daysInMonth = last.getDate();
-    const totalCells = Math.ceil((startPad + daysInMonth) / 7) * 7;
-    const cells: { dateStr: string; day: number; isCurrentMonth: boolean; isPast: boolean }[] = [];
-    for (let i = 0; i < startPad; i++) {
-      const d = new Date(year, month, 1 - (startPad - i));
-      cells.push({ dateStr: toDateStr(d), day: d.getDate(), isCurrentMonth: false, isPast: toDateStr(d) < todayStr });
-    }
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      cells.push({ dateStr, day, isCurrentMonth: true, isPast: dateStr < todayStr });
-    }
-    for (let i = 1; i <= totalCells - cells.length; i++) {
-      const d = new Date(year, month + 1, i);
-      cells.push({ dateStr: toDateStr(d), day: d.getDate(), isCurrentMonth: false, isPast: true });
-    }
-    return cells;
-  }, [rangePickerMonth, todayStr]);
+  }, [calendarMonth, slotsByDate, todayStr, adminBlockedDays]);
 
   useEffect(() => {
     if (boatList.length === 1 && !rangeBoatId) setRangeBoatId(boatList[0].id);
   }, [boatList, rangeBoatId]);
-
-  useEffect(() => {
-    if (rangeSectionOpen) setRangePickerMonth(calendarMonth);
-  }, [rangeSectionOpen, calendarMonth]);
 
   /** Slots that have a booking (booked or blocked with a booking) — shown on each calendar day card. */
   /** Only slots that have a confirmed booking in our bookings list (single source of truth). */
@@ -544,6 +621,30 @@ export default function CalendarsPage() {
     });
     return map;
   }, [bookedSlotsByDay]);
+
+  /**
+   * Real ticketed slots grouped by day — each entry has spotsBooked/maxCapacity from the slots API.
+   * Used to show one capacity pill per departure on the calendar cell instead of per-customer cards.
+   */
+  const ticketedCapacityByDay = useMemo(() => {
+    const map = new Map<string, SlotDto[]>();
+    // Deduplicate by experienceId:slotId — the slots API may return one slot per boat
+    // for ticketed experiences that have listing boats assigned.
+    const seen = new Set<string>();
+    for (const s of filteredSlots) {
+      if (!ticketedExperienceIds.has(s.experienceId ?? "")) continue;
+      if (typeof s.spotsBooked !== "number") continue; // only real ticketed slots (not synthetic)
+      if ((s.spotsBooked ?? 0) === 0) continue; // only show when tickets have been purchased
+      const dedupeKey = `${s.experienceId}:${s.id}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const day = getSlotCalendarDate(s);
+      if (!map.has(day)) map.set(day, []);
+      map.get(day)!.push(s);
+    }
+    map.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
+    return map;
+  }, [filteredSlots, ticketedExperienceIds]);
 
   const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate)?.slots ?? [] : [];
 
@@ -699,13 +800,7 @@ export default function CalendarsPage() {
 
   const blockRange = async () => {
     if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd) return;
-    if (boatList.length > 0 && !rangeBoatId) {
-      setError("Please select a boat.");
-      return;
-    }
-    const start = new Date(rangeStart + "T00:00:00");
-    const end = new Date(rangeEnd + "T00:00:00");
-    if (start > end) {
+    if (rangeStart > rangeEnd) {
       setError("Start date must be before end date.");
       return;
     }
@@ -713,7 +808,7 @@ export default function CalendarsPage() {
     setError(null);
     try {
       const boatIds = rangeBoatId ? [rangeBoatId] : undefined;
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      for (let d = new Date(rangeStart + "T00:00:00"); d <= new Date(rangeEnd + "T00:00:00"); d.setDate(d.getDate() + 1)) {
         const dateStr = toDateStr(d);
         if (dateStr < todayStr) continue;
         for (const experienceId of uniqueExperienceIds) {
@@ -728,6 +823,10 @@ export default function CalendarsPage() {
         }
       }
       await fetchSlots();
+      await fetchBlocks();
+      setAddBlockOpen(false);
+      setRangeStart("");
+      setRangeEnd("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to block range");
     } finally {
@@ -735,64 +834,99 @@ export default function CalendarsPage() {
     }
   };
 
-  const handleRangePickerDateClick = (dateStr: string) => {
-    if (rangeSelectStep === "from") {
-      setRangeStart(dateStr);
-      setRangeEnd(dateStr);
-      setRangeSelectStep("to");
-    } else {
-      if (dateStr < rangeStart) {
-        setRangeEnd(rangeStart);
-        setRangeStart(dateStr);
-      } else {
-        setRangeEnd(dateStr);
-      }
-      setRangeSelectStep("from");
-    }
-  };
-
-  const unblockRange = async () => {
-    if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd) return;
-    if (boatList.length > 0 && !rangeBoatId) {
-      setError("Please select a boat.");
-      return;
-    }
-    const start = new Date(rangeStart + "T00:00:00");
-    const end = new Date(rangeEnd + "T00:00:00");
-    if (start > end) {
-      setError("Start date must be before end date.");
-      return;
-    }
-    setRangeLoading(true);
-    setError(null);
+  const fetchBlocks = useCallback(async () => {
+    if (uniqueExperienceIds.length === 0) { setBlocks([]); return; }
+    setBlocksLoading(true);
     try {
-      const boatIds = rangeBoatId ? [rangeBoatId] : undefined;
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateStr = toDateStr(d);
-        for (const experienceId of uniqueExperienceIds) {
-          const res = await fetch("/api/booking/block-date", {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ experienceId, date: dateStr, action: "unblock", boatIds }),
+      const today = toDateStr(new Date());
+      const toDateObj = new Date();
+      toDateObj.setMonth(toDateObj.getMonth() + 3);
+      const toStr = toDateStr(toDateObj);
+      const seen = new Set<string>();
+      const all: { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }[] = [];
+      for (const expId of uniqueExperienceIds) {
+        const res = await fetch(
+          `/api/admin/blocks?experienceId=${encodeURIComponent(expId)}&from=${today}&to=${toStr}`,
+          { credentials: "include" }
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          data.forEach((b: { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }) => {
+            if (!seen.has(b.id)) { seen.add(b.id); all.push(b); }
           });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
         }
       }
+      all.sort((a, b) => a.startAt.localeCompare(b.startAt));
+      setBlocks(all);
+    } catch { setBlocks([]); }
+    finally { setBlocksLoading(false); }
+  }, [uniqueExperienceIds]);
+
+  useEffect(() => { fetchBlocks(); }, [fetchBlocks]);
+
+  const deleteBlock = async (id: string) => {
+    setDeletingBlockId(id);
+    try {
+      await fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" });
+      setBlocks((prev) => prev.filter((b) => b.id !== id));
       await fetchSlots();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to unblock range");
-    } finally {
-      setRangeLoading(false);
-    }
+    } catch { /* ignore */ }
+    finally { setDeletingBlockId(null); }
+  };
+
+  const deleteAllBlocks = async () => {
+    if (blocks.length === 0) return;
+    if (!confirm(`Remove all ${blocks.length} block${blocks.length !== 1 ? "s" : ""}? This will unblock every blocked date.`)) return;
+    setDeletingAll(true);
+    try {
+      await Promise.all(
+        blocks.map((b) => fetch(`/api/admin/blocks/${b.id}`, { method: "DELETE", credentials: "include" }))
+      );
+      setBlocks([]);
+      await fetchSlots();
+    } catch { /* ignore */ }
+    finally { setDeletingAll(false); }
+  };
+
+  /** Pre-fill date range inputs and open the form — for quick-action buttons */
+  const openBlockForm = (start: string, end: string) => {
+    setRangeStart(start);
+    setRangeEnd(end);
+    setAddBlockOpen(true);
+  };
+
+  const quickBlockToday = () => openBlockForm(toDateStr(new Date()), toDateStr(new Date()));
+
+  const quickBlockWeekend = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const daysToSat = day === 6 ? 0 : (6 - day + 7) % 7 || 7;
+    const sat = new Date(now); sat.setDate(now.getDate() + daysToSat);
+    const sun = new Date(sat); sun.setDate(sat.getDate() + 1);
+    openBlockForm(toDateStr(sat), toDateStr(sun));
+  };
+
+  const quickBlockThisWeek = () => {
+    const now = new Date();
+    const mon = new Date(now); mon.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    openBlockForm(toDateStr(mon), toDateStr(sun));
   };
 
   const formatCents = (cents: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(cents / 100);
 
+  const fmtBlockDate = (startAt: string, endAt: string): string => {
+    const sDay = startAt.slice(0, 10);
+    const eDay = endAt.slice(0, 10);
+    const fmt = (d: string) =>
+      new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    return sDay === eDay ? fmt(sDay) : `${fmt(sDay)} – ${fmt(eDay)}`;
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20 lg:pb-0">
       {/* Header: title + sync message */}
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div>
@@ -823,16 +957,16 @@ export default function CalendarsPage() {
           Loading…
         </div>
       )}
-      {!loading && boatList.length === 0 && (
+      {!loading && boatList.length === 0 && ticketedExperienceIds.size === 0 && (
         <div className="rounded-xl border border-brand-dark/10 bg-white p-8 text-center text-brand-muted">
           <CalendarIcon className="h-12 w-12 mx-auto mb-3 text-brand-muted/50" />
-          <p className="font-medium text-brand-dark">Add boats to see the calendar</p>
+          <p className="font-medium text-brand-dark">Add boats or experiences to see the calendar</p>
           <p className="text-sm text-brand-muted mt-1 max-w-sm mx-auto">
             Create and assign boats in <strong>Boats</strong>. Bookings from your site will appear here by boat, date, and time.
           </p>
         </div>
       )}
-      {!loading && boatList.length > 0 && (
+      {!loading && (boatList.length > 0 || ticketedExperienceIds.size > 0) && (
         <>
           {/* View toggle: Month | Week (Google Calendar–style) */}
           <div className="flex flex-wrap items-center gap-2">
@@ -853,7 +987,8 @@ export default function CalendarsPage() {
                 type="button"
                 onClick={() => {
                   setCalendarView("week");
-                  const d = new Date(calendarMonth);
+                  // Always jump to the current week when switching to week view
+                  const d = new Date();
                   d.setDate(d.getDate() - d.getDay());
                   d.setHours(0, 0, 0, 0);
                   setWeekStart(d);
@@ -998,7 +1133,7 @@ export default function CalendarsPage() {
 
           {calendarView === "week" ? (
             <AdminCalendarWeekView
-              experienceId={uniqueExperienceIds[0] ?? ""}
+              experienceIds={uniqueExperienceIds}
               boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
               weekStart={weekStart}
               selectedBoatIds={selectedBoatIds.size === 0 ? undefined : Array.from(selectedBoatIds)}
@@ -1010,120 +1145,192 @@ export default function CalendarsPage() {
             />
           ) : (
           <>
-          {/* Quick actions: block range (collapsible) — boat → calendar clicks → Block/Unblock */}
-          <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setRangeSectionOpen((o) => !o)}
-              className="w-full flex items-center justify-between gap-2 px-4 py-3 sm:px-6 text-left text-sm font-medium text-brand-dark hover:bg-brand-bg/30 transition-colors"
-            >
-              <span>Block or unblock a date range</span>
-              {rangeSectionOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </button>
-            {rangeSectionOpen && (
-              <div className="border-t border-brand-dark/10 px-4 py-4 sm:px-6 sm:py-4 space-y-4">
-                {boatList.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-brand-muted mb-2">1. Click boat</p>
-                    <div className="flex flex-wrap gap-2">
-                      {boatList.map((boat) => (
-                        <button
-                          key={boat.id}
-                          type="button"
-                          onClick={() => setRangeBoatId(boat.id)}
-                          className={cn(
-                            "rounded-full px-4 py-2 text-sm font-medium border-2 transition-colors",
-                            rangeBoatId === boat.id
-                              ? "bg-brand-primary text-white border-brand-primary"
-                              : "bg-white border-brand-dark/20 text-brand-dark hover:border-brand-primary/50 hover:bg-brand-primary/5"
-                          )}
-                        >
-                          {boat.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs font-medium text-brand-muted mb-2">2. Click start date, then end date</p>
-                  <div className="inline-block rounded-xl border border-brand-dark/10 bg-brand-bg/30 p-3">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-sm font-semibold text-brand-dark">
-                        {rangePickerMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-                      </span>
-                      <div className="flex gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setRangePickerMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
-                          className="p-1.5 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-white"
-                          aria-label="Previous month"
-                        >
-                          ←
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setRangePickerMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
-                          className="p-1.5 rounded-lg border border-brand-dark/15 text-brand-dark hover:bg-white"
-                          aria-label="Next month"
-                        >
-                          →
-                        </button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-7 gap-0.5">
-                      {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-                        <div key={i} className="text-center text-[10px] font-semibold text-brand-muted py-0.5">
-                          {d}
-                        </div>
-                      ))}
-                      {rangePickerDays.map((cell) => {
-                        const isInRange =
-                          rangeStart &&
-                          rangeEnd &&
-                          cell.dateStr >= rangeStart &&
-                          cell.dateStr <= rangeEnd &&
-                          cell.isCurrentMonth;
-                        const isStart = rangeStart && cell.dateStr === rangeStart;
-                        const isEnd = rangeEnd && cell.dateStr === rangeEnd;
-                        return (
-                          <button
-                            key={cell.dateStr + cell.day}
-                            type="button"
-                            onClick={() => !cell.isPast && handleRangePickerDateClick(cell.dateStr)}
-                            disabled={cell.isPast}
-                            className={cn(
-                              "min-w-[28px] h-8 rounded-md text-sm font-medium transition-colors",
-                              cell.isPast && "text-brand-muted/50 cursor-not-allowed",
-                              !cell.isPast && "hover:bg-brand-primary/20 text-brand-dark cursor-pointer",
-                              cell.isCurrentMonth ? "text-brand-dark" : "text-brand-muted/70",
-                              isInRange && "bg-brand-primary/25 text-brand-dark",
-                              (isStart || isEnd) && "ring-2 ring-brand-primary bg-brand-primary/40 font-bold"
-                            )}
-                          >
-                            {cell.day}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-                {rangeStart && rangeEnd && (
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
-                    <span className="text-sm text-brand-muted">
-                      {rangeStart === rangeEnd
-                        ? new Date(rangeStart + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                        : `${new Date(rangeStart + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(rangeEnd + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}
-                    </span>
-                    <Button variant="outline" size="sm" onClick={blockRange} disabled={rangeLoading || (boatList.length > 0 && !rangeBoatId)}>
-                      {rangeLoading ? "Saving…" : "Block range"}
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={unblockRange} disabled={rangeLoading || (boatList.length > 0 && !rangeBoatId)}>
-                      {rangeLoading ? "Saving…" : "Unblock range"}
-                    </Button>
-                  </div>
+          {/* Blocked dates panel */}
+          <div ref={blockPanelRef} className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
+
+            {/* ── Header ── */}
+            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
+              <div className="flex items-center gap-2">
+                <Ban className="h-4 w-4 text-red-400 shrink-0" aria-hidden />
+                <span className="text-sm font-semibold text-brand-dark">Blocked dates</span>
+                {blocks.length > 0 && (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 leading-none tabular-nums">
+                    {blocks.length}
+                  </span>
                 )}
               </div>
+              <div className="flex items-center gap-2">
+                {blocks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={deleteAllBlocks}
+                    disabled={deletingAll}
+                    className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline disabled:opacity-50 transition-colors"
+                  >
+                    {deletingAll ? "Removing…" : "Unblock all"}
+                  </button>
+                )}
+                <Button
+                  variant={addBlockOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAddBlockOpen((o) => !o)}
+                  className="gap-1.5 text-xs shrink-0"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  {addBlockOpen ? "Close" : "Block dates"}
+                </Button>
+              </div>
+            </div>
+
+            {/* ── Quick-add form ── */}
+            {addBlockOpen && (
+              <div className="border-t border-brand-dark/10 bg-brand-bg/30 px-4 py-4 sm:px-6 space-y-4">
+
+                {/* Quick shortcuts */}
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Quick block</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "Today", action: quickBlockToday },
+                      { label: "This weekend", action: quickBlockWeekend },
+                      { label: "This week", action: quickBlockThisWeek },
+                    ].map(({ label, action }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={action}
+                        className="rounded-full border border-brand-dark/20 bg-white px-3 py-1.5 text-xs font-medium text-brand-dark hover:border-brand-primary/60 hover:bg-brand-primary/5 hover:text-brand-primary transition-colors shadow-sm"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Date range + boat + submit */}
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Custom range</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="block-range-from" className="text-xs text-brand-muted">From</label>
+                      <input
+                        id="block-range-from"
+                        type="date"
+                        value={rangeStart}
+                        aria-label="Block start date"
+                        onChange={(e) => {
+                          setRangeStart(e.target.value);
+                          if (!rangeEnd || e.target.value > rangeEnd) setRangeEnd(e.target.value);
+                        }}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="block-range-to" className="text-xs text-brand-muted">To</label>
+                      <input
+                        id="block-range-to"
+                        type="date"
+                        value={rangeEnd}
+                        min={rangeStart}
+                        aria-label="Block end date"
+                        onChange={(e) => setRangeEnd(e.target.value)}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      />
+                    </div>
+                    {boatList.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        <label htmlFor="block-boat-select" className="text-xs text-brand-muted">Boat</label>
+                        <select
+                          id="block-boat-select"
+                          value={rangeBoatId}
+                          onChange={(e) => setRangeBoatId(e.target.value)}
+                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                        >
+                          <option value="">All boats</option>
+                          {boatList.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={blockRange}
+                      disabled={rangeLoading || !rangeStart || !rangeEnd}
+                      className="gap-1.5 min-h-[36px]"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      {rangeLoading ? "Blocking…" : "Block"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => { setAddBlockOpen(false); setRangeStart(""); setRangeEnd(""); }}
+                      className="min-h-[36px] text-brand-muted"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                  {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+                </div>
+              </div>
             )}
+
+            {/* ── Blocks list as chips ── */}
+            <div className="border-t border-brand-dark/10 px-4 py-4 sm:px-6">
+              {blocksLoading ? (
+                <div className="flex items-center gap-2 text-sm text-brand-muted">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  Loading…
+                </div>
+              ) : blocks.length === 0 ? (
+                <p className="text-sm text-brand-muted">
+                  No upcoming blocks. Use <strong>Block dates</strong> above to block time off.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {blocks.map((block) => {
+                    const boatLabel = block.boatId
+                      ? (boatNames.get(block.boatId) ?? block.boatId)
+                      : null;
+                    const isDeleting = deletingBlockId === block.id;
+                    return (
+                      <div
+                        key={block.id}
+                        className={cn(
+                          "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
+                          isDeleting
+                            ? "border-brand-dark/10 bg-brand-bg/50 text-brand-muted opacity-60"
+                            : "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100"
+                        )}
+                      >
+                        <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                        <span>{fmtBlockDate(block.startAt, block.endAt)}</span>
+                        {boatLabel && (
+                          <span className="opacity-60">· {boatLabel}</span>
+                        )}
+                        {block.note && (
+                          <span className="opacity-60 italic">· {block.note}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => deleteBlock(block.id)}
+                          disabled={isDeleting}
+                          aria-label={`Unblock ${fmtBlockDate(block.startAt, block.endAt)}`}
+                          className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
+                        >
+                          {isDeleting ? (
+                            <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+                          ) : (
+                            <span className="text-[10px] font-bold leading-none">✕</span>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Calendar card */}
@@ -1161,41 +1368,53 @@ export default function CalendarsPage() {
             </div>
 
             <div className="p-4 sm:p-6 space-y-4">
-              {/* Legend: status pills + boat swatches */}
-              <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-brand-muted shrink-0">Status</span>
-                  {(Object.keys(STATUS_COLORS) as (keyof typeof STATUS_COLORS)[]).map((status) => (
+              {/* Legend — each item matches what actually appears on calendar cells */}
+              <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-2.5">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  {/* Available: clean white cell = no bookings yet */}
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-muted">
+                    <span className="h-3 w-3 rounded-sm border border-brand-dark/25 bg-white shrink-0" aria-hidden />
+                    Available
+                  </span>
+                  {/* Booked: left-border card — same style as booking pills on the grid */}
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-muted">
                     <span
-                      key={status}
-                      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border border-black/10 shadow-sm"
-                      style={{
-                        backgroundColor: `${STATUS_COLORS[status].bg}20`,
-                        color: STATUS_COLORS[status].text,
-                        borderColor: `${STATUS_COLORS[status].bg}60`,
-                      }}
-                    >
-                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS[status].bg }} aria-hidden />
-                      {STATUS_COLORS[status].label}
+                      className="h-3 w-4 rounded-sm border-l-[3px] shrink-0"
+                      style={{ borderLeftColor: STATUS_COLORS.booked.bg, backgroundColor: `${STATUS_COLORS.booked.bg}18` }}
+                      aria-hidden
+                    />
+                    Charter Booked
+                  </span>
+                  {/* Ticketed: violet dot + pill = ticketed experience with capacity */}
+                  {ticketedExperienceIds.size > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700">
+                      <span className="h-3 w-4 rounded-sm border-l-[3px] border-violet-500 bg-violet-500/10 shrink-0" aria-hidden />
+                      Tickets (N/cap)
                     </span>
-                  ))}
+                  )}
+                  {/* Held: amber dot — appears on cells with a slot held at checkout */}
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700">
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0 bg-amber-400" aria-hidden />
+                    Held
+                  </span>
+                  {/* Blocked: gray dot — appears on cells that have blocked time slots */}
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0 bg-slate-400" aria-hidden />
+                    Blocked
+                  </span>
+                  {/* Boat color swatches */}
                   {boatList.length > 1 && (
                     <>
-                      <span className="w-px h-5 bg-brand-dark/20 shrink-0" aria-hidden />
-                      <span className="text-xs font-semibold uppercase tracking-wide text-brand-muted shrink-0">Boats</span>
+                      <span className="w-px h-4 bg-brand-dark/20 shrink-0 mx-1" aria-hidden />
                       {boatList.map((boat, idx) => {
                         const c = getBoatColorResolved(boat.id, idx);
                         return (
                           <span
                             key={boat.id}
-                            className="inline-flex items-center gap-1.5 rounded-full pl-1.5 pr-2.5 py-1 text-xs font-medium border border-black/10 shadow-sm"
-                            style={{
-                              backgroundColor: `${c}18`,
-                              color: c,
-                              borderColor: `${c}50`,
-                            }}
+                            className="inline-flex items-center gap-1.5 text-xs font-medium"
+                            style={{ color: c }}
                           >
-                            <span className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-white/80" style={{ backgroundColor: c }} aria-hidden />
+                            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: c }} aria-hidden />
                             {boat.name}
                           </span>
                         );
@@ -1222,7 +1441,10 @@ export default function CalendarsPage() {
                     ))}
                     {calendarDays.map((cell) => {
                     const daySlots = slotsByDate.get(cell.dateStr)?.slots ?? [];
-                    const bookedForDay = uniqueBookedSlotsByDay.get(cell.dateStr) ?? [];
+                    const bookedForDay = (uniqueBookedSlotsByDay.get(cell.dateStr) ?? []).filter(
+                      (s) => !ticketedExperienceIds.has(s.experienceId ?? "")
+                    );
+                    const ticketedForDay = ticketedCapacityByDay.get(cell.dateStr) ?? [];
                     const isPast = cell.isPast;
                     const isToday = cell.isCurrentMonth && cell.dateStr === todayStr;
                     const cellBusy = blocking === `date-${cell.dateStr}`;
@@ -1235,7 +1457,7 @@ export default function CalendarsPage() {
                         }}
                         title={isPast ? "Past" : "View day"}
                         className={cn(
-                          "min-h-[140px] sm:min-h-[160px] flex flex-col rounded-xl border p-2 text-left transition-all overflow-hidden relative",
+                          "min-h-[60px] sm:min-h-[140px] md:min-h-[160px] flex flex-col rounded-xl border p-2 text-left transition-all overflow-hidden relative",
                           "hover:shadow-md hover:ring-1 hover:ring-brand-primary/30",
                           cell.isCurrentMonth ? "text-brand-dark" : "text-brand-muted/70",
                           isPast && "cursor-not-allowed bg-slate-50 opacity-85 border-slate-200",
@@ -1252,37 +1474,58 @@ export default function CalendarsPage() {
                             <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/15 px-1.5 py-0.5 rounded">Today</span>
                           )}
                         </div>
-                        {/* Bookings first — what matters most */}
-                        <div className="flex flex-col gap-1 flex-1 min-h-0">
-                          {bookedForDay.length > 0 ? (
-                            <>
-                              {bookedForDay.slice(0, 3).map((slot, idx) => {
+                        {/* Desktop: booking pills sorted by start time + held/blocked indicators */}
+                        {(() => {
+                          // Merge ticketed capacity slots and charter booking slots, sorted by start time
+                          type CellItem = { kind: "ticketed"; slot: SlotDto } | { kind: "charter"; slot: SlotDto };
+                          const allItems: CellItem[] = [
+                            ...ticketedForDay.map((slot): CellItem => ({ kind: "ticketed", slot })),
+                            ...bookedForDay.map((slot): CellItem => ({ kind: "charter", slot })),
+                          ].sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt));
+                          const totalCount = allItems.length;
+                          const visible = allItems.slice(0, 3);
+                          return (
+                            <div className="hidden sm:flex flex-col gap-1 flex-1 min-h-0">
+                              {visible.map((item, idx) => {
+                                if (item.kind === "ticketed") {
+                                  const slot = item.slot;
+                                  const booked = slot.spotsBooked ?? 0;
+                                  const cap = slot.maxCapacity ?? 0;
+                                  const pct = cap > 0 ? booked / cap : 0;
+                                  const isFull = cap > 0 && slot.spotsRemaining === 0;
+                                  const pillColor = isFull ? "#e11d48" : pct >= 0.75 ? "#d97706" : "#7c3aed";
+                                  return (
+                                    <button
+                                      key={`tick-${slot.id}`}
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); openDayDetail(cell.dateStr); }}
+                                      className="w-full text-left rounded-lg border-l-4 px-2 py-1.5 text-[10px] leading-tight shrink-0 font-medium shadow-sm hover:opacity-90 transition-opacity"
+                                      style={{ borderLeftColor: pillColor, backgroundColor: `${pillColor}12`, color: "rgb(15 23 42)" }}
+                                      title="View ticket bookings"
+                                    >
+                                      <span className="font-bold tabular-nums" style={{ color: pillColor }}>{formatSlotTime(slot)}</span>
+                                      <span className="block truncate" style={{ color: pillColor }}>
+                                        {experienceNames.get(slot.experienceId!) ?? "Tickets"} · {booked}/{cap} guests{isFull && " · FULL"}
+                                      </span>
+                                    </button>
+                                  );
+                                }
+                                const slot = item.slot;
                                 const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
                                 const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
-                                const cellKey = `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}-${slot.bookingId ?? "n"}-${idx}`;
                                 const bookingId = slot.bookingSummary?.bookingId ?? slot.bookingId;
                                 return (
                                   <button
-                                    key={cellKey}
+                                    key={`${slot.id}-${slot.boatId ?? "n"}-${idx}`}
                                     type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (bookingId) {
-                                        setBookingDetailId(bookingId);
-                                        setBookingDetailOpen(true);
-                                      }
-                                    }}
+                                    onClick={(e) => { e.stopPropagation(); if (bookingId) { setBookingDetailId(bookingId); setBookingDetailOpen(true); } }}
                                     className="w-full text-left rounded-lg border-l-4 px-2 py-1.5 text-[10px] leading-tight shrink-0 font-medium shadow-sm hover:opacity-90 transition-opacity"
-                                    style={{
-                                      borderLeftColor: boatColor,
-                                      backgroundColor: `${boatColor}15`,
-                                      color: "rgb(15 23 42)",
-                                    }}
+                                    style={{ borderLeftColor: boatColor, backgroundColor: `${boatColor}15`, color: "rgb(15 23 42)" }}
                                     title={bookingId ? "View booking details" : undefined}
                                   >
                                     <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatSlotTime(slot)}{getSlotDurationLabel(slot) ? ` · ${getSlotDurationLabel(slot)}` : ""}</span>
                                     {(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name) && (
-                                      <span className="block truncate opacity-90 text-brand-dark">{(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name)}</span>
+                                      <span className="block truncate opacity-90 text-brand-dark">{slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name}</span>
                                     )}
                                     {slot.bookingSummary?.customerName && (
                                       <span className="block truncate opacity-80 text-brand-muted">{slot.bookingSummary.customerName}</span>
@@ -1290,19 +1533,46 @@ export default function CalendarsPage() {
                                   </button>
                                 );
                               })}
-                              {bookedForDay.length > 3 && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); openDayDetail(cell.dateStr); }}
-                                  className="text-[10px] font-semibold text-left w-full"
-                                  style={{ color: STATUS_COLORS.booked.bg }}
-                                >
-                                  +{bookedForDay.length - 3} more — view day
+                              {totalCount > 3 && (
+                                <button type="button" onClick={(e) => { e.stopPropagation(); openDayDetail(cell.dateStr); }} className="text-[10px] font-semibold text-left w-full" style={{ color: STATUS_COLORS.booked.bg }}>
+                                  +{totalCount - 3} more — view day
                                 </button>
                               )}
-                            </>
-                          ) : null}
-                          {daySlots.length === 0 && !isPast && <span className="text-[10px] italic text-brand-muted mt-auto">No slots</span>}
+                              {/* Held + Blocked indicators */}
+                              {!isPast && (cell.heldCount > 0 || cell.isBlocked) && (
+                                <div className="mt-auto flex flex-wrap gap-1 pt-0.5">
+                                  {cell.heldCount > 0 && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden />
+                                      {cell.heldCount} held
+                                    </span>
+                                  )}
+                                  {cell.isBlocked && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-full">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" aria-hidden />
+                                      Blocked
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {daySlots.length === 0 && !isPast && <span className="text-[10px] italic text-brand-muted mt-auto">No slots</span>}
+                            </div>
+                          );
+                        })()}
+                        {/* Mobile: colored dots sorted by start time */}
+                        <div className="sm:hidden flex flex-wrap gap-1 mt-1">
+                          {[
+                            ...ticketedForDay.map((slot) => ({ isTicketed: true, slot })),
+                            ...bookedForDay.map((slot) => ({ isTicketed: false, slot })),
+                          ].sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt)).slice(0, 4).map(({ isTicketed, slot }, idx) => {
+                            if (isTicketed) return <span key={`t-${idx}`} className="h-2 w-2 rounded-full shrink-0 bg-violet-500" aria-label="Tickets" />;
+                            const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
+                            const color = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
+                            return <span key={idx} className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} />;
+                          })}
+                          {bookedForDay.length + ticketedForDay.length > 4 && <span className="text-[9px] text-brand-muted">+{bookedForDay.length + ticketedForDay.length - 4}</span>}
+                          {!isPast && cell.heldCount > 0 && <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-label="Held" />}
+                          {!isPast && cell.isBlocked && <span className="h-2 w-2 rounded-full shrink-0 bg-slate-400" aria-label="Blocked" />}
                         </div>
                       </div>
                     );
@@ -1317,6 +1587,7 @@ export default function CalendarsPage() {
           <Dialog
         open={dayDetailOpen}
         onOpenChange={setDayDetailOpen}
+        fullScreenOnMobile
         title={
           selectedDate
             ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", {
@@ -1340,16 +1611,64 @@ export default function CalendarsPage() {
                 </p>
                 {(() => {
                   const dayBookings = uniqueBookedSlotsByDay.get(selectedDate) ?? [];
-                  if (dayBookings.length === 0) {
+                  const charterBookings = dayBookings.filter((s) => !ticketedExperienceIds.has(s.experienceId ?? ""));
+                  const ticketedBookings = dayBookings.filter((s) => ticketedExperienceIds.has(s.experienceId ?? ""));
+                  const capacitySlots = ticketedCapacityByDay.get(selectedDate) ?? [];
+                  const hasAnything = charterBookings.length > 0 || ticketedBookings.length > 0 || capacitySlots.length > 0;
+                  if (!hasAnything) {
                     return (
                       <p className="py-4 text-center text-sm text-brand-muted rounded-xl bg-brand-bg/30 border border-brand-dark/10">
                         No bookings yet. Use &quot;Add booking&quot; below or block the day if needed.
                       </p>
                     );
                   }
+
+                  // Build a unified list of items sorted by start time.
+                  // Each item is either a ticketed capacity summary card or an individual booking row.
+                  type DayItem =
+                    | { kind: "capacity"; slot: SlotDto }
+                    | { kind: "booking"; slot: SlotDto };
+
+                  const items: DayItem[] = [
+                    ...capacitySlots.map((slot): DayItem => ({ kind: "capacity", slot })),
+                    // Individual booking rows: charter + ticketed individual records, deduped vs capacity
+                    ...[...ticketedBookings, ...charterBookings].map((slot): DayItem => ({ kind: "booking", slot })),
+                  ].sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt));
+
                   return (
                     <ul className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
-                      {dayBookings.map((slot) => {
+                      {items.map((item, idx) => {
+                        if (item.kind === "capacity") {
+                          const slot = item.slot;
+                          const booked = slot.spotsBooked ?? 0;
+                          const cap = slot.maxCapacity ?? 0;
+                          const remaining = slot.spotsRemaining ?? Math.max(0, cap - booked);
+                          const pct = cap > 0 ? booked / cap : 0;
+                          const isFull = cap > 0 && remaining === 0;
+                          const barColor = isFull ? "bg-rose-500" : pct >= 0.75 ? "bg-amber-500" : "bg-violet-500";
+                          return (
+                            <li key={`cap-${slot.id}-${idx}`} className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="font-semibold text-violet-800 text-sm">
+                                  {experienceNames.get(slot.experienceId!) ?? "Ticketed Experience"}
+                                </span>
+                                <span className={cn("text-xs font-bold px-2 py-0.5 rounded-full", isFull ? "bg-rose-100 text-rose-700" : pct >= 0.75 ? "bg-amber-100 text-amber-700" : "bg-violet-100 text-violet-700")}>
+                                  {isFull ? "FULL" : `${remaining} left`}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-xs text-violet-700 mb-2">
+                                <span className="font-medium">{formatSlotTime(slot)}</span>
+                                <span>·</span>
+                                <span className="font-bold">{booked} / {cap} guests booked</span>
+                              </div>
+                              <div className="w-full bg-violet-100 rounded-full h-1.5">
+                                <div className={cn("h-1.5 rounded-full transition-all", barColor)} style={{ width: `${Math.min(100, pct * 100)}%` }} />
+                              </div>
+                            </li>
+                          );
+                        }
+
+                        const slot = item.slot;
                         const summary = slot.bookingSummary;
                         const bookingId = summary?.bookingId ?? slot.bookingId;
                         const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
@@ -1357,7 +1676,7 @@ export default function CalendarsPage() {
                         const expName = slot.experienceId && experienceNames.has(slot.experienceId) ? experienceNames.get(slot.experienceId) : null;
                         return (
                           <li
-                            key={bookingId ?? `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}`}
+                            key={bookingId ?? `${slot.id}-${slot.boatId ?? "n"}-${slot.experienceId ?? "n"}-${idx}`}
                             className={cn(
                               "rounded-xl border-2 border-brand-dark/10 bg-white overflow-hidden transition-colors",
                               bookingId && "hover:border-brand-primary/30 hover:shadow-sm cursor-pointer"
@@ -1660,6 +1979,23 @@ export default function CalendarsPage() {
           fetchSlots();
         }}
       />
+
+      {/* Mobile sticky bottom bar */}
+      <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 flex gap-2 bg-white border-t border-brand-dark/10 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+        <Button
+          onClick={() => blockPanelRef.current?.scrollIntoView({ behavior: "smooth" })}
+          className="flex-1 min-h-[44px] gap-1.5"
+          variant="outline"
+        >
+          <Lock className="h-4 w-4" /> Add Block
+        </Button>
+        <Button
+          onClick={() => setAddBookingOpen(true)}
+          className="flex-1 min-h-[44px] gap-1.5"
+        >
+          <CalendarIcon className="h-4 w-4" /> Add Booking
+        </Button>
+      </div>
     </div>
   );
 }

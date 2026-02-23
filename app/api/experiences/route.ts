@@ -15,6 +15,10 @@ export interface ExperienceListItem {
   fromPriceCents: number | null;
   active: boolean;
   sortOrder?: number;
+  pricingType?: "charter" | "ticketed";
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 export async function GET() {
@@ -44,6 +48,10 @@ export async function GET() {
         fromPriceCents,
         active: exp.active ?? true,
         sortOrder: exp.sortOrder,
+        ...(exp.pricingType && { pricingType: exp.pricingType }),
+        ...(exp.pricingType === "ticketed" && exp.maxCapacity != null && { maxCapacity: exp.maxCapacity }),
+        ...(exp.pricingType === "ticketed" && exp.departureHour != null && { departureHour: exp.departureHour }),
+        ...(exp.pricingType === "ticketed" && exp.departureMinute != null && { departureMinute: exp.departureMinute }),
       });
     }
     // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)

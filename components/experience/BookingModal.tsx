@@ -14,6 +14,10 @@ interface BookingData {
   addons: { id: string; name: string; priceCents: number; type: "toggle" | "quantity" | "tip"; maxQty?: number }[];
   maxGuests: number;
   petsMax: number;
+  pricingType?: "charter" | "ticketed";
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 interface BookingModalProps {
@@ -54,6 +58,10 @@ export function BookingModal({
           addons: data.addons ?? [],
           maxGuests: data.experience?.maxGuests ?? 14,
           petsMax: data.experience?.petsMax ?? 0,
+          pricingType: data.experience?.pricingType,
+          maxCapacity: data.experience?.maxCapacity,
+          departureHour: data.experience?.departureHour,
+          departureMinute: data.experience?.departureMinute,
         });
       })
       .finally(() => {
@@ -101,7 +109,7 @@ export function BookingModal({
       onOpenChange={onOpenChange}
       title={data ? data.experienceName : "Book now"}
       description={data ? "Choose your date and time, add your details, then pay. Your slot is held for 10 minutes." : undefined}
-      className="max-w-lg sm:max-w-xl md:max-w-2xl w-full max-h-[90dvh] sm:max-h-[88vh]"
+      className="w-full h-[100dvh] max-h-[100dvh] sm:h-auto sm:max-w-xl sm:max-h-[90vh] md:max-w-2xl overflow-y-auto"
     >
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden -mx-2 px-2">
         {loading && (
@@ -119,6 +127,10 @@ export function BookingModal({
             addons={data.addons}
             maxGuests={data.maxGuests}
             petsMax={data.petsMax}
+            pricingType={data.pricingType}
+            maxCapacity={data.maxCapacity}
+            departureHour={data.departureHour}
+            departureMinute={data.departureMinute}
             initialDate={initialDate ?? undefined}
             className="border-0 shadow-none p-0 rounded-none"
           />

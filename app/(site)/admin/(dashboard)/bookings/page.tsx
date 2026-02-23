@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
 import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
@@ -283,7 +283,7 @@ export default function AdminBookingsPage() {
   // Calendar shows only confirmed bookings (paid, deposit_paid, final_due, final_paid, final_processing).
   // Excludes canceled, refunded, final_failed, final_requires_action so the calendar isn’t cluttered with non-trips.
   const confirmedForCalendar = filteredList.filter((b) =>
-    BOOKING_STATUSES_SLOT_TAKEN.includes(b.status as (typeof BOOKING_STATUSES_SLOT_TAKEN)[number])
+    BOOKING_STATUSES_SLOT_TAKEN.has(b.status as BookingStatus)
   );
   const calendarBookings: AdminBookingCalendarItem[] = confirmedForCalendar.map((b) => ({
     id: b.id,
@@ -483,84 +483,129 @@ export default function AdminBookingsPage() {
       )}
 
       {!loading && !error && list.length > 0 && filteredList.length > 0 && viewMode === "list" && (
-        <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
-          {customerSearch.trim() && (
-            <p className="px-4 py-2 text-xs text-brand-muted bg-brand-bg/50 border-b border-brand-dark/10">
-              Showing {filteredList.length} of {list.length} bookings
-            </p>
-          )}
-          <div className="overflow-x-auto -mx-px">
-            <table className="w-full min-w-[800px] text-sm">
-              <thead>
-                <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Trip</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Booked</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Party</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Amount</th>
-                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredList.map((b) => (
-                  <tr
-                    key={b.id}
-                    onClick={() => {
-                      setSelectedBooking(b);
-                      setDetailOpen(true);
-                    }}
-                    className="border-b border-brand-dark/5 hover:bg-brand-primary/5 cursor-pointer transition-all duration-200 ease-out hover:shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
-                  >
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark whitespace-nowrap">
-                      {b.startDate
-                        ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                        : "—"}
-                      {(b.startTime ?? b.endTime) && (
-                        <span className="block text-brand-muted text-xs mt-0.5">
-                          {[b.startTime, b.endTime].filter(Boolean).join(" – ")}
-                          {b.durationHours != null && ` (${b.durationHours}h)`}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap text-xs">
-                      {b.createdAt
-                        ? new Date(b.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      {b.experienceName}
-                      {b.boatName && <span className="block text-brand-muted text-xs">{b.boatName}</span>}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
-                      {b.partySize != null ? `${b.partySize} guest${b.partySize !== 1 ? "s" : ""}` : "—"}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4">
-                      <span className="font-medium text-brand-dark">{b.customer?.name || "—"}</span>
-                      <span className="block text-brand-muted text-xs truncate max-w-[180px] sm:max-w-none">{b.customer?.email}</span>
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">
-                      {b.pricing ? formatCents(b.pricing.totalCents) : "—"}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                          b.status === "paid"
-                            ? "bg-green-100 text-green-800"
-                            : b.status === "canceled"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-gray-100 text-gray-800"
-                        }`}
-                      >
-                        {b.status}
-                      </span>
-                    </td>
+        <>
+          {/* Desktop table */}
+          <div className="hidden md:block rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
+            {customerSearch.trim() && (
+              <p className="px-4 py-2 text-xs text-brand-muted bg-brand-bg/50 border-b border-brand-dark/10">
+                Showing {filteredList.length} of {list.length} bookings
+              </p>
+            )}
+            <div className="overflow-x-auto -mx-px">
+              <table className="w-full min-w-[800px] text-sm">
+                <thead>
+                  <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Trip</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Booked</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Party</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark">Amount</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filteredList.map((b) => (
+                    <tr
+                      key={b.id}
+                      onClick={() => {
+                        setSelectedBooking(b);
+                        setDetailOpen(true);
+                      }}
+                      className="border-b border-brand-dark/5 hover:bg-brand-primary/5 cursor-pointer transition-all duration-200 ease-out hover:shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
+                    >
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark whitespace-nowrap">
+                        {b.startDate
+                          ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                          : "—"}
+                        {(b.startTime ?? b.endTime) && (
+                          <span className="block text-brand-muted text-xs mt-0.5">
+                            {[b.startTime, b.endTime].filter(Boolean).join(" – ")}
+                            {b.durationHours != null && ` (${b.durationHours}h)`}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-muted whitespace-nowrap text-xs">
+                        {b.createdAt
+                          ? new Date(b.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        {b.experienceName}
+                        {b.boatName && <span className="block text-brand-muted text-xs">{b.boatName}</span>}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        {b.partySize != null ? `${b.partySize} guest${b.partySize !== 1 ? "s" : ""}` : "—"}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4">
+                        <span className="font-medium text-brand-dark">{b.customer?.name || "—"}</span>
+                        <span className="block text-brand-muted text-xs truncate max-w-[180px] sm:max-w-none">{b.customer?.email}</span>
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-right font-medium text-brand-dark whitespace-nowrap">
+                        {b.pricing ? formatCents(b.pricing.totalCents) : "—"}
+                      </td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            b.status === "paid"
+                              ? "bg-green-100 text-green-800"
+                              : b.status === "canceled"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-gray-100 text-gray-800"
+                          }`}
+                        >
+                          {b.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {/* Mobile card list */}
+          <div className="md:hidden space-y-3">
+            {customerSearch.trim() && (
+              <p className="text-xs text-brand-muted">
+                Showing {filteredList.length} of {list.length} bookings
+              </p>
+            )}
+            {filteredList.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => { setSelectedBooking(b); setDetailOpen(true); }}
+                className="w-full text-left rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 space-y-2 hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-semibold text-brand-dark text-sm">{b.customer?.name || "—"}</span>
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${
+                      b.status === "paid"
+                        ? "bg-green-100 text-green-800"
+                        : b.status === "canceled"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-gray-100 text-gray-800"
+                    }`}
+                  >
+                    {b.status}
+                  </span>
+                </div>
+                <div className="text-xs text-brand-muted">
+                  {b.startDate
+                    ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                    : "—"}
+                  {(b.startTime ?? b.endTime) && ` · ${[b.startTime, b.endTime].filter(Boolean).join(" – ")}`}
+                  {" · "}{b.experienceName}
+                </div>
+                <div className="text-right font-semibold text-brand-dark text-sm">
+                  {b.pricing ? formatCents(b.pricing.totalCents) : "—"}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {!loading && !error && nextCursor && viewMode === "list" && (
@@ -683,6 +728,7 @@ export default function AdminBookingsPage() {
           if (!open) setSelectedBooking(null);
         }}
         title={selectedBooking ? `Booking — ${selectedBooking.customer?.name ?? "Customer"}` : undefined}
+        fullScreenOnMobile
       >
         {selectedBooking && (
           <div className="space-y-6 text-sm max-h-[80vh] overflow-y-auto">

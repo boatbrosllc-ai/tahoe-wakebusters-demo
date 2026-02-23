@@ -12,7 +12,7 @@ import { logEmailSent } from "@/lib/booking/email-log";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
@@ -66,10 +66,11 @@ export async function convertHoldToBooking(
     return { alreadyConverted: true };
   }
 
+  const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
   const hasExperience = !!hold.experienceId;
   const hasBoat = !!hold.boatId;
   const isListingBoatFlow = hasExperience && hasBoat;
-  let slotRef: DocumentReference;
+  let slotRef: DocumentReference | null;
   let experienceName: string;
   let boatNameForEmail: string;
   let locationText: string;
@@ -83,39 +84,91 @@ export async function convertHoldToBooking(
     const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
     const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
     const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-    const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
-    if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-      throw new Error("Experience/boat/rate/slot not found");
+    if (!isSharedHold) {
+      const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
+      if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
+        throw new Error("Experience/boat/rate/slot not found");
+      }
+      const exp = expSnap.data() as Experience;
+      experienceForPricing = exp;
+      boatForPricing = boatSnap.data() as ListingBoat;
+      const boat = boatForPricing as { name?: string };
+      experienceName = exp.title;
+      boatNameForEmail = boat.name ?? exp.title;
+      locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+      cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+      rate = rateSnap.data() as ExperienceRate;
+      slot = slotSnap.data() as Slot;
+      if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
+      slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
+    } else {
+      if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists) {
+        throw new Error("Experience/boat/rate not found");
+      }
+      const exp = expSnap.data() as Experience;
+      experienceForPricing = exp;
+      boatForPricing = boatSnap.data() as ListingBoat;
+      const boat = boatForPricing as { name?: string };
+      experienceName = exp.title;
+      boatNameForEmail = boat.name ?? exp.title;
+      locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+      cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+      rate = rateSnap.data() as ExperienceRate;
+      const parsedShared = parseSlotId(hold.slotId);
+      if (!parsedShared) throw new Error("Invalid slot");
+      const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
+      slot = {
+        startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart },
+        endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd },
+        status: "booked",
+        holdId: null,
+        bookingId: null,
+        updatedAt: { seconds: 0, nanoseconds: 0 },
+      };
+      slotRef = null;
     }
-    const exp = expSnap.data() as Experience;
-    experienceForPricing = exp;
-    boatForPricing = boatSnap.data() as ListingBoat;
-    const boat = boatForPricing as { name?: string };
-    experienceName = exp.title;
-    boatNameForEmail = boat.name ?? exp.title;
-    locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
-    rate = rateSnap.data() as ExperienceRate;
-    slot = slotSnap.data() as Slot;
-    if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
-    slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
   } else if (hasExperience) {
     const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
     const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-    const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
-    if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-      throw new Error("Experience/rate/slot not found");
+    if (!isSharedHold) {
+      const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
+      if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
+        throw new Error("Experience/rate/slot not found");
+      }
+      const exp = expSnap.data() as Experience;
+      experienceForPricing = exp;
+      experienceName = exp.title;
+      boatNameForEmail = exp.title;
+      locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+      cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+      rate = rateSnap.data() as ExperienceRate;
+      slot = slotSnap.data() as Slot;
+      if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
+      slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+    } else {
+      if (!expSnap.exists || !rateSnap.exists) {
+        throw new Error("Experience/rate not found");
+      }
+      const exp = expSnap.data() as Experience;
+      experienceForPricing = exp;
+      experienceName = exp.title;
+      boatNameForEmail = exp.title;
+      locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+      cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+      rate = rateSnap.data() as ExperienceRate;
+      const parsedShared = parseSlotId(hold.slotId);
+      if (!parsedShared) throw new Error("Invalid slot");
+      const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
+      slot = {
+        startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart },
+        endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd },
+        status: "booked",
+        holdId: null,
+        bookingId: null,
+        updatedAt: { seconds: 0, nanoseconds: 0 },
+      };
+      slotRef = null;
     }
-    const exp = expSnap.data() as Experience;
-    experienceForPricing = exp;
-    experienceName = exp.title;
-    boatNameForEmail = exp.title;
-    locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-    cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
-    rate = rateSnap.data() as ExperienceRate;
-    slot = slotSnap.data() as Slot;
-    if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
-    slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
   } else {
     const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
     const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
@@ -197,6 +250,7 @@ export async function convertHoldToBooking(
   const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
     ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
     ...(hold.boatId ? { boatId: hold.boatId } : {}),
+    ...((hold as { bookingMode?: string }).bookingMode ? { bookingMode: (hold as { bookingMode?: string }).bookingMode } : {}),
     slotId: hold.slotId,
     ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
     rateId: hold.rateId,
@@ -217,16 +271,18 @@ export async function convertHoldToBooking(
   };
 
   await db.runTransaction(async (tx) => {
-    const s = await tx.get(slotRef);
-    if (!s.exists) throw new Error("Slot not found");
-    const slotData = s.data() as Slot;
-    if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
-    tx.update(slotRef, {
-      status: "booked",
-      bookingId,
-      holdId: FieldValue.delete(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    if (!isSharedHold && slotRef) {
+      const s = await tx.get(slotRef);
+      if (!s.exists) throw new Error("Slot not found");
+      const slotData = s.data() as Slot;
+      if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
+      tx.update(slotRef, {
+        status: "booked",
+        bookingId,
+        holdId: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
     tx.set(db.collection("bookings").doc(bookingId), booking);
     tx.update(holdRef, { status: "converted" });
   });
@@ -262,6 +318,7 @@ export async function convertHoldToBooking(
     manageLink,
     waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
     waiverGroupSigningUrl: waiverResult?.groupSigningUrl,
+    pricingType: experienceForPricing?.pricingType,
   };
   try {
     await sendBookingConfirmationEmail(booking as Booking, emailContext);

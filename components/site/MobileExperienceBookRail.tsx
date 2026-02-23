@@ -53,7 +53,7 @@ export function MobileExperienceBookRail({
             "shadow-[0_-4px_24px_rgba(0,28,48,0.12)]",
             "px-4 py-3 pb-3"
           )}
-          style={{ bottom: BOTTOM_NAV_HEIGHT }}
+          style={{ bottom: `calc(${BOTTOM_NAV_HEIGHT}px + env(safe-area-inset-bottom, 0px))` }}
         >
           <div className="flex items-center gap-3 max-w-2xl mx-auto">
             <Link

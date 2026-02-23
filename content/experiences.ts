@@ -98,13 +98,19 @@ export function getExperienceBySlug(slug: string): Experience | undefined {
 }
 
 /**
- * Format "from" price for display by experience slug.
+ * Format "from" price for display by experience slug or pricingType.
+ * - Ticketed (via pricingType): "From $X per ticket"
  * - Watersports: "From $600"
  * - Sunset: "From $35 per ticket"
  * - Holiday: "$45 per ticket"
  */
-export function formatExperiencePriceLabel(slug: string | null | undefined, fromPriceCents: number): string {
+export function formatExperiencePriceLabel(
+  slug: string | null | undefined,
+  fromPriceCents: number,
+  pricingType?: "charter" | "ticketed"
+): string {
   const price = (fromPriceCents / 100).toFixed(0);
+  if (pricingType === "ticketed") return `From $${price} per ticket`;
   if (/holiday/i.test(slug ?? "")) return `$${price} per ticket`;
   if (/sunset/i.test(slug ?? "")) return `From $${price} per ticket`;
   return `From $${price}`;

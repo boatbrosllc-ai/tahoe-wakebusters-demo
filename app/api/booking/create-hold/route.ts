@@ -5,6 +5,7 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { getExperienceBySlug } from "@/content/experiences";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
@@ -48,6 +49,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       )
     : [];
   const answers = o.answers != null && typeof o.answers === "object" ? (o.answers as Record<string, string>) : {};
+  const bookingMode: "shared" | "charter" = o.bookingMode === "shared" ? "shared" : "charter";
   return {
     input: {
       boatId: boatId ?? undefined,
@@ -66,6 +68,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       marketingOptIn,
       tipCents,
       discountCode: discountCode || undefined,
+      bookingMode,
     },
   };
 }
@@ -103,24 +106,32 @@ export async function POST(request: NextRequest) {
     const hasExperience = !!input.experienceId;
     const hasBoat = !!input.boatId;
     // When the experience has listing boats, slots live under boats/{boatId}/slots. We must have boatId.
+    // Exception: ticketed experiences don't require a boat — admin assigns boats later.
     if (hasExperience && !hasBoat) {
-      const listingBoatsSnap = await db
-        .collection("boats")
-        .where("isListingBoat", "==", true)
-        .where("active", "==", true)
-        .where("experienceIds", "array-contains", input.experienceId)
-        .limit(1)
-        .get();
-      if (!listingBoatsSnap.empty) {
-        return NextResponse.json(
-          { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
-          { status: 400 }
-        );
+      const expCheckDoc = await db.collection("experiences").doc(input.experienceId!).get();
+      const expCheckData = expCheckDoc.exists ? (expCheckDoc.data() as Experience) : null;
+      const isTicketedExperience = expCheckData?.pricingType === "ticketed";
+      if (!isTicketedExperience) {
+        const listingBoatsSnap = await db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("active", "==", true)
+          .where("experienceIds", "array-contains", input.experienceId)
+          .limit(1)
+          .get();
+        if (!listingBoatsSnap.empty) {
+          return NextResponse.json(
+            { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
+            { status: 400 }
+          );
+        }
       }
     }
     const isListingBoatFlow = hasExperience && hasBoat; // experience slots + boat rates
     const isExperienceOnly = hasExperience && !hasBoat;
     const isLegacyBoat = !hasExperience && hasBoat;
+    let isSharedTicketed = false;
+    let isCharterTicketed = false;
 
     let capacityMax: number;
     let slotsRef: import("firebase-admin").firestore.CollectionReference;
@@ -154,9 +165,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Boat not available" }, { status: 400 });
       }
       capacityMax = getMaxGuestsForExperience(experience);
-      if (input.partySize > capacityMax) {
-        return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
+      if (input.partySize < 1 || input.partySize > capacityMax) {
+        return NextResponse.json({ error: experience.pricingType === "ticketed" ? "Ticket quantity exceeds capacity" : "Party size exceeds capacity" }, { status: 400 });
       }
+      isSharedTicketed = experience.pricingType === "ticketed" && input.bookingMode === "shared";
+      isCharterTicketed = experience.pricingType === "ticketed" && input.bookingMode !== "shared";
       const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
@@ -165,22 +178,83 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
+      if (isSharedTicketed || isCharterTicketed) {
+        const parsedSlotForCheck = parseSlotId(input.slotId);
+        if (parsedSlotForCheck) {
+          const dateStr = parsedSlotForCheck.dateStr;
+          const now = Date.now();
+          const [booksSnap, holdsSnap] = await Promise.all([
+            db.collection("bookings").where("experienceId", "==", expId).get(),
+            db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").get(),
+          ]);
+          if (isSharedTicketed) {
+            let sold = 0;
+            for (const doc of booksSnap.docs) {
+              const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
+              if (!b.slotId || typeof b.partySize !== "number") continue;
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              const p = parseSlotId(b.slotId);
+              if (p?.dateStr !== dateStr) continue;
+              if (b.bookingMode === "charter") {
+                return NextResponse.json({ error: "This departure is reserved as a private charter" }, { status: 409 });
+              }
+              sold += b.partySize;
+            }
+            let onHold = 0;
+            for (const doc of holdsSnap.docs) {
+              const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
+              if (!h.slotId || typeof h.partySize !== "number") continue;
+              if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
+              const p = parseSlotId(h.slotId);
+              if (p?.dateStr === dateStr) onHold += h.partySize;
+            }
+            const capacityForCheck = experience.maxCapacity ?? capacityMax;
+            if (sold + onHold + input.partySize > capacityForCheck) {
+              const available = Math.max(0, capacityForCheck - sold - onHold);
+              return NextResponse.json(
+                { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
+                { status: 409 }
+              );
+            }
+          } else {
+            for (const doc of booksSnap.docs) {
+              const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
+              if (!b.slotId) continue;
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              const p = parseSlotId(b.slotId);
+              if (p?.dateStr !== dateStr) continue;
+              if (b.bookingMode === "shared") {
+                return NextResponse.json({ error: "Shared tickets have already been sold for this departure" }, { status: 409 });
+              }
+            }
+          }
+        }
+      }
       slotsRef = db.collection("boats").doc(boatId).collection("slots");
-      slotRef = slotsRef.doc(input.slotId);
-      const slotDoc = await slotRef.get();
       let slotStart: Date;
-      if (slotDoc.exists) {
-        const slotData = slotDoc.data() as Slot;
-        slotStart = (slotData.startAt as { toDate(): Date }).toDate();
-      } else {
-        const parsed = parseSlotId(input.slotId);
-        if (!parsed) {
+      if (isSharedTicketed) {
+        const parsedShared = parseSlotId(input.slotId);
+        if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
-        if (rate.durationHours !== parsed.durationHours) {
-          return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+        slotStart = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0).start;
+        slotRef = db.collection("holds").doc("_noop");
+      } else {
+        slotRef = slotsRef.doc(input.slotId);
+        const slotDoc = await slotRef.get();
+        if (slotDoc.exists) {
+          const slotData = slotDoc.data() as Slot;
+          slotStart = (slotData.startAt as { toDate(): Date }).toDate();
+        } else {
+          const parsed = parseSlotId(input.slotId);
+          if (!parsed) {
+            return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+          }
+          if (rate.durationHours !== parsed.durationHours) {
+            return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+          }
+          slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
         }
-        slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
       }
       if (!isSeasonalAllowed(experience, slotStart)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
@@ -200,8 +274,61 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
       }
       capacityMax = getMaxGuestsForExperience(experience);
-      if (input.partySize > capacityMax) {
-        return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
+      if (input.partySize < 1 || input.partySize > capacityMax) {
+        return NextResponse.json({ error: experience.pricingType === "ticketed" ? "Ticket quantity exceeds capacity" : "Party size exceeds capacity" }, { status: 400 });
+      }
+      isSharedTicketed = experience.pricingType === "ticketed" && input.bookingMode === "shared";
+      isCharterTicketed = experience.pricingType === "ticketed" && input.bookingMode !== "shared";
+      if (isSharedTicketed || isCharterTicketed) {
+        const parsedSlot = parseSlotId(input.slotId);
+        if (parsedSlot) {
+          const dateStr = parsedSlot.dateStr;
+          const now = Date.now();
+          const [booksSnap, holdsSnap] = await Promise.all([
+            db.collection("bookings").where("experienceId", "==", expId).get(),
+            db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").get(),
+          ]);
+          if (isSharedTicketed) {
+            let sold = 0;
+            for (const doc of booksSnap.docs) {
+              const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
+              if (!b.slotId || typeof b.partySize !== "number") continue;
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              const p = parseSlotId(b.slotId);
+              if (p?.dateStr !== dateStr) continue;
+              if (b.bookingMode === "charter") {
+                return NextResponse.json({ error: "This departure is reserved as a private charter" }, { status: 409 });
+              }
+              sold += b.partySize;
+            }
+            let onHold = 0;
+            for (const doc of holdsSnap.docs) {
+              const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
+              if (!h.slotId || typeof h.partySize !== "number") continue;
+              if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
+              const p = parseSlotId(h.slotId);
+              if (p?.dateStr === dateStr) onHold += h.partySize;
+            }
+            const available = Math.max(0, capacityMax - sold - onHold);
+            if (input.partySize > available) {
+              return NextResponse.json(
+                { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
+                { status: 409 }
+              );
+            }
+          } else {
+            for (const doc of booksSnap.docs) {
+              const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
+              if (!b.slotId) continue;
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              const p = parseSlotId(b.slotId);
+              if (p?.dateStr !== dateStr) continue;
+              if (b.bookingMode === "shared") {
+                return NextResponse.json({ error: "Shared tickets have already been sold for this departure" }, { status: 409 });
+              }
+            }
+          }
+        }
       }
       const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
@@ -212,23 +339,32 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
       slotsRef = db.collection("experiences").doc(expId).collection("slots");
-      slotRef = slotsRef.doc(input.slotId);
-      const slotDocExp = await slotRef.get();
       let slotStartExp: Date;
-      if (slotDocExp.exists) {
-        const slotData = slotDocExp.data() as Slot;
-        slotStartExp = (slotData.startAt as { toDate(): Date }).toDate();
-      } else {
-        const parsed = parseSlotId(input.slotId);
-        if (!parsed) {
+      if (isSharedTicketed) {
+        const parsedShared = parseSlotId(input.slotId);
+        if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
-        const rateDocExp = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
-        const rateData = rateDocExp.exists ? (rateDocExp.data() as ExperienceRate) : null;
-        if (!rateData || rateData.durationHours !== parsed.durationHours) {
-          return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+        slotStartExp = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0).start;
+        slotRef = db.collection("holds").doc("_noop");
+      } else {
+        slotRef = slotsRef.doc(input.slotId);
+        const slotDocExp = await slotRef.get();
+        if (slotDocExp.exists) {
+          const slotData = slotDocExp.data() as Slot;
+          slotStartExp = (slotData.startAt as { toDate(): Date }).toDate();
+        } else {
+          const parsed = parseSlotId(input.slotId);
+          if (!parsed) {
+            return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+          }
+          const rateDocExp = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
+          const rateData = rateDocExp.exists ? (rateDocExp.data() as ExperienceRate) : null;
+          if (!rateData || rateData.durationHours !== parsed.durationHours) {
+            return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+          }
+          slotStartExp = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
         }
-        slotStartExp = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
       }
       if (!isSeasonalAllowed(experience, slotStartExp)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
@@ -270,12 +406,29 @@ export async function POST(request: NextRequest) {
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
     let rateForPricing: typeof rate & { priceCents: number } = rate as typeof rate & { priceCents: number };
     if (experienceForPricing && slotStartForPricing && "priceCents" in rate) {
-      rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number }, slotStartForPricing, experienceForPricing.holidayDates, experienceForPricing.weekendDays, experienceForPricing.friSunDays) } as typeof rate & { priceCents: number };
+      const isTicketedExperience = experienceForPricing.pricingType === "ticketed";
+      let effectivePriceCents: number;
+      if (isTicketedExperience) {
+        // Ticketed: use content fromPriceCents override when set (same source of truth used by
+        // date-prices and effective-price APIs so display and actual charge are consistent).
+        const contentExp = getExperienceBySlug(experienceForPricing.slug ?? "");
+        effectivePriceCents = contentExp?.fromPriceCents ?? (rate as { priceCents: number }).priceCents;
+      } else {
+        effectivePriceCents = getEffectiveRatePriceCents(
+          rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number },
+          slotStartForPricing,
+          experienceForPricing.holidayDates,
+          experienceForPricing.weekendDays,
+          experienceForPricing.friSunDays
+        );
+      }
+      rateForPricing = { ...rate, priceCents: effectivePriceCents } as typeof rate & { priceCents: number };
     }
     const pricing = computePricing({
       rate: rateForPricing,
       addons: addonsForPricing,
       currency: "usd",
+      qty: isSharedTicketed ? input.partySize : 1,
     });
     const tipCents = input.tipCents ?? 0;
     let discountCents = 0;
@@ -310,6 +463,8 @@ export async function POST(request: NextRequest) {
     };
     if (input.experienceId) holdPayload.experienceId = input.experienceId;
     if (input.boatId) holdPayload.boatId = input.boatId;
+    if (experienceForPricing?.pricingType) holdPayload.pricingType = experienceForPricing.pricingType;
+    if (input.bookingMode) holdPayload.bookingMode = input.bookingMode;
     if (tipCents > 0) holdPayload.tipCents = tipCents;
     if (discountCodeApplied && discountCents > 0) {
       holdPayload.discountCode = discountCodeApplied;
@@ -320,6 +475,13 @@ export async function POST(request: NextRequest) {
 
     let reusedHoldId: string | null = null;
     let reusedExpiresAt: Date | null = null;
+
+    if (isSharedTicketed) {
+      await db.collection("holds").doc(holdId).set(holdPayload);
+      const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
+      const response: CreateHoldResponse = { holdId, expiresAt: expiresAt.toISOString(), pricing: responsePricing };
+      return NextResponse.json(response);
+    }
 
     await db.runTransaction(async (tx) => {
       const slotSnap = await tx.get(slotRef);

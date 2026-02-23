@@ -117,6 +117,14 @@ export async function POST(request: NextRequest) {
       rate: rateForPricing as Rate | ExperienceRate,
       addons: addonsForPricing,
       hold,
+      ticketQty: hold.pricingType === "ticketed" && (hold as { bookingMode?: string }).bookingMode === "shared"
+        ? hold.partySize
+        : undefined,
+      unitPriceCents: hold.pricingType === "ticketed"
+        && (hold as { bookingMode?: string }).bookingMode === "shared"
+        && hold.effectiveRateCents != null
+        ? hold.effectiveRateCents
+        : undefined,
     });
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;

@@ -12,6 +12,7 @@ type DialogProps = {
   description?: string;
   children: React.ReactNode;
   className?: string;
+  fullScreenOnMobile?: boolean;
 };
 
 export function Dialog({
@@ -21,6 +22,7 @@ export function Dialog({
   description,
   children,
   className,
+  fullScreenOnMobile,
 }: DialogProps) {
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -54,7 +56,12 @@ export function Dialog({
 
   const overlay = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden min-h-screen pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] overscroll-contain"
+      className={cn(
+        "fixed inset-0 z-[100] flex overflow-hidden min-h-screen overscroll-contain",
+        fullScreenOnMobile
+          ? "items-end sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
+          : "items-center justify-center p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      )}
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? "dialog-title" : undefined}
@@ -66,10 +73,13 @@ export function Dialog({
         onClick={close}
         aria-hidden
       />
-      {/* Panel – centered on mobile and desktop, max height so inner content scrolls */}
+      {/* Panel */}
       <div
         className={cn(
-          "relative z-10 w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] flex flex-col min-h-0 overflow-hidden rounded-2xl bg-white shadow-premium my-auto",
+          "relative z-10 flex flex-col min-h-0 overflow-hidden bg-white shadow-premium",
+          fullScreenOnMobile
+            ? "w-full max-h-[90dvh] rounded-t-2xl rounded-b-none sm:rounded-2xl sm:max-w-lg sm:max-h-[85vh]"
+            : "w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] rounded-2xl my-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}

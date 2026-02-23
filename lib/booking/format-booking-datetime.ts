@@ -80,3 +80,14 @@ export function formatBookingTimeFromIso(iso: string): string {
 export function formatBookingDateTimeFromIso(iso: string): string {
   return formatBookingDateTime(new Date(iso));
 }
+
+/**
+ * Returns the YYYY-MM-DD calendar date for a UTC ISO string in America/Chicago timezone.
+ * Use this instead of iso.slice(0, 10) for slot times — late-evening slots (e.g. 7pm CST)
+ * have a UTC timestamp on the following day, so slicing gives the wrong calendar date.
+ */
+export function isoToChicagoDateStr(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: BOOKING_DISPLAY_TIMEZONE,
+  }).format(new Date(iso));
+}

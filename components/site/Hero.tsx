@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -27,18 +27,6 @@ export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState(false);
-
-  // Start loading the hero video as soon as the component mounts (faster first frame).
-  useEffect(() => {
-    const link = document.createElement("link");
-    link.rel = "preload";
-    link.as = "video";
-    link.href = HERO_VIDEO_SRC_ENCODED;
-    document.head.appendChild(link);
-    return () => {
-      document.head.removeChild(link);
-    };
-  }, []);
 
   // Smooth crossfade: start fade only after video has begun playing so the first frame is painted (avoids poster flash).
   const handleVideoReady = useCallback(() => {

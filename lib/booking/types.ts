@@ -159,6 +159,17 @@ export interface Experience {
   steps?: { label: string; description: string }[];
   /** Gallery category labels (e.g. "Vibes", "Boat", "Lake Days") — one per image or grouped. */
   galleryLabels?: string[];
+  /** charter = flat rate per booking; ticketed = per-person with fixed daily departure. */
+  pricingType?: "charter" | "ticketed";
+  /** Ticketed: maximum tickets sold per departure. */
+  maxCapacity?: number;
+  /** Ticketed: departure time hour in 24h format (0–23). */
+  departureHour?: number;
+  /** Ticketed: departure time minute (0–59). */
+  departureMinute?: number;
+  /** Ticketed: trip duration in hours (e.g. 1 for a 1-hour sunset cruise). Drives slot end time. */
+  tripDurationHours?: number;
+  showSpotsRemaining?: boolean;
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents
@@ -278,6 +289,9 @@ export type HoldStatus = "active" | "expired" | "converted";
 export interface Hold {
   boatId?: string; // legacy
   experienceId?: string;
+  /** Mirrors experience.pricingType at hold creation — used by checkout to build correct Stripe line items. */
+  pricingType?: "charter" | "ticketed";
+  bookingMode?: "shared" | "charter";
   slotId: string;
   rateId: string;
   addonSelections: AddonSelection[];
@@ -333,13 +347,13 @@ export type BookingStatus =
   | "final_failed";
 
 /** Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct). */
-export const BOOKING_STATUSES_SLOT_TAKEN: readonly BookingStatus[] = [
+export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
   "paid",
   "deposit_paid",
   "final_due",
   "final_paid",
   "final_processing",
-];
+]);
 
 /** Display-only card info (never store raw card data). */
 export interface BookingCardDisplay {
@@ -374,6 +388,7 @@ export interface BookingStripe {
 export interface Booking {
   boatId?: string;
   experienceId?: string;
+  bookingMode?: "shared" | "charter";
   slotId: string;
   rateId: string;
   addonSelections: AddonSelection[];
@@ -443,6 +458,7 @@ export interface CreateHoldInput {
   tipCents?: number;
   /** Optional discount code (validated at hold creation). */
   discountCode?: string;
+  bookingMode?: "shared" | "charter";
 }
 
 export interface CreateHoldResponse {
