@@ -152,7 +152,7 @@ export async function GET(request: NextRequest) {
         const tBookingsSnap = await db
           .collection("bookings")
           .where("experienceId", "==", experienceId)
-          .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           .limit(500)
           .get();
         tBookingsSnap.docs.forEach(processBookingForCapacity);
@@ -160,7 +160,7 @@ export async function GET(request: NextRequest) {
           const tBookingsBySlugSnap = await db
             .collection("bookings")
             .where("experienceId", "==", experienceSlug)
-            .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
             .limit(500)
             .get();
           const seenTIds = new Set(tBookingsSnap.docs.map((d) => d.id));
@@ -301,7 +301,7 @@ export async function GET(request: NextRequest) {
         const byIdSnap = await db
           .collection("bookings")
           .where("experienceId", "==", experienceId)
-          .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           .limit(500)
           .get();
         const seenIds = new Set(byIdSnap.docs.map((d) => d.id));
@@ -310,7 +310,7 @@ export async function GET(request: NextRequest) {
           const bySlugSnap = await db
             .collection("bookings")
             .where("experienceId", "==", experienceSlug)
-            .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
             .limit(500)
             .get();
           bySlugSnap.docs.forEach((d) => {
@@ -422,7 +422,7 @@ export async function GET(request: NextRequest) {
       let bookingsSnap = await db
         .collection("bookings")
         .where("experienceId", "==", experienceId)
-        .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+        .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
         .get();
       addBookingsFromQuery(bookingsSnap);
       // Fallback: some bookings store experienceId as experience slug (e.g. "lake-austin-pontoon" or "pontoon"). Include all variants.
@@ -436,7 +436,7 @@ export async function GET(request: NextRequest) {
         const bySlugSnap = await db
           .collection("bookings")
           .where("experienceId", "==", slugVariant)
-          .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           .get();
         addBookingsFromQuery(bySlugSnap);
       }
@@ -662,7 +662,7 @@ export async function GET(request: NextRequest) {
     const legacyBookingsSnap = await db
       .collection("bookings")
       .where("boatId", "==", boatId)
-      .where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+      .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
       .get();
     const legacyBookedSlotIdToBookingId = new Map<string, string>();
     legacyBookingsSnap.docs.forEach((d) => {

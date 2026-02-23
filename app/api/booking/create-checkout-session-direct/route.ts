@@ -189,7 +189,7 @@ export async function POST(request: NextRequest) {
         const slotEndMs = (slot.endAt as { toDate(): Date }).toDate().getTime();
         if (useBoatSlots && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
           }
         } else {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };
@@ -266,7 +266,7 @@ export async function POST(request: NextRequest) {
         // Reject if a paid booking already exists for this boat/experience and time
         if (useBoatSlots && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           );
           for (const doc of paidForBoat.docs) {
             const b = doc.data() as { slotId?: string };
@@ -279,7 +279,7 @@ export async function POST(request: NextRequest) {
           }
         } else if (!useBoatSlots) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", [...BOOKING_STATUSES_SLOT_TAKEN])
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           );
           for (const doc of paidForExp.docs) {
             const b = doc.data() as { slotId?: string };
