@@ -102,6 +102,10 @@ interface ExperienceCalendarSectionProps {
   /** When "dark-card", use the pontoon-style card look (dark bg, white text, compact) in the same spot as BookingPreviewCard. */
   variant?: "default" | "dark-card";
   className?: string;
+  /** Pass from server-rendered experience data to skip fetching pricingType and show the correct UI immediately. */
+  pricingType?: "charter" | "ticketed";
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 export function ExperienceCalendarSection({
@@ -118,6 +122,9 @@ export function ExperienceCalendarSection({
   addonsForDetails,
   variant = "default",
   className,
+  pricingType: pricingTypeProp,
+  departureHour: departureHourProp,
+  departureMinute: departureMinuteProp,
 }: ExperienceCalendarSectionProps) {
   const darkCard = variant === "dark-card";
   const [experienceId, setExperienceId] = useState<string | null>(experienceIdProp ?? null);
@@ -127,9 +134,9 @@ export function ExperienceCalendarSection({
   /** When loading by firestoreSlug, full experience + addons from API (for inline details step when onOpenInModal). */
   const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number } | null>(null);
   const [fetchedAddons, setFetchedAddons] = useState<{ id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[]>([]);
-  const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | undefined>(undefined);
-  const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(undefined);
-  const [fetchedDepartureMinute, setFetchedDepartureMinute] = useState<number | undefined>(undefined);
+  const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | undefined>(pricingTypeProp ?? undefined);
+  const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(departureHourProp ?? undefined);
+  const [fetchedDepartureMinute, setFetchedDepartureMinute] = useState<number | undefined>(departureMinuteProp ?? undefined);
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -150,8 +157,8 @@ export function ExperienceCalendarSection({
   const panel3Ref = useRef<HTMLDivElement>(null);
   const panel4Ref = useRef<HTMLDivElement>(null);
   const panel5Ref = useRef<HTMLDivElement>(null);
-  /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. */
-  const [inlineStepIndex, setInlineStepIndex] = useState(0);
+  /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
+  const [inlineStepIndex, setInlineStepIndex] = useState(() => pricingTypeProp === "ticketed" ? 1 : 0);
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
   const [inlineBoatsLoading, setInlineBoatsLoading] = useState(false);
   const [selectedBoatInline, setSelectedBoatInline] = useState<BoatOption | null>(null);

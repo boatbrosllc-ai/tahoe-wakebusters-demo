@@ -217,6 +217,9 @@ export function ExperienceListingPageContent(props) {
               experienceSlug={experience.slug}
               onOpenInModal={handleOpenInModal}
               variant="dark-card"
+              pricingType={experience.pricingType}
+              departureHour={experience.departureHour}
+              departureMinute={experience.departureMinute}
             />
           </div>
         </div>

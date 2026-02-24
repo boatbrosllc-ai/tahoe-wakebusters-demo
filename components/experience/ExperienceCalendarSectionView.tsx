@@ -266,7 +266,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         </div>
                       ) : (
                         <div className="mt-4 sm:mt-6 space-y-4">
-                          {rates.length > 0 && (
+                          {rates.length > 0 && !isTicketed && (
                             <div>
                               <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Duration</p>
                               <div className="flex flex-wrap gap-2">
