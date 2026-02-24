@@ -204,7 +204,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                 : "rounded-2xl sm:rounded-3xl bg-white p-4 sm:p-6 lg:p-10 shadow-premium border border-brand-dark/5 border-t-4 border-t-brand-primary"
             )}
           >
-            {isTicketed && autoSwitchBanner && (
+            {isTicketed && autoSwitchBanner && !onOpenInModal && (
               <div className="mb-4 flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
                 <span>Shared spots are full — switched to private charter</span>
                 <button
@@ -217,7 +217,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                 </button>
               </div>
             )}
-            {isTicketed && (
+            {isTicketed && !onOpenInModal && (
               <BookingTypeSelector
                 bookingMode={bookingMode}
                 onChange={setBookingMode ?? (() => {})}
