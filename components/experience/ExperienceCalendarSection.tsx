@@ -78,6 +78,7 @@ export interface ExperienceCalendarOpenModalSelection {
   date: string;
   slotId: string;
   boatId?: string;
+  pricingType?: "charter" | "ticketed";
 }
 
 interface ExperienceCalendarSectionProps {
