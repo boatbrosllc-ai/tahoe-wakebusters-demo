@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Image from "next/image";
-import { BookingCalendar } from "@/components/booking/BookingCalendar";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn } from "@/lib/utils";
@@ -274,8 +273,11 @@ export function BookingPageClient() {
             )}
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto">
-            <BookingCalendar />
+          <div className="rounded-2xl border border-brand-dark/10 bg-white p-8 sm:p-10 text-center shadow-soft">
+            <p className="text-brand-dark font-semibold">No experiences available yet</p>
+            <p className="mt-2 text-sm text-brand-muted">
+              Check back soon — experiences will appear here once they are published.
+            </p>
           </div>
         )}
 

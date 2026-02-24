@@ -8,6 +8,7 @@ export interface BookingModalInitialSelection {
   boatId?: string;
   date?: string;
   slotId?: string;
+  pricingType?: "charter" | "ticketed";
 }
 
 type BookingModalContextValue = {

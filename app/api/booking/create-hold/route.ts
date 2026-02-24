@@ -82,6 +82,41 @@ function isSeasonalAllowed(exp: Experience, slotStart: Date): boolean {
   return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
 }
 
+async function hasOverlappingBlock(opts: {
+  db: ReturnType<typeof getDb>;
+  Timestamp: ReturnType<typeof getFirestoreExports>["Timestamp"];
+  experienceId: string;
+  boatId?: string;
+  slotStart: Date;
+  slotEnd: Date;
+  get?: (q: import("firebase-admin").firestore.Query) => Promise<import("firebase-admin").firestore.QuerySnapshot>;
+}): Promise<boolean> {
+  const { db, Timestamp, experienceId, slotStart, slotEnd, get } = opts;
+  const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
+  const slotStartMs = slotStart.getTime();
+  const slotEndMs = slotEnd.getTime();
+  if (!Number.isFinite(slotStartMs) || !Number.isFinite(slotEndMs) || slotEndMs <= slotStartMs) return false;
+
+  const query = db
+    .collection("blocks")
+    .where("experienceId", "==", experienceId)
+    .where("startAt", "<", Timestamp.fromDate(slotEnd));
+
+  const getSnap = get ?? ((q: import("firebase-admin").firestore.Query) => q.get());
+  const snap = await getSnap(query);
+  for (const doc of snap.docs) {
+    const b = doc.data() as { boatId?: string | null; endAt?: { toDate?: () => Date } };
+    const blockBoatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
+    const blockBoatId = blockBoatIdRaw ? blockBoatIdRaw : null;
+    const matchesBoat = boatId ? blockBoatId === boatId || blockBoatId == null : blockBoatId == null;
+    if (!matchesBoat) continue;
+    const endAt = b.endAt?.toDate?.();
+    if (!endAt) continue;
+    if (endAt.getTime() > slotStartMs) return true;
+  }
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const rl = checkRateLimit(getClientKey(request));
@@ -140,6 +175,8 @@ export async function POST(request: NextRequest) {
     let slotRef: import("firebase-admin").firestore.DocumentReference;
     let slotStartForPricing: Date | null = null;
     let experienceForPricing: Experience | null = null;
+    let slotStartForBlock: Date | null = null;
+    let slotEndForBlock: Date | null = null;
     const expId = input.experienceId!;
 
     if (isListingBoatFlow) {
@@ -237,7 +274,15 @@ export async function POST(request: NextRequest) {
         if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
-        slotStart = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0).start;
+        const { start, end } = getSlotStartEnd(
+          parsedShared.dateStr,
+          parsedShared.startHour,
+          parsedShared.durationHours,
+          parsedShared.startMinute ?? 0
+        );
+        slotStart = start;
+        slotStartForBlock = start;
+        slotEndForBlock = end;
         slotRef = db.collection("holds").doc("_noop");
       } else {
         slotRef = slotsRef.doc(input.slotId);
@@ -245,6 +290,8 @@ export async function POST(request: NextRequest) {
         if (slotDoc.exists) {
           const slotData = slotDoc.data() as Slot;
           slotStart = (slotData.startAt as { toDate(): Date }).toDate();
+          slotStartForBlock = slotStart;
+          slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
         } else {
           const parsed = parseSlotId(input.slotId);
           if (!parsed) {
@@ -253,7 +300,10 @@ export async function POST(request: NextRequest) {
           if (rate.durationHours !== parsed.durationHours) {
             return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
           }
-          slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
+          const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          slotStart = start;
+          slotStartForBlock = start;
+          slotEndForBlock = end;
         }
       }
       if (!isSeasonalAllowed(experience, slotStart)) {
@@ -345,7 +395,15 @@ export async function POST(request: NextRequest) {
         if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
-        slotStartExp = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0).start;
+        const { start, end } = getSlotStartEnd(
+          parsedShared.dateStr,
+          parsedShared.startHour,
+          parsedShared.durationHours,
+          parsedShared.startMinute ?? 0
+        );
+        slotStartExp = start;
+        slotStartForBlock = start;
+        slotEndForBlock = end;
         slotRef = db.collection("holds").doc("_noop");
       } else {
         slotRef = slotsRef.doc(input.slotId);
@@ -353,6 +411,8 @@ export async function POST(request: NextRequest) {
         if (slotDocExp.exists) {
           const slotData = slotDocExp.data() as Slot;
           slotStartExp = (slotData.startAt as { toDate(): Date }).toDate();
+          slotStartForBlock = slotStartExp;
+          slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
         } else {
           const parsed = parseSlotId(input.slotId);
           if (!parsed) {
@@ -363,7 +423,10 @@ export async function POST(request: NextRequest) {
           if (!rateData || rateData.durationHours !== parsed.durationHours) {
             return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
           }
-          slotStartExp = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
+          const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          slotStartExp = start;
+          slotStartForBlock = start;
+          slotEndForBlock = end;
         }
       }
       if (!isSeasonalAllowed(experience, slotStartExp)) {
@@ -401,6 +464,20 @@ export async function POST(request: NextRequest) {
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
       slotsRef = db.collection("boats").doc(boatId).collection("slots");
       slotRef = slotsRef.doc(input.slotId);
+    }
+
+    if (input.experienceId && slotStartForBlock && slotEndForBlock) {
+      const blocked = await hasOverlappingBlock({
+        db,
+        Timestamp,
+        experienceId: input.experienceId,
+        boatId: input.boatId,
+        slotStart: slotStartForBlock,
+        slotEnd: slotEndForBlock,
+      });
+      if (blocked) {
+        return NextResponse.json({ error: "This slot is blocked" }, { status: 409 });
+      }
     }
 
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
@@ -484,9 +561,25 @@ export async function POST(request: NextRequest) {
     }
 
     await db.runTransaction(async (tx) => {
+      const assertNotBlocked = async (slotStart: Date, slotEnd: Date) => {
+        if (!input.experienceId) return;
+        const blocked = await hasOverlappingBlock({
+          db,
+          Timestamp,
+          experienceId: input.experienceId,
+          boatId: input.boatId,
+          slotStart,
+          slotEnd,
+          get: (q) => tx.get(q),
+        });
+        if (blocked) throw new Error("This slot is blocked");
+      };
+
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
+        const slotStartDate = (slot.startAt as { toDate(): Date }).toDate();
+        const slotEndDate = (slot.endAt as { toDate(): Date }).toDate();
         if (slot.status !== "open") {
           if (slot.status === "held" && slot.holdId) {
             const existingHoldSnap = await tx.get(db.collection("holds").doc(slot.holdId));
@@ -508,6 +601,7 @@ export async function POST(request: NextRequest) {
                 const newExpiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
                 reusedHoldId = slot.holdId;
                 reusedExpiresAt = newExpiresAt;
+                await assertNotBlocked(slotStartDate, slotEndDate);
                 tx.update(db.collection("holds").doc(slot.holdId), {
                   addonSelections: input.addonSelections,
                   partySize: input.partySize,
@@ -545,8 +639,8 @@ export async function POST(request: NextRequest) {
           }
         }
         // Defense in depth: ensure no paid booking already exists for this boat/experience and time
-        const slotStartMs = (slot.startAt as { toDate(): Date }).toDate().getTime();
-        const slotEndMs = (slot.endAt as { toDate(): Date }).toDate().getTime();
+        const slotStartMs = slotStartDate.getTime();
+        const slotEndMs = slotEndDate.getTime();
         const parsedForCheck = parseSlotId(input.slotId);
         if (parsedForCheck && isListingBoatFlow && input.boatId) {
           const paidForBoat = await tx.get(
@@ -575,6 +669,7 @@ export async function POST(request: NextRequest) {
             }
           }
         }
+        await assertNotBlocked(slotStartDate, slotEndDate);
         tx.update(slotRef, {
           status: "held",
           holdId,
@@ -679,6 +774,7 @@ export async function POST(request: NextRequest) {
             }
           }
         }
+        await assertNotBlocked(slotStartDate, slotEndDate);
         tx.set(slotRef, {
           startAt: Timestamp.fromDate(slotStartDate),
           endAt: Timestamp.fromDate(slotEndDate),
@@ -712,7 +808,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create hold failed";
-    if (message === "Slot not found" || message === "Slot no longer available") {
+    if (message === "Slot not found" || message === "Slot no longer available" || message === "This slot is blocked") {
       return NextResponse.json({ error: message }, { status: 409 });
     }
     console.error("[create-hold]", err);

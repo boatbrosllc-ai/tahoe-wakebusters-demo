@@ -1,17 +1,16 @@
 import type { Metadata } from "next";
 import Image from "next/image";
-import Link from "next/link";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
 export const metadata: Metadata = {
   title: "Our Story | Lake Austin Boat Rentals",
   description:
-    "Meet the crew behind Boat Bros. Local Austin team — Lake Austin boat rentals, pontoon, wake surf, sunset cruises. Captain included.",
+    "Meet Thomas and Nicodemus — the brothers behind Boat Bros. A legacy of lake adventure on Lake Austin.",
   keywords: ["Lake Austin boat rentals", "Boat Bros Austin", "best boat rentals Lake Austin"],
   openGraph: {
     title: "Our Story | Lake Austin Boat Rentals | Boat Bros",
-    description: "Meet the crew. Local Austin team — Lake Austin boat rentals, captain included.",
+    description: "Meet Thomas and Nicodemus — the brothers behind Boat Bros.",
   },
 };
 
@@ -51,21 +50,23 @@ export default function OurStoryPage() {
           <article className="rounded-2xl sm:rounded-3xl border-2 border-brand-dark/10 bg-white/90 shadow-premium overflow-hidden backdrop-blur-sm">
             <div className="p-6 sm:p-8 lg:p-10 xl:p-12">
               <p className="text-xl sm:text-2xl lg:text-3xl text-brand-dark font-semibold leading-relaxed mb-8 border-l-4 border-brand-primary pl-6 sm:pl-8">
-                We&apos;re a local Austin crew who love Lake Austin and wanted to share the best of the lake with visitors and locals alike.
+                Thomas and Nicodemus – A Legacy of Lake Adventure
               </p>
               <div className="space-y-6 text-brand-muted leading-relaxed text-base sm:text-lg">
                 <p>
-                  Boat Bros started with a simple idea: make it easy to book a great day on the water. No hassle, no hidden fees—just solid boats, clear pricing, and a team that shows up. We offer{" "}
-                  <Link href="/lake-austin-pontoon-rentals" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-                    Lake Austin Pontoon Rentals
-                  </Link>
-                  {" "}for parties, tow boats for wake and surf, and sunset cruises for anyone who wants to unwind with a view.
+                  Welcome to Boat Bros! Meet Thomas and Nicodemus, the brothers behind the creation of the company. Our story is rooted in a childhood filled with thrilling adventures and unforgettable moments on the water.
                 </p>
                 <p>
-                  Every rental includes life vests, safety briefing, and support if you need it. We&apos;re licensed and insured, and we work with captains who know the lake. Whether you&apos;re planning a family day, a bachelor party, or a corporate outing, we&apos;re here to make it smooth.
+                  Growing up in a family of nine children, with seven boys and two girls, our weekends were spent on the water. Our father, a true water enthusiast, introduced us to the wonders of boating.
                 </p>
                 <p>
-                  Lake Austin is our backyard. When you book with us, you&apos;re getting a team that cares about your day—and the lake we all love.
+                  As we grew older, our passion for boating became an inseparable part of who we are. It was during these formative years that the seed of Boat Bros was planted.
+                </p>
+                <p>
+                  Boat Bros is more than just a boat rental service – it’s an extension of our family and a community of like-minded individuals. We are dedicated to our customers having an unforgettable experience.
+                </p>
+                <p>
+                  We are a family that invites you to be a part of our story. Welcome to Boat Bros!
                 </p>
               </div>
             </div>

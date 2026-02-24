@@ -291,9 +291,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    // When opening with pre-selection: experience only → step 2 (pick date/time); date only → step 2; date+slot → step 3 (pick boat)
+    // When opening with pre-selection: experience only → step 2 (pick date/time); date only → step 2;
+    // date+slot → step 4 (details) for ticketed, or step 3 (pick boat) for charter
     if (initialSelection?.date) {
-      setStep(initialSelection?.slotId ? 3 : 2);
+      const isTicketedPreselect = initialSelection.pricingType === "ticketed";
+      setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
     } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
       setStep(2); // Experience chosen (e.g. from card) → skip step 1, go to date & time
     } else {
@@ -671,15 +673,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     };
   }, [isTicketed, partySize, effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
 
-  // When opened with initialSelection (slot pre-picked) and boat was also pre-picked, go to step 4.
-  // When opened from listing calendar (date + slot, no boatId), stay at step 3 so user picks boat first.
+  // When opened with initialSelection (slot pre-picked):
+  // - Charter + boatId pre-picked → go directly to step 4
+  // - Ticketed (no boat needed) → go directly to step 4
+  // - Charter without boatId → stay at step 3 so user picks boat
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
-    if (!initialSelection?.boatId) return;
+    if (!initialSelection?.boatId && !isTicketed) return;
     if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success") return;
     setStep(4);
     setPaymentPhase("form");
-  }, [open, initialSelection?.slotId, initialSelection?.boatId, selectedSlot, selectedRateId, paymentPhase]);
+  }, [open, initialSelection?.slotId, initialSelection?.boatId, isTicketed, selectedSlot, selectedRateId, paymentPhase]);
 
   // When opened with initialSelection (date but no slot), go to step 2 (pick time)
   useEffect(() => {
@@ -760,16 +764,35 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setStep(2);
       }
     } else if (step === 4) {
-      setStep(3);
-      setPaymentPhase("form");
-      setClientSecret(null);
-      setHoldId(null);
-      setPaymentIntentId(null);
-      setPaymentError(null);
-      setTipChoice(null);
-      setTipLaterMessageOpen(false);
-      setAppliedDiscount(null);
-      setAppliedDiscountError(null);
+      if (isTicketed) {
+        if (isCalendarFirstFlow) {
+          // Ticketed + pre-selected date: close modal to go back to calendar
+          onOpenChange(false);
+        } else {
+          // Ticketed + no pre-selection: go back to date picker (skip boat step)
+          setStep(2);
+          setPaymentPhase("form");
+          setClientSecret(null);
+          setHoldId(null);
+          setPaymentIntentId(null);
+          setPaymentError(null);
+          setTipChoice(null);
+          setTipLaterMessageOpen(false);
+          setAppliedDiscount(null);
+          setAppliedDiscountError(null);
+        }
+      } else {
+        setStep(3);
+        setPaymentPhase("form");
+        setClientSecret(null);
+        setHoldId(null);
+        setPaymentIntentId(null);
+        setPaymentError(null);
+        setTipChoice(null);
+        setTipLaterMessageOpen(false);
+        setAppliedDiscount(null);
+        setAppliedDiscountError(null);
+      }
     }
   };
 

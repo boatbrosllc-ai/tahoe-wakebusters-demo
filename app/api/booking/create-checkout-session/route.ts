@@ -128,18 +128,18 @@ export async function POST(request: NextRequest) {
     });
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
-    if (holdDiscountCode && holdDiscountCents > 0) {
-      lineItems = [...lineItems, {
-        price_data: {
-          currency: pricing.currency,
-          unit_amount: -holdDiscountCents,
-          product_data: { name: `Discount (${holdDiscountCode})` },
-        },
-        quantity: 1,
-      }];
-    }
     const baseUrl = bookingEnv.appBaseUrl;
     const stripe = getStripe();
+    let stripeCouponId: string | undefined;
+    if (holdDiscountCode && holdDiscountCents > 0) {
+      const coupon = await stripe.coupons.create({
+        amount_off: holdDiscountCents,
+        currency: pricing.currency,
+        name: `Discount (${holdDiscountCode})`,
+        duration: "once",
+      });
+      stripeCouponId = coupon.id;
+    }
     const metadata: Record<string, string> = {
       holdId: input.holdId,
       slotId: hold.slotId,
@@ -161,10 +161,13 @@ export async function POST(request: NextRequest) {
       sessionParams.success_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
       sessionParams.cancel_url = `${baseUrl}/booking/cancel?holdId=${input.holdId}`;
       sessionParams.phone_number_collection = { enabled: true };
-      sessionParams.allow_promotion_codes = true;
+      if (!stripeCouponId) sessionParams.allow_promotion_codes = true;
       sessionParams.custom_fields = [
         { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
       ];
+    }
+    if (stripeCouponId) {
+      sessionParams.discounts = [{ coupon: stripeCouponId }];
     }
     let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
     try {

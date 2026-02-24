@@ -19,7 +19,7 @@ function formatPrice(cents: number) {
 }
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-export type OnOpenInModalSelection = { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string };
+export type OnOpenInModalSelection = { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string; pricingType?: "charter" | "ticketed" };
 export type OnOpenInModalFn = (selection: OnOpenInModalSelection) => void;
 
 export interface ExperienceCalendarSectionViewProps {
@@ -348,54 +348,97 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                     {/* Step 0: Duration (skipped for ticketed — jump straight to step 1) */}
                     <div
                       ref={panel1Ref as React.RefObject<HTMLDivElement>}
-                      className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}
+                      className={cn(
+                        "flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full min-h-0",
+                        slidingPanelCount === 5 ? "w-1/5" : "w-1/4"
+                      )}
                     >
-                      <h2 id="calendar-section-heading" className={cn("text-xl sm:text-2xl font-extrabold tracking-tight", darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl")}>
-                        {isTicketed ? "Pick your departure" : "Pick your date & time"}
-                      </h2>
-                      <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
-                        {isTicketed ? "Select an available date to reserve your tickets." : "Choose a duration, then date, time, boat, and checkout."}
-                      </p>
+                      <div className="shrink-0">
+                        <h2
+                          id="calendar-section-heading"
+                          className={cn(
+                            "text-xl sm:text-2xl font-extrabold tracking-tight",
+                            darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl"
+                          )}
+                        >
+                          {isTicketed ? "Pick your departure" : "Pick your date & time"}
+                        </h2>
+                        <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
+                          {isTicketed
+                            ? "Select an available date to reserve your tickets."
+                            : "Choose a duration, then date, time, boat, and checkout."}
+                        </p>
+                      </div>
                       {loading ? (
                         <div className="mt-4 space-y-4">
                           <div className={cn("h-10 w-48 animate-pulse rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
                         </div>
                       ) : (
-                        <div className="mt-4 sm:mt-6 space-y-4">
-                          {rates.length > 0 && !isTicketed && (
-                            <div>
-                              <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Duration</p>
-                              <div className="flex flex-wrap gap-2">
-                                {[...rates].sort((a, b) => a.durationHours - b.durationHours).map((r) => {
-                                  const isSelected = selectedDurationForModal === r.durationHours;
-                                  return (
-                                    <button
-                                      key={r.id}
-                                      type="button"
-                                      onClick={() => { setSelectedDurationForModal(r.durationHours); setSelectedSlotInline(null); }}
-                                      className={cn(
-                                        "rounded-xl border-2 px-3 py-2.5 sm:py-3 text-sm font-semibold transition-all min-h-[44px] touch-manipulation",
-                                        darkCard ? (isSelected ? "border-brand-primary bg-brand-primary text-white" : "border-white/30 text-white/90 hover:border-white/50") : (isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30")
-                                      )}
-                                    >
-                                      {r.displayName ?? `${r.durationHours} hr`}
-                                    </button>
-                                  );
-                                })}
+                        <div className="mt-4 sm:mt-6 flex min-h-0 flex-1 flex-col">
+                          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
+                            {rates.length > 0 && !isTicketed && (
+                              <div>
+                                <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>
+                                  Duration
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {[...rates].sort((a, b) => a.durationHours - b.durationHours).map((r) => {
+                                    const isSelected = selectedDurationForModal === r.durationHours;
+                                    return (
+                                      <button
+                                        key={r.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedDurationForModal(r.durationHours);
+                                          setSelectedSlotInline(null);
+                                        }}
+                                        className={cn(
+                                          "rounded-xl border-2 px-3 py-2.5 sm:py-3 text-sm font-semibold transition-all min-h-[44px] touch-manipulation",
+                                          darkCard
+                                            ? isSelected
+                                              ? "border-brand-primary bg-brand-primary text-white"
+                                              : "border-white/30 text-white/90 hover:border-white/50"
+                                            : isSelected
+                                              ? "border-brand-primary bg-brand-primary/10 text-brand-dark"
+                                              : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
+                                        )}
+                                      >
+                                        {r.displayName ?? `${r.durationHours} hr`}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {selectedDurationForModal == null && (
+                                  <p className={cn("mt-2 text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>
+                                    Select a duration to see available dates.
+                                  </p>
+                                )}
                               </div>
-                              {selectedDurationForModal == null && <p className={cn("mt-2 text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>Select a duration to see available dates.</p>}
-                            </div>
-                          )}
+                            )}
+                          </div>
+
                           {selectedDurationForModal != null && goToInlineStep && (
-                            <button type="button" onClick={() => goToInlineStep(1)} className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 transition-colors text-sm">
-                              Next: Pick date
-                            </button>
+                            <div className="pt-3 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => goToInlineStep(1)}
+                                className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 transition-colors text-sm"
+                              >
+                                Next: Pick date
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}
                     </div>
                     {/* Step 1: Date */}
-                    <div ref={panel2Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                    <div
+                      ref={panel2Ref as React.RefObject<HTMLDivElement>}
+                      className={cn(
+                        "flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full min-h-0",
+                        slidingPanelCount === 5 ? "w-1/5" : "w-1/4"
+                      )}
+                    >
                       <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight shrink-0", darkCard ? "text-white" : "text-brand-dark")}>
                         {isTicketed ? "Pick your departure" : "Pick your date"}
                       </h2>
@@ -419,87 +462,100 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               </div>
                             </div>
                           </div>
-                          <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full shrink-0">
-                            {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
-                            {step2CompactGrid.map((cell, idx) => {
-                              if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-[44px]", darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]")} />;
-                              const { dateStr, label, weekday } = cell;
-                              const isSelected = selectedDate === dateStr;
-                              const isPast = dateStr < todayStr;
-                              const openForDuration = isTicketed
-                                ? (slotsByDate.get(dateStr)?.open ?? 0)
-                                : (openCountByDateForDuration.get(dateStr) ?? 0);
-                              const entry = slotsByDate.get(dateStr);
-                              const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
-                              const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
-                              const hasPriceForDay = typeof datePrices[dateStr] === "number";
-                              const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
-                              const priceCents = datePrices[dateStr];
-                              const isHoliday = holidayDateStrings.has(dateStr);
-                              const slotData = isTicketed ? slotDataByDate.get(dateStr) : undefined;
-                              const isCharterLocked = slotData?.isCharterLocked ?? false;
-                              const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
-                              const isSoldOutShared = isTicketed && bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
-                              const isFullyUnavailable = isTicketed && isCharterLocked;
-                              return (
-                                <button
-                                  key={dateStr}
-                                  type="button"
-                                  disabled={isPast || !isAvailable || isFullyUnavailable}
-                                  onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
-                                  title={isHoliday ? "Holiday pricing" : undefined}
-                                  className={cn(
-                                    "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px]",
-                                    darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]",
-                                    isHoliday && "ring-1.5 ring-violet-400/80 ring-offset-1 ring-offset-transparent",
-                                    darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
-                                    !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
-                                    darkCard
-                                      ? cn(
-                                          isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
-                                          !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
-                                          isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
-                                          isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                          isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                          isAvailable && !isSoldOutShared && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
-                                          isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
-                                        )
-                                      : cn(
-                                          isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                                          !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
-                                          isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
-                                          isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                          isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
-                                          isAvailable && !isSoldOutShared && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
-                                          isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
-                                        )
-                                  )}
-                                >
-                                  <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
-                                  <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
-                                  {isTicketed && isFullyUnavailable && (
-                                    <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>
-                                  )}
-                                  {isTicketed && !isFullyUnavailable && isSoldOutShared && (
-                                    <>
-                                      <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Sold out</span>
-                                      <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
-                                    </>
-                                  )}
-                                  {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && (
-                                    <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
-                                  )}
-                                  {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
-                                    if (typeof priceCents === "number") {
-                                      return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
-                                    }
-                                    return <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>;
-                                  })()}
-                                  {!isTicketed && typeof priceCents === "number" && isAvailable && <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}</span>}
-                                  {isFullyBooked && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
-                                </button>
-                              );
-                            })}
+                          <div className="mt-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
+                            <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full">
+                              {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
+                              {step2CompactGrid.map((cell, idx) => {
+                                if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-[44px]", darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]")} />;
+                                const { dateStr, label, weekday } = cell;
+                                const isSelected = selectedDate === dateStr;
+                                const isPast = dateStr < todayStr;
+                                const openForDuration = isTicketed
+                                  ? (slotsByDate.get(dateStr)?.open ?? 0)
+                                  : (openCountByDateForDuration.get(dateStr) ?? 0);
+                                const entry = slotsByDate.get(dateStr);
+                                const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                                const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                                const hasPriceForDay = typeof datePrices[dateStr] === "number";
+                                const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
+                                const priceCents = datePrices[dateStr];
+                                const isHoliday = holidayDateStrings.has(dateStr);
+                                const slotData = isTicketed ? slotDataByDate.get(dateStr) : undefined;
+                                const isCharterLocked = slotData?.isCharterLocked ?? false;
+                                const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
+                                const isSoldOutShared = isTicketed && bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
+                                const isFullyUnavailable = isTicketed && isCharterLocked;
+                                return (
+                                  <button
+                                    key={dateStr}
+                                    type="button"
+                                    disabled={isPast || !isAvailable || isFullyUnavailable}
+                                    onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
+                                    title={isHoliday ? "Holiday pricing" : undefined}
+                                    className={cn(
+                                      "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px]",
+                                      darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]",
+                                      isHoliday && "ring-1.5 ring-violet-400/80 ring-offset-1 ring-offset-transparent",
+                                      darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
+                                      !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
+                                      darkCard
+                                        ? cn(
+                                            isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
+                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                            isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
+                                            isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
+                                            isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isAvailable && !isSoldOutShared && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                            isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
+                                          )
+                                        : cn(
+                                            isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
+                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                            isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
+                                            isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                            isAvailable && !isSoldOutShared && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
+                                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                                          )
+                                    )}
+                                  >
+                                    <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                                    <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
+                                    {isTicketed && isFullyUnavailable && (
+                                      <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>
+                                    )}
+                                    {isTicketed && !isFullyUnavailable && isSoldOutShared && (
+                                      <>
+                                        <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Sold out</span>
+                                        <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
+                                      </>
+                                    )}
+                                    {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && (
+                                      <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
+                                    )}
+                                    {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
+                                      if (typeof priceCents === "number") {
+                                        return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
+                                      }
+                                      return <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>;
+                                    })()}
+                                    {!isTicketed && typeof priceCents === "number" && isAvailable && <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}</span>}
+                                    {isFullyBooked && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {noAvailabilityBecauseNotSetUp && (
+                              <div className={cn("mt-4 rounded-2xl border px-4 py-3 text-sm", darkCard ? "border-white/20 text-white/80" : "border-brand-dark/10 text-brand-muted")}>
+                                <p>Calendar not loading. Check Firebase and run setup in /admin.</p>
+                              </div>
+                            )}
+                            {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800">
+                                <p>No availability for this month.</p>
+                              </div>
+                            )}
                           </div>
                           {!isTicketed && (
                             <div className="mt-3 flex gap-2 shrink-0">
@@ -507,27 +563,53 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               {selectedDate && goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 text-sm">Next: Pick time</button>}
                             </div>
                           )}
-                          {noAvailabilityBecauseNotSetUp && <div className={cn("mt-4 rounded-2xl border px-4 py-3 text-sm shrink-0", darkCard ? "border-white/20 text-white/80" : "border-brand-dark/10 text-brand-muted")}><p>Calendar not loading. Check Firebase and run setup in /admin.</p></div>}
-                          {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800 shrink-0"><p>No availability for this month.</p></div>}
                         </>
                       )}
                     </div>
                     {/* Step 2: Time */}
-                    <div ref={panel3Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                    <div
+                      ref={panel3Ref as React.RefObject<HTMLDivElement>}
+                      className={cn(
+                        "flex flex-col flex-shrink-0 min-w-0 overflow-hidden pr-2 h-full min-h-0",
+                        slidingPanelCount === 5 ? "w-1/5" : "w-1/4"
+                      )}
+                    >
                       <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight shrink-0", darkCard ? "text-white" : "text-brand-dark")}>Pick your time</h2>
                       <p className={cn("mt-1 text-xs sm:text-sm shrink-0", darkCard ? "text-white/80" : "text-brand-muted")}>Choose a start time for {selectedDate ? new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long" }) : "your date"}.</p>
                       {selectedDate && (
                         <>
-                          {timeOptionsForModal.length === 0 ? <p className={cn("mt-4 text-xs shrink-0", darkCard ? "text-white/70" : "text-brand-muted")}>No open slots for this duration on this day.</p> : (
-                            <div className="mt-3 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-h-[220px] flex flex-wrap gap-2 content-start overscroll-contain touch-pan-y">
-                              {timeOptionsForModal.map(({ timeLabel, slot }) => {
-                                const isSelected = selectedSlotInline?.id === slot.id;
-                                return (
-                                  <button key={slot.id} type="button" onClick={() => setSelectedSlotInline(slot)} className={cn("rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all flex-shrink-0 min-h-[44px] touch-manipulation", darkCard ? (isSelected ? "border-brand-primary bg-brand-primary text-white" : "border-white/30 text-white/90 hover:border-white/50") : (isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 hover:border-brand-dark/30"))}>{timeLabel}</button>
-                                );
-                              })}
-                            </div>
-                          )}
+                          <div className="mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
+                            {timeOptionsForModal.length === 0 ? (
+                              <p className={cn("text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>
+                                No open slots for this duration on this day.
+                              </p>
+                            ) : (
+                              <div className="flex flex-wrap gap-2 content-start touch-pan-y">
+                                {timeOptionsForModal.map(({ timeLabel, slot }) => {
+                                  const isSelected = selectedSlotInline?.id === slot.id;
+                                  return (
+                                    <button
+                                      key={slot.id}
+                                      type="button"
+                                      onClick={() => setSelectedSlotInline(slot)}
+                                      className={cn(
+                                        "rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all flex-shrink-0 min-h-[44px] touch-manipulation",
+                                        darkCard
+                                          ? isSelected
+                                            ? "border-brand-primary bg-brand-primary text-white"
+                                            : "border-white/30 text-white/90 hover:border-white/50"
+                                          : isSelected
+                                            ? "border-brand-primary bg-brand-primary/10 text-brand-dark"
+                                            : "border-brand-dark/15 hover:border-brand-dark/30"
+                                      )}
+                                    >
+                                      {timeLabel}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                           <div className="mt-3 flex gap-2 shrink-0">
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(1)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
                             <button type="button" disabled={!selectedSlotInline} onClick={() => selectedSlotInline && goToInlineStep?.(3)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 text-sm">Continue to choose your boat</button>
@@ -536,7 +618,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                       )}
                     </div>
                     {/* Step 3: Boat */}
-                    <div ref={panel4Ref as React.RefObject<HTMLDivElement>} className={cn("flex flex-col flex-shrink-0 min-w-0 overflow-hidden pl-2 h-full", slidingPanelCount === 5 ? "w-1/5" : "w-1/4")}>
+                    <div
+                      ref={panel4Ref as React.RefObject<HTMLDivElement>}
+                      className={cn(
+                        "flex flex-col flex-shrink-0 min-w-0 overflow-hidden pl-2 h-full min-h-0",
+                        slidingPanelCount === 5 ? "w-1/5" : "w-1/4"
+                      )}
+                    >
                       {selectedDate && selectedSlotInline ? (
                         <>
                           <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
@@ -544,7 +632,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="text-xs font-medium text-white/80 hover:text-white">Change time</button>}
                           </div>
                           <p className={cn("text-xs mb-3", darkCard ? "text-white/70" : "text-brand-muted")}>{selectedDate} · {formatTime(selectedSlotInline.startAt)}</p>
-                          <div className="min-h-0 flex-1 overflow-y-auto max-h-[280px]">
+                          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
                             {inlineBoatsLoading ? <div className="py-4 flex justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" /></div> : inlineBoats.length === 0 ? <p className={cn("text-xs py-2", darkCard ? "text-white/70" : "text-brand-muted")}>No boats assigned — continue to details.</p> : (
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
                                 {inlineBoats.slice(0, 6).map((boat) => {

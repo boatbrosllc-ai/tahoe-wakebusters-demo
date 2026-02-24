@@ -44,7 +44,7 @@ export function HowItWorks() {
 
         <ol className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-6 max-w-5xl mx-auto list-none">
           {steps.map((step, i) => (
-            <li key={step.title} className="relative flex flex-col items-center text-center">
+            <li key={step.title} className="relative flex flex-col items-center text-center h-full">
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 whileInView={{ opacity: 1, y: 0 }}
@@ -53,7 +53,7 @@ export function HowItWorks() {
                 whileHover={{ y: -4, scale: 1.02, transition: { duration: 0.25 } }}
                 onHoverStart={() => setHoveredIndex(i)}
                 onHoverEnd={() => setHoveredIndex(null)}
-                className="relative w-full max-w-sm rounded-2xl ring-4 ring-brand-primary bg-white p-6 shadow-soft hover:shadow-xl hover:ring-offset-2 transition-all duration-300 cursor-default"
+                className="relative w-full h-full max-w-sm rounded-2xl ring-4 ring-brand-primary bg-white p-6 shadow-soft hover:shadow-xl hover:ring-offset-2 transition-all duration-300 cursor-default flex flex-col"
               >
                 {/* Step number */}
                 <motion.span
@@ -74,9 +74,13 @@ export function HowItWorks() {
                   <step.icon className="h-6 w-6" />
                 </motion.div>
                 <h3 className="text-lg font-semibold text-brand-dark mb-2">{step.title}</h3>
-                <p className="text-sm text-brand-muted mb-1">{step.description}</p>
-                {step.highlight && (
+                <p className="text-sm text-brand-muted mb-1 flex-1">{step.description}</p>
+                {step.highlight ? (
                   <p className="text-sm font-medium text-brand-primary">{step.highlight}</p>
+                ) : (
+                  <p className="text-sm font-medium text-transparent select-none" aria-hidden="true">
+                    {"\u00A0"}
+                  </p>
                 )}
               </motion.div>
             </li>

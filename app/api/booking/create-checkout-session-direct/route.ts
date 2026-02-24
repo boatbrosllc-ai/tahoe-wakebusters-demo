@@ -310,18 +310,18 @@ export async function POST(request: NextRequest) {
       addons: addonsForPricing,
       hold: hold as unknown as import("@/lib/booking/types").Hold,
     });
-    if (discountCents > 0 && discountCodeApplied) {
-      lineItems.push({
-        price_data: {
-          currency: pricing.currency,
-          unit_amount: -discountCents,
-          product_data: { name: `Discount (${discountCodeApplied})` },
-        },
-        quantity: 1,
-      });
-    }
     const baseUrl = bookingEnv.appBaseUrl;
     const stripe = getStripe();
+    let stripeCouponId: string | undefined;
+    if (discountCents > 0 && discountCodeApplied) {
+      const coupon = await stripe.coupons.create({
+        amount_off: discountCents,
+        currency: pricing.currency,
+        name: `Discount (${discountCodeApplied})`,
+        duration: "once",
+      });
+      stripeCouponId = coupon.id;
+    }
     const metadata: Record<string, string> = {
       holdId,
       slotId: input.slotId,
@@ -332,6 +332,7 @@ export async function POST(request: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: lineItems,
+      ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
       customer_email: undefined,
       phone_number_collection: { enabled: true },
       custom_fields: [

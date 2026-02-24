@@ -591,6 +591,7 @@ export function ExperienceCalendarSection({
           slotId: openSlots[0].id,
           experienceId: experienceId ?? undefined,
           experienceSlug: experienceSlug ?? undefined,
+          pricingType: "ticketed",
         });
       }
       return;
