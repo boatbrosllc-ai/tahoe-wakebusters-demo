@@ -226,7 +226,103 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                 spotsAvailable={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined}
               />
             )}
-            {onOpenInModal ? (
+            {onOpenInModal && isTicketed ? (
+              /* Ticketed: simple single-column calendar — clicking a date opens the modal directly */
+              <div ref={panel2Ref as React.RefObject<HTMLDivElement>} className="flex flex-col">
+                <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight", darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl")}>
+                  Pick your departure
+                </h2>
+                <p className={cn("mt-1.5 sm:mt-2 text-xs sm:text-sm", darkCard ? "text-white/80" : "text-brand-muted")}>
+                  {departureTimeLabel ? `Departs at ${departureTimeLabel} · tap a date to book.` : "Tap an available date to reserve your tickets."}
+                </p>
+                {loading ? (
+                  <div className="mt-4 space-y-2">
+                    <div className={cn("h-10 w-48 animate-pulse rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
+                    <div className={cn("h-48 w-full animate-pulse rounded-xl", darkCard ? "bg-white/20" : "bg-brand-dark/10")} />
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
+                      <p className={cn("text-sm font-semibold", darkCard ? "text-white/90" : "text-brand-dark")}>Date</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button type="button" onClick={goToToday} className={cn("rounded-lg border px-2.5 py-1.5 text-xs font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg")}>Today</button>
+                        <div className={cn("flex rounded-lg border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
+                          <button type="button" onClick={goPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
+                          <span className={cn("min-w-[6rem] text-center text-xs font-semibold py-1.5 flex items-center justify-center", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
+                          <button type="button" onClick={goNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full shrink-0">
+                      {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
+                      {step2CompactGrid.map((cell, idx) => {
+                        if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-[44px]", darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]")} />;
+                        const { dateStr, label, weekday } = cell;
+                        const isSelected = selectedDate === dateStr;
+                        const isPast = dateStr < todayStr;
+                        const openForDate = slotsByDate.get(dateStr)?.open ?? 0;
+                        const slotData = slotDataByDate?.get(dateStr);
+                        const isCharterLocked = slotData?.isCharterLocked ?? false;
+                        const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
+                        const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
+                        const isFullyUnavailable = isCharterLocked;
+                        const isAvailable = !isPast && openForDate > 0 && !isFullyUnavailable;
+                        const priceCents = datePrices[dateStr];
+                        const isHoliday = holidayDateStrings.has(dateStr);
+                        return (
+                          <button
+                            key={dateStr}
+                            type="button"
+                            disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable}
+                            onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
+                            title={isHoliday ? "Holiday pricing" : undefined}
+                            className={cn(
+                              "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px]",
+                              darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]",
+                              isHoliday && "ring-1 ring-violet-400/80",
+                              darkCard
+                                ? cn(
+                                    isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
+                                    !isPast && !isAvailable && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                    isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
+                                    isAvailable && !isSoldOutShared && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                    isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
+                                  )
+                                : cn(
+                                    isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
+                                    !isPast && !isAvailable && !isSoldOutShared && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                    isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
+                                    isAvailable && !isSoldOutShared && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                    isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                                  )
+                            )}
+                          >
+                            <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                            <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate")}>{label.split(" ")[1] ?? label}</span>
+                            {isFullyUnavailable && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>}
+                            {!isFullyUnavailable && isSoldOutShared && (
+                              <>
+                                <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Sold out</span>
+                                <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
+                              </>
+                            )}
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && (
+                              <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
+                            )}
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (
+                              typeof priceCents === "number"
+                                ? <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>
+                                : <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800"><p>No availability for this month.</p></div>}
+                  </>
+                )}
+              </div>
+            ) : onOpenInModal ? (
               slidingPanelCount >= 4 ? (
                 /* 5-step sliding layout: duration → date → time → boat → details (no modals) */
                 <div
@@ -330,7 +426,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               const { dateStr, label, weekday } = cell;
                               const isSelected = selectedDate === dateStr;
                               const isPast = dateStr < todayStr;
-                              const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
+                              const openForDuration = isTicketed
+                                ? (slotsByDate.get(dateStr)?.open ?? 0)
+                                : (openCountByDateForDuration.get(dateStr) ?? 0);
                               const entry = slotsByDate.get(dateStr);
                               const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                               const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
