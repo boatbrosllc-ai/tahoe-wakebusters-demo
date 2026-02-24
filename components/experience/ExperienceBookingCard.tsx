@@ -1,10 +1,57 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
+
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
+const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+
+function BookingPaymentForm({
+  onSuccess,
+  onError,
+}: {
+  onSuccess: () => void;
+  onError: (message: string) => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [processing, setProcessing] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setProcessing(true);
+    try {
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        redirect: "if_required",
+      });
+      if (error) onError(error.message ?? "Payment failed");
+      else onSuccess();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Payment failed");
+    } finally {
+      setProcessing(false);
+    }
+  };
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <PaymentElement />
+      <button
+        type="submit"
+        disabled={!stripe || processing}
+        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
+      >
+        {processing ? "Processing…" : "Pay now"}
+      </button>
+    </form>
+  );
+}
 
 function formatDepartureTime(hour: number, minute: number): string {
   const period = hour < 12 ? "AM" : "PM";
@@ -114,6 +161,10 @@ export function ExperienceBookingCard({
   const [holdId, setHoldId] = useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [pricing, setPricing] = useState<{ totalCents: number; currency: string } | null>(null);
+  const [payFullAmount, setPayFullAmount] = useState(false);
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slotStolen, setSlotStolen] = useState(false);
@@ -220,10 +271,11 @@ export function ExperienceBookingCard({
     ? (isTicketed ? selectedRate.priceCents * partySize : selectedRate.priceCents) + addonsTotalCents
     : 0;
 
-  const handleCreateHoldAndCheckout = async () => {
+  const handleCreateHoldAndPayment = async () => {
     if (!selectedSlot || !selectedRateId || !customer.name.trim() || !customer.email.trim() || !customer.phone.trim() || !cancellationAck) return;
     setError(null);
     setSubmitting(true);
+    setPaymentPhase("loading");
     try {
       const createHoldRes = await fetch("/api/booking/create-hold", {
         method: "POST",
@@ -238,6 +290,7 @@ export function ExperienceBookingCard({
           answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
+          bookingMode: isTicketed ? "shared" : "charter",
           ...(discountCode.trim() && { discountCode: discountCode.trim() }),
         }),
       });
@@ -245,26 +298,41 @@ export function ExperienceBookingCard({
       if (!createHoldRes.ok) {
         setError(holdData.error ?? "Could not reserve slot");
         if (holdData.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
+        setPaymentPhase("form");
         return;
       }
       setHoldId(holdData.holdId);
       setHoldExpiresAt(holdData.expiresAt ?? null);
       setPricing(holdData.pricing ?? null);
 
-      const checkoutRes = await fetch("/api/booking/create-checkout-session", {
+      const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: holdData.holdId }),
+        body: JSON.stringify({ holdId: holdData.holdId, payFullAmount: isTicketed ? true : payFullAmount }),
       });
-      const checkoutData = await checkoutRes.json();
-      if (!checkoutRes.ok) {
-        setError(checkoutData.error ?? "Could not start checkout");
+      const intentData = await intentRes.json();
+      if (!intentRes.ok) {
+        setError(intentData.error ?? "Could not start payment");
+        setPaymentPhase("form");
         return;
       }
-      if (checkoutData.url) window.location.href = checkoutData.url;
-      else setError("Checkout URL missing");
+      const secret = intentData.clientSecret;
+      if (!secret) {
+        setError("Payment intent missing client secret");
+        setPaymentPhase("form");
+        return;
+      }
+      if (!STRIPE_PUBLISHABLE_KEY) {
+        setError("Stripe publishable key not configured. Contact support.");
+        setPaymentPhase("form");
+        return;
+      }
+      setClientSecret(secret);
+      setPaymentIntentId(intentData.paymentIntentId ?? null);
+      setPaymentPhase("stripe");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
+      setPaymentPhase("form");
     } finally {
       setSubmitting(false);
     }
@@ -363,10 +431,104 @@ export function ExperienceBookingCard({
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
+  if (paymentPhase === "loading") {
+    return (
+      <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-3 min-h-[200px]", className)}>
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+        <p className="text-sm text-brand-muted">Preparing checkout…</p>
+      </div>
+    );
+  }
+
+  if (paymentPhase === "completing") {
+    return (
+      <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-4 min-h-[200px]", className)}>
+        <div className="h-12 w-12 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+        <p className="text-sm font-medium text-brand-dark">Completing your booking…</p>
+        <p className="text-xs text-brand-muted">Please don&apos;t close this window.</p>
+      </div>
+    );
+  }
+
+  if (paymentPhase === "success") {
+    return (
+      <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-3 min-h-[200px] text-center", className)}>
+        <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+          <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <p className="text-base font-semibold text-brand-dark">Booking confirmed!</p>
+        <p className="text-sm text-brand-muted">Check your email for your booking details.</p>
+        {error && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">{error}</p>}
+      </div>
+    );
+  }
+
+  if (paymentPhase === "stripe" && clientSecret && stripePromise) {
+    const dueCents = isTicketed || payFullAmount
+      ? (pricing?.totalCents ?? orderSummaryTotalCents)
+      : Math.round((pricing?.totalCents ?? orderSummaryTotalCents) * 0.5);
+    return (
+      <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6", className)}>
+        <h3 className="text-lg font-semibold text-brand-dark mb-1">Secure payment</h3>
+        {error && (
+          <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-2">{error}</p>
+        )}
+        <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/5 p-4 mb-4 space-y-1.5">
+          <div className="flex justify-between items-baseline">
+            <span className="text-sm font-semibold text-brand-dark">
+              {isTicketed || payFullAmount ? "Total due now" : "Deposit due now"}
+            </span>
+            <span className="text-xl font-bold text-brand-primary">${(dueCents / 100).toFixed(2)}</span>
+          </div>
+          {!isTicketed && !payFullAmount && (
+            <p className="text-xs text-brand-muted">
+              Remaining 50% (${((pricing?.totalCents ?? orderSummaryTotalCents) / 100 - dueCents / 100).toFixed(2)}) charged 48 hours before your trip
+            </p>
+          )}
+        </div>
+        {holdExpiresAt && (
+          <p className="mb-4 text-xs text-brand-muted text-center">
+            <HoldCountdown expiresAt={holdExpiresAt} label="Your slot is held — complete payment in" compact />
+          </p>
+        )}
+        <Elements stripe={stripePromise} options={{ clientSecret }}>
+          <BookingPaymentForm
+            onSuccess={async () => {
+              setPaymentPhase("completing");
+              if (!holdId || !paymentIntentId) {
+                setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
+                setPaymentPhase("success");
+                return;
+              }
+              try {
+                const res = await fetch("/api/booking/complete-after-payment", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ holdId, paymentIntentId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
+                }
+              } catch {
+                setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
+              }
+              setPaymentPhase("success");
+            }}
+            onError={(msg) => setError(msg)}
+          />
+        </Elements>
+        <p className="text-center text-[11px] text-brand-muted mt-3">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6", className)}>
       <h3 className="text-lg font-semibold text-brand-dark mb-1">Book this experience</h3>
-      <p className="text-sm text-brand-muted mb-4">Pick a date and time, then your details. Your slot is held for 10 minutes at checkout.</p>
+      <p className="text-sm text-brand-muted mb-4">Pick a date and time, then your details. We&apos;ll hold your slot while you complete payment.</p>
 
       {slotStolen && (
         <p className="mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2">
@@ -658,6 +820,45 @@ export function ExperienceBookingCard({
         </label>
       </div>
 
+      {/* Pay deposit or full — hidden for ticketed (always full) */}
+      {!isTicketed && (
+        <div className="mb-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setPayFullAmount(false)}
+              className={cn(
+                "rounded-xl border-2 py-3 px-4 text-left text-sm font-medium transition-all",
+                !payFullAmount
+                  ? "border-brand-primary bg-brand-primary/10 text-brand-dark ring-2 ring-brand-primary/30"
+                  : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+              )}
+            >
+              <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
+              <span className="block mt-0.5 text-brand-muted font-normal text-xs">
+                ${(Math.round(orderSummaryTotalCents * 0.5) / 100).toFixed(2)} now — remaining 50% charged 48 hours before your trip
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPayFullAmount(true)}
+              className={cn(
+                "rounded-xl border-2 py-3 px-4 text-left text-sm font-medium transition-all",
+                payFullAmount
+                  ? "border-brand-primary bg-brand-primary/10 text-brand-dark ring-2 ring-brand-primary/30"
+                  : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
+              )}
+            >
+              <span className="font-semibold text-brand-dark">Pay full amount</span>
+              <span className="block mt-0.5 text-brand-muted font-normal text-xs">
+                ${(orderSummaryTotalCents / 100).toFixed(2)} now — all set, no later charge
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Live total */}
       <div className="border-t border-brand-dark/10 pt-4 mb-4">
         {isTicketed && selectedRate && (
@@ -665,26 +866,29 @@ export function ExperienceBookingCard({
             {partySize} {partySize === 1 ? "ticket" : "tickets"} × ${(selectedRate.priceCents / 100).toFixed(0)}/ticket
           </p>
         )}
-        <div className="flex justify-between text-sm text-brand-dark">
+        <div className="flex justify-between text-sm text-brand-dark mb-1">
           <span>Estimated total</span>
-          <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)} + tax at checkout</span>
+          <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
         </div>
+        {!isTicketed && (
+          <div className="flex justify-between text-sm font-semibold text-brand-dark">
+            <span>{payFullAmount ? "Total due now" : "Deposit due now"}</span>
+            <span className="text-brand-primary">
+              ${((isTicketed || payFullAmount ? orderSummaryTotalCents : Math.round(orderSummaryTotalCents * 0.5)) / 100).toFixed(2)}
+            </span>
+          </div>
+        )}
       </div>
 
       <Button
         size="lg"
         className="w-full rounded-xl"
         disabled={!canProceed || submitting}
-        onClick={handleCreateHoldAndCheckout}
+        onClick={handleCreateHoldAndPayment}
       >
-        {submitting ? "Taking you to payment…" : "Continue to payment"}
+        {submitting ? "Preparing payment…" : "Continue to payment"}
       </Button>
-
-      {holdExpiresAt && (
-        <p className="mt-2 text-xs text-brand-muted text-center">
-          <HoldCountdown expiresAt={holdExpiresAt} label="Your slot is held — complete payment in" compact />
-        </p>
-      )}
+      <p className="text-center text-[11px] text-brand-muted mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
     </div>
   );
 }

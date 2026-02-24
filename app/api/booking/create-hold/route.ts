@@ -5,7 +5,6 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getExperienceBySlug } from "@/content/experiences";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
@@ -483,22 +482,13 @@ export async function POST(request: NextRequest) {
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
     let rateForPricing: typeof rate & { priceCents: number } = rate as typeof rate & { priceCents: number };
     if (experienceForPricing && slotStartForPricing && "priceCents" in rate) {
-      const isTicketedExperience = experienceForPricing.pricingType === "ticketed";
-      let effectivePriceCents: number;
-      if (isTicketedExperience) {
-        // Ticketed: use content fromPriceCents override when set (same source of truth used by
-        // date-prices and effective-price APIs so display and actual charge are consistent).
-        const contentExp = getExperienceBySlug(experienceForPricing.slug ?? "");
-        effectivePriceCents = contentExp?.fromPriceCents ?? (rate as { priceCents: number }).priceCents;
-      } else {
-        effectivePriceCents = getEffectiveRatePriceCents(
-          rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number },
-          slotStartForPricing,
-          experienceForPricing.holidayDates,
-          experienceForPricing.weekendDays,
-          experienceForPricing.friSunDays
-        );
-      }
+      const effectivePriceCents = getEffectiveRatePriceCents(
+        rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number; durationHours?: number },
+        slotStartForPricing,
+        experienceForPricing.holidayDates,
+        experienceForPricing.weekendDays,
+        experienceForPricing.friSunDays
+      );
       rateForPricing = { ...rate, priceCents: effectivePriceCents } as typeof rate & { priceCents: number };
     }
     const pricing = computePricing({
@@ -554,7 +544,53 @@ export async function POST(request: NextRequest) {
     let reusedExpiresAt: Date | null = null;
 
     if (isSharedTicketed) {
-      await db.collection("holds").doc(holdId).set(holdPayload);
+      const parsedForCapacity = parseSlotId(input.slotId);
+      if (!parsedForCapacity) {
+        return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+      }
+      const dateStr = parsedForCapacity.dateStr;
+      // isListingBoatFlow uses experience.maxCapacity when set; isExperienceOnly uses capacityMax directly.
+      const sharedCapacityLimit = isListingBoatFlow
+        ? ((experienceForPricing as Experience).maxCapacity ?? capacityMax)
+        : capacityMax;
+      await db.runTransaction(async (tx) => {
+        const nowMs = Date.now();
+        const [booksSnap, holdsSnap] = await Promise.all([
+          tx.get(db.collection("bookings").where("experienceId", "==", expId)),
+          tx.get(
+            db.collection("holds")
+              .where("experienceId", "==", expId)
+              .where("status", "==", "active")
+          ),
+        ]);
+        let sold = 0;
+        for (const doc of booksSnap.docs) {
+          const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
+          if (!b.slotId || typeof b.partySize !== "number") continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const p = parseSlotId(b.slotId);
+          if (p?.dateStr !== dateStr) continue;
+          if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
+          sold += b.partySize;
+        }
+        let onHold = 0;
+        for (const doc of holdsSnap.docs) {
+          const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
+          if (!h.slotId || typeof h.partySize !== "number") continue;
+          if (h.expiresAt && h.expiresAt.toDate().getTime() < nowMs) continue;
+          const p = parseSlotId(h.slotId);
+          if (p?.dateStr === dateStr) onHold += h.partySize;
+        }
+        if (sold + onHold + input.partySize > sharedCapacityLimit) {
+          const available = Math.max(0, sharedCapacityLimit - sold - onHold);
+          throw new Error(
+            available === 0
+              ? "This date is sold out."
+              : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
+          );
+        }
+        tx.set(db.collection("holds").doc(holdId), holdPayload);
+      });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
       const response: CreateHoldResponse = { holdId, expiresAt: expiresAt.toISOString(), pricing: responsePricing };
       return NextResponse.json(response);
@@ -808,7 +844,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create hold failed";
-    if (message === "Slot not found" || message === "Slot no longer available" || message === "This slot is blocked") {
+    if (
+      message === "Slot not found" ||
+      message === "Slot no longer available" ||
+      message === "This slot is blocked" ||
+      message === "This departure is reserved as a private charter" ||
+      message === "This date is sold out." ||
+      message.startsWith("Only ")
+    ) {
       return NextResponse.json({ error: message }, { status: 409 });
     }
     console.error("[create-hold]", err);
