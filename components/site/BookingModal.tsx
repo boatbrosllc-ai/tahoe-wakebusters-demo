@@ -12,6 +12,9 @@ import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
+import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
+import { siteConfig } from "@/config/site";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -68,6 +71,9 @@ interface AddonOption {
 
 /** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
 const TEXAS_SALES_TAX_RATE = 0.0825;
+
+/** Stable empty array for ratesForSelection when no rates loaded yet (avoids new [] reference every render). */
+const EMPTY_RATES_FOR_SELECTION: CachedRateOption[] = [];
 
 function getNextDays(days: number): { dateStr: string; label: string; weekday: string }[] {
   const out: { dateStr: string; label: string; weekday: string }[] = [];
@@ -181,7 +187,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [boatsLoading, setBoatsLoading] = useState(false);
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [experienceRates, setExperienceRates] = useState<RateOption[]>([]);
-  const [experienceRatesLoading, setExperienceRatesLoading] = useState(false);
   const [addons, setAddons] = useState<AddonOption[]>([]);
   const [addonsLoading, setAddonsLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -192,7 +197,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [viewMonthYear, setViewMonthYear] = useState(today.year);
   const [viewMonthMonth, setViewMonthMonth] = useState(today.month);
   const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
+  const [ratesSummary, setRatesSummary] = useState<CachedRateOption[] | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  const [datePricesLoading, setDatePricesLoading] = useState(false);
+  const inFlightKeyRef = useRef<string | null>(null);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
@@ -235,13 +243,24 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
   const [payFullAmount, setPayFullAmount] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
+  // Persists the last successfully-created holdId per slot across back-navigation so
+  // subsequent create-hold calls for the same slot can include resumeHoldId.
+  const lastHoldRef = useRef<{ slotId: string; holdId: string } | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  // Month-level caching is handled by the shared module-level bookingCache (booking-data-cache.ts)
+  // which also deduplicates in-flight requests across all booking entry points.
+
   // Always use listing (experience) rates for duration and pricing — never boat rates.
   // Calendar and checkout must show the numbers from the listing page (experience rates).
-  const ratesForSelection = experienceRates;
+  // Prefer experience-detail rates when loaded; otherwise use ratesSummary (from early fetch) so duration buttons and date-prices can show before experience-detail returns.
+  // Memoize with stable empty array when both are empty to avoid new [] reference every render (which would retrigger useEffects that depend on ratesForSelection).
+  const ratesForSelection = useMemo(
+    () => (experienceRates.length > 0 ? experienceRates : (ratesSummary ?? EMPTY_RATES_FOR_SELECTION)),
+    [experienceRates, ratesSummary]
+  );
 
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
   const isTicketed = selectedExperience?.pricingType === "ticketed";
@@ -261,7 +280,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (ratesForSelection.length === 0) return;
     const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
-    if (!valid) setSelectedRateIdForCalendar(null);
+    if (!valid) {
+      setSelectedRateIdForCalendar(null);
+      setSelectedSlot(null);
+    }
   }, [ratesForSelection, selectedRateIdForCalendar]);
 
   // Ticketed: auto-select the single rate when rates load (no duration picker shown).
@@ -339,23 +361,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setClientSecret(null);
     setPaymentError(null);
     setExperiencesLoadError(null);
-    fetch("/api/experiences")
-      .then((res) => res.json().then((data) => ({ res, data })))
-      .then(({ res, data }) => {
-        const list = Array.isArray(data) ? data : (data?.experiences ?? []);
-        if (!res.ok) {
-          setExperiences([]);
-          setExperiencesLoadError((data as { error?: string })?.error ?? "Failed to load experiences");
-          return;
-        }
-        if (Array.isArray(list) && list.length > 0) setExperiences(list);
+    setRatesSummary(null);
+    const controller = new AbortController();
+    bookingCache.fetchExperiences(controller.signal)
+      .then((data) => {
+        const list = data?.experiences ?? [];
+        if (list.length > 0) setExperiences(list);
         else setExperiences([]);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
         setExperiences([]);
         setExperiencesLoadError("Failed to load experiences");
       })
       .finally(() => setLoading(false));
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when modal open state changes
   }, [open]);
 
@@ -388,56 +408,61 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     if (slot) setSelectedSlot(slot);
   }, [open, initialSelection, openSlotsForDate]);
 
+  // Load boats, rates, and add-ons in a single request to /api/booking/experience-detail.
+  // Previously three separate sequential/overlapping effects; now one effect, one round-trip.
+  // Also clears the month-level caches so a freshly-selected experience never shows stale data.
   useEffect(() => {
     if (!selectedExperience?.id) {
       setBoats([]);
       setSelectedBoat(null);
-      return;
-    }
-    setBoatsLoading(true);
-    setSelectedBoat(null);
-    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(selectedExperience.id)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.boats && Array.isArray(data.boats)) setBoats(data.boats);
-        else setBoats([]);
-      })
-      .catch(() => setBoats([]))
-      .finally(() => setBoatsLoading(false));
-  }, [selectedExperience]);
-
-  useEffect(() => {
-    if (!selectedExperience?.id) {
+      setExperienceRates([]);
       setAddons([]);
       return;
     }
+    setSlotsLoading(true);
+    setMonthSlots([]);
+    setBoatsLoading(true);
     setAddonsLoading(true);
-    fetch(`/api/booking/experience-addons?experienceId=${encodeURIComponent(selectedExperience.id)}`)
-      .then((res) => res.json())
+    setSelectedBoat(null);
+    const controller = new AbortController();
+    bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
-        if (data.addons && Array.isArray(data.addons)) setAddons(data.addons);
-        else setAddons([]);
+        setBoats(Array.isArray(data.boats) ? data.boats : []);
+        setExperienceRates(Array.isArray(data.rates) ? data.rates : []);
+        setAddons(Array.isArray(data.addons) ? data.addons : []);
       })
-      .catch(() => setAddons([]))
-      .finally(() => setAddonsLoading(false));
-  }, [selectedExperience]);
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setBoats([]);
+        setExperienceRates([]);
+        setAddons([]);
+      })
+      .finally(() => {
+        setBoatsLoading(false);
+        setAddonsLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectedExperience?.id]);
 
-  // Load experience rates whenever experience is selected (for step 2 date/time before boat is chosen)
+  // Fetch rates immediately on experience selection so we can show duration and start date-prices without waiting for experience-detail.
   useEffect(() => {
     if (!selectedExperience?.id) {
-      setExperienceRates([]);
+      setRatesSummary(null);
       return;
     }
-    setExperienceRatesLoading(true);
-    fetch(`/api/experiences/rates?experienceId=${encodeURIComponent(selectedExperience.id)}`)
-      .then((res) => res.json())
+    const controller = new AbortController();
+    bookingCache
+      .fetchExperienceRates(selectedExperience.id, controller.signal)
       .then((data) => {
-        if (data.rates && Array.isArray(data.rates)) setExperienceRates(data.rates);
-        else setExperienceRates([]);
+        const list = data?.rates ?? [];
+        setRatesSummary(list);
+        setSelectedRateIdForCalendar((prev) => prev ?? list[0]?.id ?? null);
       })
-      .catch(() => setExperienceRates([]))
-      .finally(() => setExperienceRatesLoading(false));
-  }, [selectedExperience]);
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setRatesSummary(null);
+      });
+    return () => controller.abort();
+  }, [selectedExperience?.id]);
 
   const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
   const viewMonthEndStr = useMemo(() => {
@@ -453,53 +478,100 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setDatePrices({});
       setHolidayDateStrings(new Set());
       setTicketsAvailableByDate({});
+      setDatePricesLoading(false);
       return;
     }
-    const rateIdQ = `&rateId=${encodeURIComponent(selectedRateIdForCalendar)}`;
-    fetch(
-      `/api/booking/date-prices?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&days=${daysInViewMonth}${rateIdQ}`
-    )
-      .then((res) => res.json())
+    const key = `${selectedExperience.id}|${viewMonthStartStr}|${daysInViewMonth}|${selectedRateIdForCalendar}`;
+    inFlightKeyRef.current = key;
+    setDatePricesLoading(true);
+    const controller = new AbortController();
+
+    bookingCache
+      .fetchDatePrices(
+        selectedExperience.id,
+        viewMonthStartStr,
+        daysInViewMonth,
+        selectedRateIdForCalendar,
+        controller.signal,
+      )
       .then((data) => {
-        if (data.prices && typeof data.prices === "object") setDatePrices(data.prices);
-        else setDatePrices({});
-        if (Array.isArray(data?.holidayDateStrings)) {
-          setHolidayDateStrings(new Set(data.holidayDateStrings));
-        } else {
+        if (inFlightKeyRef.current !== key) return;
+        const prices = data.prices && typeof data.prices === "object" ? data.prices : {};
+        const holidays = new Set<string>(Array.isArray(data?.holidayDateStrings) ? data.holidayDateStrings : []);
+        const ticketsAvailable =
+          data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object"
+            ? data.ticketsAvailableByDate
+            : {};
+        setDatePrices(prices);
+        setHolidayDateStrings(holidays);
+        setTicketsAvailableByDate(ticketsAvailable);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        if (inFlightKeyRef.current === key) {
+          setDatePrices({});
           setHolidayDateStrings(new Set());
-        }
-        if (data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object") {
-          setTicketsAvailableByDate(data.ticketsAvailableByDate);
-        } else {
           setTicketsAvailableByDate({});
         }
       })
-      .catch(() => {
-        setDatePrices({});
-        setHolidayDateStrings(new Set());
-        setTicketsAvailableByDate({});
+      .finally(() => {
+        if (inFlightKeyRef.current === key) {
+          setDatePricesLoading(false);
+        }
       });
-  }, [selectedExperience?.id, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar]);
 
+    const otherRateIds = ratesForSelection.map((r) => r.id).filter((id) => id !== selectedRateIdForCalendar);
+    if (otherRateIds.length > 0) {
+      bookingCache.prefetchDatePrices(
+        selectedExperience.id,
+        viewMonthStartStr,
+        daysInViewMonth,
+        otherRateIds,
+        controller.signal,
+        2,
+      );
+    }
 
-  // Fetch all slots for the visible month (all boats) so step 3 can show real availability; never filter by boat so "Booked" is only for real bookings.
+    return () => {
+      controller.abort();
+      inFlightKeyRef.current = null;
+    };
+  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar, ratesForSelection]);
+
+  // Fetch all slots for the visible month
   useEffect(() => {
     if (!selectedExperience?.id) {
       setMonthSlots([]);
       return;
     }
     setSlotsLoading(true);
-    fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${viewMonthStartStr}&endDate=${viewMonthEndStr}`
+    const controller = new AbortController();
+    bookingCache.fetchSlots(
+      selectedExperience.id,
+      viewMonthStartStr,
+      viewMonthEndStr,
+      controller.signal,
     )
-      .then((res) => res.json())
       .then((data) => {
-        const list = data?.slots ?? [];
-        setMonthSlots(list);
+        const slots = (data?.slots ?? []) as SlotDto[];
+        // Defer setting 3k+ slots so the first render only has detail+rates and stays fast;
+        // date-prices effect then runs immediately and the calendar appears. Slots paint next tick.
+        if (slots.length > 100) {
+          setTimeout(() => {
+            setMonthSlots(slots);
+            setSlotsLoading(false);
+          }, 0);
+        } else {
+          setMonthSlots(slots);
+          setSlotsLoading(false);
+        }
       })
-      .catch(() => setMonthSlots([]))
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setMonthSlots([]);
+      })
       .finally(() => setSlotsLoading(false));
-  }, [selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
+    return () => controller.abort();
+  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, viewMonthEndStr]);
 
   // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 8)
   useEffect(() => {
@@ -518,68 +590,67 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setSelectedSlot(openSlotsForDate[0]);
   }, [isTicketed, selectedDate, openSlotsForDate]);
 
-  // Ticketed: fetch ticket availability counts when date changes
+  // Ref holds the latest ticketsAvailableByDate so the effect below can read it without
+  // adding it to deps (which would cause a second fetch every time month-level data loads).
+  const ticketsAvailableByDateRef = useRef<Record<string, number>>({});
+  ticketsAvailableByDateRef.current = ticketsAvailableByDate;
+
+  // Ticketed: fetch ticket availability counts when date changes.
+  // Skip the per-date network call when the month-level data already shows zero tickets
+  // available — the sold-out state is known without needing the detailed breakdown.
   useEffect(() => {
     if (!isTicketed || !selectedDate || !selectedExperience?.id) {
       setTicketCounts(null);
       return;
     }
+    if (ticketsAvailableByDateRef.current[selectedDate] === 0) {
+      setTicketCounts({ total: 0, sold: 0, onHold: 0, available: 0 });
+      return;
+    }
     setTicketCountsLoading(true);
     setTicketCounts(null);
-    fetch(`/api/booking/ticket-availability?experienceId=${encodeURIComponent(selectedExperience.id)}&date=${encodeURIComponent(selectedDate)}`)
-      .then((res) => res.ok ? res.json() : null)
+    const controller = new AbortController();
+    fetch(
+      `/api/booking/ticket-availability?experienceId=${encodeURIComponent(selectedExperience.id)}&date=${encodeURIComponent(selectedDate)}`,
+      { signal: controller.signal },
+    )
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && typeof data.total === "number") setTicketCounts(data);
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") {
+          // Leave ticketCounts null on error — UI will fall back to ticketMax
+        }
+      })
       .finally(() => setTicketCountsLoading(false));
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ticketsAvailableByDate intentionally excluded; read via ref to prevent double-fetch
   }, [isTicketed, selectedDate, selectedExperience?.id]);
 
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
-  /** Boat IDs that have the selected date/time slot OPEN — for step 3. */
-  const availableBoatIdsForSelectedSlot = useMemo(() => {
-    if (!selectedSlot?.startAt) return new Set<string>();
+  /** Single-pass derivation of all three boat-availability sets for the selected time slot. */
+  const { availableBoatIdsForSelectedSlot, unavailableBoatIdsForSelectedSlot, bookedBoatIdsForSelectedSlot } = useMemo(() => {
+    const empty = new Set<string>();
+    if (!selectedSlot?.startAt) return { availableBoatIdsForSelectedSlot: empty, unavailableBoatIdsForSelectedSlot: empty, bookedBoatIdsForSelectedSlot: empty };
     const selectedStartMs = new Date(selectedSlot.startAt).getTime();
-    const ids = new Set<string>();
+    const available = new Set<string>();
+    const unavailable = new Set<string>();
+    const booked = new Set<string>();
     for (const s of monthSlots) {
-      if (!s.boatId || s.status !== "open") continue;
-      const slotStartMs = new Date(s.startAt).getTime();
-      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
+      if (!s.boatId) continue;
+      if (new Date(s.startAt).getTime() !== selectedStartMs) continue;
+      if (s.status === "open") available.add(s.boatId);
+      else {
+        unavailable.add(s.boatId);
+        if (s.status === "booked") booked.add(s.boatId);
+      }
     }
-    return ids;
+    return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };
   }, [selectedSlot?.startAt, monthSlots]);
-  /** Boat IDs that have ANY non-open slot (booked/held/blocked) at the selected time — greyed and not selectable. */
-  const unavailableBoatIdsForSelectedSlot = useMemo(() => {
-    if (!selectedSlot?.startAt) return new Set<string>();
-    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
-    const ids = new Set<string>();
-    for (const s of monthSlots) {
-      if (!s.boatId || s.status === "open") continue;
-      const slotStartMs = new Date(s.startAt).getTime();
-      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
-    }
-    return ids;
-  }, [selectedSlot?.startAt, monthSlots]);
-  /** Boat IDs with a real booking at the selected time — show "Booked" overlay only for these. */
-  const bookedBoatIdsForSelectedSlot = useMemo(() => {
-    if (!selectedSlot?.startAt) return new Set<string>();
-    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
-    const ids = new Set<string>();
-    for (const s of monthSlots) {
-      if (!s.boatId || s.status !== "booked") continue;
-      const slotStartMs = new Date(s.startAt).getTime();
-      if (slotStartMs === selectedStartMs) ids.add(s.boatId);
-    }
-    return ids;
-  }, [selectedSlot?.startAt, monthSlots]);
-  /** On step 3, show all boats; available = has open slot and not in unavailable set. */
-  const boatsToShowOnStep3 = useMemo(() => {
-    if (!selectedSlot) return boats;
-    return boats;
-  }, [boats, selectedSlot]);
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -593,6 +664,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       else if (s.status === "held") e.held++;
       else if (s.status === "booked") e.booked++;
       else e.blocked++;
+    }
+    return map;
+  }, [monthSlots]);
+  /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). */
+  const openCountByDateAndDuration = useMemo(() => {
+    const map = new Map<string, Map<number, number>>();
+    for (const s of monthSlots) {
+      if (s.status !== "open") continue;
+      const day = isoToChicagoDateStr(s.startAt);
+      const dur = parseSlotId(s.id)?.durationHours;
+      if (dur == null) continue;
+      if (!map.has(day)) map.set(day, new Map());
+      const byDur = map.get(day)!;
+      byDur.set(dur, (byDur.get(dur) ?? 0) + 1);
     }
     return map;
   }, [monthSlots]);
@@ -737,20 +822,32 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [step, paymentPhase]);
 
   useEffect(() => {
+    const controller = new AbortController();
     if (!selectedExperience?.id || !selectedRateId || !selectedDate) {
       setEffectiveRateCents(null);
-      return;
+      return () => controller.abort();
+    }
+    // Use the already-loaded monthly date price when available to avoid an extra round-trip.
+    // Fall back to /api/booking/effective-price only when the date isn't in the loaded range.
+    const cachedPrice = datePrices[selectedDate];
+    if (typeof cachedPrice === "number") {
+      setEffectiveRateCents(cachedPrice);
+      return () => controller.abort();
     }
     fetch(
-      `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`
+      `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`,
+      { signal: controller.signal }
     )
       .then((res) => res.json())
       .then((data) => {
         if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
         else setEffectiveRateCents(null);
       })
-      .catch(() => setEffectiveRateCents(null));
-  }, [selectedExperience?.id, selectedRateId, selectedDate]);
+      .catch((err) => {
+        if (err.name !== "AbortError") setEffectiveRateCents(null);
+      });
+    return () => controller.abort();
+  }, [selectedExperience?.id, selectedRateId, selectedDate, datePrices]);
 
   /** Calendar-first flow: date + slot chosen on listing, so modal only shows boat → details (no step 1 or 3). */
   const isCalendarFirstFlow = !!initialSelection?.slotId;
@@ -770,6 +867,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           onOpenChange(false);
         } else {
           // Ticketed + no pre-selection: go back to date picker (skip boat step)
+          lastHoldRef.current = null;
           setStep(2);
           setPaymentPhase("form");
           setClientSecret(null);
@@ -782,6 +880,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           setAppliedDiscountError(null);
         }
       } else {
+        lastHoldRef.current = null;
         setStep(3);
         setPaymentPhase("form");
         setClientSecret(null);
@@ -862,12 +961,33 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError("Please choose Tip now or Tip later.");
       return;
     }
+    if (!STRIPE_PUBLISHABLE_KEY) {
+      setPaymentError(
+        "Stripe publishable key not found. Add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY to .env.local (no quotes), then restart the dev server (npm run dev)."
+      );
+      return;
+    }
     setPaymentError(null);
     setPaymentPhase("loading");
     const addonList = Object.entries(addonSelections)
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
+    let createdHoldId: string | null = null;
+    const releaseCreatedHold = async () => {
+      if (!createdHoldId) return;
+      try {
+        await fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: createdHoldId }),
+        });
+      } catch {
+        // best-effort
+      }
+      createdHoldId = null;
+      setHoldId(null);
+    };
     try {
       const holdRes = await fetch("/api/booking/create-hold", {
         method: "POST",
@@ -886,6 +1006,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
           ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
           bookingMode: isTicketed ? "shared" : "charter",
+          ...(lastHoldRef.current?.slotId === selectedSlot.id ? { resumeHoldId: lastHoldRef.current.holdId } : {}),
         }),
       });
       const holdData = await holdRes.json();
@@ -894,11 +1015,26 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const hint = holdData.hint ? ` ${holdData.hint}` : "";
         setPaymentError(holdRes.status === 409 ? "This time is no longer available. Please choose another date or time." : `${message}${hint}`);
         setPaymentPhase("form");
-        if (holdRes.status === 409) setStep(3);
+        if (holdRes.status === 409) {
+          bookingCache.invalidate(`slots|${selectedExperience.id}`);
+          setMonthSlots([]);
+          if (isTicketed) {
+            setStep(2);
+            setSelectedDate(null);
+          } else if (boats.length > 0) {
+            setStep(3);
+            setSelectedSlot(null);
+          } else {
+            setStep(2);
+            setSelectedDate(null);
+          }
+        }
         return;
       }
       const { holdId: newHoldId } = holdData;
+      createdHoldId = newHoldId;
       setHoldId(newHoldId);
+      lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -906,20 +1042,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
+        await releaseCreatedHold();
         setPaymentError(intentData.error ?? "Failed to start payment");
         setPaymentPhase("form");
         return;
       }
       const secret = intentData.clientSecret;
       if (!secret) {
+        await releaseCreatedHold();
         setPaymentError("Payment intent missing client secret");
-        setPaymentPhase("form");
-        return;
-      }
-      if (!STRIPE_PUBLISHABLE_KEY) {
-        setPaymentError(
-          "Stripe publishable key not found. Add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY to .env.local (no quotes), then restart the dev server (npm run dev)."
-        );
         setPaymentPhase("form");
         return;
       }
@@ -927,6 +1058,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (err) {
+      await releaseCreatedHold();
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }
@@ -1132,7 +1264,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 )}
                 {selectedRateIdForCalendar && (
                   <>
-                  <div>
+                  <div className="relative">
                   <div className="flex flex-col items-center gap-2 mb-3 md:mb-3">
                     <p className="text-xs font-semibold text-brand-dark w-full">Date</p>
                     <div className="flex items-center justify-center gap-2 w-full">
@@ -1194,12 +1326,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       const entry = slotsByDate.get(dateStr);
                       const openForDuration =
                         rateForCalendar?.durationHours != null
-                          ? monthSlots.filter(
-                              (s) =>
-                                isoToChicagoDateStr(s.startAt) === dateStr &&
-                                s.status === "open" &&
-                                parseSlotId(s.id)?.durationHours === rateForCalendar.durationHours
-                            ).length
+                          ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
                           : entry?.open ?? 0;
                       const ticketsLeft = isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
                       const isAvailable = !isPast && (isTicketed
@@ -1255,6 +1382,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       );
                     })}
                   </div>
+                  {datePricesLoading && (
+                    <div className="absolute inset-0 bg-white/80 flex items-center justify-center rounded-xl z-10">
+                      <span className="text-sm text-brand-muted">Loading dates &amp; prices…</span>
+                    </div>
+                  )}
                 </div>
                 {selectedDate && (
                   <div className="min-h-[2.5rem] transition-[opacity] duration-150 ease-out">
@@ -1303,7 +1435,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         ) : (
                         <div className="flex flex-wrap gap-1.5 md:gap-2">
                           {slotsForDay.map((slot) => {
-                            const isSelected = selectedSlot?.startAt === slot.startAt;
+                            const isSelected = selectedSlot?.id === slot.id;
                             return (
                               <button
                                 key={slot.startAt}
@@ -2102,6 +2234,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       <BookingPaymentForm
                         onSuccess={async () => {
                           setPaymentPhase("completing");
+                          if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
                           if (!holdId || !paymentIntentId) {
                             console.error("[BookingModal] complete-after-payment skipped: missing holdId or paymentIntentId", { holdId: !!holdId, paymentIntentId: !!paymentIntentId });
                             setPaymentError("Your payment succeeded. If you don't see a confirmation email, contact us with your email and we'll confirm your booking.");
@@ -2115,16 +2248,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                               body: JSON.stringify({ holdId, paymentIntentId }),
                             });
                             const data = await res.json().catch(() => ({}));
-                            if (!res.ok) {
-                              const errMsg = (data as { error?: string }).error ?? "Booking is being created; check your email and Admin in a moment.";
+                            if (res.ok) {
+                              setPaymentPhase("success");
+                            } else {
                               console.error("[BookingModal] complete-after-payment failed", res.status, data);
-                              setPaymentError(errMsg);
+                              setPaymentError(
+                                `Payment captured but booking confirmation failed — please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`
+                              );
                             }
                           } catch (e) {
                             console.error("[BookingModal] complete-after-payment request failed", e);
-                            setPaymentError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
+                            setPaymentError(
+                              `Payment captured but booking confirmation failed — please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`
+                            );
                           }
-                          setPaymentPhase("success");
                         }}
                         onError={(msg) => {
                           setPaymentError(msg);

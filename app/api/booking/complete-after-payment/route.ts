@@ -105,6 +105,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, bookingId: result.bookingId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
+    if (message === "Hold has expired") {
+      console.warn("[complete-after-payment] hold expired", { holdId: (err as { holdId?: string }).holdId });
+      return NextResponse.json(
+        { error: "Your booking hold has expired. Please start a new booking." },
+        { status: 409 }
+      );
+    }
     console.error("[complete-after-payment]", message, err);
     return NextResponse.json({ error: message }, { status: 500 });
   }

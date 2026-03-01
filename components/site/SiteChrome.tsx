@@ -6,6 +6,7 @@ import { Footer } from "@/components/site/Footer";
 import { MobileStickyBar } from "@/components/site/MobileStickyBar";
 import { NavProgress } from "@/components/site/NavProgress";
 import { BookingModalProvider } from "@/components/site/BookingModalContext";
+import { BookingPreload } from "@/components/site/BookingPreload";
 
 export function SiteChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -17,6 +18,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
 
   return (
     <BookingModalProvider>
+      <BookingPreload />
       <NavProgress />
       <div className="min-h-screen flex flex-col">
         <Header />

@@ -234,8 +234,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const data = expSnap.data() as Record<string, unknown>;
-    const ratesSnap = await expRef.collection("rates").get();
-    const addonsSnap = await expRef.collection("addons").get();
+    const [ratesSnap, addonsSnap] = await Promise.all([
+      expRef.collection("rates").get(),
+      expRef.collection("addons").get(),
+    ]);
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const addons = addonsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     return NextResponse.json({ id: expSnap.id, ...data, rates, addons });
@@ -274,27 +276,47 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const { rates, addons, ...expFieldsInner } = parsed;
+    const ratesRef = expRef.collection("rates");
+    const addonsRef = expRef.collection("addons");
+
+    // Fetch existing sub-collections only when we're replacing them, in parallel.
+    const [existingRatesSnap, existingAddonsSnap] = await Promise.all([
+      Array.isArray(rates) ? ratesRef.get() : Promise.resolve(null),
+      Array.isArray(addons) ? addonsRef.get() : Promise.resolve(null),
+    ]);
+
+    // Accumulate all writes into a single batch for one round-trip.
+    const batch = db.batch();
+    const expUpdate: Record<string, unknown> = {};
+
     if (Object.keys(expFieldsInner).length > 0) {
-      const expPayload = stripUndefined(expFieldsInner as Record<string, unknown>) as Partial<Experience>;
-      await expRef.update(expPayload);
+      Object.assign(expUpdate, stripUndefined(expFieldsInner as Record<string, unknown>));
     }
-    if (Array.isArray(rates)) {
-      const ratesRef = expRef.collection("rates");
-      const existing = await ratesRef.get();
-      for (const d of existing.docs) await d.ref.delete();
-      for (let ri = 0; ri < rates.length; ri++) {
-        const r = rates[ri];
-        await ratesRef.doc().set({ ...stripUndefined(r as Record<string, unknown>), active: true });
+
+    if (Array.isArray(rates) && existingRatesSnap) {
+      let minPriceCents: number | null = null;
+      for (const d of existingRatesSnap.docs) batch.delete(d.ref);
+      for (const r of rates) {
+        batch.set(ratesRef.doc(), { ...stripUndefined(r as Record<string, unknown>), active: true });
+        if (typeof r.priceCents === "number" && (minPriceCents === null || r.priceCents < minPriceCents)) {
+          minPriceCents = r.priceCents;
+        }
       }
+      expUpdate.fromPriceCents = minPriceCents ?? null;
     }
-    if (Array.isArray(addons)) {
-      const addonsRef = expRef.collection("addons");
-      const existing = await addonsRef.get();
-      for (const d of existing.docs) await d.ref.delete();
+
+    if (Array.isArray(addons) && existingAddonsSnap) {
+      for (const d of existingAddonsSnap.docs) batch.delete(d.ref);
       for (const a of addons) {
-        await addonsRef.doc().set({ ...stripUndefined(a as Record<string, unknown>), active: true });
+        batch.set(addonsRef.doc(), { ...stripUndefined(a as Record<string, unknown>), active: true });
       }
     }
+
+    if (Object.keys(expUpdate).length > 0) {
+      batch.update(expRef, expUpdate as Partial<Experience>);
+    }
+
+    await batch.commit();
     return NextResponse.json({ id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 import Image from "next/image";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
+import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 
 interface ExperienceItem {
@@ -26,14 +28,27 @@ interface BoatOption {
   rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
 }
 
+interface InitialSelection {
+  /** experienceId or slug emitted by BookingCTA / ExperienceBookPage / LegacyBookPage */
+  experience?: string;
+  boatId?: string;
+  date?: string;
+}
+
+/** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. */
+function getChicagoToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+}
+
 function getNextDays(days: number): { dateStr: string; label: string; weekday: string }[] {
   const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Build the 35-day grid anchored to Chicago "today" so the isPast comparison is consistent.
+  const todayChicago = getChicagoToday();
+  const base = new Date(todayChicago + "T00:00:00");
   for (let i = 0; i < days; i++) {
-    const d = new Date(today);
+    const d = new Date(base);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     out.push({
       dateStr,
       label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
@@ -43,7 +58,7 @@ function getNextDays(days: number): { dateStr: string; label: string; weekday: s
   return out;
 }
 
-export function BookingPageClient() {
+export function BookingPageClient({ initialSelection }: { initialSelection?: InitialSelection }) {
   const { openWithSelection } = useBookingModal();
   const [experiences, setExperiences] = useState<ExperienceItem[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,15 +70,47 @@ export function BookingPageClient() {
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
+  // One-shot initialization from deep-link params. Cleared after first boats load so user
+  // edits (e.g. switching experience) don't re-trigger auto-selection.
+  const initRef = useRef<InitialSelection | null>(
+    initialSelection?.experience || initialSelection?.boatId || initialSelection?.date
+      ? { ...initialSelection }
+      : null
+  );
+  const [initDone, setInitDone] = useState(false);
+
+  // Refs for scrolling to the first incomplete step after initialization.
+  const boatsSectionRef = useRef<HTMLElement | null>(null);
+  const dateSectionRef = useRef<HTMLElement | null>(null);
+  const continueSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // null = not yet fetched; array = fetched (may be empty if no open slots)
+  const [allSlots, setAllSlots] = useState<bookingCache.CachedSlotDto[] | null>(null);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+
   useEffect(() => {
-    fetch("/api/experiences")
-      .then((res) => res.json())
+    const controller = new AbortController();
+    bookingCache.fetchExperiences(controller.signal)
       .then((data) => {
-        if (data.experiences?.length) setExperiences(data.experiences);
-        else setError(data.error ?? null);
+        if (data.experiences?.length) {
+          setExperiences(data.experiences);
+          // Apply deep-link experience preselection (match by id or slug).
+          if (initRef.current?.experience) {
+            const target = initRef.current.experience;
+            const match = data.experiences.find(
+              (exp) => exp.id === target || exp.slug === target
+            );
+            if (match) setSelectedExperience(match);
+          }
+        } else {
+          setError(null);
+        }
       })
-      .catch(() => setError("Failed to load"))
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setError("Failed to load");
+      })
       .finally(() => setLoading(false));
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -75,17 +122,83 @@ export function BookingPageClient() {
     setBoatsLoading(true);
     setSelectedBoat(null);
     setSelectedDate(null);
-    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(selectedExperience.id)}`)
-      .then((res) => res.json())
+    const controller = new AbortController();
+    bookingCache.fetchBoats(selectedExperience.id, controller.signal)
       .then((data) => {
-        if (data.boats && Array.isArray(data.boats)) setBoats(data.boats);
-        else setBoats([]);
+        const boatList = data.boats && Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
+        setBoats(boatList);
+        // Apply one-shot deep-link preselection for boat and date.
+        // initRef is cleared after the first run so user edits don't re-trigger auto-selection.
+        if (initRef.current) {
+          if (initRef.current.boatId && boatList.length > 0) {
+            const match = boatList.find((b) => b.id === initRef.current!.boatId);
+            if (match) setSelectedBoat(match);
+          }
+          if (initRef.current.date) {
+            // The availableDateSet effect will validate and clear this if the date is unavailable.
+            setSelectedDate(initRef.current.date);
+          }
+          initRef.current = null;
+          setInitDone(true);
+        }
       })
-      .catch(() => setBoats([]))
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setBoats([]);
+        initRef.current = null;
+      })
       .finally(() => setBoatsLoading(false));
+    return () => controller.abort();
   }, [selectedExperience]);
 
   const dateOptions = useMemo(() => getNextDays(35), []);
+
+  // Fetch all slots for the selected experience once — no boatId so all boats are included.
+  // Boat-specific filtering is done client-side in availableDateSet below, so switching boats
+  // never triggers a second round-trip.
+  useEffect(() => {
+    if (!selectedExperience) {
+      setAllSlots(null);
+      return;
+    }
+    const startDate = dateOptions[0].dateStr;
+    const endDate = dateOptions[dateOptions.length - 1].dateStr;
+    setSlotsLoading(true);
+    setAllSlots(null);
+    const controller = new AbortController();
+    bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, controller.signal)
+      .then((data) => {
+        setAllSlots(Array.isArray(data.slots) ? data.slots : []);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setAllSlots([]);
+      })
+      .finally(() => setSlotsLoading(false));
+    return () => controller.abort();
+  }, [selectedExperience, dateOptions]);
+
+  // Derive available dates in-memory from the cached slot dataset.
+  // Switching boats re-derives this set without any API call.
+  const availableDateSet = useMemo<Set<string> | null>(() => {
+    if (allSlots === null) return null;
+    const available = new Set<string>();
+    for (const slot of allSlots) {
+      if (slot.status !== "open") continue;
+      // When a boat is selected, restrict to that boat's slots only.
+      if (selectedBoat && slot.boatId !== selectedBoat.id) continue;
+      const dateStr: string = slot.dateStr ?? (slot.startAt ? isoToChicagoDateStr(slot.startAt) : "");
+      if (dateStr) available.add(dateStr);
+    }
+    return available;
+  }, [allSlots, selectedBoat]);
+
+  // Clear a previously-selected date if it is no longer available for the current boat.
+  useEffect(() => {
+    if (availableDateSet !== null) {
+      setSelectedDate((prev) => (prev && !availableDateSet.has(prev) ? null : prev));
+    }
+  }, [availableDateSet]);
+
+  const todayChicago = useMemo(() => getChicagoToday(), []);
   const useExperiencePicker = experiences != null && experiences.length > 0;
 
   const canContinue =
@@ -100,6 +213,25 @@ export function BookingPageClient() {
       date: selectedDate ?? undefined,
     });
   };
+
+  // After deep-link initialization completes and slots finish loading, scroll to the first
+  // incomplete step. scrolledRef ensures this fires at most once per page load.
+  const scrolledRef = useRef(false);
+  useEffect(() => {
+    if (!initDone || slotsLoading || scrolledRef.current) return;
+    scrolledRef.current = true;
+    const timer = setTimeout(() => {
+      if (selectedExperience && boats.length > 0 && !selectedBoat) {
+        boatsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (selectedExperience && (boats.length === 0 || selectedBoat) && !selectedDate) {
+        dateSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (canContinue) {
+        continueSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initDone, slotsLoading]);
 
   return (
     <div className="section-padding">
@@ -171,7 +303,7 @@ export function BookingPageClient() {
 
             {/* 2. Select your boat – only when category selected */}
             {selectedExperience && (
-              <section>
+              <section ref={boatsSectionRef}>
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your boat
                 </h2>
@@ -220,41 +352,52 @@ export function BookingPageClient() {
 
             {/* 3. Select your date – only when boat selected (or no boats) */}
             {selectedExperience && (boats.length === 0 || selectedBoat) && (
-              <section>
+              <section ref={dateSectionRef}>
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your date
                 </h2>
-                <div className="grid grid-cols-5 sm:grid-cols-7 gap-2">
-                  {dateOptions.map(({ dateStr, label, weekday }) => {
-                    const isSelected = selectedDate === dateStr;
-                    const isPast = dateStr < new Date().toISOString().slice(0, 10);
-                    return (
-                      <button
-                        key={dateStr}
-                        type="button"
-                        disabled={isPast}
-                        onClick={() => setSelectedDate(dateStr)}
-                        className={cn(
-                          "rounded-xl border-2 py-2.5 px-2 text-center transition-all",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isPast && "opacity-50 cursor-not-allowed",
-                          isSelected
-                            ? "border-brand-primary bg-brand-primary/10 text-brand-dark font-semibold"
-                            : !isPast && "border-brand-dark/15 bg-white hover:border-brand-dark/30"
-                        )}
-                      >
-                        <span className="block text-[10px] sm:text-xs text-brand-muted uppercase">{weekday}</span>
-                        <span className="block text-sm font-medium mt-0.5">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                {slotsLoading ? (
+                  <div className="flex items-center gap-2 py-4">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                    <p className="text-brand-muted text-sm">Checking availability…</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-5 sm:grid-cols-7 gap-2">
+                    {dateOptions.map(({ dateStr, label, weekday }) => {
+                      const isSelected = selectedDate === dateStr;
+                      const isPast = dateStr < todayChicago;
+                      const isAvailable = availableDateSet !== null ? availableDateSet.has(dateStr) : true;
+                      const isDisabled = isPast || (availableDateSet !== null && !isAvailable);
+                      return (
+                        <button
+                          key={dateStr}
+                          type="button"
+                          disabled={isDisabled}
+                          onClick={() => setSelectedDate(dateStr)}
+                          className={cn(
+                            "rounded-xl border-2 py-2.5 px-2 text-center transition-all",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                            isDisabled && "opacity-40 cursor-not-allowed",
+                            isSelected
+                              ? "border-brand-primary bg-brand-primary/10 text-brand-dark font-semibold"
+                              : !isDisabled
+                                ? "border-green-400/70 bg-green-50 hover:border-green-500"
+                                : "border-brand-dark/10 bg-white"
+                          )}
+                        >
+                          <span className="block text-[10px] sm:text-xs text-brand-muted uppercase">{weekday}</span>
+                          <span className="block text-sm font-medium mt-0.5">{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
             )}
 
             {/* Continue CTA */}
             {canContinue && (
-              <div className="pt-4">
+              <div ref={continueSectionRef} className="pt-4">
                 <button
                   type="button"
                   onClick={handleContinueToCheckout}

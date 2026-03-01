@@ -19,16 +19,25 @@ export async function GET(request: NextRequest) {
       .collection("rates")
       .where("active", "==", true)
       .get();
-    const rates = ratesSnap.docs.map((r) => {
-      const d = r.data() as ExperienceRate;
-      return {
-        id: r.id,
-        durationHours: d.durationHours,
-        displayName: d.displayName,
-        priceCents: d.priceCents,
-      };
-    });
-    return NextResponse.json({ rates });
+    const rates = ratesSnap.docs
+      .map((r) => {
+        const d = r.data() as ExperienceRate;
+        return {
+          id: r.id,
+          durationHours: d.durationHours,
+          displayName: d.displayName,
+          priceCents: d.priceCents,
+        };
+      })
+      .sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0));
+    return NextResponse.json(
+      { rates },
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=7200",
+        },
+      }
+    );
   } catch (err) {
     console.error("[experiences/rates]", err);
     return NextResponse.json({ rates: [] });

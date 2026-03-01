@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, isAllowedSlotTime } from "@/lib/booking/experience-slots";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
-import type { Experience, ExperienceRate, ExperienceAddon, Slot } from "@/lib/booking/types";
+import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
@@ -65,7 +65,14 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
 
-    const expDoc = await db.collection("experiences").doc(input.experienceId).get();
+    // Fetch experience, rates, boats, and addons in parallel — all only need experienceId
+    const [expDoc, ratesSnap, boatsSnap, addonsSnap] = await Promise.all([
+      db.collection("experiences").doc(input.experienceId).get(),
+      db.collection("experiences").doc(input.experienceId).collection("rates").where("active", "==", true).get(),
+      db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", input.experienceId).get(),
+      db.collection("experiences").doc(input.experienceId).collection("addons").get(),
+    ]);
+
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
@@ -78,12 +85,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Party size exceeds maximum" }, { status: 400 });
     }
 
-    const ratesSnap = await db
-      .collection("experiences")
-      .doc(input.experienceId)
-      .collection("rates")
-      .where("active", "==", true)
-      .get();
     const rateDoc = ratesSnap.docs.find((d) => (d.data() as ExperienceRate).durationHours === parsed.durationHours);
     if (!rateDoc) {
       return NextResponse.json({ error: "No rate found for this slot duration" }, { status: 404 });
@@ -92,12 +93,6 @@ export async function POST(request: NextRequest) {
     const rate = rateDoc.data() as ExperienceRate;
 
     // Experiences with listing boats: slots live under boats/{boatId}/slots. Require boatId so we hold the correct slot.
-    const boatsSnap = await db
-      .collection("boats")
-      .where("isListingBoat", "==", true)
-      .where("active", "==", true)
-      .where("experienceIds", "array-contains", input.experienceId)
-      .get();
     const listingBoatIds = boatsSnap.docs.map((d) => d.id);
     const hasListingBoats = listingBoatIds.length > 0;
     const useBoatSlots = hasListingBoats && !!input.boatId;
@@ -110,6 +105,28 @@ export async function POST(request: NextRequest) {
     }
     if (input.boatId && !listingBoatIds.includes(input.boatId)) {
       return NextResponse.json({ error: "Boat not found or not available for this experience" }, { status: 404 });
+    }
+
+    const isTicketed = experience.pricingType === "ticketed";
+    if (isTicketed) {
+      const deptHour = experience.departureHour;
+      const deptMinute = experience.departureMinute ?? 0;
+      const tripDuration = experience.tripDurationHours;
+      if (
+        deptHour == null || tripDuration == null ||
+        parsed.startHour !== deptHour ||
+        parsed.startMinute !== deptMinute ||
+        parsed.durationHours !== tripDuration
+      ) {
+        return NextResponse.json({ error: "Slot is not valid for this experience" }, { status: 400 });
+      }
+    } else {
+      const selectedBoat = input.boatId
+        ? (boatsSnap.docs.find((d) => d.id === input.boatId)?.data() as ListingBoat | undefined)
+        : undefined;
+      if (!isAllowedSlotTime(parsed.startHour, parsed.startMinute, parsed.durationHours, selectedBoat?.allowedStartTimes)) {
+        return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
+      }
     }
 
     const slotRef = useBoatSlots
@@ -129,12 +146,6 @@ export async function POST(request: NextRequest) {
     if (!isSeasonalAllowed(experience, slotStart)) {
       return NextResponse.json({ error: "Experience not available for this date" }, { status: 400 });
     }
-
-    const addonsSnap = await db
-      .collection("experiences")
-      .doc(input.experienceId)
-      .collection("addons")
-      .get();
     const addonsById = new Map<string, ExperienceAddon>();
     addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     const addonsForPricing = buildAddonSelectionsForPricing([], addonsById);
@@ -160,6 +171,7 @@ export async function POST(request: NextRequest) {
     const holdPayload: Record<string, unknown> = {
       experienceId: input.experienceId,
       slotId: input.slotId,
+      startDateStr: parsed.dateStr,
       rateId,
       addonSelections: [] as { addonId: string; qty: number }[],
       partySize: input.partySize,
@@ -184,34 +196,42 @@ export async function POST(request: NextRequest) {
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
         if (slot.status !== "open") throw new Error("Slot no longer available");
-        // Defense in depth: ensure no paid booking already exists for this boat/experience and time
+        // Defense in depth: date-bounded overlap check mirrors create-hold query strategy.
+        // Index used: bookings(experienceId, startDateStr).
         const slotStartMs = (slot.startAt as { toDate(): Date }).toDate().getTime();
         const slotEndMs = (slot.endAt as { toDate(): Date }).toDate().getTime();
-        if (useBoatSlots && input.boatId) {
-          const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          );
-          for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string };
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
+        const paidSnap = await tx.get(
+          db.collection("bookings")
+            .where("experienceId", "==", input.experienceId)
+            .where("startDateStr", "==", parsed.dateStr)
+        );
+        for (const doc of paidSnap.docs) {
+          const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
+          if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const p = b.slotId ? parseSlotId(b.slotId) : null;
+          if (!p) continue;
+          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+            throw new Error("Slot no longer available");
           }
-        } else {
-          const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          );
-          for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string };
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
+        }
+        // Legacy fallback: covers bookings written before startDateStr was populated.
+        // TODO: remove after all booking documents have startDateStr backfilled.
+        const legacyPaid = await tx.get(
+          db.collection("bookings")
+            .where("experienceId", "==", input.experienceId)
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+        );
+        for (const doc of legacyPaid.docs) {
+          const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
+          if (b.startDateStr) continue; // already covered by the primary date-bounded query
+          if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
+          const p = b.slotId ? parseSlotId(b.slotId) : null;
+          if (!p || p.dateStr !== parsed.dateStr) continue;
+          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+            throw new Error("Slot no longer available");
           }
         }
         tx.update(slotRef, {
@@ -263,32 +283,41 @@ export async function POST(request: NextRequest) {
             }
           }
         }
-        // Reject if a paid booking already exists for this boat/experience and time
-        if (useBoatSlots && input.boatId) {
-          const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          );
-          for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string };
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
+        // Reject if a paid booking already exists for this boat/experience and time.
+        // Date-bounded query mirrors create-hold strategy; boatId/status filtered in code.
+        // Index used: bookings(experienceId, startDateStr).
+        const paidSnap2 = await tx.get(
+          db.collection("bookings")
+            .where("experienceId", "==", input.experienceId)
+            .where("startDateStr", "==", parsed.dateStr)
+        );
+        for (const doc of paidSnap2.docs) {
+          const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
+          if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const p = b.slotId ? parseSlotId(b.slotId) : null;
+          if (!p) continue;
+          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+            throw new Error("Slot no longer available");
           }
-        } else if (!useBoatSlots) {
-          const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          );
-          for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string };
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
+        }
+        // Legacy fallback: covers bookings written before startDateStr was populated.
+        // TODO: remove after all booking documents have startDateStr backfilled.
+        const legacyPaid2 = await tx.get(
+          db.collection("bookings")
+            .where("experienceId", "==", input.experienceId)
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+        );
+        for (const doc of legacyPaid2.docs) {
+          const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
+          if (b.startDateStr) continue; // already covered by the primary date-bounded query
+          if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
+          const p = b.slotId ? parseSlotId(b.slotId) : null;
+          if (!p || p.dateStr !== parsed.dateStr) continue;
+          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+            throw new Error("Slot no longer available");
           }
         }
         tx.set(slotRef, {
@@ -314,12 +343,15 @@ export async function POST(request: NextRequest) {
     const stripe = getStripe();
     let stripeCouponId: string | undefined;
     if (discountCents > 0 && discountCodeApplied) {
-      const coupon = await stripe.coupons.create({
-        amount_off: discountCents,
-        currency: pricing.currency,
-        name: `Discount (${discountCodeApplied})`,
-        duration: "once",
-      });
+      const coupon = await stripe.coupons.create(
+        {
+          amount_off: discountCents,
+          currency: pricing.currency,
+          name: `Discount (${discountCodeApplied})`,
+          duration: "once",
+        },
+        { idempotencyKey: `coupon-${holdId}` }
+      );
       stripeCouponId = coupon.id;
     }
     const metadata: Record<string, string> = {

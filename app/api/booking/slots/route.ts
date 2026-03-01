@@ -17,6 +17,11 @@ import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/t
 
 export const dynamic = "force-dynamic";
 
+// Set LEGACY_BOOKING_FALLBACK=1 only during / immediately after a startDateStr backfill migration.
+// Once all historical bookings and holds carry startDateStr, leave this unset so the broad
+// legacy scans are never executed and every request uses only the fast windowed index queries.
+const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_BOOKING_FALLBACK === "1";
+
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
 
@@ -52,6 +57,15 @@ export async function GET(request: NextRequest) {
       // Experiences with listing boats: slots are per boat so one boat booked doesn't block others.
       // Optional boatId: return only that boat's slots. Otherwise return slots for all boats (each slot has boatId).
       const expRef = db.collection("experiences").doc(experienceId);
+      // Start rates + boats fetches immediately — they only need expRef (a reference, not a resolved
+      // doc) so they run in parallel with expDoc instead of sequentially after it.
+      const ratesSnapPromise = expRef.collection("rates").where("active", "==", true).get();
+      const boatsSnapPromise = db
+        .collection("boats")
+        .where("isListingBoat", "==", true)
+        .where("active", "==", true)
+        .where("experienceIds", "array-contains", experienceId)
+        .get();
       const expDoc = await expRef.get();
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -73,7 +87,7 @@ export async function GET(request: NextRequest) {
 
       if (expDataFull?.pricingType === "ticketed") {
         // --- Ticketed experience: one slot per date with capacity enrichment ---
-        const tRatesSnap = await expRef.collection("rates").where("active", "==", true).get();
+        const tRatesSnap = await ratesSnapPromise;
         if (tRatesSnap.empty) {
           console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
           return NextResponse.json({ slots: [] });
@@ -96,13 +110,8 @@ export async function GET(request: NextRequest) {
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 
-        // Load boats to resolve the first boatId for slot rows
-        const tBoatsSnap = await db
-          .collection("boats")
-          .where("isListingBoat", "==", true)
-          .where("active", "==", true)
-          .where("experienceIds", "array-contains", experienceId)
-          .get();
+        // Load boats to resolve the first boatId for slot rows (reuse already-started promise)
+        const tBoatsSnap = await boatsSnapPromise;
         let tBoatIds: string[] = tBoatsSnap.docs.map((d) => d.id);
         if (tBoatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
           const tBoatsBySlugSnap = await db
@@ -137,6 +146,7 @@ export async function GET(request: NextRequest) {
         const charterLockedDates = new Set<string>();
         const processBookingForCapacity = (doc: { id: string; data: () => Record<string, unknown> }) => {
           const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; status?: string };
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) return;
           const slotIdRaw = b.slotId ?? b.slot_id;
           if (!slotIdRaw) return;
           const parsed = parseSlotIdRelaxedT(slotIdRaw);
@@ -149,24 +159,71 @@ export async function GET(request: NextRequest) {
           }
         };
 
-        const tBookingsSnap = await db
-          .collection("bookings")
-          .where("experienceId", "==", experienceId)
-          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          .limit(500)
-          .get();
-        tBookingsSnap.docs.forEach(processBookingForCapacity);
-        if (experienceSlug && experienceSlug !== experienceId) {
-          const tBookingsBySlugSnap = await db
-            .collection("bookings")
-            .where("experienceId", "==", experienceSlug)
-            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-            .limit(500)
-            .get();
-          const seenTIds = new Set(tBookingsSnap.docs.map((d) => d.id));
-          tBookingsBySlugSnap.docs.forEach((doc) => {
-            if (!seenTIds.has(doc.id)) processBookingForCapacity(doc);
-          });
+        // Build experience ID variants once so all queries run in parallel across all IDs.
+        const tAllExpIds = Array.from(new Set([experienceId, ...(experienceSlug && experienceSlug !== experienceId ? [experienceSlug] : [])]));
+
+        // Windowed query: parallel == queries per experience ID use the deployed (experienceId, startDateStr) index.
+        // Note: `in` + range on a different field is rejected by Firestore, so we use per-ID parallel calls.
+        const tSeenBookingIds = new Set<string>();
+        let tWindowedIndexReady = true;
+        try {
+          const tWindowedBookingSnaps = await Promise.all(
+            tAllExpIds.map(expId =>
+              db.collection("bookings")
+                .where("experienceId", "==", expId)
+                .where("startDateStr", ">=", startDate)
+                .where("startDateStr", "<=", endDate)
+                .get()
+            )
+          );
+          tWindowedBookingSnaps.forEach(snap =>
+            snap.docs.forEach(doc => {
+              if (tSeenBookingIds.has(doc.id)) return;
+              tSeenBookingIds.add(doc.id);
+              processBookingForCapacity(doc);
+            })
+          );
+        } catch (tWindowedErr) {
+          const twmsg = tWindowedErr instanceof Error ? tWindowedErr.message : String(tWindowedErr);
+          if (/FAILED_PRECONDITION.*index/i.test(twmsg)) {
+            tWindowedIndexReady = false;
+            console.warn("[slots] ticketed windowed bookings index not ready yet, falling back to legacy query");
+          } else {
+            throw tWindowedErr;
+          }
+        }
+        // Legacy fallback: only runs when the windowed index is absent or LEGACY_BOOKING_FALLBACK=1.
+        // Unset LEGACY_BOOKING_FALLBACK once startDateStr is backfilled on all historical bookings
+        // so this broad scan is never executed on normal requests.
+        if (!tWindowedIndexReady || LEGACY_FALLBACK_ENABLED) {
+          try {
+            const tLegacyBookingSnaps = await Promise.all(
+              tAllExpIds.map(expId =>
+                db.collection("bookings")
+                  .where("experienceId", "==", expId)
+                  .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                  .limit(200) // tight ceiling; in-memory date filter discards out-of-window records
+                  .get()
+              )
+            );
+            tLegacyBookingSnaps.forEach(snap =>
+              snap.docs.forEach(doc => {
+                if (tSeenBookingIds.has(doc.id)) return;
+                const d = doc.data() as { startDateStr?: string };
+                // Skip docs already covered by the windowed query.
+                if (tWindowedIndexReady && d.startDateStr) return;
+                tSeenBookingIds.add(doc.id);
+                processBookingForCapacity(doc);
+              })
+            );
+          } catch (tLegacyErr) {
+            const tlmsg = tLegacyErr instanceof Error ? tLegacyErr.message : String(tLegacyErr);
+            if (/FAILED_PRECONDITION.*index/i.test(tlmsg)) {
+              console.warn("[slots] ticketed legacy bookings index not ready yet, continuing without booking data");
+            } else {
+              throw tLegacyErr;
+            }
+          }
         }
 
         // Query active holds for this experience and fold non-charter holds into spotsByDate
@@ -184,22 +241,45 @@ export async function GET(request: NextRequest) {
           spotsByDate.set(dateStr, (spotsByDate.get(dateStr) ?? 0) + (h.partySize ?? 0));
         };
         try {
-          const tHoldsSnap = await db
-            .collection("holds")
-            .where("experienceId", "==", experienceId)
-            .where("status", "==", "active")
-            .get();
-          tHoldsSnap.docs.forEach(processHoldForCapacity);
-          if (experienceSlug && experienceSlug !== experienceId) {
-            const tHoldsBySlugSnap = await db
-              .collection("holds")
-              .where("experienceId", "==", experienceSlug)
-              .where("status", "==", "active")
-              .get();
-            const seenTHoldIds = new Set(tHoldsSnap.docs.map((d) => d.id));
-            tHoldsBySlugSnap.docs.forEach((doc) => {
-              if (!seenTHoldIds.has(doc.id)) processHoldForCapacity(doc);
-            });
+          // Windowed holds query: parallel == queries per experience ID use the deployed (experienceId, startDateStr) index.
+          const tHoldsWindowedSnaps = await Promise.all(
+            tAllExpIds.map(expId =>
+              db.collection("holds")
+                .where("experienceId", "==", expId)
+                .where("startDateStr", ">=", startDate)
+                .where("startDateStr", "<=", endDate)
+                .get()
+            )
+          );
+          const tSeenHoldIds = new Set<string>();
+          tHoldsWindowedSnaps.forEach(snap =>
+            snap.docs.forEach(doc => {
+              if (tSeenHoldIds.has(doc.id)) return;
+              tSeenHoldIds.add(doc.id);
+              processHoldForCapacity(doc);
+            })
+          );
+          // Legacy holds fallback: only runs when LEGACY_BOOKING_FALLBACK=1.
+          // Unset once startDateStr is backfilled on all historical holds.
+          if (LEGACY_FALLBACK_ENABLED) {
+            const tHoldsLegacySnaps = await Promise.all(
+              tAllExpIds.map(expId =>
+                db.collection("holds")
+                  .where("experienceId", "==", expId)
+                  .where("status", "==", "active")
+                  .limit(200) // tight ceiling; in-memory expiry filter discards irrelevant holds
+                  .get()
+              )
+            );
+            tHoldsLegacySnaps.forEach(snap =>
+              snap.docs.forEach(doc => {
+                if (tSeenHoldIds.has(doc.id)) return;
+                const d = doc.data() as { startDateStr?: string };
+                if (d.startDateStr) return; // already covered by windowed query
+                tSeenHoldIds.add(doc.id);
+                processHoldForCapacity(doc);
+              })
+            );
           }
         } catch (tHoldsErr) {
           console.warn("[slots] ticketed holds query failed:", tHoldsErr instanceof Error ? tHoldsErr.message : tHoldsErr);
@@ -263,22 +343,19 @@ export async function GET(request: NextRequest) {
           });
         }
         tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
-        return NextResponse.json({ slots: tSlots }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+        return NextResponse.json({ slots: tSlots }, { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } });
       }
       // --- End ticketed branch ---
 
-      const ratesSnap = await expRef.collection("rates").where("active", "==", true).get();
+      // Both promises started in parallel with expDoc above — await them together here.
+      const [ratesSnap, boatsSnap] = await Promise.all([ratesSnapPromise, boatsSnapPromise]);
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
       const durationsUnique = Array.from(new Set(durations));
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
-      let boatIds: string[] = [];
-      const boatsSnap = await db
-        .collection("boats")
-        .where("isListingBoat", "==", true)
-        .where("active", "==", true)
-        .where("experienceIds", "array-contains", experienceId)
-        .get();
-      boatIds = boatsSnap.docs.map((d) => d.id);
+      let boatIds: string[] = boatsSnap.docs.map((d) => d.id);
+      // Build boat data map from fetched docs to reuse for grid metadata without redundant per-boat fetches
+      const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
+      boatsSnap.docs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
       // Fallback: boats may be linked by experience slug (e.g. "lake-austin-pontoon-charter") instead of Firestore id.
       if (boatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
         const boatsBySlugSnap = await db
@@ -288,7 +365,16 @@ export async function GET(request: NextRequest) {
           .where("experienceIds", "array-contains", experienceSlug)
           .get();
         boatIds = boatsBySlugSnap.docs.map((d) => d.id);
+        boatsBySlugSnap.docs.forEach((d) => {
+          if (!boatDocDataById.has(d.id)) boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string });
+        });
       }
+      // Build experience ID variants upfront so all queries run in parallel across all IDs.
+      const allExpIds = Array.from(new Set([
+        experienceId,
+        ...(experienceSlug && experienceSlug !== experienceId ? [experienceSlug] : []),
+        ...((experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") ? ["pontoon", "lake-austin-pontoon"] : []),
+      ]));
       if (boatIdParam) {
         if (!boatIds.includes(boatIdParam)) {
           return NextResponse.json({ error: "Boat not found or not assigned to this experience" }, { status: 404 });
@@ -298,28 +384,26 @@ export async function GET(request: NextRequest) {
       // If no boats linked to this experience (e.g. boats use slug and experience has different id), still show booked slots by using boatIds from bookings.
       let bookingsFromFallback: { id: string; data: () => Record<string, unknown> }[] = [];
       if (boatIds.length === 0) {
-        const byIdSnap = await db
-          .collection("bookings")
-          .where("experienceId", "==", experienceId)
-          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          .limit(500)
-          .get();
-        const seenIds = new Set(byIdSnap.docs.map((d) => d.id));
-        const mergedDocs = [...byIdSnap.docs];
-        if (experienceSlug && experienceSlug !== experienceId) {
-          const bySlugSnap = await db
-            .collection("bookings")
-            .where("experienceId", "==", experienceSlug)
-            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-            .limit(500)
-            .get();
-          bySlugSnap.docs.forEach((d) => {
-            if (!seenIds.has(d.id)) {
-              seenIds.add(d.id);
+        // Run parallel per-experience queries to discover boat IDs from existing bookings
+        const fallbackSnaps = await Promise.all(
+          allExpIds.map(expId =>
+            db.collection("bookings")
+              .where("experienceId", "==", expId)
+              .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+              .limit(500)
+              .get()
+          )
+        );
+        const seenFallbackIds = new Set<string>();
+        const mergedDocs: { id: string; data: () => Record<string, unknown> }[] = [];
+        fallbackSnaps.forEach(snap =>
+          snap.docs.forEach(d => {
+            if (!seenFallbackIds.has(d.id)) {
+              seenFallbackIds.add(d.id);
               mergedDocs.push(d);
             }
-          });
-        }
+          })
+        );
         const fromBookings = new Set<string>();
         mergedDocs.forEach((d) => {
           const boatId = (d.data() as { boatId?: string }).boatId;
@@ -411,34 +495,71 @@ export async function GET(request: NextRequest) {
       const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
       const seenBookingIds = new Set<string>();
 
-      const addBookingsFromQuery = (snap: import("firebase-admin").firestore.QuerySnapshot) => {
-        snap.docs.forEach((doc) => {
-          if (seenBookingIds.has(doc.id)) return;
-          seenBookingIds.add(doc.id);
-          allBookingDocs.push(doc);
-        });
+      const addBookingDoc = (doc: { id: string; data: () => Record<string, unknown> }) => {
+        if (seenBookingIds.has(doc.id)) return;
+        seenBookingIds.add(doc.id);
+        allBookingDocs.push(doc);
       };
 
-      let bookingsSnap = await db
-        .collection("bookings")
-        .where("experienceId", "==", experienceId)
-        .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-        .get();
-      addBookingsFromQuery(bookingsSnap);
-      // Fallback: some bookings store experienceId as experience slug (e.g. "lake-austin-pontoon" or "pontoon"). Include all variants.
-      const slugVariants = new Set<string>();
-      if (experienceSlug && experienceSlug !== experienceId) slugVariants.add(experienceSlug);
-      if (experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") {
-        slugVariants.add("pontoon");
-        slugVariants.add("lake-austin-pontoon");
+      // Windowed query uses the (experienceId, startDateStr) composite index — fast path for all requests.
+      // Note: `in` + range on a different field is rejected by Firestore; per-ID parallel calls are used.
+      let windowedIndexReady = true;
+      try {
+        const windowedSnaps = await Promise.all(
+          allExpIds.map(expId =>
+            db.collection("bookings")
+              .where("experienceId", "==", expId)
+              .where("startDateStr", ">=", startDate)
+              .where("startDateStr", "<=", endDate)
+              .get()
+          )
+        );
+        windowedSnaps.forEach(snap =>
+          snap.docs.forEach(doc => {
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has((doc.data() as { status?: BookingStatus }).status as BookingStatus)) return;
+            addBookingDoc(doc);
+          })
+        );
+      } catch (windowedErr) {
+        const wmsg = windowedErr instanceof Error ? windowedErr.message : String(windowedErr);
+        if (/FAILED_PRECONDITION.*index/i.test(wmsg)) {
+          windowedIndexReady = false;
+          console.warn("[slots] windowed bookings index not ready yet, falling back to legacy query");
+        } else {
+          throw windowedErr;
+        }
       }
-      for (const slugVariant of Array.from(slugVariants)) {
-        const bySlugSnap = await db
-          .collection("bookings")
-          .where("experienceId", "==", slugVariant)
-          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          .get();
-        addBookingsFromQuery(bySlugSnap);
+      // Legacy fallback: only runs when the windowed index is absent or LEGACY_BOOKING_FALLBACK=1.
+      // Not started eagerly — avoids the parallel broad scan on every request.
+      // Unset LEGACY_BOOKING_FALLBACK once startDateStr is backfilled on all historical bookings.
+      if (!windowedIndexReady || LEGACY_FALLBACK_ENABLED) {
+        try {
+          const legacySnaps = await Promise.all(
+            allExpIds.map(expId =>
+              db.collection("bookings")
+                .where("experienceId", "==", expId)
+                .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                .limit(200) // tight ceiling; in-memory date filter discards out-of-window records
+                .get()
+            )
+          );
+          legacySnaps.forEach(snap =>
+            snap.docs.forEach(doc => {
+              if (seenBookingIds.has(doc.id)) return;
+              const d = doc.data() as { startDateStr?: string };
+              // Skip docs already covered by the windowed query.
+              if (windowedIndexReady && d.startDateStr) return;
+              addBookingDoc(doc);
+            })
+          );
+        } catch (legacyErr) {
+          const lmsg = legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
+          if (/FAILED_PRECONDITION.*index/i.test(lmsg)) {
+            console.warn("[slots] legacy bookings index not ready yet, continuing without booking data");
+          } else {
+            throw legacyErr;
+          }
+        }
       }
       allBookingDocs.forEach((doc) => mergeBookingSlot(doc));
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
@@ -470,6 +591,17 @@ export async function GET(request: NextRequest) {
         }
         return null;
       };
+
+      // Start blocks query in parallel with slot docs — it only needs experienceId and end date.
+      const blocksSnapPromise = db
+        .collection("blocks")
+        .where("experienceId", "==", experienceId)
+        .where("startAt", "<=", Timestamp.fromDate(end))
+        .get()
+        .catch((blocksErr: unknown) => {
+          console.warn("[slots] blocks query failed (index may be building):", blocksErr instanceof Error ? blocksErr.message : blocksErr);
+          return null;
+        });
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -513,11 +645,16 @@ export async function GET(request: NextRequest) {
       );
 
       // Per-boat grid: wake boats use Saturday-only expanded times (9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm) on Saturday and allowedStartTimes (or hourly) on weekdays. Other boats with allowedStartTimes use those every day.
-      const boatDocs = await Promise.all(boatIds.map((id) => db.collection("boats").doc(id).get()));
       const gridByBoatId = new Map<string, import("@/lib/booking/experience-slots").SlotGridItem[]>();
       for (let i = 0; i < boatIds.length; i++) {
         const bid = boatIds[i];
-        const boatData = boatDocs[i]?.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string } | undefined;
+        // Reuse already-fetched boat data; only fetch fresh if boat was discovered via the fallback booking scan
+        let boatData = boatDocDataById.get(bid) as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string } | undefined;
+        if (!boatData) {
+          const freshDoc = await db.collection("boats").doc(bid).get();
+          boatData = freshDoc.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string } | undefined;
+          if (boatData) boatDocDataById.set(bid, boatData);
+        }
         const allowedEveryDay = boatData?.allowedStartTimes;
         const isWakeBoat = boatData?.boatType === "wake";
         let grid: import("@/lib/booking/experience-slots").SlotGridItem[];
@@ -533,12 +670,8 @@ export async function GET(request: NextRequest) {
         gridByBoatId.set(bid, grid);
       }
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
-      try {
-        const blocksSnap = await db
-          .collection("blocks")
-          .where("experienceId", "==", experienceId)
-          .where("startAt", "<=", Timestamp.fromDate(end))
-          .get();
+      const blocksSnap = await blocksSnapPromise; // already running since before slot docs
+      if (blocksSnap) {
         blocksSnap.docs.forEach((doc) => {
           const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
           const blockStart = b.startAt?.toDate?.()?.getTime();
@@ -556,9 +689,6 @@ export async function GET(request: NextRequest) {
             });
           }
         });
-      } catch (blocksErr) {
-        // Index may still be building or missing; continue without blocks so bookings still show
-        console.warn("[slots] blocks query failed (index may be building):", blocksErr instanceof Error ? blocksErr.message : blocksErr);
       }
       const slots: SlotRow[] = [];
       for (const bid of boatIds) {
@@ -609,7 +739,8 @@ export async function GET(request: NextRequest) {
       const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
       const holdIdsToRelease = new Set<string>(); // held slots whose hold is missing, inactive, or expired → show as open
       if (heldHoldIds.length > 0) {
-        const holdSnap = await Promise.all(heldHoldIds.map((id) => db.collection("holds").doc(id).get()));
+        const holdRefs = heldHoldIds.map((id) => db.collection("holds").doc(id));
+        const holdSnap = await db.getAll(...holdRefs);
         const now = new Date();
         holdSnap.forEach((doc, i) => {
           const hid = heldHoldIds[i];
@@ -654,7 +785,7 @@ export async function GET(request: NextRequest) {
         : undefined;
       return NextResponse.json(
         debugByDate != null ? { slots, byDate: debugByDate } : { slots },
-        { headers: { "Cache-Control": "no-store, max-age=0" } }
+        { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
       );
     }
 
@@ -697,7 +828,7 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json(
       { slots },
-      { headers: { "Cache-Control": "no-store, max-age=0" } }
+      { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

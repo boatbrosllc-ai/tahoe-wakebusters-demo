@@ -63,7 +63,39 @@ export async function convertHoldToBooking(
   }
   const hold = holdSnap.data() as Hold;
   if (hold.status !== "active") {
+    // When the hold is already converted, check whether the incoming payment intent matches
+    // the one that was recorded during payment creation. A mismatch means a second charge
+    // arrived for the same hold (e.g. two browser tabs, a webhook retry of a different PI).
+    // Flag it for the refund workflow rather than silently ignoring it.
+    if (hold.status === "converted" && input.paymentIntentId) {
+      const isDeposit = isDepositInput(input);
+      const holdPiField = isDeposit ? "depositPaymentIntentId" : "fullPaymentIntentId";
+      const recordedPiId = (hold as Record<string, unknown>)[holdPiField] as string | undefined;
+      if (recordedPiId && input.paymentIntentId !== recordedPiId) {
+        try {
+          await db.collection("pendingRefunds").add({
+            holdId,
+            duplicatePaymentIntentId: input.paymentIntentId,
+            expectedPaymentIntentId: recordedPiId,
+            reason: "duplicate_charge_after_conversion",
+            status: "pending",
+            createdAt: Timestamp.now(),
+          });
+          console.warn("[convert-hold-to-booking] Duplicate charge flagged for refund", {
+            holdId,
+            duplicatePaymentIntentId: input.paymentIntentId,
+            expectedPaymentIntentId: recordedPiId,
+          });
+        } catch (refundFlagErr) {
+          console.error("[convert-hold-to-booking] Failed to write pendingRefunds record", refundFlagErr);
+        }
+      }
+    }
     return { alreadyConverted: true };
+  }
+  const expiresAtDate = (hold.expiresAt as { toDate(): Date }).toDate();
+  if (expiresAtDate < new Date()) {
+    throw new Error("Hold has expired");
   }
 
   const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
@@ -80,12 +112,21 @@ export async function convertHoldToBooking(
   let experienceForPricing: Experience | null = null;
   let boatForPricing: ListingBoat | null = null;
 
+  // Kick off addons fetch in parallel — only depends on hold IDs known upfront
+  const addonsPromise = (hasExperience
+    ? db.collection("experiences").doc(hold.experienceId!).collection("addons")
+    : db.collection("boats").doc(hold.boatId!).collection("addons")
+  ).get();
+
   if (isListingBoatFlow) {
-    const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-    const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-    const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
+    const [expSnap, boatSnap, rateSnap, slotSnapMaybe] = await Promise.all([
+      db.collection("experiences").doc(hold.experienceId!).get(),
+      db.collection("boats").doc(hold.boatId!).get(),
+      db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get(),
+      isSharedHold ? Promise.resolve(null) : db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get(),
+    ]);
     if (!isSharedHold) {
-      const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
+      const slotSnap = slotSnapMaybe!;
       if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
         throw new Error("Experience/boat/rate/slot not found");
       }
@@ -128,10 +169,13 @@ export async function convertHoldToBooking(
       slotRef = null;
     }
   } else if (hasExperience) {
-    const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-    const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
+    const [expSnap, rateSnap, slotSnapMaybe] = await Promise.all([
+      db.collection("experiences").doc(hold.experienceId!).get(),
+      db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get(),
+      isSharedHold ? Promise.resolve(null) : db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get(),
+    ]);
     if (!isSharedHold) {
-      const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
+      const slotSnap = slotSnapMaybe!;
       if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
         throw new Error("Experience/rate/slot not found");
       }
@@ -170,9 +214,11 @@ export async function convertHoldToBooking(
       slotRef = null;
     }
   } else {
-    const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-    const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
-    const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
+    const [boatSnap, rateSnap, slotSnap] = await Promise.all([
+      db.collection("boats").doc(hold.boatId!).get(),
+      db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get(),
+      db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get(),
+    ]);
     if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
       throw new Error("Boat/rate/slot not found");
     }
@@ -187,10 +233,7 @@ export async function convertHoldToBooking(
     slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
   }
 
-  const addonsRef = hasExperience
-    ? db.collection("experiences").doc(hold.experienceId!).collection("addons")
-    : db.collection("boats").doc(hold.boatId!).collection("addons");
-  const addonsSnap = await addonsRef.get();
+  const addonsSnap = await addonsPromise;
   const addonsById = new Map<string, Addon | ExperienceAddon>();
   addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon | ExperienceAddon));
   const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
@@ -321,18 +364,20 @@ export async function convertHoldToBooking(
     pricingType: experienceForPricing?.pricingType,
   };
   try {
-    await sendBookingConfirmationEmail(booking as Booking, emailContext);
-    await logEmailSent({
-      to: customer.email,
-      toName: customer.name,
-      templateId: "booking_confirmation",
-      subject: "Booking Confirmation – Boat Bros ATX",
-      bookingId,
-    });
-    await sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext);
+    await Promise.all([
+      sendBookingConfirmationEmail(booking as Booking, emailContext),
+      sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext),
+    ]);
   } catch (emailErr) {
     console.error("[convert-hold-to-booking] Brevo send failed", emailErr);
   }
+  logEmailSent({
+    to: customer.email,
+    toName: customer.name,
+    templateId: "booking_confirmation",
+    subject: "Booking Confirmation – Boat Bros ATX",
+    bookingId,
+  }).catch((err) => console.error("[convert-hold-to-booking] logEmailSent failed", err));
   if (waiverResult?.sendSeparateWaiverInvite) {
     try {
       await sendWaiverInviteAndMarkSent(waiverResult);

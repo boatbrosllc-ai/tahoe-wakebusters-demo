@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -9,9 +10,14 @@ import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
-import { BookingModal } from "@/components/site/BookingModal";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
+
+// Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
+const BookingModal = dynamic(
+  () => import("@/components/site/BookingModal").then((m) => ({ default: m.BookingModal })),
+  { ssr: false }
+);
 
 const navLinks = [
   { href: "/experiences", label: "Experiences" },
@@ -28,16 +34,26 @@ export function Header() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection } = useBookingModal();
+  // Only mount the modal after it has been opened at least once — avoids mounting a
+  // 2300-line component on every page load even when the modal is never opened.
+  const [hasOpenedBookingModal, setHasOpenedBookingModal] = useState(false);
+  useEffect(() => {
+    if (bookingModalOpen) setHasOpenedBookingModal(true);
+  }, [bookingModalOpen]);
 
   const handleCallClick = () => analytics.callClick("header", "global");
 
-  // Re-check admin session on mount and when pathname changes (e.g. after signing in and navigating to site)
-  useEffect(() => {
+  const checkSession = () => {
     fetch("/api/admin/session", { credentials: "include" })
       .then((res) => res.json().catch(() => ({})))
       .then((data: { signedIn?: boolean }) => setIsAdmin(data.signedIn === true))
       .catch(() => setIsAdmin(false));
-  }, [pathname]);
+  };
+
+  // Check admin session once on mount only
+  useEffect(() => {
+    checkSession();
+  }, []);
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -226,11 +242,13 @@ export function Header() {
           >
             Book now
           </Button>
-          <BookingModal
-            open={bookingModalOpen}
-            onOpenChange={setBookingModalOpen}
-            initialSelection={initialSelection}
-          />
+          {hasOpenedBookingModal && (
+            <BookingModal
+              open={bookingModalOpen}
+              onOpenChange={setBookingModalOpen}
+              initialSelection={initialSelection}
+            />
+          )}
         </div>
       </div>
     </header>

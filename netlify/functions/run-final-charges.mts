@@ -1,6 +1,6 @@
 import { schedule } from "@netlify/functions";
 
-export const handler = schedule("0 */4 * * *", async () => {
+export const handler = schedule("20 */4 * * *", async () => {
   const rawBase =
     process.env.APP_BASE_URL ?? process.env.URL;
   const cronSecret = process.env.CRON_SECRET;

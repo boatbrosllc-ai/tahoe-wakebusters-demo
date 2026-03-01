@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { cn } from "@/lib/utils";
@@ -154,20 +155,14 @@ export function InlineBookingDetailsStep({
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [payFullAmount, setPayFullAmount] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
   const [holdId, setHoldId] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (bookingMode === "shared") {
-      setPayFullAmount(true);
-    } else {
-      setPayFullAmount(false);
-    }
-  }, [bookingMode]);
+  // Derived: no state or effect needed — shared bookings always pay full upfront
+  const payFullAmount = bookingMode === "shared";
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
     ? Math.min(experienceMaxGuests, spotsRemaining)
@@ -176,12 +171,19 @@ export function InlineBookingDetailsStep({
   const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
 
   useEffect(() => {
-    fetch(
-      `/api/booking/effective-price?experienceId=${encodeURIComponent(experienceId)}&rateId=${encodeURIComponent(rateId)}&date=${encodeURIComponent(selectedDate)}`
-    )
-      .then((res) => res.json())
-      .then((data) => (typeof data?.priceCents === "number" ? setEffectiveRateCents(data.priceCents) : setEffectiveRateCents(null)))
-      .catch(() => setEffectiveRateCents(null));
+    const controller = new AbortController();
+    // fetchDatePrices uses the shared module-level cache, so if the calendar section already
+    // loaded prices for this month the result comes back instantly without a network round-trip.
+    bookingCache.fetchDatePrices(experienceId, selectedDate, 1, rateId, controller.signal)
+      .then((data) => {
+        const price = data?.prices?.[selectedDate];
+        if (typeof price === "number") setEffectiveRateCents(price);
+        else setEffectiveRateCents(null);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setEffectiveRateCents(null);
+      });
+    return () => controller.abort();
   }, [experienceId, rateId, selectedDate]);
 
   const priceSummary = useMemo(() => {
@@ -251,6 +253,7 @@ export function InlineBookingDetailsStep({
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
           ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
           bookingMode: bookingMode ?? "charter",
+          ...(holdId ? { resumeHoldId: holdId } : {}),
         }),
       });
       const holdData = await holdRes.json();
@@ -293,6 +296,7 @@ export function InlineBookingDetailsStep({
 
   const handlePaymentSuccess = async () => {
     setPaymentPhase("completing");
+    bookingCache.invalidateBookingCaches(experienceId);
     if (!holdId || !paymentIntentId) {
       setPaymentPhase("success");
       return;

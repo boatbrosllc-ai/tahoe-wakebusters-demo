@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { ExperienceCalendarSectionView } from "./ExperienceCalendarSectionView";
 import Link from "next/link";
 import Image from "next/image";
@@ -36,6 +37,25 @@ function getDateRangeForMonth(calendarMonth: Date): { start: string; end: string
   const start = new Date(y, m - 1, 1);
   const end = new Date(y, m + 2, 0); // last day of month + 1
   return { start: toDateStr(start), end: toDateStr(end) };
+}
+
+/** Returns the date range covering only the visible calendar month (first day through last day). */
+function getVisibleMonthRange(calendarMonth: Date): { start: string; end: string } {
+  const y = calendarMonth.getFullYear();
+  const m = calendarMonth.getMonth();
+  return { start: toDateStr(new Date(y, m, 1)), end: toDateStr(new Date(y, m + 1, 0)) };
+}
+
+/**
+ * Merges incoming slots into an existing collection. For any (id, boatId) pair that appears in
+ * both arrays the incoming (fresher) slot wins, so staleness is never introduced by a merge.
+ */
+function mergeSlots(existing: SlotDto[], incoming: SlotDto[]): SlotDto[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+  const incomingByKey = new Map(incoming.map((s) => [`${s.id}:${s.boatId ?? ""}`, s]));
+  const retained = existing.filter((s) => !incomingByKey.has(`${s.id}:${s.boatId ?? ""}`));
+  return [...retained, ...incoming];
 }
 
 function toDateStr(d: Date): string {
@@ -158,6 +178,15 @@ export function ExperienceCalendarSection({
   const panel3Ref = useRef<HTMLDivElement>(null);
   const panel4Ref = useRef<HTMLDivElement>(null);
   const panel5Ref = useRef<HTMLDivElement>(null);
+  /** True when Effect 1 already populated rates from the slug endpoint response; skips the standalone rates fetch in Effect 2. */
+  const ratesLoadedFromSlug = useRef(false);
+  /**
+   * Tracks "experienceId:YYYY-MM" month keys already loaded into slot state so navigation to a
+   * previously-seen (or already-prefetched) month skips the loading indicator.
+   */
+  const fetchedMonthKeysRef = useRef<Set<string>>(new Set());
+  /** Tracks adjacent month keys already background-prefetched to avoid duplicate idle fetches. */
+  const prefetchedMonthKeysRef = useRef<Set<string>>(new Set());
   /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
   const [inlineStepIndex, setInlineStepIndex] = useState(() => pricingTypeProp === "ticketed" ? 1 : 0);
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
@@ -173,6 +202,7 @@ export function ExperienceCalendarSection({
 
   useEffect(() => {
     if (experienceIdProp) {
+      ratesLoadedFromSlug.current = false;
       setExperienceId(experienceIdProp);
       setRates([]);
       setFetchedExperience(null);
@@ -185,13 +215,15 @@ export function ExperienceCalendarSection({
       setFetchedAddons([]);
       return;
     }
-    let cancelled = false;
-    fetch(`/api/experiences/${firestoreSlug}`)
-      .then((res) => (res.ok ? res.json() : null))
+    const controller = new AbortController();
+    bookingCache.fetchExperienceBySlug(firestoreSlug, controller.signal)
       .then((data) => {
-        if (!cancelled && data?.id) {
+        if (data?.id) {
           setExperienceId(data.id);
-          if (Array.isArray(data.rates)) setRates(data.rates);
+          if (Array.isArray(data.rates)) {
+            ratesLoadedFromSlug.current = true;
+            setRates(data.rates);
+          }
           const exp = data.experience;
           if (exp && typeof exp.title === "string") {
             setFetchedExperience({
@@ -226,26 +258,31 @@ export function ExperienceCalendarSection({
           setFetchedAddons([]);
         }
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setFetchedExperience(null);
+        setFetchedAddons([]);
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
   }, [experienceIdProp, firestoreSlug]);
 
   // Load rates when we have experienceId (from prop or from slug resolve). Keeps prices in sync when slug response omitted rates.
+  // Skip when the slug effect already supplied rates — the slug endpoint always includes them.
   useEffect(() => {
     if (!experienceId) return;
-    let cancelled = false;
-    fetch(`/api/experiences/rates?experienceId=${encodeURIComponent(experienceId)}`)
-      .then((res) => (res.ok ? res.json() : null))
+    if (ratesLoadedFromSlug.current) return;
+    const controller = new AbortController();
+    bookingCache.fetchExperienceRates(experienceId, controller.signal)
       .then((data) => {
-        if (!cancelled && Array.isArray(data?.rates)) setRates(data.rates);
+        if (Array.isArray(data?.rates)) setRates(data.rates);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") {
+          // rates stay empty — UI falls back gracefully
+        }
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [experienceId]);
 
   const isTicketed = fetchedPricingType === "ticketed";
@@ -260,21 +297,75 @@ export function ExperienceCalendarSection({
 
   const dateRange = useMemo(() => getDateRangeForMonth(calendarMonth), [calendarMonth]);
 
-  const fetchSlots = useCallback(() => {
-    if (!experienceId) return;
-    setLoading(true);
-    fetch(
-      `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&endDate=${dateRange.end}`
-    )
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setSlots(data?.slots ?? []))
-      .finally(() => setLoading(false));
-  }, [experienceId, dateRange.start, dateRange.end]);
+  // Clear accumulated slot state when the experience changes so stale slots never bleed through.
+  // Defined before the fetch effect so React runs it first when experienceId changes.
+  useEffect(() => {
+    setSlots([]);
+    fetchedMonthKeysRef.current = new Set();
+    prefetchedMonthKeysRef.current = new Set();
+  }, [experienceId]);
 
+  // Fetch slots for the visible month only. Merges into existing state so already-seen months
+  // remain in the slot collection and calendar edge-cells keep their data while navigating.
+  // Loading indicator is only shown the first time a month is visited.
   useEffect(() => {
     if (!experienceId) return;
-    fetchSlots();
-  }, [experienceId, fetchSlots]);
+    const monthKey = `${experienceId}:${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, "0")}`;
+    const alreadyFetched = fetchedMonthKeysRef.current.has(monthKey);
+    fetchedMonthKeysRef.current.add(monthKey);
+    if (!alreadyFetched) setLoading(true);
+    const { start, end } = getVisibleMonthRange(calendarMonth);
+    const controller = new AbortController();
+    bookingCache.fetchSlots(experienceId, start, end, controller.signal)
+      .then((data) => setSlots((prev) => mergeSlots(prev, (data?.slots ?? []) as SlotDto[])))
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") {
+          if (!alreadyFetched) setSlots([]);
+        }
+      })
+      .finally(() => { if (!alreadyFetched) setLoading(false); });
+    return () => controller.abort();
+  }, [experienceId, calendarMonth]);
+
+  // After the visible month loads, prefetch the previous and next months in the background so
+  // navigating feels instant. Uses requestIdleCallback when available (Safari 16.4+, Chrome/Firefox),
+  // falls back to a low-priority setTimeout for other environments.
+  useEffect(() => {
+    if (!experienceId) return;
+    let idleId: number | undefined;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    const controllers: AbortController[] = [];
+
+    const doPrefetch = () => {
+      for (const offset of [-1, 1]) {
+        const adj = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + offset, 1);
+        const adjKey = `${experienceId}:${adj.getFullYear()}-${String(adj.getMonth() + 1).padStart(2, "0")}`;
+        if (prefetchedMonthKeysRef.current.has(adjKey)) continue;
+        prefetchedMonthKeysRef.current.add(adjKey);
+        const { start, end } = getVisibleMonthRange(adj);
+        const ctrl = new AbortController();
+        controllers.push(ctrl);
+        bookingCache.fetchSlots(experienceId, start, end, ctrl.signal)
+          .then((data) => {
+            const incoming = (data?.slots ?? []) as SlotDto[];
+            if (incoming.length > 0) setSlots((prev) => mergeSlots(prev, incoming));
+          })
+          .catch(() => { /* prefetch failures are non-critical */ });
+      }
+    };
+
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      idleId = (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(doPrefetch);
+    } else {
+      timerId = setTimeout(doPrefetch, 300);
+    }
+
+    return () => {
+      if (idleId !== undefined) (window as Window & { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(idleId);
+      if (timerId !== undefined) clearTimeout(timerId);
+      controllers.forEach((c) => c.abort());
+    };
+  }, [experienceId, calendarMonth]);
 
   // When showing inline boat step, fetch boats for this experience
   useEffect(() => {
@@ -282,63 +373,45 @@ export function ExperienceCalendarSection({
     setInlineBoatsLoading(true);
     setInlineBoats([]);
     setSelectedBoatInline(null);
-    fetch(`/api/booking/boats?experienceId=${encodeURIComponent(experienceId)}`)
-      .then((res) => (res.ok ? res.json() : null))
+    const controller = new AbortController();
+    bookingCache.fetchBoats(experienceId, controller.signal)
       .then((data) => {
-        if (data?.boats && Array.isArray(data.boats)) setInlineBoats(data.boats);
+        if (data?.boats && Array.isArray(data.boats)) setInlineBoats(data.boats as BoatOption[]);
         else setInlineBoats([]);
       })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setInlineBoats([]);
+      })
       .finally(() => setInlineBoatsLoading(false));
+    return () => controller.abort();
   }, [showInlineBoatStep, experienceId]);
 
   /**
-   * Boat IDs that have an OPEN slot matching the selected slot's exact start AND end time.
-   * Matching on both startAt + endAt (i.e. same duration) prevents cross-duration false negatives
-   * where a boat's longer-duration slot is blocked while the selected duration is still open.
+   * Single-pass derivation of all three boat-availability sets for the selected inline slot.
+   * Matching on both startAt + endAt prevents cross-duration false negatives.
    */
-  const availableBoatIdsForInlineSlot = useMemo(() => {
-    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
+  const { availableBoatIdsForInlineSlot, unavailableBoatIdsForInlineSlot, bookedBoatIdsForInlineSlot } = useMemo(() => {
+    const empty = new Set<string>();
+    if (!selectedSlotInline?.startAt || !slots.length) {
+      return { availableBoatIdsForInlineSlot: empty, unavailableBoatIdsForInlineSlot: empty, bookedBoatIdsForInlineSlot: empty };
+    }
     const startMs = new Date(selectedSlotInline.startAt).getTime();
     const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
-    const ids = new Set<string>();
+    const available = new Set<string>();
+    const unavailable = new Set<string>();
+    const booked = new Set<string>();
     for (const s of slots) {
       const boatId = (s as SlotDto & { boatId?: string }).boatId;
-      if (!boatId || s.status !== "open") continue;
+      if (!boatId) continue;
       if (new Date(s.startAt).getTime() !== startMs) continue;
       if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
-      ids.add(boatId);
+      if (s.status === "open") available.add(boatId);
+      else {
+        unavailable.add(boatId);
+        if (s.status === "booked") booked.add(boatId);
+      }
     }
-    return ids;
-  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
-  /** Boat IDs unavailable (held/blocked) for the exact selected slot (same start + end time). */
-  const unavailableBoatIdsForInlineSlot = useMemo(() => {
-    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
-    const startMs = new Date(selectedSlotInline.startAt).getTime();
-    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
-    const ids = new Set<string>();
-    for (const s of slots) {
-      const boatId = (s as SlotDto & { boatId?: string }).boatId;
-      if (!boatId || s.status === "open") continue;
-      if (new Date(s.startAt).getTime() !== startMs) continue;
-      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
-      ids.add(boatId);
-    }
-    return ids;
-  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
-  /** Boat IDs booked for the exact selected slot (show "Booked" overlay). */
-  const bookedBoatIdsForInlineSlot = useMemo(() => {
-    if (!selectedSlotInline?.startAt || !slots.length) return new Set<string>();
-    const startMs = new Date(selectedSlotInline.startAt).getTime();
-    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
-    const ids = new Set<string>();
-    for (const s of slots) {
-      const boatId = (s as SlotDto & { boatId?: string }).boatId;
-      if (!boatId || s.status !== "booked") continue;
-      if (new Date(s.startAt).getTime() !== startMs) continue;
-      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
-      ids.add(boatId);
-    }
-    return ids;
+    return { availableBoatIdsForInlineSlot: available, unavailableBoatIdsForInlineSlot: unavailable, bookedBoatIdsForInlineSlot: booked };
   }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
 
   // Fetch listing (experience) day pricing so calendar shows the same numbers as the listing page
@@ -352,11 +425,8 @@ export function ExperienceCalendarSection({
     const start = new Date(dateRange.start + "T00:00:00");
     const end = new Date(dateRange.end + "T00:00:00");
     const days = Math.min(90, Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1));
-    const rateQ = rateIdForPricing ? `&rateId=${encodeURIComponent(rateIdForPricing)}` : "";
-    fetch(
-      `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&days=${days}${rateQ}`
-    )
-      .then((res) => (res.ok ? res.json() : null))
+    const controller = new AbortController();
+    bookingCache.fetchDatePrices(experienceId, dateRange.start, days, rateIdForPricing, controller.signal)
       .then((data) => {
         if (data?.prices && typeof data.prices === "object") setDatePrices(data.prices);
         else setDatePrices({});
@@ -371,11 +441,13 @@ export function ExperienceCalendarSection({
           setTicketsAvailableByDate({});
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
         setDatePrices({});
         setHolidayDateStrings(new Set());
         setTicketsAvailableByDate({});
       });
+    return () => controller.abort();
   }, [experienceId, dateRange.start, dateRange.end, rateIdForPricing]);
 
   // When only one rate, auto-select duration so calendar shows availability without an extra click
@@ -385,42 +457,41 @@ export function ExperienceCalendarSection({
     }
   }, [rates, selectedDurationForModal]);
 
+  // Declared before the useEffect below that depends on it — avoids forward-reference TDZ bug
+  const goToInlineStep = useCallback(
+    (step: number) => {
+      setInlineStepIndex(step);
+      setShowInlineBoatStep(step >= 3);
+      setShowDetailsStep(step >= 4);
+    },
+    []
+  );
+
   // Ticketed: skip the duration step — jump straight to the calendar (step 1)
   useEffect(() => {
     if (isTicketed && onOpenInModal && inlineStepIndex === 0) {
       goToInlineStep(1);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTicketed, onOpenInModal]);
+  }, [isTicketed, onOpenInModal, goToInlineStep]);
 
-  /** Aggregates slots by date across all boats (no boatId in fetch = all boats). Full only when no open slots on that day. */
-  const slotsByDate = useMemo(() => {
-    const map = new Map<
-      string,
-      { open: number; held: number; booked: number; blocked: number }
-    >();
+  /** Single-pass derivation of slotsByDate (counts) and openSlotsByDate (open slot arrays). */
+  const { slotsByDate, openSlotsByDate } = useMemo(() => {
+    const counts = new Map<string, { open: number; held: number; booked: number; blocked: number }>();
+    const openMap = new Map<string, SlotDto[]>();
     for (const s of slots) {
       const day = isoToChicagoDateStr(s.startAt);
-      if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
-      const entry = map.get(day)!;
-      if (s.status === "open") entry.open++;
-      else if (s.status === "held") entry.held++;
+      if (!counts.has(day)) counts.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
+      const entry = counts.get(day)!;
+      if (s.status === "open") {
+        entry.open++;
+        if (!openMap.has(day)) openMap.set(day, []);
+        openMap.get(day)!.push(s);
+      } else if (s.status === "held") entry.held++;
       else if (s.status === "booked") entry.booked++;
       else entry.blocked++;
     }
-    return map;
-  }, [slots]);
-
-  const openSlotsByDate = useMemo(() => {
-    const map = new Map<string, SlotDto[]>();
-    for (const s of slots) {
-      if (s.status !== "open") continue;
-      const day = isoToChicagoDateStr(s.startAt);
-      if (!map.has(day)) map.set(day, []);
-      map.get(day)!.push(s);
-    }
-    map.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
-    return map;
+    openMap.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
+    return { slotsByDate: counts, openSlotsByDate: openMap };
   }, [slots]);
 
   const slotDataByDate = useMemo(() => {
@@ -631,15 +702,6 @@ export function ExperienceCalendarSection({
   const slidingPanelCount = onOpenInModal ? (hasInlineDetails ? 5 : 4) : hasInlineDetails ? 3 : 2;
   const slidingPanelIndex = onOpenInModal ? inlineStepIndex : showDetailsStep ? 2 : showInlineBoatStep ? 1 : 0;
 
-  const goToInlineStep = useCallback(
-    (step: number) => {
-      setInlineStepIndex(step);
-      setShowInlineBoatStep(step >= 3);
-      setShowDetailsStep(step >= 4);
-    },
-    []
-  );
-
   const inlineDetailsRate = useMemo(() => {
     if (!selectedDate || !selectedSlotInline || !effectiveExperienceForDetails) return null;
     const rateList = effectiveRatesForDetails ?? rates;
@@ -660,6 +722,12 @@ export function ExperienceCalendarSection({
     }
     setInlineBookingHeight(null);
   }, [onOpenInModal, slidingPanelIndex]);
+
+  // Stable reference — must be declared before any early return to satisfy Rules of Hooks
+  const handleSetBookingMode = useCallback((mode: "shared" | "charter") => {
+    setBookingMode(mode);
+    setAutoSwitchBanner(false);
+  }, []);
 
   if (!experienceIdProp && !firestoreSlug) return null;
 
@@ -735,7 +803,7 @@ export function ExperienceCalendarSection({
     departureTimeLabel,
     ticketsAvailableByDate,
     bookingMode,
-    setBookingMode: (mode: "shared" | "charter") => { setBookingMode(mode); setAutoSwitchBanner(false); },
+    setBookingMode: handleSetBookingMode,
     autoSwitchBanner,
     setAutoSwitchBanner,
     showSpotsRemaining: fetchedShowSpotsRemaining,

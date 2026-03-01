@@ -11,9 +11,11 @@ import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, Bookin
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
+import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
+import { sendBookingConfirmationCopyToBusiness } from "@/lib/booking/brevo";
 
 export async function POST(request: NextRequest) {
   try {
@@ -73,15 +75,22 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       }
       const hold = holdSnap.data() as Hold;
+      const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
       if (hold.status !== "active") {
         console.error("[stripe-webhook] checkout.session.completed hold already converted", { holdId, status: hold.status });
         await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold already converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
         return NextResponse.json({ received: true });
       }
+      const holdExpiresAt = (hold.expiresAt as { toDate(): Date });
+      if (holdExpiresAt.toDate() < new Date()) {
+        console.warn("[stripe-webhook] checkout.session.completed hold expired", { holdId, sessionId });
+        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold expired", holdId, sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ received: true });
+      }
       const hasExperience = !!hold.experienceId;
       const hasBoat = !!hold.boatId;
       const isListingBoatFlow = hasExperience && hasBoat;
-      let slotRef: import("firebase-admin").firestore.DocumentReference;
+      let slotRef: import("firebase-admin").firestore.DocumentReference | null = null;
       let experienceName: string;
       let boatNameForEmail: string;
       let locationText: string;
@@ -91,54 +100,108 @@ export async function POST(request: NextRequest) {
       let experienceForPricing: Experience | null = null;
       let boatForPricing: ListingBoat | null = null;
       if (isListingBoatFlow) {
-        const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
-        if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
+        const [expSnap, boatSnap, rateSnap, slotSnapMaybe] = await Promise.all([
+          db.collection("experiences").doc(hold.experienceId!).get(),
+          db.collection("boats").doc(hold.boatId!).get(),
+          db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get(),
+          isSharedHold ? Promise.resolve(null) : db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get(),
+        ]);
+        if (!isSharedHold) {
+          const slotSnap = slotSnapMaybe!;
+          if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const exp = expSnap.data() as Experience;
+          experienceForPricing = exp;
+          boatForPricing = boatSnap.data() as ListingBoat;
+          const boat = boatForPricing as { name?: string };
+          experienceName = exp.title;
+          boatNameForEmail = boat.name ?? exp.title;
+          locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+          cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+          rate = rateSnap.data() as ExperienceRate;
+          slot = slotSnap.data() as Slot;
+          if (slot.holdId !== holdId) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
+        } else {
+          if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const exp = expSnap.data() as Experience;
+          experienceForPricing = exp;
+          boatForPricing = boatSnap.data() as ListingBoat;
+          const boat = boatForPricing as { name?: string };
+          experienceName = exp.title;
+          boatNameForEmail = boat.name ?? exp.title;
+          locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+          cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+          rate = rateSnap.data() as ExperienceRate;
+          const parsedShared = parseSlotId(hold.slotId);
+          if (!parsedShared) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
+          slot = { startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart }, endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd }, status: "booked", holdId: null, bookingId: null, updatedAt: { seconds: 0, nanoseconds: 0 } };
+          slotRef = null;
         }
-        const exp = expSnap.data() as Experience;
-        experienceForPricing = exp;
-        boatForPricing = boatSnap.data() as ListingBoat;
-        const boat = boatForPricing as { name?: string };
-        experienceName = exp.title;
-        boatNameForEmail = boat.name ?? exp.title;
-        locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
-        rate = rateSnap.data() as ExperienceRate;
-        slot = slotSnap.data() as Slot;
-        if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
-        }
-        slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
       } else if (hasExperience) {
-        const expSnap = await db.collection("experiences").doc(hold.experienceId!).get();
-        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get();
-        if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
+        const [expSnap, rateSnap, slotSnapMaybe] = await Promise.all([
+          db.collection("experiences").doc(hold.experienceId!).get(),
+          db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get(),
+          isSharedHold ? Promise.resolve(null) : db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId).get(),
+        ]);
+        if (!isSharedHold) {
+          const slotSnap = slotSnapMaybe!;
+          if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const exp = expSnap.data() as Experience;
+          experienceForPricing = exp;
+          experienceName = exp.title;
+          boatNameForEmail = exp.title;
+          locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+          cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+          rate = rateSnap.data() as ExperienceRate;
+          slot = slotSnap.data() as Slot;
+          if (slot.holdId !== holdId) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+        } else {
+          if (!expSnap.exists || !rateSnap.exists) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const exp = expSnap.data() as Experience;
+          experienceForPricing = exp;
+          experienceName = exp.title;
+          boatNameForEmail = exp.title;
+          locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+          cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+          rate = rateSnap.data() as ExperienceRate;
+          const parsedShared = parseSlotId(hold.slotId);
+          if (!parsedShared) {
+            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ received: true });
+          }
+          const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
+          slot = { startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart }, endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd }, status: "booked", holdId: null, bookingId: null, updatedAt: { seconds: 0, nanoseconds: 0 } };
+          slotRef = null;
         }
-        const exp = expSnap.data() as Experience;
-        experienceForPricing = exp;
-        experienceName = exp.title;
-        boatNameForEmail = exp.title;
-        locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-        cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
-        rate = rateSnap.data() as ExperienceRate;
-        slot = slotSnap.data() as Slot;
-        if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
-        }
-        slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
       } else {
-        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
-        const slotSnap = await db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get();
+        const [boatSnap, rateSnap, slotSnap] = await Promise.all([
+          db.collection("boats").doc(hold.boatId!).get(),
+          db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get(),
+          db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get(),
+        ]);
         if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
           await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
           return NextResponse.json({ received: true });
@@ -177,11 +240,12 @@ export async function POST(request: NextRequest) {
       const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
       const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
       const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
-      // Always use the email from the booking details form for the confirmation email.
+      // Prefer the real contact details collected by Stripe Checkout; fall back to
+      // hold.customerDraft only when Checkout did not collect a given field.
       const customerDetails = session.customer_details;
       const customer = {
         name: (customerDetails?.name ?? "").trim() || hold.customerDraft.name,
-        email: hold.customerDraft.email,
+        email: (customerDetails?.email ?? "").trim() || hold.customerDraft.email,
         phone: (customerDetails?.phone ?? "").trim() || hold.customerDraft.phone,
       };
       let specialNotes: string | undefined;
@@ -196,6 +260,7 @@ export async function POST(request: NextRequest) {
       const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
         ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
         ...(hold.boatId ? { boatId: hold.boatId } : {}),
+        ...((hold as { bookingMode?: string }).bookingMode ? { bookingMode: (hold as { bookingMode?: string }).bookingMode } : {}),
         slotId: hold.slotId,
         ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
         rateId: hold.rateId,
@@ -217,24 +282,30 @@ export async function POST(request: NextRequest) {
         createdAt: Timestamp.now(),
       };
       await db.runTransaction(async (tx) => {
-        const s = await tx.get(slotRef);
-        if (!s.exists) throw new Error("Slot not found");
-        const slotData = s.data() as Slot;
-        if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
-        tx.update(slotRef, {
-          status: "booked",
-          bookingId,
-          holdId: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+        if (!isSharedHold && slotRef) {
+          const s = await tx.get(slotRef);
+          if (!s.exists) throw new Error("Slot not found");
+          const slotData = s.data() as Slot;
+          if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
+          tx.update(slotRef, {
+            status: "booked",
+            bookingId,
+            holdId: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
         tx.set(db.collection("bookings").doc(bookingId), booking);
-        tx.update(holdRef, { status: "converted" });
+        tx.update(holdRef, {
+          status: "converted",
+          "customerDraft.name": customer.name,
+          "customerDraft.email": customer.email,
+          "customerDraft.phone": customer.phone,
+        });
       });
       const startTs = slot.startAt as { toDate(): Date };
       const endTs = slot.endAt as { toDate(): Date };
-      let waiverResult: Awaited<ReturnType<typeof import("@/lib/waiver/on-booking-created").createWaiverForBooking>> = null;
+      let waiverResult: Awaited<ReturnType<typeof createWaiverForBooking>> = null;
       try {
-        const { createWaiverForBooking } = await import("@/lib/waiver/on-booking-created");
         waiverResult = await createWaiverForBooking({
           bookingId,
           customerEmail: customer.email,
@@ -254,22 +325,22 @@ export async function POST(request: NextRequest) {
         pricingType: experienceForPricing?.pricingType,
       };
       try {
-        await sendBookingConfirmationEmail(booking as Booking, emailContext);
-        await logEmailSent({
-          to: customer.email,
-          toName: customer.name,
-          templateId: "booking_confirmation",
-          subject: "Booking Confirmation – Boat Bros ATX",
-          bookingId,
-        });
-        const { sendBookingConfirmationCopyToBusiness } = await import("@/lib/booking/brevo");
-        await sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext);
+        await Promise.all([
+          sendBookingConfirmationEmail(booking as Booking, emailContext),
+          sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext),
+        ]);
       } catch (emailErr) {
         console.error("[stripe-webhook] Brevo send failed", emailErr);
       }
+      logEmailSent({
+        to: customer.email,
+        toName: customer.name,
+        templateId: "booking_confirmation",
+        subject: "Booking Confirmation – Boat Bros ATX",
+        bookingId,
+      }).catch((err) => console.error("[stripe-webhook] logEmailSent failed", err));
       if (waiverResult?.sendSeparateWaiverInvite) {
         try {
-          const { sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
           await sendWaiverInviteAndMarkSent(waiverResult);
         } catch (waiverErr) {
           console.error("[stripe-webhook] waiver invite send failed", waiverErr);
@@ -383,8 +454,13 @@ export async function POST(request: NextRequest) {
         }
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
-        console.error("[stripe-webhook] payment_intent.succeeded convert failed", convertErr);
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        if (errMsg === "Hold has expired") {
+          console.warn("[stripe-webhook] payment_intent.succeeded hold expired", { holdId, paymentIntentId: piId });
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold expired", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        } else {
+          console.error("[stripe-webhook] payment_intent.succeeded convert failed", convertErr);
+          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        }
       }
     }
 
@@ -402,7 +478,10 @@ export async function POST(request: NextRequest) {
             lastError?.code === "card_authentication_required" ||
             (typeof lastError?.message === "string" && lastError.message.toLowerCase().includes("authenticate"));
           const newStatus = requiresAction ? "final_requires_action" : "final_failed";
-          await db.collection("bookings").doc(bookingId).update({
+          // Fetch before update so we have customer data without an extra round-trip after
+          const bookingRef = db.collection("bookings").doc(bookingId);
+          const bookingSnap = await bookingRef.get();
+          await bookingRef.update({
             status: newStatus,
             "stripe.finalError": { code: lastError?.code ?? undefined, message: lastError?.message ?? undefined },
             "stripe.finalChargeAttemptedAt": Timestamp.now(),
@@ -410,7 +489,6 @@ export async function POST(request: NextRequest) {
           });
           console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
           try {
-            const bookingSnap = await db.collection("bookings").doc(bookingId).get();
             if (bookingSnap.exists) {
               const b = bookingSnap.data() as Booking;
               let manageLink: string | undefined;

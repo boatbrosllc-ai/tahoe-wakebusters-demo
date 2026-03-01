@@ -170,6 +170,8 @@ export interface Experience {
   /** Ticketed: trip duration in hours (e.g. 1 for a 1-hour sunset cruise). Drives slot end time. */
   tripDurationHours?: number;
   showSpotsRemaining?: boolean;
+  /** Denormalized minimum rate price in cents; kept in sync by admin write paths to avoid subcollection reads on list queries. */
+  fromPriceCents?: number;
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents
@@ -459,6 +461,8 @@ export interface CreateHoldInput {
   /** Optional discount code (validated at hold creation). */
   discountCode?: string;
   bookingMode?: "shared" | "charter";
+  /** The hold ID the client wants to resume/extend. Required to reuse an existing active hold on a held slot. */
+  resumeHoldId?: string;
 }
 
 export interface CreateHoldResponse {

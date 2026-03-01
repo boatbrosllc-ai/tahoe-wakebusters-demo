@@ -71,34 +71,28 @@ export async function POST(request: NextRequest) {
     const hasExperience = !!hold.experienceId;
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
-    let rate: Rate | ExperienceRate | BoatRate;
-    const addonsById = new Map<string, Addon | ExperienceAddon>();
-    if (isListingBoatFlow) {
-      const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-      if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-      rate = rateSnap.data() as ExperienceRate;
-      const addonsSnap = await db.collection("experiences").doc(hold.experienceId!).collection("addons").get();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
-    } else if (hasExperience) {
-      const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-      if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-      rate = rateSnap.data() as ExperienceRate;
-      const addonsSnap = await db.collection("experiences").doc(hold.experienceId!).collection("addons").get();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
-    } else {
-      const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-      if (!boatSnap.exists) return NextResponse.json({ error: "Boat not found" }, { status: 404 });
-      const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
-      if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-      rate = rateSnap.data() as Rate;
-      const addonsSnap = await db.collection("boats").doc(hold.boatId!).collection("addons").get();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
-    }
-    const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
     let pricing: import("@/lib/booking/types").BookingPricing;
     if (hold.pricing) {
       pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
     } else {
+      let rate: Rate | ExperienceRate | BoatRate;
+      const addonsById = new Map<string, Addon | ExperienceAddon>();
+      if (isListingBoatFlow || hasExperience) {
+        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
+        if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
+        rate = rateSnap.data() as ExperienceRate;
+        const addonsSnap = await db.collection("experiences").doc(hold.experienceId!).collection("addons").get();
+        addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
+      } else {
+        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
+        if (!boatSnap.exists) return NextResponse.json({ error: "Boat not found" }, { status: 404 });
+        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
+        if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
+        rate = rateSnap.data() as Rate;
+        const addonsSnap = await db.collection("boats").doc(hold.boatId!).collection("addons").get();
+        addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
+      }
+      const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
       let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
       if (hasExperience && "priceCents" in rate) {
         const parsed = parseSlotId(hold.slotId);
@@ -133,6 +127,31 @@ export async function POST(request: NextRequest) {
       hold.customerDraft.phone
     );
 
+    // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
+    // The field name is scoped to the payment stage so deposit and full retries never cross-contaminate.
+    const stageKey = payFullAmount ? "fullPaymentIntentId" : "depositPaymentIntentId";
+    const existingPiId = (hold as Record<string, unknown>)[stageKey] as string | undefined;
+    if (existingPiId) {
+      try {
+        const existing = await stripe.paymentIntents.retrieve(existingPiId);
+        if (existing.status !== "canceled" && existing.status !== "succeeded") {
+          if (!existing.client_secret) {
+            return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
+          }
+          return NextResponse.json({
+            clientSecret: existing.client_secret,
+            paymentIntentId: existing.id,
+            depositCents: payFullAmount ? totalCents : depositCents,
+            finalCents: payFullAmount ? 0 : finalCents,
+            totalCents,
+            payFullAmount,
+          });
+        }
+      } catch (piErr) {
+        console.warn("[create-payment-intent] Failed to retrieve existing PI, creating new one", existingPiId, piErr);
+      }
+    }
+
     const metadata: Record<string, string> = {
       holdId: input.holdId,
       slotId: hold.slotId,
@@ -145,17 +164,22 @@ export async function POST(request: NextRequest) {
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: chargeCents,
-      currency: "usd",
-      customer: customerId,
-      automatic_payment_methods: { enabled: true },
-      setup_future_usage: "off_session",
-      metadata,
-    });
+    const paymentIntent = await stripe.paymentIntents.create(
+      {
+        amount: chargeCents,
+        currency: "usd",
+        customer: customerId,
+        automatic_payment_methods: { enabled: true },
+        setup_future_usage: "off_session",
+        metadata,
+      },
+      { idempotencyKey: `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}` }
+    );
     if (!paymentIntent.client_secret) {
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }
+    // Persist the PI id on the hold so retries can reuse it instead of creating a new charge.
+    await holdRef.update({ [stageKey]: paymentIntent.id });
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,

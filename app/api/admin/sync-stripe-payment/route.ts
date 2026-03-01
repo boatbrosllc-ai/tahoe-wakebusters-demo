@@ -72,13 +72,19 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
-    const status = message === "Hold not found" ? 404 : isFirebaseConfig ? 503 : 500;
+    const status =
+      message === "Hold not found" ? 404 :
+      message === "Hold has expired" ? 409 :
+      isFirebaseConfig ? 503 : 500;
     return NextResponse.json(
       {
         error: message,
         ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }),
         ...(message === "Hold not found" && {
-          hint: "The hold may have expired (holds expire after 10 minutes) or was created in a different environment (e.g. local vs production).",
+          hint: "The hold may have been deleted or was created in a different environment (e.g. local vs production).",
+        }),
+        ...(message === "Hold has expired" && {
+          hint: "The hold's expiry time has passed. The payment succeeded but the hold is no longer valid for conversion.",
         }),
       },
       { status }

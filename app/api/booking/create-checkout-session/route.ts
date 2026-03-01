@@ -58,6 +58,26 @@ export async function POST(request: NextRequest) {
     if (expiresAt.toDate() < new Date()) {
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
+
+    // Init stripe early so we can reuse an existing open session and skip all downstream work.
+    const stripe = getStripe();
+    const existingSessionId = (hold as { checkoutSessionId?: string }).checkoutSessionId;
+    if (existingSessionId) {
+      try {
+        const existingSession = await stripe.checkout.sessions.retrieve(existingSessionId);
+        if (existingSession.status === "open") {
+          if (input.embedded && existingSession.client_secret) {
+            return NextResponse.json({ clientSecret: existingSession.client_secret, sessionId: existingSession.id });
+          }
+          if (existingSession.url) {
+            return NextResponse.json({ url: existingSession.url, sessionId: existingSession.id });
+          }
+        }
+      } catch (sessionErr) {
+        console.warn("[create-checkout-session] Failed to retrieve existing session, creating new one", existingSessionId, sessionErr);
+      }
+    }
+
     const hasExperience = !!hold.experienceId;
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
@@ -129,16 +149,23 @@ export async function POST(request: NextRequest) {
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
     const baseUrl = bookingEnv.appBaseUrl;
-    const stripe = getStripe();
     let stripeCouponId: string | undefined;
-    if (holdDiscountCode && holdDiscountCents > 0) {
-      const coupon = await stripe.coupons.create({
-        amount_off: holdDiscountCents,
-        currency: pricing.currency,
-        name: `Discount (${holdDiscountCode})`,
-        duration: "once",
-      });
+    // Reuse a previously created coupon for this hold; create with an idempotency key if new.
+    const holdStripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
+    if (holdStripeCouponId) {
+      stripeCouponId = holdStripeCouponId;
+    } else if (holdDiscountCode && holdDiscountCents > 0) {
+      const coupon = await stripe.coupons.create(
+        {
+          amount_off: holdDiscountCents,
+          currency: pricing.currency,
+          name: `Discount (${holdDiscountCode})`,
+          duration: "once",
+        },
+        { idempotencyKey: `coupon-${input.holdId}` }
+      );
       stripeCouponId = coupon.id;
+      await holdRef.update({ stripeCouponId: coupon.id });
     }
     const metadata: Record<string, string> = {
       holdId: input.holdId,
@@ -171,7 +198,7 @@ export async function POST(request: NextRequest) {
     }
     let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
     try {
-      session = await stripe.checkout.sessions.create(sessionParams);
+      session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey: `cs-${input.holdId}` });
     } catch (e) {
       const details = formatStripeError(e);
       const stripeMessage = typeof details.message === "string" ? details.message : null;

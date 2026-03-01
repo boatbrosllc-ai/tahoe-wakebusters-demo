@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, isAllowedSlotTime } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
@@ -11,6 +11,16 @@ import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 const HOLD_EXPIRY_MINUTES = 10;
+
+function buildExpSlugVariants(expId: string, expSlug: string): string[] {
+  const variants = new Set<string>();
+  if (expSlug && expSlug !== expId) variants.add(expSlug);
+  if (expSlug === "pontoon" || expSlug === "lake-austin-pontoon") {
+    variants.add("pontoon");
+    variants.add("lake-austin-pontoon");
+  }
+  return Array.from(variants);
+}
 
 function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | { input: null; hint: string } {
   if (body == null || typeof body !== "object") {
@@ -49,6 +59,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
     : [];
   const answers = o.answers != null && typeof o.answers === "object" ? (o.answers as Record<string, string>) : {};
   const bookingMode: "shared" | "charter" = o.bookingMode === "shared" ? "shared" : "charter";
+  const resumeHoldId = typeof o.resumeHoldId === "string" && o.resumeHoldId.trim() ? o.resumeHoldId.trim() : undefined;
   return {
     input: {
       boatId: boatId ?? undefined,
@@ -68,6 +79,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       tipCents,
       discountCode: discountCode || undefined,
       bookingMode,
+      resumeHoldId,
     },
   };
 }
@@ -179,8 +191,14 @@ export async function POST(request: NextRequest) {
     const expId = input.experienceId!;
 
     if (isListingBoatFlow) {
-      // Experience + listing boat: experience slots, addons, and rates (boat is for availability only)
-      const expDoc = await db.collection("experiences").doc(expId).get();
+      // Experience + listing boat: fetch all in parallel — all IDs known from request body
+      const boatId = input.boatId!;
+      const [expDoc, boatDoc, rateDoc, addonsSnapPre] = await Promise.all([
+        db.collection("experiences").doc(expId).get(),
+        db.collection("boats").doc(boatId).get(),
+        db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get(),
+        db.collection("experiences").doc(expId).collection("addons").get(),
+      ]);
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
       }
@@ -188,8 +206,6 @@ export async function POST(request: NextRequest) {
       if (!experience.active) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
       }
-      const boatId = input.boatId!;
-      const boatDoc = await db.collection("boats").doc(boatId).get();
       if (!boatDoc.exists) {
         return NextResponse.json({ error: "Boat not found" }, { status: 404 });
       }
@@ -206,7 +222,6 @@ export async function POST(request: NextRequest) {
       }
       isSharedTicketed = experience.pricingType === "ticketed" && input.bookingMode === "shared";
       isCharterTicketed = experience.pricingType === "ticketed" && input.bookingMode !== "shared";
-      const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
       }
@@ -214,56 +229,25 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
-      if (isSharedTicketed || isCharterTicketed) {
-        const parsedSlotForCheck = parseSlotId(input.slotId);
-        if (parsedSlotForCheck) {
-          const dateStr = parsedSlotForCheck.dateStr;
-          const now = Date.now();
-          const [booksSnap, holdsSnap] = await Promise.all([
-            db.collection("bookings").where("experienceId", "==", expId).get(),
-            db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").get(),
-          ]);
-          if (isSharedTicketed) {
-            let sold = 0;
-            for (const doc of booksSnap.docs) {
-              const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
-              if (!b.slotId || typeof b.partySize !== "number") continue;
-              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-              const p = parseSlotId(b.slotId);
-              if (p?.dateStr !== dateStr) continue;
-              if (b.bookingMode === "charter") {
-                return NextResponse.json({ error: "This departure is reserved as a private charter" }, { status: 409 });
-              }
-              sold += b.partySize;
-            }
-            let onHold = 0;
-            for (const doc of holdsSnap.docs) {
-              const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
-              if (!h.slotId || typeof h.partySize !== "number") continue;
-              if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
-              const p = parseSlotId(h.slotId);
-              if (p?.dateStr === dateStr) onHold += h.partySize;
-            }
-            const capacityForCheck = experience.maxCapacity ?? capacityMax;
-            if (sold + onHold + input.partySize > capacityForCheck) {
-              const available = Math.max(0, capacityForCheck - sold - onHold);
-              return NextResponse.json(
-                { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
-                { status: 409 }
-              );
-            }
-          } else {
-            for (const doc of booksSnap.docs) {
-              const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
-              if (!b.slotId) continue;
-              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-              const p = parseSlotId(b.slotId);
-              if (p?.dateStr !== dateStr) continue;
-              if (b.bookingMode === "shared") {
-                return NextResponse.json({ error: "Shared tickets have already been sold for this departure" }, { status: 409 });
-              }
-            }
+      {
+        const parsedForValidation = parseSlotId(input.slotId);
+        if (!parsedForValidation) {
+          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+        }
+        if (isSharedTicketed || isCharterTicketed) {
+          const deptHour = experience.departureHour;
+          const deptMinute = experience.departureMinute ?? 0;
+          const tripDuration = experience.tripDurationHours;
+          if (
+            deptHour == null || tripDuration == null ||
+            parsedForValidation.startHour !== deptHour ||
+            parsedForValidation.startMinute !== deptMinute ||
+            parsedForValidation.durationHours !== tripDuration
+          ) {
+            return NextResponse.json({ error: "Slot is not valid for this experience" }, { status: 400 });
           }
+        } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours, boat.allowedStartTimes)) {
+          return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
         }
       }
       slotsRef = db.collection("boats").doc(boatId).collection("slots");
@@ -310,11 +294,15 @@ export async function POST(request: NextRequest) {
       }
       slotStartForPricing = slotStart;
       experienceForPricing = experience;
-      const addonsSnap = await db.collection("experiences").doc(expId).collection("addons").get();
       addonsById = new Map();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
+      addonsSnapPre.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     } else if (isExperienceOnly) {
-      const expDoc = await db.collection("experiences").doc(expId).get();
+      // Fetch experience, rate, and addons in parallel — all IDs known from request body
+      const [expDoc, rateDoc, addonsSnapPre] = await Promise.all([
+        db.collection("experiences").doc(expId).get(),
+        db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get(),
+        db.collection("experiences").doc(expId).collection("addons").get(),
+      ]);
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
       }
@@ -328,64 +316,33 @@ export async function POST(request: NextRequest) {
       }
       isSharedTicketed = experience.pricingType === "ticketed" && input.bookingMode === "shared";
       isCharterTicketed = experience.pricingType === "ticketed" && input.bookingMode !== "shared";
-      if (isSharedTicketed || isCharterTicketed) {
-        const parsedSlot = parseSlotId(input.slotId);
-        if (parsedSlot) {
-          const dateStr = parsedSlot.dateStr;
-          const now = Date.now();
-          const [booksSnap, holdsSnap] = await Promise.all([
-            db.collection("bookings").where("experienceId", "==", expId).get(),
-            db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").get(),
-          ]);
-          if (isSharedTicketed) {
-            let sold = 0;
-            for (const doc of booksSnap.docs) {
-              const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
-              if (!b.slotId || typeof b.partySize !== "number") continue;
-              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-              const p = parseSlotId(b.slotId);
-              if (p?.dateStr !== dateStr) continue;
-              if (b.bookingMode === "charter") {
-                return NextResponse.json({ error: "This departure is reserved as a private charter" }, { status: 409 });
-              }
-              sold += b.partySize;
-            }
-            let onHold = 0;
-            for (const doc of holdsSnap.docs) {
-              const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
-              if (!h.slotId || typeof h.partySize !== "number") continue;
-              if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
-              const p = parseSlotId(h.slotId);
-              if (p?.dateStr === dateStr) onHold += h.partySize;
-            }
-            const available = Math.max(0, capacityMax - sold - onHold);
-            if (input.partySize > available) {
-              return NextResponse.json(
-                { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
-                { status: 409 }
-              );
-            }
-          } else {
-            for (const doc of booksSnap.docs) {
-              const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
-              if (!b.slotId) continue;
-              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-              const p = parseSlotId(b.slotId);
-              if (p?.dateStr !== dateStr) continue;
-              if (b.bookingMode === "shared") {
-                return NextResponse.json({ error: "Shared tickets have already been sold for this departure" }, { status: 409 });
-              }
-            }
-          }
-        }
-      }
-      const rateDoc = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
       }
       rate = rateDoc.data() as ExperienceRate;
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
+      }
+      {
+        const parsedForValidation = parseSlotId(input.slotId);
+        if (!parsedForValidation) {
+          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+        }
+        if (isSharedTicketed || isCharterTicketed) {
+          const deptHour = experience.departureHour;
+          const deptMinute = experience.departureMinute ?? 0;
+          const tripDuration = experience.tripDurationHours;
+          if (
+            deptHour == null || tripDuration == null ||
+            parsedForValidation.startHour !== deptHour ||
+            parsedForValidation.startMinute !== deptMinute ||
+            parsedForValidation.durationHours !== tripDuration
+          ) {
+            return NextResponse.json({ error: "Slot is not valid for this experience" }, { status: 400 });
+          }
+        } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours)) {
+          return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
+        }
       }
       slotsRef = db.collection("experiences").doc(expId).collection("slots");
       let slotStartExp: Date;
@@ -417,8 +374,8 @@ export async function POST(request: NextRequest) {
           if (!parsed) {
             return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
           }
-          const rateDocExp = await db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get();
-          const rateData = rateDocExp.exists ? (rateDocExp.data() as ExperienceRate) : null;
+          // rateDoc already fetched in parallel above — no need to re-fetch
+          const rateData = rateDoc.exists ? (rateDoc.data() as ExperienceRate) : null;
           if (!rateData || rateData.durationHours !== parsed.durationHours) {
             return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
           }
@@ -433,12 +390,16 @@ export async function POST(request: NextRequest) {
       }
       slotStartForPricing = slotStartExp;
       experienceForPricing = experience;
-      const addonsSnap = await db.collection("experiences").doc(expId).collection("addons").get();
       addonsById = new Map();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
+      addonsSnapPre.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     } else {
+      // Legacy boat flow: fetch boat, rate, and addons in parallel
       const boatId = input.boatId!;
-      const boatDoc = await db.collection("boats").doc(boatId).get();
+      const [boatDoc, rateDoc, addonsSnap] = await Promise.all([
+        db.collection("boats").doc(boatId).get(),
+        db.collection("boats").doc(boatId).collection("rates").doc(input.rateId).get(),
+        db.collection("boats").doc(boatId).collection("addons").get(),
+      ]);
       if (!boatDoc.exists) {
         return NextResponse.json({ error: "Boat not found" }, { status: 404 });
       }
@@ -450,7 +411,6 @@ export async function POST(request: NextRequest) {
       if (input.partySize > capacityMax) {
         return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
       }
-      const rateDoc = await db.collection("boats").doc(boatId).collection("rates").doc(input.rateId).get();
       if (!rateDoc.exists) {
         return NextResponse.json({ error: "Rate not found" }, { status: 404 });
       }
@@ -458,25 +418,10 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
-      const addonsSnap = await db.collection("boats").doc(boatId).collection("addons").get();
       addonsById = new Map<string, Addon>();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
       slotsRef = db.collection("boats").doc(boatId).collection("slots");
       slotRef = slotsRef.doc(input.slotId);
-    }
-
-    if (input.experienceId && slotStartForBlock && slotEndForBlock) {
-      const blocked = await hasOverlappingBlock({
-        db,
-        Timestamp,
-        experienceId: input.experienceId,
-        boatId: input.boatId,
-        slotStart: slotStartForBlock,
-        slotEnd: slotEndForBlock,
-      });
-      if (blocked) {
-        return NextResponse.json({ error: "This slot is blocked" }, { status: 409 });
-      }
     }
 
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
@@ -515,8 +460,10 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
 
+    const parsedSlotForHold = parseSlotId(input.slotId);
     const holdPayload: Record<string, unknown> = {
       slotId: input.slotId,
+      ...(parsedSlotForHold ? { startDateStr: parsedSlotForHold.dateStr } : {}),
       rateId: input.rateId,
       addonSelections: input.addonSelections,
       partySize: input.partySize,
@@ -553,33 +500,46 @@ export async function POST(request: NextRequest) {
       const sharedCapacityLimit = isListingBoatFlow
         ? ((experienceForPricing as Experience).maxCapacity ?? capacityMax)
         : capacityMax;
+      // Slug variants cover legacy bookings stored under alternate experienceId values (e.g. "pontoon" slug).
+      const expSlug = experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
+        ? ((experienceForPricing as Experience).slug as string).trim()
+        : "";
+      const slugVariantsList = buildExpSlugVariants(expId, expSlug);
       await db.runTransaction(async (tx) => {
         const nowMs = Date.now();
-        const [booksSnap, holdsSnap] = await Promise.all([
-          tx.get(db.collection("bookings").where("experienceId", "==", expId)),
-          tx.get(
-            db.collection("holds")
-              .where("experienceId", "==", expId)
-              .where("status", "==", "active")
-          ),
-        ]);
+        // All queries are date-bounded via startDateStr — only docs for this departure date are read.
+        // Indexes used: bookings(experienceId, startDateStr), holds(experienceId, status, startDateStr).
+        const allQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
+          tx.get(db.collection("bookings").where("experienceId", "==", expId).where("startDateStr", "==", dateStr)),
+          tx.get(db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").where("startDateStr", "==", dateStr)),
+          ...slugVariantsList.flatMap(v => [
+            tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", dateStr)),
+            tx.get(db.collection("holds").where("experienceId", "==", v).where("status", "==", "active").where("startDateStr", "==", dateStr)),
+          ]),
+        ];
+        const allSnaps = await Promise.all(allQueries);
+        const seenBIds = new Set(allSnaps[0].docs.map(d => d.id));
+        const seenHIds = new Set(allSnaps[1].docs.map(d => d.id));
+        const allBookDocs = [...allSnaps[0].docs];
+        const allHoldDocs = [...allSnaps[1].docs];
+        for (let i = 0; i < slugVariantsList.length; i++) {
+          allSnaps[2 + i * 2].docs.forEach(d => { if (!seenBIds.has(d.id)) { seenBIds.add(d.id); allBookDocs.push(d); } });
+          allSnaps[2 + i * 2 + 1].docs.forEach(d => { if (!seenHIds.has(d.id)) { seenHIds.add(d.id); allHoldDocs.push(d); } });
+        }
         let sold = 0;
-        for (const doc of booksSnap.docs) {
-          const b = doc.data() as { slotId?: string; partySize?: number; status?: string; bookingMode?: string };
-          if (!b.slotId || typeof b.partySize !== "number") continue;
+        for (const doc of allBookDocs) {
+          const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
+          if (typeof b.partySize !== "number") continue;
           if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-          const p = parseSlotId(b.slotId);
-          if (p?.dateStr !== dateStr) continue;
           if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
           sold += b.partySize;
         }
         let onHold = 0;
-        for (const doc of holdsSnap.docs) {
-          const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
-          if (!h.slotId || typeof h.partySize !== "number") continue;
+        for (const doc of allHoldDocs) {
+          const h = doc.data() as { partySize?: number; expiresAt?: { toDate(): Date } };
+          if (typeof h.partySize !== "number") continue;
           if (h.expiresAt && h.expiresAt.toDate().getTime() < nowMs) continue;
-          const p = parseSlotId(h.slotId);
-          if (p?.dateStr === dateStr) onHold += h.partySize;
+          onHold += h.partySize;
         }
         if (sold + onHold + input.partySize > sharedCapacityLimit) {
           const available = Math.max(0, sharedCapacityLimit - sold - onHold);
@@ -624,16 +584,13 @@ export async function POST(request: NextRequest) {
               const exp = existingHold.expiresAt;
               const expiryDate =
                 exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
-              const sameSlot =
-                existingHold.slotId === input.slotId &&
-                (existingHold.experienceId ?? undefined) === (input.experienceId ?? undefined) &&
-                (existingHold.boatId ?? undefined) === (input.boatId ?? undefined) &&
-                existingHold.rateId === input.rateId;
-              if (
-                existingHold.status === "active" &&
-                expiryDate > now &&
-                sameSlot
-              ) {
+              const isStillActive = existingHold.status === "active" && expiryDate > now;
+              if (isStillActive) {
+                // Only allow extension when the caller proves they own this hold.
+                // Any other request gets a 409 — never overwrite another customer's hold.
+                if (input.resumeHoldId !== slot.holdId) {
+                  throw new Error("Slot no longer available");
+                }
                 const newExpiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
                 reusedHoldId = slot.holdId;
                 reusedExpiresAt = newExpiresAt;
@@ -643,8 +600,6 @@ export async function POST(request: NextRequest) {
                   partySize: input.partySize,
                   petsCount: input.petsCount,
                   answers: input.answers,
-                  customerDraft: input.customerDraft,
-                  marketingOptIn: input.marketingOptIn,
                   expiresAt: Timestamp.fromDate(newExpiresAt),
                   tipCents: tipCents,
                   ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
@@ -653,12 +608,7 @@ export async function POST(request: NextRequest) {
                 });
                 return;
               }
-              // Hold exists but expired or different slot → treat slot as available, overwrite with new hold below
-              if (expiryDate <= now || existingHold.status !== "active") {
-                // fall through to update slot and create new hold
-              } else {
-                throw new Error("Slot no longer available");
-              }
+              // Hold exists but expired or cancelled → treat slot as available, fall through to create new hold
             }
             // Slot doc says "booked" — only treat as taken if the booking still exists and is confirmed
           } else if (slot.status === "booked" && slot.bookingId) {
@@ -674,18 +624,23 @@ export async function POST(request: NextRequest) {
             throw new Error("Slot no longer available");
           }
         }
-        // Defense in depth: ensure no paid booking already exists for this boat/experience and time
+        // Defense in depth: ensure no paid booking already exists for this boat/experience and time.
+        // Queries are date-bounded via startDateStr; boatId/status are filtered in code on the small result set.
+        // Index used: bookings(experienceId, startDateStr).
         const slotStartMs = slotStartDate.getTime();
         const slotEndMs = slotEndDate.getTime();
         const parsedForCheck = parseSlotId(input.slotId);
         if (parsedForCheck && isListingBoatFlow && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsedForCheck.dateStr)
           );
           for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string };
+            const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
+            if (b.boatId !== input.boatId) continue;
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
             const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsedForCheck.dateStr) continue;
+            if (!p) continue;
             const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
@@ -693,12 +648,14 @@ export async function POST(request: NextRequest) {
           }
         } else if (parsedForCheck && isExperienceOnly && input.experienceId) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsedForCheck.dateStr)
           );
           for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string };
+            const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
             const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsedForCheck.dateStr) continue;
+            if (!p) continue;
             const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
@@ -727,22 +684,53 @@ export async function POST(request: NextRequest) {
         // Prevent double-booking: reject if any existing held/booked/blocked slot overlaps this time
         const dayStart = new Date(parsed.dateStr + "T00:00:00");
         const dayEnd = new Date(parsed.dateStr + "T23:59:59.999");
-        const isHeldTrulyTaken = async (slotData: Slot, holdId: string | null | undefined): Promise<boolean> => {
-          if (slotData.status !== "held" || !holdId) return slotData.status !== "open";
-          const holdSnap = await tx.get(db.collection("holds").doc(holdId));
-          if (!holdSnap.exists) return false; // missing hold → treat as open
-          const hold = holdSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
-          if (hold?.status !== "active") return false;
-          const exp = hold?.expiresAt?.toDate?.();
-          if (exp && exp <= now) return false; // expired → treat as open
-          return true;
-        };
-        const isBookedTrulyTaken = async (slotData: Slot): Promise<boolean> => {
-          if (slotData.status !== "booked" || !slotData.bookingId) return false;
-          const bookingSnap = await tx.get(db.collection("bookings").doc(slotData.bookingId));
-          if (!bookingSnap.exists) return false;
-          const b = bookingSnap.data() as { status?: string };
-          return !!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never));
+        const checkSameDaySlotsForOverlap = async (
+          sameDayDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[]
+        ) => {
+          // Batch-prefetch all holds and bookings needed to determine true status — avoids N+1 reads.
+          const heldDocs = sameDayDocs.filter(d => {
+            const s = d.data() as Slot;
+            return s.status === "held" && s.holdId;
+          });
+          const bookedDocs = sameDayDocs.filter(d => {
+            const s = d.data() as Slot;
+            return s.status === "booked" && s.bookingId;
+          });
+          const [holdSnaps, bookingSnaps] = await Promise.all([
+            heldDocs.length
+              ? Promise.all(heldDocs.map(d => tx.get(db.collection("holds").doc((d.data() as Slot).holdId as string))))
+              : Promise.resolve([] as import("firebase-admin").firestore.DocumentSnapshot[]),
+            bookedDocs.length
+              ? Promise.all(bookedDocs.map(d => tx.get(db.collection("bookings").doc((d.data() as Slot).bookingId as string))))
+              : Promise.resolve([] as import("firebase-admin").firestore.DocumentSnapshot[]),
+          ]);
+          const holdsById = new Map(heldDocs.map((d, i) => [(d.data() as Slot).holdId as string, holdSnaps[i]]));
+          const bookingsById = new Map(bookedDocs.map((d, i) => [(d.data() as Slot).bookingId as string, bookingSnaps[i]]));
+
+          for (const doc of sameDayDocs) {
+            const data = doc.data() as Slot;
+            if (data.status === "open") continue;
+            if (data.status === "held") {
+              if (!data.holdId) continue;
+              const hSnap = holdsById.get(data.holdId);
+              if (!hSnap?.exists) continue;
+              const hold = hSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
+              if (hold?.status !== "active") continue;
+              const exp = hold?.expiresAt?.toDate?.();
+              if (exp && exp <= now) continue;
+            } else if (data.status === "booked") {
+              if (!data.bookingId) continue;
+              const bSnap = bookingsById.get(data.bookingId);
+              if (!bSnap?.exists) continue;
+              const b = bSnap.data() as { status?: string };
+              if (!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never))) continue;
+            }
+            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
+            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
+            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+              throw new Error("Slot no longer available");
+            }
+          }
         };
 
         if (isListingBoatFlow && input.boatId) {
@@ -752,17 +740,7 @@ export async function POST(request: NextRequest) {
               .where("startAt", ">=", Timestamp.fromDate(dayStart))
               .where("startAt", "<=", Timestamp.fromDate(dayEnd))
           );
-          for (const doc of sameDaySnap.docs) {
-            const data = doc.data() as Slot;
-            if (data.status === "open") continue;
-            if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
-            if (data.status === "booked" && !(await isBookedTrulyTaken(data))) continue;
-            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-              throw new Error("Slot no longer available");
-            }
-          }
+          await checkSameDaySlotsForOverlap(sameDaySnap.docs);
         } else if (isExperienceOnly && input.experienceId) {
           const expSlotsRef = db.collection("experiences").doc(input.experienceId).collection("slots");
           const sameDaySnap = await tx.get(
@@ -770,27 +748,22 @@ export async function POST(request: NextRequest) {
               .where("startAt", ">=", Timestamp.fromDate(dayStart))
               .where("startAt", "<=", Timestamp.fromDate(dayEnd))
           );
-          for (const doc of sameDaySnap.docs) {
-            const data = doc.data() as Slot;
-            if (data.status === "open") continue;
-            if (data.status === "held" && !(await isHeldTrulyTaken(data, data.holdId))) continue;
-            if (data.status === "booked" && !(await isBookedTrulyTaken(data))) continue;
-            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-              throw new Error("Slot no longer available");
-            }
-          }
+          await checkSameDaySlotsForOverlap(sameDaySnap.docs);
         }
-        // Also reject if a paid booking already exists for this boat/experience and time (slot doc may be missing)
+        // Also reject if a paid booking already exists for this boat/experience and time (slot doc may be missing).
+        // Queries are date-bounded via startDateStr; boatId/status are filtered in code on the small result set.
+        // Index used: bookings(experienceId, startDateStr).
         if (isListingBoatFlow && input.boatId) {
           const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("boatId", "==", input.boatId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsed.dateStr)
           );
           for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string };
+            const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
+            if (b.boatId !== input.boatId) continue;
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
             const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
+            if (!p) continue;
             const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
@@ -798,12 +771,14 @@ export async function POST(request: NextRequest) {
           }
         } else if (isExperienceOnly && input.experienceId) {
           const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsed.dateStr)
           );
           for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string };
+            const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
             const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p || p.dateStr !== parsed.dateStr) continue;
+            if (!p) continue;
             const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
             if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
               throw new Error("Slot no longer available");
@@ -849,6 +824,7 @@ export async function POST(request: NextRequest) {
       message === "Slot no longer available" ||
       message === "This slot is blocked" ||
       message === "This departure is reserved as a private charter" ||
+      message === "Shared tickets have already been sold for this departure" ||
       message === "This date is sold out." ||
       message.startsWith("Only ")
     ) {

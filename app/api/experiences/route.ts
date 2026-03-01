@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import type { Experience, ExperienceRate } from "@/lib/booking/types";
+import type { Experience } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceBySlug } from "@/content/experiences";
 
@@ -25,35 +25,29 @@ export async function GET() {
   try {
     const db = getDb();
     const snap = await db.collection("experiences").where("active", "==", true).get();
-    const list: ExperienceListItem[] = [];
-    for (const doc of snap.docs) {
-      const exp = doc.data() as Experience;
-      const ratesSnap = await db.collection("experiences").doc(doc.id).collection("rates").where("active", "==", true).get();
-      let fromPriceCents: number | null = null;
-      ratesSnap.docs.forEach((r) => {
-        const rate = r.data() as ExperienceRate;
-        if (fromPriceCents == null || rate.priceCents < fromPriceCents) fromPriceCents = rate.priceCents;
+    const list: ExperienceListItem[] = snap.docs.map((doc) => {
+        const exp = doc.data() as Experience;
+        // Read the denormalized field written by admin save paths; fall back to content override when set.
+        let fromPriceCents: number | null = exp.fromPriceCents ?? null;
+        const contentExp = getExperienceBySlug(exp.slug ?? "");
+        if (contentExp?.fromPriceCents != null) fromPriceCents = contentExp.fromPriceCents;
+        return {
+          id: doc.id,
+          slug: exp.slug ?? "",
+          title: exp.title ?? "",
+          subtitle: exp.subtitle ?? "",
+          heroMedia: exp.heroMedia ?? { type: "image", url: "" },
+          maxGuests: getMaxGuestsForExperience(exp),
+          petsMax: exp.petsMax ?? 0,
+          fromPriceCents,
+          active: exp.active ?? true,
+          sortOrder: exp.sortOrder,
+          ...(exp.pricingType && { pricingType: exp.pricingType }),
+          ...(exp.pricingType === "ticketed" && exp.maxCapacity != null && { maxCapacity: exp.maxCapacity }),
+          ...(exp.pricingType === "ticketed" && exp.departureHour != null && { departureHour: exp.departureHour }),
+          ...(exp.pricingType === "ticketed" && exp.departureMinute != null && { departureMinute: exp.departureMinute }),
+        };
       });
-      // Use content display price when set (so cards show correct "From $X" / per-ticket copy)
-      const contentExp = getExperienceBySlug(exp.slug ?? "");
-      if (contentExp?.fromPriceCents != null) fromPriceCents = contentExp.fromPriceCents;
-      list.push({
-        id: doc.id,
-        slug: exp.slug ?? "",
-        title: exp.title ?? "",
-        subtitle: exp.subtitle ?? "",
-        heroMedia: exp.heroMedia ?? { type: "image", url: "" },
-        maxGuests: getMaxGuestsForExperience(exp),
-        petsMax: exp.petsMax ?? 0,
-        fromPriceCents,
-        active: exp.active ?? true,
-        sortOrder: exp.sortOrder,
-        ...(exp.pricingType && { pricingType: exp.pricingType }),
-        ...(exp.pricingType === "ticketed" && exp.maxCapacity != null && { maxCapacity: exp.maxCapacity }),
-        ...(exp.pricingType === "ticketed" && exp.departureHour != null && { departureHour: exp.departureHour }),
-        ...(exp.pricingType === "ticketed" && exp.departureMinute != null && { departureMinute: exp.departureMinute }),
-      });
-    }
     // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)
     const slugOrder = ["pontoon", "watersports", "sunset", "holiday"];
     const slugOrderIndex = (slug: string): number => {
@@ -70,7 +64,9 @@ export async function GET() {
       if (orderA !== orderB) return orderA - orderB;
       return (a.title ?? "").localeCompare(b.title ?? "");
     });
-    return NextResponse.json({ experiences: list });
+    return NextResponse.json({ experiences: list }, {
+      headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isConfigMissing =

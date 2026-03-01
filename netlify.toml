@@ -1,0 +1,26 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[functions]
+  # Allow long-running booking and cron functions up to 60 seconds
+  # (Netlify default is 10s; background functions allow up to 15 min)
+  included_files = ["netlify/functions/**"]
+
+[functions."booking-reminder-cron"]
+  timeout = 60
+
+[functions."final-payment-reminder-cron"]
+  timeout = 60
+
+[functions."cleanup-holds"]
+  timeout = 60
+
+[functions."run-final-charges"]
+  timeout = 60
+
+[functions."waiver-reminder-cron"]
+  timeout = 60
+
+[functions."warm-booking"]
+  timeout = 10

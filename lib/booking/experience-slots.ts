@@ -44,6 +44,19 @@ export function buildSlotId(dateStr: string, startHour: number, durationHours: n
   return `${dateStr}-${startHour}-${durationHours}`;
 }
 
+/** Cached DST boundaries (2nd Sunday March, 1st Sunday November) keyed by year. */
+const dstBoundaryCache = new Map<number, { marchDay: number; novDay: number }>();
+
+function getDstBoundary(year: number): { marchDay: number; novDay: number } {
+  const cached = dstBoundaryCache.get(year);
+  if (cached) return cached;
+  const marchDay = 8 + (7 - new Date(year, 2, 8).getDay()) % 7;
+  const novDay = 1 + (7 - new Date(year, 10, 1).getDay()) % 7;
+  const boundary = { marchDay, novDay };
+  dstBoundaryCache.set(year, boundary);
+  return boundary;
+}
+
 /**
  * Offset in hours for America/Chicago vs UTC on the given calendar date (DST-aware).
  * Central Standard Time = -6, Central Daylight Time = -5.
@@ -52,8 +65,7 @@ function getCentralOffsetHoursForDate(dateStr: string): number {
   const [y, m, day] = dateStr.split("-").map(Number);
   if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(day)) return -6;
   // US DST: 2nd Sunday March (2am) through 1st Sunday November (2am)
-  const secondSundayMarch = 8 + (7 - new Date(y, 2, 8).getDay()) % 7;
-  const firstSundayNov = 1 + (7 - new Date(y, 10, 1).getDay()) % 7;
+  const { marchDay: secondSundayMarch, novDay: firstSundayNov } = getDstBoundary(y);
   const onOrAfterMarchDST = m > 3 || (m === 3 && day >= secondSundayMarch);
   const beforeNovemberDSTEnd = m < 11 || (m === 11 && day < firstSundayNov);
   const inDST = onOrAfterMarchDST && beforeNovemberDSTEnd;
@@ -81,6 +93,29 @@ export function getSlotStartEnd(dateStr: string, startHour: number, durationHour
  */
 export function getLatestStartHourForDuration(durationHours: number): number {
   return Math.max(OPERATING_START_HOUR, OPERATING_END_HOUR - durationHours);
+}
+
+/**
+ * Returns true if (startHour, startMinute, durationHours) is within the allowed operating
+ * window and permitted start times for the boat.
+ *
+ * - Slot must start at or after OPERATING_START_HOUR (7am) and end by OPERATING_END_HOUR (7pm).
+ * - If allowedStartTimes is set (boat-specific restriction), the start time must be in that list.
+ * - Otherwise, only whole-hour starts (startMinute === 0) are permitted.
+ */
+export function isAllowedSlotTime(
+  startHour: number,
+  startMinute: number,
+  durationHours: number,
+  allowedStartTimes?: { hour: number; minute: number }[]
+): boolean {
+  const startDecimal = startHour + startMinute / 60;
+  if (startDecimal < OPERATING_START_HOUR) return false;
+  if (startDecimal + durationHours > OPERATING_END_HOUR) return false;
+  if (allowedStartTimes && allowedStartTimes.length > 0) {
+    return allowedStartTimes.some((t) => t.hour === startHour && t.minute === startMinute);
+  }
+  return startMinute === 0;
 }
 
 /**

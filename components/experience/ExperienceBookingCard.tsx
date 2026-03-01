@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -61,17 +62,8 @@ function formatDepartureTime(hour: number, minute: number): string {
 
 const SLOTS_POLL_MS = 60000;
 
-type SlotStatus = "open" | "held" | "booked" | "blocked";
-
-interface SlotDto {
-  id: string;
-  startAt: string;
-  endAt: string;
-  status: SlotStatus;
-  holdId: string | null;
-  bookingId: string | null;
-  updatedAt: string | null;
-}
+// SlotDto is sourced from the shared cache module (CachedSlotDto).
+type SlotDto = CachedSlotDto;
 
 interface RateDto {
   id: string;
@@ -96,14 +88,17 @@ function formatDate(iso: string) {
   return formatBookingDate(new Date(iso));
 }
 
-function getDateRange(days: number): { start: string; end: string } {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + days);
+function getMonthRange(monthDate: Date): { start: string; end: string } {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0);
+  const effectiveStart = monthStart < today ? today : monthStart;
   return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    start: effectiveStart.toISOString().slice(0, 10),
+    end: monthEnd.toISOString().slice(0, 10),
   };
 }
 
@@ -150,15 +145,15 @@ export function ExperienceBookingCard({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   const [selectedRateId, setSelectedRateId] = useState<string | null>(rates[0]?.id ?? null);
-  const [addonSelections, setAddonSelections] = useState<{ addonId: string; qty: number }[]>(
-    addons.map((a) => ({ addonId: a.id, qty: 0 }))
-  );
+  const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
   const [customer, setCustomer] = useState({ name: "", email: "", phone: "" });
   const [discountCode, setDiscountCode] = useState("");
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [partySize, setPartySize] = useState(2);
   const [holdId, setHoldId] = useState<string | null>(null);
+  // Tracks which slot the current holdId was created for, so we can pass resumeHoldId on re-submission.
+  const [holdSlotId, setHoldSlotId] = useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [pricing, setPricing] = useState<{ totalCents: number; currency: string } | null>(null);
   const [payFullAmount, setPayFullAmount] = useState(false);
@@ -169,30 +164,45 @@ export function ExperienceBookingCard({
   const [error, setError] = useState<string | null>(null);
   const [slotStolen, setSlotStolen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => {
+    if (initialDate) {
+      const d = new Date(initialDate + "T12:00:00");
+      return new Date(d.getFullYear(), d.getMonth(), 1);
+    }
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
-  const dateRange = useMemo(() => getDateRange(60), []);
+  // Tracks which "YYYY-MM" months have been fetched; avoids redundant requests on
+  // month navigation without blocking forced refreshes during polling.
+  const loadedMonthsRef = useRef<Set<string>>(new Set());
 
-  const fetchSlots = useCallback(async () => {
+  const fetchMonthSlots = useCallback(async (monthDate: Date, forceRefresh = false) => {
+    const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}`;
+    if (!forceRefresh && loadedMonthsRef.current.has(key)) return;
+    const range = getMonthRange(monthDate);
     setSlotsLoading(true);
     setSlotStolen(false);
     try {
-      const res = await fetch(
-        `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&endDate=${dateRange.end}`
-      );
-      if (!res.ok) throw new Error("Failed to load slots");
-      const data = await res.json();
-      setSlots(data.slots ?? []);
+      const data = await fetchSlotsCache(experienceId, range.start, range.end);
+      setSlots((prev) => {
+        // Replace slots in this date range while preserving other months.
+        const outsideRange = prev.filter(
+          (s) => s.startAt < range.start || s.startAt.slice(0, 10) > range.end,
+        );
+        return [...outsideRange, ...(data.slots ?? [])];
+      });
+      loadedMonthsRef.current.add(key);
+    } catch {
+      // Network errors are non-fatal; stale slot data remains visible.
     } finally {
       setSlotsLoading(false);
     }
-  }, [experienceId, dateRange.start, dateRange.end]);
+  }, [experienceId]);
 
+  // Fetch the visible month on mount and whenever the user navigates months.
   useEffect(() => {
-    fetchSlots();
-  }, [fetchSlots]);
+    fetchMonthSlots(calendarMonth);
+  }, [fetchMonthSlots, calendarMonth]);
 
   useEffect(() => {
     if (initialDate) setSelectedDate(initialDate);
@@ -223,18 +233,24 @@ export function ExperienceBookingCard({
     else setSelectedSlot(null);
   }, [isTicketed, selectedDate, openSlotsByDate]);
 
+  // Poll only while the date-selection calendar is visible. Once the user picks
+  // a slot or advances to a payment phase there is nothing to refresh.
+  const isDateSelectionActive = paymentPhase === "form" && !selectedSlot;
+
   useEffect(() => {
+    if (!isDateSelectionActive) return;
     let t: ReturnType<typeof setInterval> | null = null;
+    const poll = () => fetchMonthSlots(calendarMonth, true);
     const schedule = () => {
       if (typeof document !== "undefined" && document.hidden) return;
-      t = setInterval(fetchSlots, SLOTS_POLL_MS);
+      t = setInterval(poll, SLOTS_POLL_MS);
     };
     schedule();
     const onVisibility = () => {
       if (t) clearInterval(t);
       t = null;
       if (!document.hidden) {
-        fetchSlots();
+        poll();
         schedule();
       }
     };
@@ -243,29 +259,37 @@ export function ExperienceBookingCard({
       if (t) clearInterval(t);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [fetchSlots]);
+  }, [fetchMonthSlots, calendarMonth, isDateSelectionActive]);
 
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
-  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim());
+  const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim()), [customer.email]);
   const showEmailError = customer.email.length > 0 && !emailValid;
-  const canProceed =
-    selectedSlot &&
-    selectedRateId &&
-    customer.name.trim() &&
-    customer.email.trim() &&
-    customer.phone.trim() &&
-    emailValid &&
-    cancellationAck &&
-    partySize >= 1 &&
-    partySize <= effectiveMax;
+  const canProceed = useMemo(
+    () =>
+      !!selectedSlot &&
+      !!selectedRateId &&
+      !!customer.name.trim() &&
+      !!customer.email.trim() &&
+      !!customer.phone.trim() &&
+      emailValid &&
+      cancellationAck &&
+      partySize >= 1 &&
+      partySize <= effectiveMax,
+    [selectedSlot, selectedRateId, customer.name, customer.email, customer.phone, emailValid, cancellationAck, partySize, effectiveMax]
+  );
+
+  const addonMap = useMemo(
+    () => new Map(addons.map((a) => [a.id, a])),
+    [addons]
+  );
 
   const addonsTotalCents = useMemo(
     () =>
-      addonSelections.reduce((sum, s) => {
-        const addon = addons.find((a) => a.id === s.addonId);
-        return sum + (addon ? addon.priceCents * s.qty : 0);
+      Object.entries(addonSelections).reduce((sum, [addonId, qty]) => {
+        const addon = addonMap.get(addonId);
+        return sum + (addon ? addon.priceCents * qty : 0);
       }, 0),
-    [addons, addonSelections]
+    [addonMap, addonSelections]
   );
   const orderSummaryTotalCents = selectedRate
     ? (isTicketed ? selectedRate.priceCents * partySize : selectedRate.priceCents) + addonsTotalCents
@@ -284,7 +308,7 @@ export function ExperienceBookingCard({
           experienceId,
           slotId: selectedSlot.id,
           rateId: selectedRateId,
-          addonSelections: addonSelections.filter((s) => s.qty > 0),
+          addonSelections: Object.entries(addonSelections).filter(([, qty]) => qty > 0).map(([addonId, qty]) => ({ addonId, qty })),
           partySize,
           petsCount: 0,
           answers: {},
@@ -292,6 +316,7 @@ export function ExperienceBookingCard({
           marketingOptIn,
           bookingMode: isTicketed ? "shared" : "charter",
           ...(discountCode.trim() && { discountCode: discountCode.trim() }),
+          ...(holdId && holdSlotId === selectedSlot.id ? { resumeHoldId: holdId } : {}),
         }),
       });
       const holdData = await createHoldRes.json();
@@ -302,6 +327,7 @@ export function ExperienceBookingCard({
         return;
       }
       setHoldId(holdData.holdId);
+      setHoldSlotId(selectedSlot.id);
       setHoldExpiresAt(holdData.expiresAt ?? null);
       setPricing(holdData.pricing ?? null);
 
@@ -338,13 +364,9 @@ export function ExperienceBookingCard({
     }
   };
 
-  const updateAddonQty = (addonId: string, qty: number) => {
-    setAddonSelections((prev) => {
-      const next = prev.map((s) => (s.addonId === addonId ? { ...s, qty } : s));
-      if (!next.some((s) => s.addonId === addonId)) next.push({ addonId, qty });
-      return next;
-    });
-  };
+  const updateAddonQty = useCallback((addonId: string, qty: number) => {
+    setAddonSelections((prev) => ({ ...prev, [addonId]: qty }));
+  }, []);
 
   const openDays = useMemo(() => new Set(openSlotsByDate.keys()), [openSlotsByDate]);
   const selectedDaySlots = selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : [];
@@ -424,12 +446,12 @@ export function ExperienceBookingCard({
     ];
   }, [openSlotsByDate]);
 
-  const goPrevMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
-  const goNextMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
-  const goToToday = () => setCalendarMonth(() => {
+  const goPrevMonth = useCallback(() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1)), []);
+  const goNextMonth = useCallback(() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1)), []);
+  const goToToday = useCallback(() => {
     const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+    setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+  }, []);
 
   if (paymentPhase === "loading") {
     return (
@@ -497,6 +519,7 @@ export function ExperienceBookingCard({
           <BookingPaymentForm
             onSuccess={async () => {
               setPaymentPhase("completing");
+              invalidateBookingCaches(experienceId);
               if (!holdId || !paymentIntentId) {
                 setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
                 setPaymentPhase("success");
@@ -726,7 +749,7 @@ export function ExperienceBookingCard({
                 {(a.type === "toggle" || a.type === "tip") ? (
                   <input
                     type="checkbox"
-                    checked={(addonSelections.find((s) => s.addonId === a.id)?.qty ?? 0) > 0}
+                    checked={(addonSelections[a.id] ?? 0) > 0}
                     onChange={(e) => updateAddonQty(a.id, e.target.checked ? 1 : 0)}
                     className="h-4 w-4 rounded border-brand-dark/30 text-brand-primary"
                     aria-label={a.name}
@@ -735,16 +758,16 @@ export function ExperienceBookingCard({
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={() => updateAddonQty(a.id, Math.max(0, (addonSelections.find((s) => s.addonId === a.id)?.qty ?? 0) - 1))}
+                      onClick={() => updateAddonQty(a.id, Math.max(0, (addonSelections[a.id] ?? 0) - 1))}
                       className="h-8 w-8 rounded-lg border border-brand-dark/20 text-brand-dark font-medium"
                     >
                       −
                     </button>
-                    <span className="w-6 text-center text-sm">{(addonSelections.find((s) => s.addonId === a.id)?.qty ?? 0)}</span>
+                    <span className="w-6 text-center text-sm">{(addonSelections[a.id] ?? 0)}</span>
                     <button
                       type="button"
                       onClick={() =>
-                        updateAddonQty(a.id, Math.min(a.maxQty ?? 99, (addonSelections.find((s) => s.addonId === a.id)?.qty ?? 0) + 1))
+                        updateAddonQty(a.id, Math.min(a.maxQty ?? 99, (addonSelections[a.id] ?? 0) + 1))
                       }
                       className="h-8 w-8 rounded-lg border border-brand-dark/20 text-brand-dark font-medium"
                     >

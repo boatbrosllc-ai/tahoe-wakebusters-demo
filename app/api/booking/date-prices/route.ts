@@ -6,6 +6,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
+
+export const dynamic = "force-dynamic";
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -102,13 +104,48 @@ export async function GET(request: NextRequest) {
       const total = exp.maxCapacity ?? exp.maxGuests ?? 36;
       const dateSet = new Set(dateStrs);
 
-      // Query by experienceId only — filter status/expiry in memory to avoid composite index requirement
-      const [bookingsSnap, holdsSnap] = await Promise.all([
-        db.collection("bookings").where("experienceId", "==", experienceId).get(),
-        db.collection("holds").where("experienceId", "==", experienceId).where("status", "==", "active").get(),
+      const startStr = dateStrs[0];
+      const endStr = dateStrs[dateStrs.length - 1];
+
+      // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
+      const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
+
+      const [bookingsSnap, holdsWindowedSnap, holdsLegacySnap] = await Promise.all([
+        // Windowed bookings via (experienceId, startDateStr) composite index.
+        db.collection("bookings")
+          .where("experienceId", "==", experienceId)
+          .where("startDateStr", ">=", startStr)
+          .where("startDateStr", "<=", endStr)
+          .get(),
+        // Windowed holds via (experienceId, startDateStr) index; status filtered in-memory to avoid
+        // requiring a three-field (experienceId, status, startDateStr) composite index.
+        db.collection("holds")
+          .where("experienceId", "==", experienceId)
+          .where("startDateStr", ">=", startStr)
+          .where("startDateStr", "<=", endStr)
+          .get(),
+        // Legacy fallback for holds written before startDateStr was stored.
+        // Skipped when DISABLE_LEGACY_HOLDS_FALLBACK=true (once all holds are backfilled).
+        legacyFallbackEnabled
+          ? db.collection("holds")
+              .where("experienceId", "==", experienceId)
+              .where("status", "==", "active")
+              .limit(100)
+              .get()
+          : Promise.resolve({ docs: [] as typeof holdsWindowedSnap.docs }),
       ]);
 
-      // Aggregate sold + onHold per date (filter status and expiry in memory)
+      // Merge windowed and legacy hold docs; dedup by id.
+      const holdDocMap = new Map<string, (typeof holdsWindowedSnap.docs)[0]>();
+      for (const doc of holdsWindowedSnap.docs) holdDocMap.set(doc.id, doc);
+      for (const doc of holdsLegacySnap.docs) {
+        if (holdDocMap.has(doc.id)) continue;
+        const legacyData = doc.data() as { startDateStr?: string };
+        if (legacyData.startDateStr) continue; // already covered by windowed query
+        holdDocMap.set(doc.id, doc);
+      }
+
+      // Aggregate sold + onHold per date (filter status/expiry in memory)
       const now = Date.now();
       const soldByDate: Record<string, number> = {};
       const heldByDate: Record<string, number> = {};
@@ -120,13 +157,14 @@ export async function GET(request: NextRequest) {
         if (!parsed || !dateSet.has(parsed.dateStr)) continue;
         soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
       }
-      for (const doc of holdsSnap.docs) {
-        const h = doc.data() as { slotId?: string; partySize?: number; expiresAt?: { toDate(): Date } };
+      for (const doc of holdDocMap.values()) {
+        const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
         if (!h.slotId || typeof h.partySize !== "number") continue;
-        if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue; // expired
-        const parsed = parseSlotId(h.slotId);
-        if (!parsed || !dateSet.has(parsed.dateStr)) continue;
-        heldByDate[parsed.dateStr] = (heldByDate[parsed.dateStr] ?? 0) + h.partySize;
+        if (h.status !== "active") continue;
+        if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
+        const holdDate = h.startDateStr ?? parseSlotId(h.slotId)?.dateStr;
+        if (!holdDate || !dateSet.has(holdDate)) continue;
+        heldByDate[holdDate] = (heldByDate[holdDate] ?? 0) + h.partySize;
       }
 
       ticketsAvailableByDate = {};
@@ -137,7 +175,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ prices, holidayDateStrings, pricingType: exp.pricingType ?? "charter", ticketsAvailableByDate });
+    return NextResponse.json(
+      { prices, holidayDateStrings, pricingType: exp.pricingType ?? "charter", ticketsAvailableByDate },
+      { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load date prices";
     console.error("[date-prices]", err);

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -21,6 +22,7 @@ interface ExperienceOption {
   id: string | null;
   slug: string;
   title: string;
+  pricingType?: string;
 }
 
 function formatTime(iso: string) {
@@ -36,7 +38,7 @@ function getDateRange(days: number): { start: string; end: string } {
 }
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
@@ -74,8 +76,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   useEffect(() => {
     if (!open) return;
     setExperiencesLoading(true);
-    fetch("/api/experiences")
-      .then((res) => (res.ok ? res.json() : null))
+    const controller = new AbortController();
+    bookingCache.fetchExperiences(controller.signal)
       .then((data) => {
         if (data?.experiences?.length) {
           setExperiences(
@@ -83,14 +85,18 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
               id: e.id,
               slug: e.slug,
               title: e.title,
+              pricingType: (e as { pricingType?: string }).pricingType,
             }))
           );
         } else {
           setExperiences(FALLBACK_EXPERIENCES);
         }
       })
-      .catch(() => setExperiences(FALLBACK_EXPERIENCES))
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setExperiences(FALLBACK_EXPERIENCES);
+      })
       .finally(() => setExperiencesLoading(false));
+    return () => controller.abort();
   }, [open]);
 
   useEffect(() => {
@@ -107,44 +113,47 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
       setRates([]);
       return;
     }
-    let cancelled = false;
-    fetch(`/api/experiences/rates?experienceId=${encodeURIComponent(experienceId)}`)
-      .then((res) => (res.ok ? res.json() : null))
+    const controller = new AbortController();
+    bookingCache.fetchExperienceRates(experienceId, controller.signal)
       .then((data) => {
-        if (!cancelled && Array.isArray(data?.rates)) setRates(data.rates);
+        if (Array.isArray(data?.rates)) setRates(data.rates);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setRates([]);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [experienceId]);
 
   // Only fetch slots when we have experience id (resolve by slug first when using FALLBACK_EXPERIENCES).
   useEffect(() => {
     if (!selectedExperience) return;
+    const controller = new AbortController();
     if (selectedExperience.id) {
       setSlotsLoading(true);
       setSlots([]);
-      fetch(
-        `/api/booking/slots?experienceId=${encodeURIComponent(selectedExperience.id)}&startDate=${dateRange.start}&endDate=${dateRange.end}`
-      )
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => setSlots(data?.slots ?? []))
+      bookingCache.fetchSlots(selectedExperience.id, dateRange.start, dateRange.end, controller.signal)
+        .then((data) => setSlots((data?.slots ?? []) as SlotDto[]))
+        .catch((err: unknown) => {
+          if ((err as { name?: string })?.name !== "AbortError") setSlots([]);
+        })
         .finally(() => setSlotsLoading(false));
-      return;
+      return () => controller.abort();
     }
     setSlotsLoading(true);
     setSlots([]);
-    fetch(`/api/experiences/${selectedExperience.slug}`)
-      .then((res) => (res.ok ? res.json() : null))
+    bookingCache.fetchExperienceBySlug(selectedExperience.slug, controller.signal)
       .then((data) => {
         if (data?.id) {
-          setSelectedExperience((prev) => (prev ? { ...prev, id: data.id } : null));
+          setSelectedExperience((prev) => (prev ? { ...prev, id: data.id as string } : null));
         } else {
           setSlotsLoading(false);
         }
       })
-      .catch(() => setSlotsLoading(false));
-  }, [selectedExperience?.slug, selectedExperience?.id, selectedExperience, dateRange.start, dateRange.end]);
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setSlotsLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end]);
 
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
@@ -370,6 +379,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                               experienceSlug,
                               date: selectedDate,
                               slotId: slot.id,
+                              pricingType: (selectedExperience?.pricingType as 'charter' | 'ticketed' | undefined),
                             });
                             setSlotModalOpen(false);
                             onOpenChange(false);

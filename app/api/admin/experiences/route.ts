@@ -270,9 +270,12 @@ export async function POST(request: NextRequest) {
     await ref.set(exp);
     const expId = ref.id;
     if (parsed.rates?.length) {
+      let minPriceCents: number | null = null;
       for (const r of parsed.rates) {
         await ref.collection("rates").doc().set({ ...r, active: true });
+        if (minPriceCents === null || r.priceCents < minPriceCents) minPriceCents = r.priceCents;
       }
+      if (minPriceCents !== null) await ref.update({ fromPriceCents: minPriceCents });
     }
     if (parsed.addons?.length) {
       for (const a of parsed.addons) {
