@@ -260,7 +260,7 @@ export async function POST(request: NextRequest) {
       const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
         ...(hold.experienceId ? { experienceId: hold.experienceId } : {}),
         ...(hold.boatId ? { boatId: hold.boatId } : {}),
-        ...((hold as { bookingMode?: string }).bookingMode ? { bookingMode: (hold as { bookingMode?: string }).bookingMode } : {}),
+        ...(hold.bookingMode ? { bookingMode: hold.bookingMode } : {}),
         slotId: hold.slotId,
         ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
         rateId: hold.rateId,
