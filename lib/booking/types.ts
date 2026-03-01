@@ -316,6 +316,10 @@ export interface Hold {
   pricing?: BookingPricing;
   /** Effective rate price (cents) used for this hold (date-based). Enables checkout to use hold.pricing without recomputing. */
   effectiveRateCents?: number;
+  /** Stripe PaymentIntent id for deposit (reused on retry). */
+  depositPaymentIntentId?: string;
+  /** Stripe PaymentIntent id for full/final payment (reused on retry). */
+  fullPaymentIntentId?: string;
 }
 
 // ---------------------------------------------------------------------------

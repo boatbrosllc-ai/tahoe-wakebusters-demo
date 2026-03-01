@@ -129,8 +129,7 @@ export async function POST(request: NextRequest) {
 
     // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
     // The field name is scoped to the payment stage so deposit and full retries never cross-contaminate.
-    const stageKey = payFullAmount ? "fullPaymentIntentId" : "depositPaymentIntentId";
-    const existingPiId = (hold as Record<string, unknown>)[stageKey] as string | undefined;
+    const existingPiId = payFullAmount ? hold.fullPaymentIntentId : hold.depositPaymentIntentId;
     if (existingPiId) {
       try {
         const existing = await stripe.paymentIntents.retrieve(existingPiId);
