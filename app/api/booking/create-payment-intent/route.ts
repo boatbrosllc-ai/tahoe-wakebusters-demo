@@ -178,7 +178,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }
     // Persist the PI id on the hold so retries can reuse it instead of creating a new charge.
-    await holdRef.update({ [stageKey]: paymentIntent.id });
+    await holdRef.update(
+      payFullAmount ? { fullPaymentIntentId: paymentIntent.id } : { depositPaymentIntentId: paymentIntent.id }
+    );
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
