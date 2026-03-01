@@ -427,9 +427,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const controller = new AbortController();
     bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
-        setBoats(Array.isArray(data.boats) ? data.boats : []);
-        setExperienceRates(Array.isArray(data.rates) ? data.rates : []);
-        setAddons(Array.isArray(data.addons) ? data.addons : []);
+        setBoats(Array.isArray(data.boats) ? (data.boats as BoatOption[]) : []);
+        setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
+        setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;

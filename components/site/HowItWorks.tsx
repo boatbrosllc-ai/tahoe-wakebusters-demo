@@ -44,7 +44,7 @@ export function HowItWorks() {
 
         <ol className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-6 max-w-5xl mx-auto list-none">
           {steps.map((step, i) => (
-            <li key={step.title} className="relative flex flex-col items-center text-center h-full">
+            <li key={step.title} className="relative h-full">
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 whileInView={{ opacity: 1, y: 0 }}
@@ -53,35 +53,39 @@ export function HowItWorks() {
                 whileHover={{ y: -4, scale: 1.02, transition: { duration: 0.25 } }}
                 onHoverStart={() => setHoveredIndex(i)}
                 onHoverEnd={() => setHoveredIndex(null)}
-                className="relative w-full h-full max-w-sm rounded-2xl ring-4 ring-brand-primary bg-white p-6 shadow-soft hover:shadow-xl hover:ring-offset-2 transition-all duration-300 cursor-default flex flex-col"
+                className="relative w-full h-full max-w-sm rounded-2xl ring-4 ring-brand-primary bg-white p-6 shadow-soft hover:shadow-xl hover:ring-offset-2 transition-all duration-300 cursor-default flex gap-4 sm:gap-4 flex-row items-start text-left"
               >
-                {/* Step number */}
-                <motion.span
-                  className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-primary text-white text-sm font-bold mb-4"
-                  aria-hidden
-                  whileHover={{ scale: 1.08 }}
-                  transition={{ type: "spring", stiffness: 400, damping: 17 }}
-                >
-                  {i + 1}
-                </motion.span>
-                {/* Icon – animates on card hover */}
-                <motion.div
-                  className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-primary/10 text-brand-primary mb-3"
-                  aria-hidden
-                  animate={hoveredIndex === i ? step.iconHover : { scale: 1, rotate: 0, y: 0 }}
-                  transition={hoveredIndex === i ? (step.iconHover.transition ?? { duration: 0.3 }) : { duration: 0.25 }}
-                >
-                  <step.icon className="h-6 w-6" />
-                </motion.div>
-                <h3 className="text-lg font-semibold text-brand-dark mb-2">{step.title}</h3>
-                <p className="text-sm text-brand-muted mb-1 flex-1">{step.description}</p>
-                {step.highlight ? (
-                  <p className="text-sm font-medium text-brand-primary">{step.highlight}</p>
-                ) : (
-                  <p className="text-sm font-medium text-transparent select-none" aria-hidden="true">
-                    {"\u00A0"}
-                  </p>
-                )}
+                {/* Left: step number + icon – fixed width so they always fit */}
+                <div className="flex shrink-0 flex-col items-center gap-3">
+                  <motion.span
+                    className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-primary text-white text-sm font-bold"
+                    aria-hidden
+                    whileHover={{ scale: 1.08 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                  >
+                    {i + 1}
+                  </motion.span>
+                  <motion.div
+                    className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-primary/10 text-brand-primary flex-shrink-0"
+                    aria-hidden
+                    animate={hoveredIndex === i ? step.iconHover : { scale: 1, rotate: 0, y: 0 }}
+                    transition={hoveredIndex === i ? (step.iconHover.transition ?? { duration: 0.3 }) : { duration: 0.25 }}
+                  >
+                    <step.icon className="h-6 w-6" />
+                  </motion.div>
+                </div>
+                {/* Right: title + description + highlight */}
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <h3 className="text-lg font-semibold text-brand-dark mb-2">{step.title}</h3>
+                  <p className="text-sm text-brand-muted mb-1">{step.description}</p>
+                  {step.highlight ? (
+                    <p className="text-sm font-medium text-brand-primary">{step.highlight}</p>
+                  ) : (
+                    <p className="text-sm font-medium text-transparent select-none" aria-hidden="true">
+                      {"\u00A0"}
+                    </p>
+                  )}
+                </div>
               </motion.div>
             </li>
           ))}

@@ -41,9 +41,9 @@ export function BookingPreload() {
       ])
         .then(([detail, ratesData]) => {
           if (cancelled) return;
-          const rates = detail?.rates ?? ratesData?.rates ?? [];
+          const rates = (detail?.rates ?? ratesData?.rates ?? []) as Array<{ id: string }>;
           const firstRateId = rates.length > 0 ? rates[0].id : undefined;
-          const allRateIds = rates.map((r: { id: string }) => r.id).filter(Boolean);
+          const allRateIds = rates.map((r) => r.id).filter(Boolean);
 
           // Prefetch date-prices for all rates so modal gets cache hits regardless of which rate it shows first (detail vs rates API order can differ).
           const datePricesPromises: Promise<unknown>[] = allRateIds.length > 0

@@ -70,7 +70,7 @@ export async function convertHoldToBooking(
     if (hold.status === "converted" && input.paymentIntentId) {
       const isDeposit = isDepositInput(input);
       const holdPiField = isDeposit ? "depositPaymentIntentId" : "fullPaymentIntentId";
-      const recordedPiId = (hold as Record<string, unknown>)[holdPiField] as string | undefined;
+      const recordedPiId = (hold as unknown as Record<string, unknown>)[holdPiField] as string | undefined;
       if (recordedPiId && input.paymentIntentId !== recordedPiId) {
         try {
           await db.collection("pendingRefunds").add({

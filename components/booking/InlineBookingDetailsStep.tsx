@@ -162,7 +162,8 @@ export function InlineBookingDetailsStep({
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Derived: no state or effect needed — shared bookings always pay full upfront
-  const payFullAmount = bookingMode === "shared";
+  const [charterPayFull, setCharterPayFull] = useState(false);
+  const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
     ? Math.min(experienceMaxGuests, spotsRemaining)
@@ -600,7 +601,7 @@ export function InlineBookingDetailsStep({
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => setPayFullAmount(false)}
+                onClick={() => setCharterPayFull(false)}
                 className={cn(
                   "rounded-xl border-2 py-3 px-3 text-left text-sm",
                   !payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
@@ -611,7 +612,7 @@ export function InlineBookingDetailsStep({
               </button>
               <button
                 type="button"
-                onClick={() => setPayFullAmount(true)}
+                onClick={() => setCharterPayFull(true)}
                 className={cn(
                   "rounded-xl border-2 py-3 px-3 text-left text-sm",
                   payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
