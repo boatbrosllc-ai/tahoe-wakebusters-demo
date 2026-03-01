@@ -74,7 +74,6 @@ export async function POST(request: NextRequest) {
     return data;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let cursor: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData> | null = null;
 
   while (true) {

@@ -82,7 +82,6 @@ export async function GET(request: NextRequest) {
   }
 
   for (const status of paidStatuses) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let cursor: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData> | null = null;
 
     while (true) {
