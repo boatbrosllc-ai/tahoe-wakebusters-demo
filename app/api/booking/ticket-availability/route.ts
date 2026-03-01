@@ -30,30 +30,28 @@ export async function GET(request: NextRequest) {
     // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
     const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
 
-    // All queries only need experienceId and date from request params — run in parallel.
-    const [expDoc, bookingsSnap, holdsSnap, legacyHoldsSnap] = await Promise.all([
+    type DocSnapshot = import("firebase-admin").firestore.DocumentSnapshot;
+    type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
+    const promises: [Promise<DocSnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>] = [
       db.collection("experiences").doc(experienceId).get(),
-      // Single-date filter: result set is inherently small; no limit needed.
       db.collection("bookings")
         .where("experienceId", "==", experienceId)
         .where("startDateStr", "==", date)
         .get(),
-      // Primary: date-bounded active holds (requires holds/experienceId+status+startDateStr index).
       db.collection("holds")
         .where("experienceId", "==", experienceId)
         .where("status", "==", "active")
         .where("startDateStr", "==", date)
         .get(),
-      // Bounded fallback for legacy hold documents written before startDateStr was stored.
-      // Skipped when DISABLE_LEGACY_HOLDS_FALLBACK=true.
       legacyFallbackEnabled
         ? db.collection("holds")
             .where("experienceId", "==", experienceId)
             .where("status", "==", "active")
             .limit(100)
             .get()
-        : Promise.resolve({ docs: [] as typeof holdsSnap.docs }),
-    ]);
+        : Promise.resolve({ docs: [], empty: true, size: 0 } as unknown as QuerySnapshot),
+    ];
+    const [expDoc, bookingsSnap, holdsSnap, legacyHoldsSnap] = await Promise.all(promises);
 
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found." }, { status: 404 });
@@ -89,7 +87,7 @@ export async function GET(request: NextRequest) {
     }
 
     let onHold = 0;
-    for (const doc of holdDocMap.values()) {
+    for (const doc of Array.from(holdDocMap.values())) {
       const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
       if (!h.slotId || typeof h.partySize !== "number") continue;
       if (h.status !== "active") continue;
