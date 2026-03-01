@@ -110,7 +110,8 @@ export async function GET(request: NextRequest) {
       // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
 
-      const [bookingsSnap, holdsWindowedSnap, holdsLegacySnap] = await Promise.all([
+      type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
+      const promises: [Promise<QuerySnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>] = [
         // Windowed bookings via (experienceId, startDateStr) composite index.
         db.collection("bookings")
           .where("experienceId", "==", experienceId)
@@ -125,15 +126,15 @@ export async function GET(request: NextRequest) {
           .where("startDateStr", "<=", endStr)
           .get(),
         // Legacy fallback for holds written before startDateStr was stored.
-        // Skipped when DISABLE_LEGACY_HOLDS_FALLBACK=true (once all holds are backfilled).
         legacyFallbackEnabled
           ? db.collection("holds")
               .where("experienceId", "==", experienceId)
               .where("status", "==", "active")
               .limit(100)
               .get()
-          : Promise.resolve({ docs: [] as typeof holdsWindowedSnap.docs }),
-      ]);
+          : Promise.resolve({ docs: [], empty: true, size: 0 } as unknown as QuerySnapshot),
+      ];
+      const [bookingsSnap, holdsWindowedSnap, holdsLegacySnap] = await Promise.all(promises);
 
       // Merge windowed and legacy hold docs; dedup by id.
       const holdDocMap = new Map<string, (typeof holdsWindowedSnap.docs)[0]>();
