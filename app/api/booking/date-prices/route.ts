@@ -158,7 +158,7 @@ export async function GET(request: NextRequest) {
         if (!parsed || !dateSet.has(parsed.dateStr)) continue;
         soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
       }
-      for (const doc of holdDocMap.values()) {
+      for (const doc of Array.from(holdDocMap.values())) {
         const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
         if (!h.slotId || typeof h.partySize !== "number") continue;
         if (h.status !== "active") continue;
