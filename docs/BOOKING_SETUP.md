@@ -101,6 +101,40 @@ If booking works locally but fails in production, check:
 
 When config is missing, the booking UI now shows the API error and hint (e.g. “Booking is not configured. Set FIREBASE_* in your deployment.”). Check the message and the host’s env/logs.
 
+## Netlify: get booking working in production
+
+To get the full booking flow (including **more than one month** loading in the calendar) working on Netlify:
+
+1. **Use the Next.js runtime**  
+   In Netlify → Site configuration → Build & deploy → Build:
+   - **Build command:** `npm run build` (or `next build`).
+   - **Publish directory:** leave as set by the Netlify Next.js plugin (usually `.next` is handled automatically).  
+   If you use **Netlify’s “Detect next.js”** or **@netlify/plugin-nextjs**, API routes under `/api/*` (including `/api/booking/slots`, `/api/booking/create-hold`, etc.) run as serverless functions. Without the Next runtime, those routes won’t exist in production.
+
+2. **Set environment variables** (Site settings → Environment variables → Add variable / Import from .env):
+   - **Firebase (required for slots, holds, checkout):**  
+     `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (single line, newlines as `\n` — see [Firebase Private Key](#production-deployment-netlify--vercel--etc) below).  
+     Do **not** set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in Netlify.
+   - **Stripe:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+   - **Brevo:** `BREVO_API_KEY`.
+   - **App URL:** `APP_BASE_URL` = your production URL (e.g. `https://yoursite.com`), no trailing slash.
+   - **Public (if using Stripe or Firebase on the client):** `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, and if using admin login: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `ADMIN_EMAIL`.  
+   Set scope to **All** or **Build** so they’re available at build and runtime. Then **Trigger deploy** (or push a commit) so the new vars are applied.
+
+3. **Stripe webhook**  
+   In Stripe Dashboard → Webhooks, add endpoint URL:  
+   `https://YOUR_NETLIFY_DOMAIN/api/stripe/webhook`  
+   Events: `checkout.session.completed`, `payment_intent.succeeded`.  
+   Copy the signing secret into Netlify as `STRIPE_WEBHOOK_SECRET` and redeploy.
+
+4. **Deploy the latest code**  
+   Ensure the repo has the fixes for production (UTC date parsing in the slots API, shared month range in the booking modal). Push to the branch Netlify builds from and wait for the deploy to finish.
+
+5. **Verify**
+   - Open the production site → Book now or an experience page.
+   - Open the first month; then click **Next month**. The second month should load (no “Unable to load availability”).
+   - If the second month still doesn’t load: Netlify → Deploys → latest → Functions / Logs; look for errors from `/api/booking/slots` (e.g. 400/503). In the browser, DevTools → Network: check the request to `/api/booking/slots?experienceId=...&startDate=...&endDate=...` for the next month and see the response status and body.
+
 ## Production deployment (Netlify / Vercel / etc.)
 
 For **Book now** and experiences to work in production, the server must have Firebase Admin credentials. If they are missing, `/api/experiences` returns 500 and the booking modal shows “No experiences” or “Failed to load experiences.”

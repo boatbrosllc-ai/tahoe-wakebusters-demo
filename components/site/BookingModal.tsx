@@ -16,6 +16,7 @@ import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
+import { getMonthRange } from "@/lib/booking/booking-date-range";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -481,11 +482,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     return () => controller.abort();
   }, [selectedExperience?.id]);
 
-  const viewMonthStartStr = `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}-01`;
-  const viewMonthEndStr = useMemo(() => {
-    const last = new Date(viewMonthYear, viewMonthMonth, 0);
-    return toLocalDateStr(last);
-  }, [viewMonthYear, viewMonthMonth]);
+  // Use shared date-range helper so month boundaries match API and other booking flows (avoids TZ bugs in production).
+  const { start: viewMonthStartStr, end: viewMonthEndStr } = useMemo(
+    () => getMonthRange(viewMonthYear, viewMonthMonth - 1),
+    [viewMonthYear, viewMonthMonth]
+  );
   const daysInViewMonth = useMemo(
     () => new Date(viewMonthYear, viewMonthMonth, 0).getDate(),
     [viewMonthYear, viewMonthMonth]

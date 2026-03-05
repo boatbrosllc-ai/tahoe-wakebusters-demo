@@ -41,8 +41,9 @@ export async function GET(request: NextRequest) {
     if ((!boatId && !experienceId) || !startDate || !endDate) {
       return NextResponse.json({ error: "boatId or experienceId, startDate, endDate required (YYYY-MM-DD)" }, { status: 400 });
     }
-    const start = new Date(startDate + "T00:00:00");
-    const end = new Date(endDate + "T23:59:59");
+    // Parse as UTC so range validation is identical in all server timezones (avoids production-only rejections).
+    const start = new Date(startDate + "T12:00:00.000Z");
+    const end = new Date(endDate + "T23:59:59.999Z");
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return NextResponse.json({ error: "Invalid date format" }, { status: 400 });
     }
