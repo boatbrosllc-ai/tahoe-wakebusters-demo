@@ -578,6 +578,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       lastSlotsRetryForRef.current = null;
     }
     slotsRequestRangeRef.current = { start: viewMonthStartStr, end: viewMonthEndStr };
+    bookingLog("client", "slots fetch start", {
+      experienceId: selectedExperience.id,
+      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
+      startDate: viewMonthStartStr,
+      endDate: viewMonthEndStr,
+    });
     bookingDebugLog("BookingModal", "slots fetch start", {
       experienceId: selectedExperience.id,
       viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
@@ -611,12 +617,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
         const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
-        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch(() => {});
+        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch((prefetchErr: unknown) => {
+          const status = (prefetchErr as { status?: number }).status;
+          if (typeof status === "number") bookingLog("client", "slots prefetch failed (next month)", { nextStart, nextEnd, status });
+        });
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
         const apiBody = (err as { apiBody?: { error?: string; hint?: string; firebaseDetail?: { summary?: string } } })?.apiBody;
         const status = (err as { status?: number }).status;
+        bookingError("client", "slots fetch failed", null, {
+          startDate: viewMonthStartStr,
+          endDate: viewMonthEndStr,
+          status,
+          error: apiBody?.error,
+          hint: apiBody?.hint,
+          firebaseSummary: apiBody?.firebaseDetail?.summary,
+        });
         console.warn("[booking] slots fetch failed (check Network tab for /api/booking/slots)", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, status, error: apiBody?.error, hint: apiBody?.hint, firebaseDetail: apiBody?.firebaseDetail });
         bookingDebugLog("BookingModal", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         setMonthSlots([]);

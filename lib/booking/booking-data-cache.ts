@@ -129,6 +129,7 @@ function fetchCached<T>(
       };
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
+      const startMs = Date.now();
       const p = fetch(fullUrl, fetchOpts)
         .then(async (res) => {
           if (!res.ok) {
@@ -154,6 +155,21 @@ function fetchCached<T>(
         })
         .catch((err: unknown) => {
           inFlight.delete(key);
+          // Always log failed API requests to dev console so production issues can be diagnosed (status, error, hint, duration).
+          const status = (err as { status?: number }).status;
+          const apiBody = (err as { apiBody?: { error?: string; hint?: string; firebaseDetail?: { summary?: string } } }).apiBody;
+          if (typeof status === "number" && status >= 400) {
+            const durationMs = Date.now() - startMs;
+            console.error("[booking:diagnostic] API request failed", {
+              key,
+              url,
+              status,
+              durationMs,
+              error: apiBody?.error,
+              hint: apiBody?.hint,
+              firebaseSummary: apiBody?.firebaseDetail?.summary,
+            });
+          }
           throw err;
         });
       inFlight.set(key, p);
