@@ -17,6 +17,8 @@ import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
+/** Ask host for longer timeout so second-month requests don't time out (Netlify default 10s). */
+export const maxDuration = 26;
 
 // Set LEGACY_BOOKING_FALLBACK=1 only during / immediately after a startDateStr backfill migration.
 // Once all historical bookings and holds carry startDateStr, leave this unset so the broad
@@ -41,6 +43,9 @@ export async function GET(request: NextRequest) {
     if ((!boatId && !experienceId) || !startDate || !endDate) {
       return NextResponse.json({ error: "boatId or experienceId, startDate, endDate required (YYYY-MM-DD)" }, { status: 400 });
     }
+    // #region agent log
+    console.log("[slots] request", { experienceId: experienceId ?? null, boatId: boatId ?? null, startDate, endDate });
+    // #endregion
     // Parse as UTC so range validation is identical in all server timezones (avoids production-only rejections).
     const start = new Date(startDate + "T12:00:00.000Z");
     const end = new Date(endDate + "T23:59:59.999Z");
@@ -856,6 +861,9 @@ export async function GET(request: NextRequest) {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const startDate = request.nextUrl.searchParams.get("startDate");
+    const endDate = request.nextUrl.searchParams.get("endDate");
+    console.error("[slots] error", { startDate, endDate, message });
     console.error("[slots]", err);
     const isFirebase = /firebase|FIREBASE|config missing|credential|private.?key/i.test(message);
     return NextResponse.json(

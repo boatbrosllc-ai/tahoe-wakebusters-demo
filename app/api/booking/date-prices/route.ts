@@ -8,6 +8,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 
 export const dynamic = "force-dynamic";
+/** Allow longer timeout so second-month requests succeed in production (Netlify default 10s). */
+export const maxDuration = 26;
+
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -31,6 +34,10 @@ export async function GET(request: NextRequest) {
     const days = Math.min(Math.max(parseInt(daysParam ?? "35", 10) || 35, 1), 90);
     const startDateParam = request.nextUrl.searchParams.get("startDate"); // YYYY-MM-DD, optional
     const rateIdParam = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
+
+    // #region agent log
+    console.log("[date-prices] request", { experienceId, startDateParam, daysParam, rateId: rateIdParam ?? null });
+    // #endregion
 
     const db = getDb();
     const [expSnap, ratesSnap] = await Promise.all([
@@ -182,6 +189,8 @@ export async function GET(request: NextRequest) {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load date prices";
+    const startDateParam = request.nextUrl.searchParams.get("startDate");
+    console.error("[date-prices] error", { experienceId: request.nextUrl.searchParams.get("experienceId"), startDateParam, message });
     console.error("[date-prices]", err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
