@@ -22,6 +22,19 @@ export const dynamic = "force-dynamic";
 // legacy scans are never executed and every request uses only the fast windowed index queries.
 const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_BOOKING_FALLBACK === "1";
 
+/** Slugs that mean "wake / watersports" experience — only wake boats should be shown. */
+function isWatersportsSlug(slug: string): boolean {
+  const s = (slug ?? "").toLowerCase().trim();
+  return (
+    s === "watersports" ||
+    s === "wake-surf" ||
+    s === "lake-austin-wake-boat" ||
+    s === "wake" ||
+    s === "wakeboard" ||
+    s === "wake-board"
+  );
+}
+
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
 
@@ -74,8 +87,9 @@ export async function GET(request: NextRequest) {
       const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
       const experienceSlugLower = experienceSlug.toLowerCase();
       const allowBoatTypeForSlug = (bt: string | undefined): boolean => {
-        if (experienceSlugLower === "watersports" || experienceSlugLower === "wake-surf") return bt === "wake";
-        if (experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon") return bt === "pontoon" || bt === "tritoon";
+        if (isWatersportsSlug(experienceSlugLower)) return bt === "wake";
+        // Pontoon: allow pontoon/tritoon; also allow missing boatType so boats assigned to the listing still appear.
+        if (experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon") return !bt || bt === "pontoon" || bt === "tritoon";
         return true;
       };
 
@@ -122,6 +136,22 @@ export async function GET(request: NextRequest) {
         let tBoatIds: string[] = tBoatsSnap.docs
           .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
           .map((d) => d.id);
+        const tIsPontoonSlug = experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon";
+        if (tIsPontoonSlug) {
+          const [tByPontoon, tByLakeAustin] = await Promise.all([
+            db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
+            db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
+          ]);
+          const tSeen = new Set(tBoatIds);
+          for (const snap of [tByPontoon, tByLakeAustin]) {
+            snap.docs.forEach((d) => {
+              if (allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType) && !tSeen.has(d.id)) {
+                tSeen.add(d.id);
+                tBoatIds.push(d.id);
+              }
+            });
+          }
+        }
         if (tBoatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
           const tBoatsBySlugSnap = await db
             .collection("boats")
@@ -370,6 +400,24 @@ export async function GET(request: NextRequest) {
       let boatIds: string[] = boatsSnap.docs
         .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
+      // Pontoon: also include boats linked by slug "pontoon" or "lake-austin-pontoon" (merge so all pontoon boats appear).
+      const isPontoonSlug = experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon";
+      if (isPontoonSlug) {
+        const [boatsByPontoonSnap, boatsByLakeAustinPontoonSnap] = await Promise.all([
+          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
+          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
+        ]);
+        const seenIds = new Set(boatIds);
+        for (const snap of [boatsByPontoonSnap, boatsByLakeAustinPontoonSnap]) {
+          snap.docs.forEach((d) => {
+            if (!boatDocDataById.has(d.id)) boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string });
+            if (allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType) && !seenIds.has(d.id)) {
+              seenIds.add(d.id);
+              boatIds.push(d.id);
+            }
+          });
+        }
+      }
       // Fallback: boats may be linked by experience slug (e.g. "lake-austin-pontoon-charter") instead of Firestore id.
       if (boatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
         const boatsBySlugSnap = await db

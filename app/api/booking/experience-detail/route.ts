@@ -54,24 +54,47 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const db = getDb();
     const expRef = db.collection("experiences").doc(experienceId);
 
-    const [expDoc, ratesSnap, boatsSnap, addonsSnap] = await Promise.all([
-      expRef.get(),
-      expRef.collection("rates").where("active", "==", true).get(),
-      db
-        .collection("boats")
-        .where("isListingBoat", "==", true)
-        .where("active", "==", true)
-        .where("experienceIds", "array-contains", experienceId)
-        .get(),
-      expRef.collection("addons").where("active", "==", true).get(),
-    ]);
-
+    const expDoc = await expRef.get();
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-
     const expData = expDoc.data() as { slug?: string };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
+
+    // Pontoon experience: boats may be linked by doc id OR by slug ("pontoon" / "lake-austin-pontoon"). Query all and merge.
+    const isPontoonSlug = experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon";
+    const boatsByExpIdPromise = db
+      .collection("boats")
+      .where("isListingBoat", "==", true)
+      .where("active", "==", true)
+      .where("experienceIds", "array-contains", experienceId)
+      .get();
+    const boatsByPontoonPromise = isPontoonSlug
+      ? Promise.all([
+          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
+          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
+        ])
+      : Promise.resolve([]);
+
+    const [ratesSnap, boatsSnapById, boatsBySlugSnaps, addonsSnap] = await Promise.all([
+      expRef.collection("rates").where("active", "==", true).get(),
+      boatsByExpIdPromise,
+      boatsByPontoonPromise,
+      expRef.collection("addons").where("active", "==", true).get(),
+    ]);
+
+    const allBoatDocs = [...boatsSnapById.docs];
+    if (isPontoonSlug && Array.isArray(boatsBySlugSnaps)) {
+      const seen = new Set(allBoatDocs.map((d) => d.id));
+      for (const snap of boatsBySlugSnaps) {
+        snap.docs.forEach((d: { id: string }) => {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            allBoatDocs.push(d as (typeof allBoatDocs)[number]);
+          }
+        });
+      }
+    }
 
     // --- Rates ---
     const rates: ExperienceDetailRate[] = ratesSnap.docs
@@ -92,12 +115,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     // (guards against production data linking the wrong boat types to an experience).
     const boatTypeForSlug = (slug: string): ((bt: string | undefined) => boolean) => {
-      if (slug === "watersports" || slug === "wake-surf") return (bt) => bt === "wake";
-      if (slug === "pontoon" || slug === "lake-austin-pontoon") return (bt) => bt === "pontoon" || bt === "tritoon";
+      const s = (slug ?? "").toLowerCase().trim();
+      if (
+        s === "watersports" ||
+        s === "wake-surf" ||
+        s === "lake-austin-wake-boat" ||
+        s === "wake" ||
+        s === "wakeboard" ||
+        s === "wake-board"
+      )
+        return (bt) => bt === "wake";
+      // Pontoon: allow pontoon/tritoon; also allow missing boatType so boats assigned to the listing but without type set still appear.
+      if (s === "pontoon" || s === "lake-austin-pontoon") return (bt) => !bt || bt === "pontoon" || bt === "tritoon";
       return () => true; // sunset, holiday: no filter
     };
     const allowBoatType = boatTypeForSlug(experienceSlug);
-    const boats: ExperienceDetailBoat[] = boatsSnap.docs
+    const boats: ExperienceDetailBoat[] = allBoatDocs
       .filter((doc) => {
         const boat = doc.data() as ListingBoat;
         return allowBoatType(boat.boatType);
