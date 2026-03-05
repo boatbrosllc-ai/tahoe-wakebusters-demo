@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 export interface ExperienceDetailBoat {
@@ -61,38 +62,31 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const expData = expDoc.data() as { slug?: string };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
 
-    // Pontoon experience: boats may be linked by doc id OR by slug ("pontoon" / "lake-austin-pontoon"). Query all and merge.
-    const isPontoonSlug = experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon";
-    const boatsByExpIdPromise = db
-      .collection("boats")
-      .where("isListingBoat", "==", true)
-      .where("active", "==", true)
-      .where("experienceIds", "array-contains", experienceId)
-      .get();
-    const boatsByPontoonPromise = isPontoonSlug
-      ? Promise.all([
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
-        ])
-      : Promise.resolve([]);
+    // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
+    const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+    const boatPromises = experienceIdVariants.map((variantId) =>
+      db
+        .collection("boats")
+        .where("isListingBoat", "==", true)
+        .where("active", "==", true)
+        .where("experienceIds", "array-contains", variantId)
+        .get()
+    );
 
-    const [ratesSnap, boatsSnapById, boatsBySlugSnaps, addonsSnap] = await Promise.all([
+    const [ratesSnap, addonsSnap, ...boatsSnapsByVariant] = await Promise.all([
       expRef.collection("rates").where("active", "==", true).get(),
-      boatsByExpIdPromise,
-      boatsByPontoonPromise,
       expRef.collection("addons").where("active", "==", true).get(),
+      ...boatPromises,
     ]);
 
-    const allBoatDocs = [...boatsSnapById.docs];
-    if (isPontoonSlug && Array.isArray(boatsBySlugSnaps)) {
-      const seen = new Set(allBoatDocs.map((d) => d.id));
-      for (const snap of boatsBySlugSnaps) {
-        snap.docs.forEach((d: { id: string }) => {
-          if (!seen.has(d.id)) {
-            seen.add(d.id);
-            allBoatDocs.push(d as (typeof allBoatDocs)[number]);
-          }
-        });
+    const allBoatDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+    const seen = new Set<string>();
+    for (const snap of boatsSnapsByVariant) {
+      for (const d of snap.docs) {
+        if (!seen.has(d.id)) {
+          seen.add(d.id);
+          allBoatDocs.push(d);
+        }
       }
     }
 

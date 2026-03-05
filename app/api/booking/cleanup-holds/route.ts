@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { parseSlotId } from "@/lib/booking/experience-slots";
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,13 +27,19 @@ export async function GET(request: NextRequest) {
       const experienceId = hold.experienceId as string | undefined;
       const slotId = hold.slotId as string;
       if (!slotId || (!boatId && !experienceId)) return false;
+      const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
+      const dateStr =
+        (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(slotId)?.dateStr ?? "";
       const slotRef = boatId
         ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
         : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
       await db.runTransaction(async (tx) => {
         const slotSnap = await tx.get(slotRef);
         if (!slotSnap.exists) {
-          // Slot doc was never created (e.g. shared ticketed hold) — skip slot update but still expire the hold.
+          if (isSharedHold && experienceId && dateStr) {
+            const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+            await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+          }
           tx.update(doc.ref, { status: "expired" });
           return;
         }

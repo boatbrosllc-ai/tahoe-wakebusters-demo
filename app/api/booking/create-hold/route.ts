@@ -5,22 +5,14 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { getExperienceIdVariants, boatMatchesExperience } from "@/lib/booking/experience-aliases";
+import { getDepartureInventoryRef, reserveCapacity } from "@/lib/booking/shared-departure-inventory";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 const HOLD_EXPIRY_MINUTES = 10;
-
-function buildExpSlugVariants(expId: string, expSlug: string): string[] {
-  const variants = new Set<string>();
-  if (expSlug && expSlug !== expId) variants.add(expSlug);
-  if (expSlug === "pontoon" || expSlug === "lake-austin-pontoon") {
-    variants.add("pontoon");
-    variants.add("lake-austin-pontoon");
-  }
-  return Array.from(variants);
-}
 
 function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | { input: null; hint: string } {
   if (body == null || typeof body !== "object") {
@@ -210,7 +202,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Boat not found" }, { status: 404 });
       }
       const boat = boatDoc.data() as ListingBoat & { active?: boolean };
-      if (boat.isListingBoat !== true || !Array.isArray(boat.experienceIds) || !boat.experienceIds.includes(expId)) {
+      const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
+      if (boat.isListingBoat !== true || !boatMatchesExperience(boat, expId, expSlug)) {
         return NextResponse.json({ error: "Boat not available for this experience" }, { status: 400 });
       }
       if (boat.active === false) {
@@ -504,51 +497,29 @@ export async function POST(request: NextRequest) {
       const expSlug = experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
         ? ((experienceForPricing as Experience).slug as string).trim()
         : "";
-      const slugVariantsList = buildExpSlugVariants(expId, expSlug);
+      const slugVariantsList = getExperienceIdVariants(expId, expSlug);
+      const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
       await db.runTransaction(async (tx) => {
-        const nowMs = Date.now();
-        // All queries are date-bounded via startDateStr — only docs for this departure date are read.
-        // Indexes used: bookings(experienceId, startDateStr), holds(experienceId, status, startDateStr).
-        const allQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
+        // Single per-departure inventory doc is read and updated so concurrent requests conflict and retry safely.
+        const bookingQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
           tx.get(db.collection("bookings").where("experienceId", "==", expId).where("startDateStr", "==", dateStr)),
-          tx.get(db.collection("holds").where("experienceId", "==", expId).where("status", "==", "active").where("startDateStr", "==", dateStr)),
-          ...slugVariantsList.flatMap(v => [
-            tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", dateStr)),
-            tx.get(db.collection("holds").where("experienceId", "==", v).where("status", "==", "active").where("startDateStr", "==", dateStr)),
-          ]),
+          ...slugVariantsList.map(v => tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", dateStr))),
         ];
-        const allSnaps = await Promise.all(allQueries);
-        const seenBIds = new Set(allSnaps[0].docs.map(d => d.id));
-        const seenHIds = new Set(allSnaps[1].docs.map(d => d.id));
-        const allBookDocs = [...allSnaps[0].docs];
-        const allHoldDocs = [...allSnaps[1].docs];
-        for (let i = 0; i < slugVariantsList.length; i++) {
-          allSnaps[2 + i * 2].docs.forEach(d => { if (!seenBIds.has(d.id)) { seenBIds.add(d.id); allBookDocs.push(d); } });
-          allSnaps[2 + i * 2 + 1].docs.forEach(d => { if (!seenHIds.has(d.id)) { seenHIds.add(d.id); allHoldDocs.push(d); } });
-        }
+        const bookSnaps = await Promise.all(bookingQueries);
+        const seenBIds = new Set<string>();
         let sold = 0;
-        for (const doc of allBookDocs) {
-          const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
-          if (typeof b.partySize !== "number") continue;
-          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-          if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
-          sold += b.partySize;
+        for (const snap of bookSnaps) {
+          for (const doc of snap.docs) {
+            if (seenBIds.has(doc.id)) continue;
+            seenBIds.add(doc.id);
+            const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
+            if (typeof b.partySize !== "number") continue;
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
+            sold += b.partySize;
+          }
         }
-        let onHold = 0;
-        for (const doc of allHoldDocs) {
-          const h = doc.data() as { partySize?: number; expiresAt?: { toDate(): Date } };
-          if (typeof h.partySize !== "number") continue;
-          if (h.expiresAt && h.expiresAt.toDate().getTime() < nowMs) continue;
-          onHold += h.partySize;
-        }
-        if (sold + onHold + input.partySize > sharedCapacityLimit) {
-          const available = Math.max(0, sharedCapacityLimit - sold - onHold);
-          throw new Error(
-            available === 0
-              ? "This date is sold out."
-              : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
-          );
-        }
+        await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
         tx.set(db.collection("holds").doc(holdId), holdPayload);
       });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
@@ -595,6 +566,8 @@ export async function POST(request: NextRequest) {
                 reusedHoldId = slot.holdId;
                 reusedExpiresAt = newExpiresAt;
                 await assertNotBlocked(slotStartDate, slotEndDate);
+                // Clear stage-specific payment intent IDs when reusing/extending a hold with mutated pricing
+                // so stale intents (wrong amount) cannot be reused.
                 tx.update(db.collection("holds").doc(slot.holdId), {
                   addonSelections: input.addonSelections,
                   partySize: input.partySize,
@@ -605,6 +578,8 @@ export async function POST(request: NextRequest) {
                   ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
                   ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
                   ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
+                  depositPaymentIntentId: FieldValue.delete(),
+                  fullPaymentIntentId: FieldValue.delete(),
                 });
                 return;
               }

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import type { Booking, AddonSelection } from "@/lib/booking/types";
+import type { Booking, AddonSelection, Slot } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 
@@ -335,11 +336,81 @@ export async function POST(request: NextRequest) {
       ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
       : db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
     const { start: slotStart, end: slotEnd } = getSlotStartEnd(tripDate, startHour, durationHours, 0);
+    const slotStartMs = slotStart.getTime();
+    const slotEndMs = slotEnd.getTime();
+    const dayStart = new Date(tripDate + "T00:00:00");
+    const dayEnd = new Date(tripDate + "T23:59:59.999");
+    const now = new Date();
+
     await db.runTransaction(async (tx) => {
-      const slotSnap = await tx.get(slotRef);
-      if (slotSnap.exists && (slotSnap.data()?.status === "booked" || slotSnap.data()?.status === "held")) {
-        throw Object.assign(new Error("This time slot is already booked or held"), { code: "SLOT_CONFLICT" });
+      const slotsRef = boatId
+        ? db.collection("boats").doc(boatId).collection("slots")
+        : db.collection("experiences").doc(experienceId).collection("slots");
+      const sameDaySnap = await tx.get(
+        slotsRef
+          .where("startAt", ">=", Timestamp.fromDate(dayStart))
+          .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+      );
+      const sameDayDocs = sameDaySnap.docs;
+      const heldDocs = sameDayDocs.filter((d) => {
+        const s = d.data() as Slot;
+        return s.status === "held" && s.holdId;
+      });
+      const bookedDocs = sameDayDocs.filter((d) => {
+        const s = d.data() as Slot;
+        return s.status === "booked" && s.bookingId;
+      });
+      const [holdSnaps, bookingSnaps] = await Promise.all([
+        heldDocs.length
+          ? Promise.all(heldDocs.map((d) => tx.get(db.collection("holds").doc((d.data() as Slot).holdId as string))))
+          : Promise.resolve([] as import("firebase-admin/firestore").DocumentSnapshot[]),
+        bookedDocs.length
+          ? Promise.all(bookedDocs.map((d) => tx.get(db.collection("bookings").doc((d.data() as Slot).bookingId as string))))
+          : Promise.resolve([] as import("firebase-admin/firestore").DocumentSnapshot[]),
+      ]);
+      const holdsById = new Map(heldDocs.map((d, i) => [(d.data() as Slot).holdId as string, holdSnaps[i]]));
+      const bookingsById = new Map(bookedDocs.map((d, i) => [(d.data() as Slot).bookingId as string, bookingSnaps[i]]));
+
+      for (const doc of sameDayDocs) {
+        const data = doc.data() as Slot;
+        if (data.status === "open") continue;
+        if (data.status === "held") {
+          if (!data.holdId) continue;
+          const hSnap = holdsById.get(data.holdId);
+          if (!hSnap?.exists) continue;
+          const hold = hSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
+          if (hold?.status !== "active") continue;
+          const exp = hold?.expiresAt?.toDate?.();
+          if (exp && exp <= now) continue;
+        } else if (data.status === "booked") {
+          if (!data.bookingId) continue;
+          const bSnap = bookingsById.get(data.bookingId);
+          if (!bSnap?.exists) continue;
+          const b = bSnap.data() as { status?: string };
+          if (!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never))) continue;
+        }
+        const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
+        const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
+        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+          throw Object.assign(new Error("This time slot overlaps an existing booking or hold"), { code: "SLOT_CONFLICT" });
+        }
       }
+
+      const paidBookingsSnap = await tx.get(
+        db.collection("bookings").where("experienceId", "==", experienceId).where("startDateStr", "==", tripDate)
+      );
+      for (const doc of paidBookingsSnap.docs) {
+        const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
+        if (boatId && b.boatId !== boatId) continue;
+        if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+        const p = b.slotId ? parseSlotId(b.slotId) : null;
+        if (!p) continue;
+        const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+        if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+          throw Object.assign(new Error("This time slot overlaps an existing booking"), { code: "SLOT_CONFLICT" });
+        }
+      }
+
       tx.set(bookingRef, booking);
       tx.set(slotRef, {
         status: "booked",

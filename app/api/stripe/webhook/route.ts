@@ -38,21 +38,51 @@ export async function POST(request: NextRequest) {
     const { FieldValue, Timestamp } = getFirestoreExports();
     const eventId = event.id;
     const eventsRef = db.collection("stripeEvents");
-    // Claim the event in a transaction so Stripe retries don't re-run the handler (avoids duplicate writes + quota).
-    const claimed = await db.runTransaction(async (tx) => {
-      const d = await tx.get(eventsRef.doc(eventId));
-      if (d.exists) return false;
-      tx.set(eventsRef.doc(eventId), { receivedAt: Timestamp.now(), status: "processing", eventType: event.type });
-      return true;
+    const PROCESSING_LEASE_MS = 5 * 60 * 1000; // 5 min — stale processing can be re-claimed for retry
+
+    type ClaimResult = { runHandler: boolean; alreadyCompleted: boolean };
+    const claimResult = await db.runTransaction(async (tx): Promise<ClaimResult> => {
+      const ref = eventsRef.doc(eventId);
+      const d = await tx.get(ref);
+      const now = Timestamp.now();
+      if (d.exists) {
+        const data = d.data() as { status?: string; receivedAt?: { toDate(): Date }; leaseExpiresAt?: { toDate(): Date } };
+        if (data.status === "completed") return { runHandler: false, alreadyCompleted: true };
+        if (data.status === "processing") {
+          const leaseExpiresAt = data.leaseExpiresAt?.toDate?.();
+          const stale = leaseExpiresAt && leaseExpiresAt.getTime() < Date.now();
+          if (!stale) return { runHandler: false, alreadyCompleted: false };
+        }
+        const leaseExpiresAt = Timestamp.fromDate(new Date(Date.now() + PROCESSING_LEASE_MS));
+        tx.set(ref, { status: "processing", eventType: event.type, receivedAt: now, leaseExpiresAt, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        return { runHandler: true, alreadyCompleted: false };
+      }
+      const leaseExpiresAt = Timestamp.fromDate(new Date(Date.now() + PROCESSING_LEASE_MS));
+      tx.set(ref, { receivedAt: now, status: "processing", eventType: event.type, leaseExpiresAt, updatedAt: FieldValue.serverTimestamp() });
+      return { runHandler: true, alreadyCompleted: false };
     });
-    if (!claimed) {
-      return NextResponse.json({ received: true });
+
+    if (claimResult.alreadyCompleted) return NextResponse.json({ received: true });
+    if (!claimResult.runHandler) {
+      return NextResponse.json({ error: "Event processing in progress or lease held" }, { status: 500 });
     }
+
     const writeEventResult = async (
       docId: string,
-      data: { processedAt: FirestoreTimestamp; error?: string; outcome?: string; bookingId?: string; holdId?: string; sessionId?: string; paymentIntentId?: string; amountTotal?: number; currency?: string }
+      data: {
+        status: "completed" | "failed_retryable";
+        processedAt: FirestoreTimestamp;
+        error?: string;
+        outcome?: string;
+        bookingId?: string;
+        holdId?: string;
+        sessionId?: string;
+        paymentIntentId?: string;
+        amountTotal?: number;
+        currency?: string;
+      }
     ) => {
-      await eventsRef.doc(docId).set(data, { merge: true });
+      await eventsRef.doc(docId).set({ ...data, updatedAt: FieldValue.serverTimestamp(), leaseExpiresAt: FieldValue.delete() }, { merge: true });
     };
 
     if (event.type === "checkout.session.completed") {
@@ -64,28 +94,28 @@ export async function POST(request: NextRequest) {
       const holdId = session.metadata?.holdId;
       if (!holdId) {
         console.error("[stripe-webhook] checkout.session.completed missing holdId in metadata", { sessionId, paymentIntentId });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in session metadata", sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ received: true });
+        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in session metadata", sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
         console.error("[stripe-webhook] checkout.session.completed hold not found", { holdId, sessionId });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ received: true });
+        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
       const hold = holdSnap.data() as Hold;
       const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
       if (hold.status !== "active") {
         console.error("[stripe-webhook] checkout.session.completed hold already converted", { holdId, status: hold.status });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold already converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ received: true });
+        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold already converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
       const holdExpiresAt = (hold.expiresAt as { toDate(): Date });
       if (holdExpiresAt.toDate() < new Date()) {
         console.warn("[stripe-webhook] checkout.session.completed hold expired", { holdId, sessionId });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold expired", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ received: true });
+        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold expired", holdId, sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
       const hasExperience = !!hold.experienceId;
       const hasBoat = !!hold.boatId;
@@ -109,8 +139,8 @@ export async function POST(request: NextRequest) {
         if (!isSharedHold) {
           const slotSnap = slotSnapMaybe!;
           if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Experience/boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const exp = expSnap.data() as Experience;
           experienceForPricing = exp;
@@ -123,14 +153,14 @@ export async function POST(request: NextRequest) {
           rate = rateSnap.data() as ExperienceRate;
           slot = slotSnap.data() as Slot;
           if (slot.holdId !== holdId) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
         } else {
           if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/boat/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Experience/boat/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const exp = expSnap.data() as Experience;
           experienceForPricing = exp;
@@ -143,8 +173,8 @@ export async function POST(request: NextRequest) {
           rate = rateSnap.data() as ExperienceRate;
           const parsedShared = parseSlotId(hold.slotId);
           if (!parsedShared) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
           slot = { startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart }, endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd }, status: "booked", holdId: null, bookingId: null, updatedAt: { seconds: 0, nanoseconds: 0 } };
@@ -159,8 +189,8 @@ export async function POST(request: NextRequest) {
         if (!isSharedHold) {
           const slotSnap = slotSnapMaybe!;
           if (!expSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Experience/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const exp = expSnap.data() as Experience;
           experienceForPricing = exp;
@@ -171,14 +201,14 @@ export async function POST(request: NextRequest) {
           rate = rateSnap.data() as ExperienceRate;
           slot = slotSnap.data() as Slot;
           if (slot.holdId !== holdId) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
         } else {
           if (!expSnap.exists || !rateSnap.exists) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Experience/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Experience/rate not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const exp = expSnap.data() as Experience;
           experienceForPricing = exp;
@@ -189,8 +219,8 @@ export async function POST(request: NextRequest) {
           rate = rateSnap.data() as ExperienceRate;
           const parsedShared = parseSlotId(hold.slotId);
           if (!parsedShared) {
-            await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
-            return NextResponse.json({ received: true });
+            await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Invalid slot", holdId, sessionId, paymentIntentId, amountTotal, currency });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
           }
           const { start: sharedStart, end: sharedEnd } = getSlotStartEnd(parsedShared.dateStr, parsedShared.startHour, parsedShared.durationHours, parsedShared.startMinute ?? 0);
           slot = { startAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedStart }, endAt: { seconds: 0, nanoseconds: 0, toDate: () => sharedEnd }, status: "booked", holdId: null, bookingId: null, updatedAt: { seconds: 0, nanoseconds: 0 } };
@@ -203,8 +233,8 @@ export async function POST(request: NextRequest) {
           db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId).get(),
         ]);
         if (!boatSnap.exists || !rateSnap.exists || !slotSnap.exists) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Boat/rate/slot not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
         }
         const boat = boatSnap.data() as Boat;
         experienceName = boat.name;
@@ -214,8 +244,8 @@ export async function POST(request: NextRequest) {
         rate = rateSnap.data() as Rate;
         slot = slotSnap.data() as Slot;
         if (slot.holdId !== holdId) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
-          return NextResponse.json({ received: true });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Slot not held by this hold", holdId, sessionId, paymentIntentId, amountTotal, currency });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
         }
         slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
       }
@@ -354,7 +384,7 @@ export async function POST(request: NextRequest) {
           console.error("[stripe-webhook] Brevo list subscribe failed", listErr);
         }
       }
-      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
+      await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
     }
     if (event.type === "payment_intent.succeeded") {
       const piRaw = event.data.object as Stripe.PaymentIntent;
@@ -368,14 +398,37 @@ export async function POST(request: NextRequest) {
         const bookingId = piRaw.metadata?.bookingId;
         if (!bookingId) {
           console.error("[stripe-webhook] payment_intent.succeeded final missing bookingId");
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing bookingId for final", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ received: true });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing bookingId for final", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
         }
         const bookingRef = db.collection("bookings").doc(bookingId);
         const bookingSnap = await bookingRef.get();
         if (!bookingSnap.exists) {
           console.error("[stripe-webhook] payment_intent.succeeded final booking not found", { bookingId });
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Booking not found", bookingId, paymentIntentId: piId });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Booking not found", bookingId, paymentIntentId: piId });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        const bookingData = bookingSnap.data() as { status?: string; stripe?: { finalPaymentIntentId?: string } };
+        const existingFinalPiId = bookingData.stripe?.finalPaymentIntentId;
+        if (bookingData.status === "final_paid" && existingFinalPiId && existingFinalPiId !== piId) {
+          try {
+            await db.collection("pendingRefunds").add({
+              bookingId,
+              duplicatePaymentIntentId: piId,
+              expectedPaymentIntentId: existingFinalPiId,
+              reason: "duplicate_final_charge",
+              status: "pending",
+              createdAt: Timestamp.now(),
+            });
+            console.warn("[stripe-webhook] Duplicate final charge flagged for refund", { bookingId, duplicatePaymentIntentId: piId, expectedPaymentIntentId: existingFinalPiId });
+          } catch (refundFlagErr) {
+            console.error("[stripe-webhook] Failed to write pendingRefunds for duplicate final charge", refundFlagErr);
+          }
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "duplicate_final_flagged", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          return NextResponse.json({ received: true });
+        }
+        if (bookingData.status === "final_paid" && existingFinalPiId === piId) {
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "final_paid_idempotent", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
           return NextResponse.json({ received: true });
         }
         await bookingRef.update({
@@ -386,15 +439,15 @@ export async function POST(request: NextRequest) {
           updatedAt: FieldValue.serverTimestamp(),
         });
         console.log("[stripe-webhook] payment_intent.succeeded final_paid", { bookingId });
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "final_paid", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "final_paid", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ received: true });
       }
 
       const holdId = piRaw.metadata?.holdId;
       if (!holdId) {
         console.error("[stripe-webhook] payment_intent.succeeded missing holdId in metadata");
-        await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-        return NextResponse.json({ received: true });
+        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
 
       const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
@@ -447,20 +500,21 @@ export async function POST(request: NextRequest) {
       try {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("alreadyConverted" in result) {
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
           console.log("[stripe-webhook] payment_intent.succeeded booking created", { bookingId: result.bookingId, holdId });
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
         if (errMsg === "Hold has expired") {
           console.warn("[stripe-webhook] payment_intent.succeeded hold expired", { holdId, paymentIntentId: piId });
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: "Hold expired", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold expired", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
           console.error("[stripe-webhook] payment_intent.succeeded convert failed", convertErr);
-          await writeEventResult(eventId, { processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
+        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
     }
 
@@ -507,10 +561,10 @@ export async function POST(request: NextRequest) {
           }
         }
       }
-      await writeEventResult(eventId, { processedAt: Timestamp.now(), outcome: "payment_failed_handled" });
+      await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "payment_failed_handled" });
     }
 
-    await writeEventResult(eventId, { processedAt: Timestamp.now() });
+    await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now() });
     return NextResponse.json({ received: true });
   } catch (err) {
     console.error("[stripe-webhook]", err);
@@ -523,6 +577,7 @@ export async function POST(request: NextRequest) {
         const { Timestamp } = getFirestoreExports();
         const obj = ev?.data?.object as Record<string, unknown> | undefined;
         const payload: Record<string, unknown> = {
+          status: "failed_retryable",
           processedAt: Timestamp.now(),
           error: err instanceof Error ? err.message : String(err),
         };

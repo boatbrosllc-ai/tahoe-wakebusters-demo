@@ -240,7 +240,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [payFullAmount, setPayFullAmount] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
   // Persists the last successfully-created holdId per slot across back-navigation so
@@ -266,6 +266,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const isTicketed = selectedExperience?.pricingType === "ticketed";
   /** Max sellable tickets (ticketed) or max guests (charter). */
   const ticketMax = isTicketed ? 36 : (selectedExperience?.maxGuests ?? 14);
+  /** Ticketed: cap to live availability so UI and submit stay in sync. */
+  const availableTickets = ticketCounts?.available ?? ticketMax;
+  const effectiveTicketMax = Math.min(ticketMax, availableTickets);
 
   /** For ticketed experiences: format departure time from departureHour/departureMinute. */
   const departurTimeLabel = useMemo(() => {
@@ -765,7 +768,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
     if (!initialSelection?.boatId && !isTicketed) return;
-    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success") return;
+    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
     setStep(4);
     setPaymentPhase("form");
   }, [open, initialSelection?.slotId, initialSelection?.boatId, isTicketed, selectedSlot, selectedRateId, paymentPhase]);
@@ -952,9 +955,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
       return;
     }
-    if (partySize < 1 || partySize > ticketMax) {
+    const maxAllowed = isTicketed ? effectiveTicketMax : ticketMax;
+    if (partySize < 1 || partySize > maxAllowed) {
       const label = isTicketed ? "ticket count" : "party size";
-      setPaymentError(partySize < 1 ? `A ${label} is required.` : `${isTicketed ? "Ticket count" : "Party size"} must be between 1 and ${ticketMax}.`);
+      setPaymentError(partySize < 1 ? `A ${label} is required.` : `${isTicketed ? "Ticket count" : "Party size"} must be between 1 and ${maxAllowed}.`);
       return;
     }
     if (tipChoice === null) {
@@ -1085,9 +1089,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const panel3Collapsed = step !== 3;
   const panel4Collapsed = step !== 4;
 
-  // Ticket selector max — capped to live availability when loaded
-  const availableTickets = ticketCounts?.available ?? ticketMax;
-  const effectiveTicketMax = Math.min(ticketMax, availableTickets);
+  // Clamp partySize when effectiveTicketMax decreases (e.g. ticketCounts load) so submitted value matches ticket select.
+  useEffect(() => {
+    if (isTicketed && partySize > effectiveTicketMax) {
+      setPartySize(effectiveTicketMax);
+    }
+  }, [isTicketed, effectiveTicketMax, partySize]);
 
   return (
     <Dialog
@@ -1571,7 +1578,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             <select
                               id="booking-party-size"
                               value={Math.min(partySize, effectiveTicketMax)}
-                              onChange={(e) => setPartySize(parseInt(e.target.value, 10) || 1)}
+                              onChange={(e) => setPartySize(Math.min(parseInt(e.target.value, 10) || 1, effectiveTicketMax))}
                               required
                               className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
                               aria-describedby="booking-party-size-hint"
@@ -2171,6 +2178,59 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   <p className="text-xs text-brand-muted">Please don&apos;t close this window.</p>
                 </div>
               )}
+              {paymentPhase === "successWithWarning" && (
+                <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
+                    <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-bold text-brand-dark">Payment received — confirmation pending</h3>
+                    <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
+                      {paymentError ?? "Your payment was successful, but we couldn't complete the booking confirmation. Please contact us with your email so we can confirm your reservation."}
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!holdId || !paymentIntentId) return;
+                        setPaymentError(null);
+                        setPaymentPhase("completing");
+                        try {
+                          const res = await fetch("/api/booking/complete-after-payment", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ holdId, paymentIntentId }),
+                          });
+                          const data = await res.json().catch(() => ({}));
+                          if (res.ok && data?.success) {
+                            setPaymentPhase("success");
+                            setPaymentError(null);
+                          } else {
+                            setPaymentError((data?.error as string) || "Please contact us to confirm your reservation.");
+                            setPaymentPhase("successWithWarning");
+                          }
+                        } catch {
+                          setPaymentError("Request failed. Please contact us.");
+                          setPaymentPhase("successWithWarning");
+                        }
+                      }}
+                      className="rounded-xl border-2 border-brand-primary bg-white text-brand-primary font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/10 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
+                    >
+                      Try again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenChange(false)}
+                      className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
               {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                   <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
@@ -2252,15 +2312,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                               setPaymentPhase("success");
                             } else {
                               console.error("[BookingModal] complete-after-payment failed", res.status, data);
-                              setPaymentError(
-                                `Payment captured but booking confirmation failed — please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`
-                              );
+                              const message = (data?.error as string) || `Payment captured but booking confirmation failed. Please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`;
+                              setPaymentError(message);
+                              setPaymentPhase("successWithWarning");
                             }
                           } catch (e) {
                             console.error("[BookingModal] complete-after-payment request failed", e);
                             setPaymentError(
-                              `Payment captured but booking confirmation failed — please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`
+                              `Payment captured but we couldn't confirm your booking. Please contact us with your email to confirm. Call us at ${siteConfig.phone}.`
                             );
+                            setPaymentPhase("successWithWarning");
                           }
                         }}
                         onError={(msg) => {

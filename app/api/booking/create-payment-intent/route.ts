@@ -128,23 +128,31 @@ export async function POST(request: NextRequest) {
     );
 
     // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
-    // The field name is scoped to the payment stage so deposit and full retries never cross-contaminate.
+    // Validate amount matches current chargeCents; if not, cancel/replace and persist new id so we never charge a stale amount.
     const existingPiId = payFullAmount ? hold.fullPaymentIntentId : hold.depositPaymentIntentId;
     if (existingPiId) {
       try {
         const existing = await stripe.paymentIntents.retrieve(existingPiId);
         if (existing.status !== "canceled" && existing.status !== "succeeded") {
-          if (!existing.client_secret) {
-            return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
+          const existingAmount = existing.amount;
+          if (existingAmount === chargeCents && existing.client_secret) {
+            return NextResponse.json({
+              clientSecret: existing.client_secret,
+              paymentIntentId: existing.id,
+              depositCents: payFullAmount ? totalCents : depositCents,
+              finalCents: payFullAmount ? 0 : finalCents,
+              totalCents,
+              payFullAmount,
+            });
           }
-          return NextResponse.json({
-            clientSecret: existing.client_secret,
-            paymentIntentId: existing.id,
-            depositCents: payFullAmount ? totalCents : depositCents,
-            finalCents: payFullAmount ? 0 : finalCents,
-            totalCents,
-            payFullAmount,
-          });
+          // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
+          if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
+            await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+          }
+          const { FieldValue } = getFirestoreExports();
+          await holdRef.update(
+            payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+          );
         }
       } catch (piErr) {
         console.warn("[create-payment-intent] Failed to retrieve existing PI, creating new one", existingPiId, piErr);
@@ -163,6 +171,9 @@ export async function POST(request: NextRequest) {
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
 
+    // Idempotency key includes chargeCents so replacement intents after amount mismatch use a different key
+    // and cannot replay a stale Stripe response; fast-path above only reuses when amount and secret are valid.
+    const idempotencyKey = `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}-${chargeCents}`;
     const paymentIntent = await stripe.paymentIntents.create(
       {
         amount: chargeCents,
@@ -172,7 +183,7 @@ export async function POST(request: NextRequest) {
         setup_future_usage: "off_session",
         metadata,
       },
-      { idempotencyKey: `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}` }
+      { idempotencyKey }
     );
     if (!paymentIntent.client_secret) {
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });

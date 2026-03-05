@@ -11,6 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -201,7 +202,7 @@ export async function GET(request: NextRequest) {
         };
 
         // Build experience ID variants once so all queries run in parallel across all IDs.
-        const tAllExpIds = Array.from(new Set([experienceId, ...(experienceSlug && experienceSlug !== experienceId ? [experienceSlug] : [])]));
+        const tAllExpIds = getExperienceIdVariants(experienceId, experienceSlug);
 
         // Windowed query: parallel == queries per experience ID use the deployed (experienceId, startDateStr) index.
         // Note: `in` + range on a different field is rejected by Firestore, so we use per-ID parallel calls.
@@ -270,7 +271,8 @@ export async function GET(request: NextRequest) {
         // Query active holds for this experience and fold non-charter holds into spotsByDate
         const tHoldsNow = Date.now();
         const processHoldForCapacity = (doc: { id: string; data: () => Record<string, unknown> }) => {
-          const h = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; expiresAt?: { toDate(): Date } };
+          const h = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; status?: string; expiresAt?: { toDate(): Date } };
+          if (h.status !== "active") return;
           if (h.expiresAt && h.expiresAt.toDate().getTime() < tHoldsNow) return;
           const slotIdRaw = h.slotId ?? h.slot_id;
           if (!slotIdRaw) return;
@@ -434,11 +436,7 @@ export async function GET(request: NextRequest) {
           .map((d) => d.id);
       }
       // Build experience ID variants upfront so all queries run in parallel across all IDs.
-      const allExpIds = Array.from(new Set([
-        experienceId,
-        ...(experienceSlug && experienceSlug !== experienceId ? [experienceSlug] : []),
-        ...((experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") ? ["pontoon", "lake-austin-pontoon"] : []),
-      ]));
+      const allExpIds = getExperienceIdVariants(experienceId, experienceSlug);
       if (boatIdParam) {
         if (!boatIds.includes(boatIdParam)) {
           return NextResponse.json({ error: "Boat not found or not assigned to this experience" }, { status: 404 });

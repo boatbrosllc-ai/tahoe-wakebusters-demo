@@ -4,6 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 function isWatersportsSlug(slug: string): boolean {
@@ -62,27 +63,21 @@ export async function GET(request: NextRequest) {
       if (fromPriceCents == null || r.priceCents < fromPriceCents) fromPriceCents = r.priceCents;
     });
 
-    const isPontoonSlug = experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon";
-    const snapById = await db
-      .collection("boats")
-      .where("isListingBoat", "==", true)
-      .where("active", "==", true)
-      .where("experienceIds", "array-contains", experienceId)
-      .get();
+    const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+    const boatSnaps = await Promise.all(
+      experienceIdVariants.map((variantId) =>
+        db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("active", "==", true)
+          .where("experienceIds", "array-contains", variantId)
+          .get()
+      )
+    );
 
-    const [snapByPontoon, snapByLakeAustin] = isPontoonSlug
-      ? await Promise.all([
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
-        ])
-      : [null, null];
-
-    const docById = new Map(snapById.docs.map((d) => [d.id, d]));
-    if (isPontoonSlug && snapByPontoon && snapByLakeAustin) {
-      snapByPontoon.docs.forEach((d) => {
-        if (!docById.has(d.id)) docById.set(d.id, d);
-      });
-      snapByLakeAustin.docs.forEach((d) => {
+    const docById = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();
+    for (const snap of boatSnaps) {
+      snap.docs.forEach((d) => {
         if (!docById.has(d.id)) docById.set(d.id, d);
       });
     }

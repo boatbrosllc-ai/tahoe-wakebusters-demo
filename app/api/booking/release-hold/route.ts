@@ -6,6 +6,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { parseSlotId } from "@/lib/booking/experience-slots";
 import type { Hold, Slot } from "@/lib/booking/types";
 
 function getHoldId(request: NextRequest): string | null {
@@ -52,14 +54,26 @@ export async function POST(request: NextRequest) {
       ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
       : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
 
+    const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
+    const dateStr =
+      (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(hold.slotId)?.dateStr ?? "";
+
     await db.runTransaction(async (tx) => {
       const slotSnap = await tx.get(slotRef);
       if (!slotSnap.exists) {
+        if (isSharedHold && experienceId && dateStr) {
+          const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+          await releaseCapacity(tx, inventoryRef, hold.partySize);
+        }
         await tx.update(holdRef, { status: "expired" });
         return;
       }
       const slot = slotSnap.data() as Slot;
       if (slot.holdId !== holdId) {
+        if (isSharedHold && experienceId && dateStr) {
+          const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+          await releaseCapacity(tx, inventoryRef, hold.partySize);
+        }
         await tx.update(holdRef, { status: "expired" });
         return;
       }
@@ -68,6 +82,10 @@ export async function POST(request: NextRequest) {
         holdId: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
+      if (isSharedHold && experienceId && dateStr) {
+        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+        await releaseCapacity(tx, inventoryRef, hold.partySize);
+      }
       tx.update(holdRef, { status: "expired" });
     });
 
@@ -108,14 +126,26 @@ export async function GET(request: NextRequest) {
     ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
     : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
 
+  const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
+  const dateStr =
+    (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(hold.slotId)?.dateStr ?? "";
+
   await db.runTransaction(async (tx) => {
     const slotSnap = await tx.get(slotRef);
     if (!slotSnap.exists) {
+      if (isSharedHold && experienceId && dateStr) {
+        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+        await releaseCapacity(tx, inventoryRef, hold.partySize);
+      }
       await tx.update(holdRef, { status: "expired" });
       return;
     }
     const slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) {
+      if (isSharedHold && experienceId && dateStr) {
+        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+        await releaseCapacity(tx, inventoryRef, hold.partySize);
+      }
       await tx.update(holdRef, { status: "expired" });
       return;
     }
@@ -124,6 +154,10 @@ export async function GET(request: NextRequest) {
       holdId: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    if (isSharedHold && experienceId && dateStr) {
+      const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+      await releaseCapacity(tx, inventoryRef, hold.partySize);
+    }
     tx.update(holdRef, { status: "expired" });
   });
 

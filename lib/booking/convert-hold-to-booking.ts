@@ -15,6 +15,10 @@ import { bookingEnv } from "@/lib/booking/env";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
@@ -314,6 +318,32 @@ export async function convertHoldToBooking(
   };
 
   await db.runTransaction(async (tx) => {
+    if (isSharedHold && hold.experienceId && parsedSlot && experienceForPricing) {
+      const inventoryRef = getDepartureInventoryRef(db, hold.experienceId, parsedSlot.dateStr);
+      const expSlug = typeof (experienceForPricing as Experience).slug === "string" ? (experienceForPricing as Experience).slug.trim() : "";
+      const slugVariants = getExperienceIdVariants(hold.experienceId, expSlug);
+      const bookSnaps = await Promise.all(
+        slugVariants.map((v) =>
+          tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", parsedSlot!.dateStr))
+        )
+      );
+      const seen = new Set<string>();
+      let sold = 0;
+      for (const snap of bookSnaps) {
+        for (const doc of snap.docs) {
+          if (seen.has(doc.id)) continue;
+          seen.add(doc.id);
+          const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
+          if (typeof b.partySize !== "number") continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          if (b.bookingMode === "charter") continue;
+          sold += b.partySize;
+        }
+      }
+      const capacity =
+        (experienceForPricing as Experience).maxCapacity ?? getMaxGuestsForExperience(experienceForPricing);
+      await checkCapacityAndRelease(tx, inventoryRef, capacity, sold, hold.partySize);
+    }
     if (!isSharedHold && slotRef) {
       const s = await tx.get(slotRef);
       if (!s.exists) throw new Error("Slot not found");
