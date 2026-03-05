@@ -416,8 +416,8 @@ export interface Booking {
   discountCode?: string;
   /** Discount amount in cents (if any). */
   discountCents?: number;
-  /** When to run final charge (bookingStartAt - 48h). Firestore Timestamp or ISO string. */
-  finalChargeAt?: FirestoreTimestamp | string;
+  /** When to run final charge (bookingStartAt - 48h). */
+  finalChargeAt?: FirestoreTimestamp;
   /** When heads-up reminder email was sent (optional). */
   finalReminderSentAt?: FirestoreTimestamp;
   /** When "1 week before trip" reminder was sent. */
@@ -444,6 +444,17 @@ export interface Booking {
     templateId: string;
     templateVersion: number;
   };
+  createdAt: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
+}
+
+/** Pending refund record (e.g. duplicate charge or hold paid after expiry). */
+export interface PendingRefund {
+  bookingId?: string;
+  holdId?: string;
+  duplicatePaymentIntentId?: string;
+  reason: string;
+  status: "pending" | "resolved";
   createdAt: FirestoreTimestamp;
 }
 

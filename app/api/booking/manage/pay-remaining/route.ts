@@ -99,17 +99,57 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const idempotencyKey = `final_${payload.bookingId}`;
-    const paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount: finalCents,
-        currency: "usd",
-        customer: customerId,
-        automatic_payment_methods: { enabled: true },
-        metadata: { bookingId: payload.bookingId, payment_stage: "final" },
-      },
-      { idempotencyKey }
-    );
+    const idempotencyKey = `final_charge_${payload.bookingId}`;
+    let paymentIntent: Awaited<ReturnType<typeof stripe.paymentIntents.create>>;
+    try {
+      paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: finalCents,
+          currency: "usd",
+          customer: customerId,
+          automatic_payment_methods: { enabled: true },
+          metadata: { bookingId: payload.bookingId, payment_stage: "final" },
+        },
+        { idempotencyKey }
+      );
+    } catch (createErr: unknown) {
+      const stripeErr = createErr as { code?: string; type?: string; statusCode?: number };
+      const isIdempotencyMismatch =
+        stripeErr.code === "idempotency_error" ||
+        stripeErr.type === "idempotency_error" ||
+        stripeErr.statusCode === 409;
+      if (isIdempotencyMismatch) {
+        const reSnap = await bookingRef.get();
+        if (!reSnap.exists) throw createErr;
+        const reBooking = reSnap.data() as Booking;
+        const existingPiId = reBooking.stripe?.finalPaymentIntentId;
+        if (existingPiId) {
+          const pi = await stripe.paymentIntents.retrieve(existingPiId);
+          if (pi.status === "succeeded") {
+            return NextResponse.json({ error: "This booking is already fully paid" }, { status: 400 });
+          }
+          if (pi.status === "requires_payment_method" || pi.status === "requires_confirmation" || pi.status === "requires_action") {
+            if (!pi.client_secret) {
+              return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
+            }
+            return NextResponse.json({
+              clientSecret: pi.client_secret,
+              paymentIntentId: pi.id,
+              finalCents,
+            });
+          }
+          if (pi.status === "canceled") {
+            await bookingRef.update({
+              status: "final_due",
+              "stripe.finalPaymentIntentId": FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            return NextResponse.json({ error: "Previous payment was canceled; please try again" }, { status: 400 });
+          }
+        }
+      }
+      throw createErr;
+    }
     if (!paymentIntent.client_secret) {
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }

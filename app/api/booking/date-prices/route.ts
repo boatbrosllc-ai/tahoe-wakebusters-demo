@@ -35,10 +35,6 @@ export async function GET(request: NextRequest) {
     const startDateParam = request.nextUrl.searchParams.get("startDate"); // YYYY-MM-DD, optional
     const rateIdParam = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
 
-    // #region agent log
-    console.log("[date-prices] request", { experienceId, startDateParam, daysParam, rateId: rateIdParam ?? null });
-    // #endregion
-
     const db = getDb();
     const [expSnap, ratesSnap] = await Promise.all([
       db.collection("experiences").doc(experienceId).get(),

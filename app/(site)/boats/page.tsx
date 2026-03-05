@@ -10,6 +10,9 @@ import { ChevronRight } from "lucide-react";
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 const canonical = `${baseUrl}/boats`;
 
+/** Cache page for 60s so prefetches and repeat visits are fast; boats list is cached in getListingBoatsForPublic. */
+export const revalidate = 60;
+
 export const metadata: Metadata = {
   title: "Our Boats | Lake Austin Boat Rentals | Boat Bros",
   description:

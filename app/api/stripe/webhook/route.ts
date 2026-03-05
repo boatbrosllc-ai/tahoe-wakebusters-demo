@@ -543,8 +543,20 @@ export async function POST(request: NextRequest) {
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
         if (errMsg === "Hold has expired") {
-          bookingWarn("stripe-webhook", "payment_intent.succeeded hold expired", { holdId, paymentIntentId: piId });
-          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold expired", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          try {
+            await db.collection("pendingRefunds").add({
+              holdId,
+              paymentIntentId: piId,
+              reason: "hold_expired_after_payment",
+              status: "pending",
+              createdAt: Timestamp.now(),
+            });
+          } catch (refundFlagErr) {
+            console.error("[stripe-webhook] Failed to write pendingRefunds for hold expired", refundFlagErr);
+          }
+          console.warn("[stripe-webhook] Hold expired after successful payment — flagged for refund", { holdId, paymentIntentId: piId });
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "hold_expired_refund_flagged", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          return NextResponse.json({ received: true });
         } else {
           bookingError("stripe-webhook", "payment_intent.succeeded convertHoldToBooking failed", convertErr, { holdId, paymentIntentId: piId, error: errMsg });
           await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });

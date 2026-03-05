@@ -3,6 +3,8 @@ import { brand } from "@/content/brand";
 import { faqs } from "@/content/faqs";
 import { FAQsPageClient } from "./FAQsPageClient";
 
+export const dynamic = "force-static";
+
 export const metadata: Metadata = {
   title: "FAQs | Lake Austin Boat Rentals",
   description:

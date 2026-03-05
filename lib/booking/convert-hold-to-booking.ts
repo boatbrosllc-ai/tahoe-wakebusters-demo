@@ -288,6 +288,14 @@ export async function convertHoldToBooking(
   const parsedSlot = parseSlotId(hold.slotId);
   const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
 
+  let discountRef: DocumentReference | null = null;
+  if (holdDiscountCode) {
+    const discountSnap = await db.collection("discounts").where("code", "==", holdDiscountCode).limit(1).get();
+    if (!discountSnap.empty) {
+      discountRef = discountSnap.docs[0].ref;
+    }
+  }
+
   const slotStart = (slot.startAt as { toDate(): Date }).toDate();
   const finalChargeAtDate = new Date(slotStart.getTime() - 48 * 60 * 60 * 1000);
   const finalChargeAtTimestamp = Timestamp.fromDate(finalChargeAtDate);
@@ -375,19 +383,15 @@ export async function convertHoldToBooking(
     }
     tx.set(db.collection("bookings").doc(bookingId), booking);
     tx.update(holdRef, { status: "converted" });
-  });
-
-  bookingLog("convert-hold", "transaction completed, sending emails and side effects", { holdId, bookingId });
-  if (holdDiscountCode) {
-    const discountSnap = await db.collection("discounts").where("code", "==", holdDiscountCode).limit(1).get();
-    if (!discountSnap.empty) {
-      const discountRef = discountSnap.docs[0].ref;
-      await discountRef.update({
+    if (discountRef) {
+      tx.update(discountRef, {
         usedCount: FieldValue.increment(1),
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
-  }
+  });
+
+  bookingLog("convert-hold", "transaction completed, sending emails and side effects", { holdId, bookingId });
 
   const startTs = slot.startAt as { toDate(): Date };
   const endTs = slot.endAt as { toDate(): Date };

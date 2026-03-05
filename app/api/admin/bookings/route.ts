@@ -177,12 +177,11 @@ export async function GET(request: NextRequest) {
         qty: sel.qty ?? 1,
       }));
 
-      const bWithExt = b as Booking & { card?: { brand?: string; last4?: string; expMonth?: number; expYear?: number }; finalChargeAt?: { seconds?: number; toDate?: () => Date } | string };
+      const bWithExt = b as Booking & { card?: { brand?: string; last4?: string; expMonth?: number; expYear?: number }; finalChargeAt?: { seconds?: number; toDate?: () => Date } };
       const finalChargeAt = bWithExt.finalChargeAt;
       let finalChargeAtStr: string | null = null;
       if (finalChargeAt) {
-        if (typeof finalChargeAt === "string") finalChargeAtStr = finalChargeAt;
-        else if (typeof finalChargeAt.toDate === "function") finalChargeAtStr = finalChargeAt.toDate().toISOString();
+        if (typeof finalChargeAt.toDate === "function") finalChargeAtStr = finalChargeAt.toDate().toISOString();
         else if (typeof (finalChargeAt as { seconds?: number }).seconds === "number") finalChargeAtStr = new Date((finalChargeAt as { seconds: number }).seconds * 1000).toISOString();
       }
       const bWaiver = (b as { waiver?: { requestId: string; status: string; templateId: string; templateVersion: number } }).waiver;

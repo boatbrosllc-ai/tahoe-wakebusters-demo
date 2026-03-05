@@ -3,6 +3,8 @@ import Image from "next/image";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
+export const dynamic = "force-static";
+
 export const metadata: Metadata = {
   title: "Our Story | Lake Austin Boat Rentals",
   description:

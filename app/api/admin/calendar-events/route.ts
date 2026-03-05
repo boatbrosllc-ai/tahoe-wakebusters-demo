@@ -61,9 +61,6 @@ export async function GET(request: NextRequest) {
         if (!experienceIdsToQuery.includes("lake-austin-pontoon")) experienceIdsToQuery.push("lake-austin-pontoon");
       }
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'calendar-events/route.ts:64',message:'API params + experienceIdsToQuery',hypothesisId:'A-C',data:{experienceId,fromStr,toStr,expExists:expSnap.exists,experienceIdsToQuery},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     const SLOT_TAKEN_STATUSES = new Set(["paid", "deposit_paid", "final_due", "final_paid", "final_processing"]);
     // Single "in" query — filter status in memory to avoid composite index requirement
     const bookingsSnap = await db
@@ -108,15 +105,8 @@ export async function GET(request: NextRequest) {
     };
     const events: CalendarEvent[] = [];
 
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'calendar-events/route.ts:70',message:'bookings query result',hypothesisId:'A',data:{totalBookingsFound:bookingsSnap.size,sampleExperienceIds:bookingsSnap.docs.slice(0,5).map(d=>({id:d.id,experienceId:(d.data() as {experienceId?:string}).experienceId,status:(d.data() as {status?:string}).status,slotId:(d.data() as {slotId?:string}).slotId}))},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     bookingsSnap.docs.forEach((doc) => {
       const b = doc.data() as Booking & { startDateStr?: string };
-      // #region agent log
-      const _skipReason = !SLOT_TAKEN_STATUSES.has(b.status as string) ? 'bad-status' : !parseSlotIdRelaxed(b.slotId??'') && !b.startDateStr ? 'no-date' : null;
-      if(_skipReason||true) fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'calendar-events/route.ts:109',message:'per-booking filter',hypothesisId:'B-D',data:{docId:doc.id,status:b.status,slotId:b.slotId,startDateStr:(b as {startDateStr?:string}).startDateStr,fromStr,toStr,parsedDate:parseSlotIdRelaxed(b.slotId??'')?.dateStr??null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (!SLOT_TAKEN_STATUSES.has(b.status as string)) return;
       const parsed = parseSlotIdRelaxed(b.slotId ?? "");
       const dateStr = parsed?.dateStr ?? (b.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(b.startDateStr) ? b.startDateStr : null);

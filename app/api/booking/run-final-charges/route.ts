@@ -83,9 +83,15 @@ export async function GET(request: NextRequest) {
           },
           { idempotencyKey: `final_charge_${bookingId}` }
         );
-        await db.collection("bookings").doc(bookingId).update({
-          status: "final_processing",
+        // Persist finalPaymentIntentId before status so pay-remaining can find it on idempotency mismatch
+        const bookingRef = db.collection("bookings").doc(bookingId);
+        await bookingRef.update({
           "stripe.finalPaymentIntentId": pi.id,
+          updatedAt: Timestamp.now(),
+        });
+        await bookingRef.update({
+          status: "final_processing",
+          updatedAt: Timestamp.now(),
         });
         console.log("[run-final-charges] PaymentIntent created (webhook will set final_paid)", { bookingId, piId: pi.id });
         attempted++;

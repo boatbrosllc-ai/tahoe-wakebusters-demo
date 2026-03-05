@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { ListingBoat, Experience } from "@/lib/booking/types";
 
@@ -32,11 +33,7 @@ export interface PublicBoatBySlug {
   experiences: ExperienceRef[];
 }
 
-/**
- * List all active listing boats that have a slug (so they can have a pillar page).
- * Used by: home page "Our Boats" section, /boats hub, sitemap. Photos and info come from backend (Firestore).
- */
-export async function getListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
+async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
   const db = getDb();
   const snap = await db
     .collection("boats")
@@ -63,6 +60,17 @@ export async function getListingBoatsForPublic(): Promise<PublicBoatListItem[]> 
   }
   return list;
 }
+
+/**
+ * List all active listing boats that have a slug (so they can have a pillar page).
+ * Used by: home page "Our Boats" section, /boats hub, sitemap. Photos and info come from backend (Firestore).
+ * Cached 60s to speed up prefetch and repeat visits without hitting Firestore every time.
+ */
+export const getListingBoatsForPublic = unstable_cache(
+  fetchListingBoatsForPublic,
+  ["listing-boats-public"],
+  { revalidate: 60 }
+);
 
 /**
  * Get one boat by slug and resolve its experiences (id, slug, title) for "Available for" links.

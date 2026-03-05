@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { brand } from "@/content/brand";
 import { ExperiencesListClient } from "@/components/site/ExperiencesListClient";
 
+export const dynamic = "force-static";
+
 export const metadata: Metadata = {
   title: "Lake Austin Boat Rentals | Pontoon, Wake Surf, Sunset Cruise & More",
   description:

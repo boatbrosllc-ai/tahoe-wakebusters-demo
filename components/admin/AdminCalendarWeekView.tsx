@@ -130,9 +130,6 @@ export function AdminCalendarWeekView({
 
   const resolvedIdsKey = resolvedExperienceIds.join(",");
   const fetchEvents = useCallback(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:133',message:'fetchEvents called',hypothesisId:'C-D',data:{resolvedExperienceIds,fromStr,toStr,weekStartISO:weekStart.toISOString()},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (resolvedExperienceIds.length === 0) {
       setEvents([]);
       return;
@@ -145,12 +142,7 @@ export function AdminCalendarWeekView({
           { credentials: "include" }
         )
           .then((r) => r.json())
-          .then((d: { events?: CalendarEvent[] }) => {
-            // #region agent log
-            fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:145',message:'API response per experienceId',hypothesisId:'D-E',data:{expId,eventsReturned:d.events?.length??0,sampleEvents:(d.events??[]).slice(0,3).map(e=>({id:e.id,type:e.type,startAt:e.startAt,title:e.title})),errorField:(d as {error?:string}).error??null},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
-            return d.events ?? [];
-          })
+          .then((d: { events?: CalendarEvent[] }) => d.events ?? [])
           .catch(() => [] as CalendarEvent[])
       )
     )
@@ -164,9 +156,6 @@ export function AdminCalendarWeekView({
               merged.push(ev);
             }
         merged.sort((a, b) => a.startAt.localeCompare(b.startAt));
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminCalendarWeekView.tsx:167',message:'merged events set',hypothesisId:'E',data:{totalMerged:merged.length,weekStartISO:weekStart.toISOString(),events:merged.map(e=>({id:e.id,startAt:e.startAt,title:e.title,type:e.type}))},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setEvents(merged);
       })
       .finally(() => setEventsLoading(false));

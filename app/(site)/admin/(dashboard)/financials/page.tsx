@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { PendingRefundsPanel } from "@/components/admin/PendingRefundsPanel";
 
 type StripeData = {
   balanceAvailableCents: number;
@@ -200,6 +201,8 @@ export default function AdminFinancialsPage() {
           </div>
         )}
       </div>
+
+      <PendingRefundsPanel />
 
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-brand-dark border-b border-brand-dark/10 pb-3 mb-4">

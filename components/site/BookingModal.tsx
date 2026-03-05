@@ -17,7 +17,6 @@ import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
-
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -885,22 +884,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     const effectivePriceUrl = `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`;
     fetch(effectivePriceUrl, { signal: controller.signal })
-      .then((res) => {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "BookingModal.tsx:effective-price response",
-            message: "effective-price client received",
-            data: { status: res.status, ok: res.ok, url: effectivePriceUrl },
-            timestamp: Date.now(),
-            hypothesisId: "F",
-          }),
-        }).catch(() => {});
-        // #endregion
-        return res.json();
-      })
+      .then((res) => res.json())
       .then((data) => {
         if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
         else setEffectiveRateCents(null);
@@ -1319,6 +1303,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               )}
             >
               <div className="space-y-3 md:space-y-4">
+                {/* When opened with a pre-selected experience but list failed or didn't match, show why the calendar never loads */}
+                {step === 2 && initialSelection && !selectedExperience && !loading && (
+                  <p className="text-sm text-amber-700 py-3 px-2">
+                    {experiencesLoadError
+                      ? `${experiencesLoadError} Please try again or contact us.`
+                      : "Couldn’t load this experience. Please select one from the list on the left."}
+                  </p>
+                )}
+                {step === 2 && initialSelection && !selectedExperience && loading && (
+                  <p className="text-sm text-brand-muted py-3">Loading experience…</p>
+                )}
                 {ratesLoadError && (
                   <p className="text-sm text-amber-700 py-2">{ratesLoadError} Try again or contact us.</p>
                 )}
