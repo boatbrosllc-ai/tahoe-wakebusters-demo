@@ -513,6 +513,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     inFlightKeyRef.current = key;
     setDatePricesLoading(true);
     const controller = new AbortController();
+    bookingLog("client", "date-prices fetch start", { experienceId: selectedExperience.id, startDate: viewMonthStartStr, days: daysInViewMonth, rateId: selectedRateIdForCalendar });
 
     bookingCache
       .fetchDatePrices(
@@ -530,12 +531,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object"
             ? data.ticketsAvailableByDate
             : {};
+        const priceCount = Object.keys(prices).length;
+        bookingLog("client", "date-prices fetch ok", { startDate: viewMonthStartStr, priceCount, holidayCount: holidays.size });
         setDatePrices(prices);
         setHolidayDateStrings(holidays);
         setTicketsAvailableByDate(ticketsAvailable);
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
+        const status = (err as { status?: number }).status;
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        bookingError("client", "date-prices fetch failed", null, { startDate: viewMonthStartStr, status, error: apiBody?.error, hint: apiBody?.hint });
         if (inFlightKeyRef.current === key) {
           setDatePrices({});
           setHolidayDateStrings(new Set());
@@ -603,6 +609,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const slots = (data?.slots ?? []) as SlotDto[];
         if (slotsRequestRangeRef.current?.start !== viewMonthStartStr || slotsRequestRangeRef.current?.end !== viewMonthEndStr) return;
         setSlotsLoadError(null);
+        bookingLog("client", "slots fetch ok", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, slotCount: slots.length });
         bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
         if (slots.length > 100) {
           setTimeout(() => {
@@ -617,6 +624,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
         const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
+        bookingLog("client", "slots prefetch start", { nextStart, nextEnd });
         bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch((prefetchErr: unknown) => {
           const status = (prefetchErr as { status?: number }).status;
           if (typeof status === "number") bookingLog("client", "slots prefetch failed (next month)", { nextStart, nextEnd, status });
@@ -642,6 +650,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setSlotsLoadError(parts.join(" "));
         if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
+          bookingLog("client", "slots fetch retry scheduled", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, in: "1.5s" });
           setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
         }
       })
