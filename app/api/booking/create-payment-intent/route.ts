@@ -6,6 +6,7 @@ import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
 import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
+import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
 function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | null {
   if (body == null || typeof body !== "object") return null;
@@ -49,23 +50,29 @@ async function getOrCreateStripeCustomer(
 
 export async function POST(request: NextRequest) {
   try {
+    bookingLog("create-payment-intent", "request started");
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
+      bookingLog("create-payment-intent", "invalid body: holdId required");
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
+    bookingLog("create-payment-intent", "parsed input", { holdId: input.holdId, payFullAmount: input.payFullAmount });
     const db = getDb();
     const holdRef = db.collection("holds").doc(input.holdId);
     const holdSnap = await holdRef.get();
     if (!holdSnap.exists) {
+      bookingLog("create-payment-intent", "hold not found", { holdId: input.holdId });
       return NextResponse.json({ error: "Hold not found" }, { status: 404 });
     }
     const hold = holdSnap.data() as Hold;
     if (hold.status !== "active") {
+      bookingLog("create-payment-intent", "hold not active", { holdId: input.holdId, status: hold.status });
       return NextResponse.json({ error: "Hold expired or already used" }, { status: 400 });
     }
     const expiresAt = hold.expiresAt as { toDate(): Date };
     if (expiresAt.toDate() < new Date()) {
+      bookingLog("create-payment-intent", "hold expired", { holdId: input.holdId, expiresAt: expiresAt.toDate().toISOString() });
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
     const hasExperience = !!hold.experienceId;
@@ -117,6 +124,14 @@ export async function POST(request: NextRequest) {
       ? true
       : input.payFullAmount;
     const chargeCents = payFullAmount ? totalCents : depositCents;
+    bookingLog("create-payment-intent", "pricing", {
+      holdId: input.holdId,
+      totalCents,
+      depositCents,
+      finalCents,
+      payFullAmount,
+      chargeCents,
+    });
 
     const stripe = getStripe();
     const customerId = await getOrCreateStripeCustomer(
@@ -132,10 +147,12 @@ export async function POST(request: NextRequest) {
     const existingPiId = payFullAmount ? hold.fullPaymentIntentId : hold.depositPaymentIntentId;
     if (existingPiId) {
       try {
+        bookingLog("create-payment-intent", "checking existing PI", { holdId: input.holdId, existingPiId: existingPiId.slice(0, 24) + "...", payFullAmount });
         const existing = await stripe.paymentIntents.retrieve(existingPiId);
         if (existing.status !== "canceled" && existing.status !== "succeeded") {
           const existingAmount = existing.amount;
           if (existingAmount === chargeCents && existing.client_secret) {
+            bookingLog("create-payment-intent", "reusing existing PI", { holdId: input.holdId, paymentIntentId: existing.id });
             return NextResponse.json({
               clientSecret: existing.client_secret,
               paymentIntentId: existing.id,
@@ -146,6 +163,12 @@ export async function POST(request: NextRequest) {
             });
           }
           // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
+          bookingLog("create-payment-intent", "existing PI stale (amount mismatch or no secret), creating new", {
+            holdId: input.holdId,
+            existingAmount,
+            chargeCents,
+            status: existing.status,
+          });
           if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
             await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
           }
@@ -155,7 +178,7 @@ export async function POST(request: NextRequest) {
           );
         }
       } catch (piErr) {
-        console.warn("[create-payment-intent] Failed to retrieve existing PI, creating new one", existingPiId, piErr);
+        bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", { holdId: input.holdId, existingPiId });
       }
     }
 
@@ -174,6 +197,12 @@ export async function POST(request: NextRequest) {
     // Idempotency key includes chargeCents so replacement intents after amount mismatch use a different key
     // and cannot replay a stale Stripe response; fast-path above only reuses when amount and secret are valid.
     const idempotencyKey = `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}-${chargeCents}`;
+    bookingLog("create-payment-intent", "creating new PaymentIntent", {
+      holdId: input.holdId,
+      chargeCents,
+      payFullAmount,
+      idempotencyKey: idempotencyKey.slice(0, 50) + "...",
+    });
     const paymentIntent = await stripe.paymentIntents.create(
       {
         amount: chargeCents,
@@ -186,12 +215,18 @@ export async function POST(request: NextRequest) {
       { idempotencyKey }
     );
     if (!paymentIntent.client_secret) {
+      bookingError("create-payment-intent", "PaymentIntent missing client secret", null, { paymentIntentId: paymentIntent.id });
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }
     // Persist the PI id on the hold so retries can reuse it instead of creating a new charge.
     await holdRef.update(
       payFullAmount ? { fullPaymentIntentId: paymentIntent.id } : { depositPaymentIntentId: paymentIntent.id }
     );
+    bookingLog("create-payment-intent", "PaymentIntent created and persisted", {
+      holdId: input.holdId,
+      paymentIntentId: paymentIntent.id,
+      payFullAmount,
+    });
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
@@ -202,7 +237,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";
-    console.error("[create-payment-intent]", err);
+    bookingError("create-payment-intent", "create payment intent failed", err, { message });
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

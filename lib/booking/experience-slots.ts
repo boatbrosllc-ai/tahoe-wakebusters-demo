@@ -10,13 +10,13 @@
 /** Business timezone for slot times (Austin). */
 export const SLOT_TIMEZONE = "America/Chicago";
 
-/** Operating window: 7am (7) to 7pm (19). End is exclusive (trip must end by 7pm). */
+/** Operating window: 7am (7) to 7pm (19). Last departure at 7pm; trips may end after 7pm. */
 export const OPERATING_START_HOUR = 7;
 export const OPERATING_END_HOUR = 19;
 
-/** Hourly start times from 7am through 6pm (18) so trips end by 7pm. Use with end-time filter per duration. */
+/** Hourly start times from 7am through 7pm (19). Final departure at 7pm. */
 export const EXPERIENCE_START_HOURS = Array.from(
-  { length: OPERATING_END_HOUR - OPERATING_START_HOUR },
+  { length: OPERATING_END_HOUR - OPERATING_START_HOUR + 1 },
   (_, i) => OPERATING_START_HOUR + i
 ) as number[];
 
@@ -88,18 +88,17 @@ export function getSlotStartEnd(dateStr: string, startHour: number, durationHour
 }
 
 /**
- * Latest start hour for a given duration so the charter ends by OPERATING_END_HOUR (7pm).
- * E.g. 8hr → start by 11 (11am); 3hr → start by 16 (4pm); 1hr → start by 18 (6pm).
+ * Latest start hour: 7pm (19) is the final departure time. Any duration can depart at 7pm.
  */
-export function getLatestStartHourForDuration(durationHours: number): number {
-  return Math.max(OPERATING_START_HOUR, OPERATING_END_HOUR - durationHours);
+export function getLatestStartHourForDuration(_durationHours: number): number {
+  return OPERATING_END_HOUR;
 }
 
 /**
  * Returns true if (startHour, startMinute, durationHours) is within the allowed operating
  * window and permitted start times for the boat.
  *
- * - Slot must start at or after OPERATING_START_HOUR (7am) and end by OPERATING_END_HOUR (7pm).
+ * - Slot must start at or after OPERATING_START_HOUR (7am) and at or before OPERATING_END_HOUR (7pm); 7pm is the final departure.
  * - If allowedStartTimes is set (boat-specific restriction), the start time must be in that list.
  * - Otherwise, only whole-hour starts (startMinute === 0) are permitted.
  */
@@ -111,7 +110,7 @@ export function isAllowedSlotTime(
 ): boolean {
   const startDecimal = startHour + startMinute / 60;
   if (startDecimal < OPERATING_START_HOUR) return false;
-  if (startDecimal + durationHours > OPERATING_END_HOUR) return false;
+  if (startDecimal > OPERATING_END_HOUR) return false;
   if (allowedStartTimes && allowedStartTimes.length > 0) {
     return allowedStartTimes.some((t) => t.hour === startHour && t.minute === startMinute);
   }
@@ -218,7 +217,7 @@ export function getSlotGridForStartTimes(
     for (const durationHours of durationHoursList) {
       for (const { hour: startHour, minute: startMinute } of allowedStartTimes) {
         const startDecimal = startHour + startMinute / 60;
-        if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+        if (startDecimal > OPERATING_END_HOUR) continue;
         if (dateStr === todayStr) {
           const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
           if (slotStart < now) continue;
@@ -251,7 +250,7 @@ export function getSlotGridWithSaturdayOnlyRestriction(
       for (const durationHours of durationHoursList) {
         for (const { hour: startHour, minute: startMinute } of saturdayStartTimes) {
           const startDecimal = startHour + startMinute / 60;
-          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (startDecimal > OPERATING_END_HOUR) continue;
           if (dateStr === todayStr) {
             const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
             if (slotStart < now) continue;
@@ -320,7 +319,7 @@ export function getSlotGridWakeBoard(
       for (const durationHours of durationHoursList) {
         for (const { hour: startHour, minute: startMinute } of WAKEBOARD_SATURDAY_START_TIMES) {
           const startDecimal = startHour + startMinute / 60;
-          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (startDecimal > OPERATING_END_HOUR) continue;
           if (dateStr === todayStr) {
             const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
             if (slotStart < now) continue;
@@ -332,7 +331,7 @@ export function getSlotGridWakeBoard(
       for (const durationHours of durationHoursList) {
         for (const { hour: startHour, minute: startMinute } of weekdayStartTimes) {
           const startDecimal = startHour + startMinute / 60;
-          if (startDecimal + durationHours > OPERATING_END_HOUR) continue;
+          if (startDecimal > OPERATING_END_HOUR) continue;
           if (dateStr === todayStr) {
             const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
             if (slotStart < now) continue;

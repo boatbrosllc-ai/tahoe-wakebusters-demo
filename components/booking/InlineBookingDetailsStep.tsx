@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
+import { bookingLog, bookingError } from "@/lib/booking/debug";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -237,6 +238,7 @@ export function InlineBookingDetailsStep({
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     try {
+      bookingLog("client", "InlineBookingDetailsStep create-hold request", { experienceId, boatId: boatId ?? undefined, slotId: slot.id, rateId, partySize });
       const holdRes = await fetch("/api/booking/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -259,12 +261,14 @@ export function InlineBookingDetailsStep({
       });
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
+        bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: holdRes.status, error: holdData.error });
         setPaymentError(holdData.error ?? "Failed to create hold");
         setPaymentPhase("form");
         return;
       }
       const newHoldId = holdData.holdId;
       setHoldId(newHoldId);
+      bookingLog("client", "InlineBookingDetailsStep create-hold success, create-payment-intent request", { holdId: newHoldId, payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -272,15 +276,18 @@ export function InlineBookingDetailsStep({
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
+        bookingLog("client", "InlineBookingDetailsStep create-payment-intent failed", { status: intentRes.status, error: intentData.error });
         setPaymentError(intentData.error ?? "Failed to start payment");
         setPaymentPhase("form");
         return;
       }
       if (!intentData.clientSecret) {
+        bookingError("client", "InlineBookingDetailsStep create-payment-intent missing clientSecret", null, { holdId: newHoldId });
         setPaymentError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
       }
+      bookingLog("client", "InlineBookingDetailsStep create-payment-intent success", { holdId: newHoldId });
       if (!STRIPE_PUBLISHABLE_KEY) {
         setPaymentError("Stripe not configured.");
         setPaymentPhase("form");
@@ -290,6 +297,7 @@ export function InlineBookingDetailsStep({
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (err) {
+      bookingError("client", "InlineBookingDetailsStep create-hold or create-payment-intent threw", err, {});
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }
@@ -299,16 +307,21 @@ export function InlineBookingDetailsStep({
     setPaymentPhase("completing");
     bookingCache.invalidateBookingCaches(experienceId);
     if (!holdId || !paymentIntentId) {
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
       setPaymentPhase("success");
       return;
     }
     try {
-      await fetch("/api/booking/complete-after-payment", {
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
+      const res = await fetch("/api/booking/complete-after-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ holdId, paymentIntentId }),
       });
-    } catch {
+      const data = await res.json().catch(() => ({}));
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment response", { status: res.status, ok: res.ok, success: data?.success, bookingId: data?.bookingId });
+    } catch (e) {
+      bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId });
       // still show success
     }
     setPaymentPhase("success");

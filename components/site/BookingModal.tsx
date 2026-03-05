@@ -15,6 +15,7 @@ import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
+import { bookingLog, bookingError } from "@/lib/booking/debug";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -198,6 +199,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [viewMonthMonth, setViewMonthMonth] = useState(today.month);
   const [selectedRateIdForCalendar, setSelectedRateIdForCalendar] = useState<string | null>(null);
   const [ratesSummary, setRatesSummary] = useState<CachedRateOption[] | null>(null);
+  const [ratesLoadError, setRatesLoadError] = useState<string | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const inFlightKeyRef = useRef<string | null>(null);
@@ -365,6 +367,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setPaymentError(null);
     setExperiencesLoadError(null);
     setRatesSummary(null);
+    setRatesLoadError(null);
     const controller = new AbortController();
     bookingCache.fetchExperiences(controller.signal)
       .then((data) => {
@@ -430,7 +433,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const controller = new AbortController();
     bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
-        setBoats(Array.isArray(data.boats) ? (data.boats as BoatOption[]) : []);
+        const boatList = Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
+        setBoats(boatList);
+        if (boatList.length === 1) setSelectedBoat(boatList[0]);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
       })
@@ -451,8 +456,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!selectedExperience?.id) {
       setRatesSummary(null);
+      setRatesLoadError(null);
       return;
     }
+    setRatesLoadError(null);
     const controller = new AbortController();
     bookingCache
       .fetchExperienceRates(selectedExperience.id, controller.signal)
@@ -460,9 +467,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const list = data?.rates ?? [];
         setRatesSummary(list);
         setSelectedRateIdForCalendar((prev) => prev ?? list[0]?.id ?? null);
+        setRatesLoadError(null);
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setRatesSummary(null);
+        if ((err as { name?: string })?.name !== "AbortError") {
+          setRatesSummary(null);
+          setRatesLoadError("We couldn't load rates for this experience.");
+        }
       });
     return () => controller.abort();
   }, [selectedExperience?.id]);
@@ -884,7 +895,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         }
       } else {
         lastHoldRef.current = null;
-        setStep(3);
+        setStep(boats.length === 1 ? 2 : 3);
         setPaymentPhase("form");
         setClientSecret(null);
         setHoldId(null);
@@ -909,6 +920,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const handleStep2Next = () => {
     if (!canGoFromStep2) return;
     if (isTicketed) {
+      setStep(4);
+      setPaymentPhase("form");
+    } else if (boats.length === 1) {
       setStep(4);
       setPaymentPhase("form");
     } else {
@@ -993,6 +1007,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setHoldId(null);
     };
     try {
+      bookingLog("client", "create-hold request", {
+        experienceId: selectedExperience.id,
+        boatId: selectedBoat?.id ?? undefined,
+        slotId: selectedSlot.id,
+        rateId: selectedRateId,
+        partySize,
+        bookingMode: isTicketed ? "shared" : "charter",
+        resumeHoldId: lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId : undefined,
+      });
       const holdRes = await fetch("/api/booking/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1015,6 +1038,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
+        bookingLog("client", "create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
         const message = holdData.error ?? "Failed to create hold";
         const hint = holdData.hint ? ` ${holdData.hint}` : "";
         setPaymentError(holdRes.status === 409 ? "This time is no longer available. Please choose another date or time." : `${message}${hint}`);
@@ -1039,6 +1063,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       createdHoldId = newHoldId;
       setHoldId(newHoldId);
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
+      bookingLog("client", "create-hold success, requesting payment intent", { holdId: newHoldId, payFullAmount: isTicketed ? true : payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1046,6 +1071,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
+        bookingLog("client", "create-payment-intent failed", { status: intentRes.status, error: intentData.error });
         await releaseCreatedHold();
         setPaymentError(intentData.error ?? "Failed to start payment");
         setPaymentPhase("form");
@@ -1053,15 +1079,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       }
       const secret = intentData.clientSecret;
       if (!secret) {
+        bookingError("client", "create-payment-intent missing clientSecret", null, { holdId: newHoldId });
         await releaseCreatedHold();
         setPaymentError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
       }
+      bookingLog("client", "create-payment-intent success, showing Stripe form", { holdId: newHoldId, paymentIntentId: intentData.paymentIntentId ?? null });
       setClientSecret(secret);
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (err) {
+      bookingError("client", "create-hold or create-payment-intent threw", err, {});
       await releaseCreatedHold();
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
@@ -1071,13 +1100,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const stepTitles = isTicketed
     ? ["Pick category", "Pick date", "Details & payment", "Details & payment"]
     : ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
-  // Ticketed: 3 steps (category → date → payment); no boat step
-  const stepCount = isCalendarFirstFlow ? 2 : isTicketed ? 3 : 4;
+  // Ticketed: 3 steps; charter with one boat: 3 steps (skip boat); charter with multiple boats: 4 steps
+  const stepCount = isCalendarFirstFlow ? 2 : isTicketed ? 3 : boats.length === 1 ? 3 : 4;
   const stepIndex = isCalendarFirstFlow
     ? (step === 3 ? 1 : 2)
     : isTicketed
       ? (step === 1 ? 1 : step === 2 ? 2 : 3)
-      : step;
+      : boats.length === 1
+        ? (step === 4 ? 3 : step)
+        : step;
   const stepTitle = isCalendarFirstFlow
     ? (step === 3 ? "Choose your boat" : "Details & payment")
     : stepTitles[step - 1];
@@ -1128,7 +1159,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {(isCalendarFirstFlow ? [3, 4] : isTicketed ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
+            {(isCalendarFirstFlow ? [3, 4] : isTicketed ? [1, 2, 4] : boats.length === 1 ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
                 key={`step-dot-${stepIdx}`}
                 className={cn(
@@ -1241,6 +1272,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               )}
             >
               <div className="space-y-3 md:space-y-4">
+                {ratesLoadError && (
+                  <p className="text-sm text-amber-700 py-2">{ratesLoadError} Try again or contact us.</p>
+                )}
                 {ratesForSelection.length > 0 && !isTicketed && (
                   <div>
                     <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
@@ -1475,7 +1509,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
               >
                 Continue
               </button>
-              {!isTicketed && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
+              {!isTicketed && boats.length > 1 && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
             </div>
 
             {/* Step 3: Boat — only boats available for the selected date/time */}
@@ -2198,6 +2232,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         if (!holdId || !paymentIntentId) return;
                         setPaymentError(null);
                         setPaymentPhase("completing");
+                        bookingLog("client", "complete-after-payment retry (Try again)", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
                         try {
                           const res = await fetch("/api/booking/complete-after-payment", {
                             method: "POST",
@@ -2206,13 +2241,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           });
                           const data = await res.json().catch(() => ({}));
                           if (res.ok && data?.success) {
+                            bookingLog("client", "complete-after-payment retry success", { holdId });
                             setPaymentPhase("success");
                             setPaymentError(null);
                           } else {
+                            bookingLog("client", "complete-after-payment retry failed", { status: res.status, error: data?.error });
                             setPaymentError((data?.error as string) || "Please contact us to confirm your reservation.");
                             setPaymentPhase("successWithWarning");
                           }
-                        } catch {
+                        } catch (e) {
+                          bookingError("client", "complete-after-payment retry request failed", e, { holdId });
                           setPaymentError("Request failed. Please contact us.");
                           setPaymentPhase("successWithWarning");
                         }
@@ -2296,11 +2334,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           setPaymentPhase("completing");
                           if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
                           if (!holdId || !paymentIntentId) {
-                            console.error("[BookingModal] complete-after-payment skipped: missing holdId or paymentIntentId", { holdId: !!holdId, paymentIntentId: !!paymentIntentId });
+                            bookingError("client", "complete-after-payment skipped: missing holdId or paymentIntentId", null, { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
                             setPaymentError("Your payment succeeded. If you don't see a confirmation email, contact us with your email and we'll confirm your booking.");
                             setPaymentPhase("success");
                             return;
                           }
+                          bookingLog("client", "complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
                           try {
                             const res = await fetch("/api/booking/complete-after-payment", {
                               method: "POST",
@@ -2309,15 +2348,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             });
                             const data = await res.json().catch(() => ({}));
                             if (res.ok) {
+                              bookingLog("client", "complete-after-payment success", { holdId, alreadyConverted: data?.alreadyConverted, bookingId: data?.bookingId });
                               setPaymentPhase("success");
                             } else {
-                              console.error("[BookingModal] complete-after-payment failed", res.status, data);
+                              bookingError("client", "complete-after-payment failed", null, { status: res.status, error: data?.error });
                               const message = (data?.error as string) || `Payment captured but booking confirmation failed. Please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`;
                               setPaymentError(message);
                               setPaymentPhase("successWithWarning");
                             }
                           } catch (e) {
-                            console.error("[BookingModal] complete-after-payment request failed", e);
+                            bookingError("client", "complete-after-payment request failed", e, { holdId });
                             setPaymentError(
                               `Payment captured but we couldn't confirm your booking. Please contact us with your email to confirm. Call us at ${siteConfig.phone}.`
                             );

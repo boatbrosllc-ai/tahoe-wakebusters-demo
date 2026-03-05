@@ -127,6 +127,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       .then((data) => {
         const boatList = data.boats && Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
         setBoats(boatList);
+        // Single boat: auto-assign so we don't force the user to "select" the only option.
+        if (boatList.length === 1) {
+          setSelectedBoat(boatList[0]);
+        }
         // Apply one-shot deep-link preselection for boat and date.
         // initRef is cleared after the first run so user edits don't re-trigger auto-selection.
         if (initRef.current) {
@@ -221,9 +225,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     if (!initDone || slotsLoading || scrolledRef.current) return;
     scrolledRef.current = true;
     const timer = setTimeout(() => {
-      if (selectedExperience && boats.length > 0 && !selectedBoat) {
+      if (selectedExperience && boats.length > 1 && !selectedBoat) {
         boatsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } else if (selectedExperience && (boats.length === 0 || selectedBoat) && !selectedDate) {
+      } else if (selectedExperience && (boats.length === 0 || boats.length === 1 || selectedBoat) && !selectedDate) {
         dateSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (canContinue) {
         continueSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -301,8 +305,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
               </div>
             </section>
 
-            {/* 2. Select your boat – only when category selected */}
-            {selectedExperience && (
+            {/* 2. Select your boat – only when category selected and more than one boat (single boat is auto-assigned) */}
+            {selectedExperience && boats.length > 1 && (
               <section ref={boatsSectionRef}>
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your boat
@@ -350,8 +354,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
               </section>
             )}
 
-            {/* 3. Select your date – only when boat selected (or no boats) */}
-            {selectedExperience && (boats.length === 0 || selectedBoat) && (
+            {/* 3. Select your date – when boat selected, no boats, or single boat (auto-assigned) */}
+            {selectedExperience && (boats.length === 0 || boats.length === 1 || selectedBoat) && (
               <section ref={dateSectionRef}>
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your date

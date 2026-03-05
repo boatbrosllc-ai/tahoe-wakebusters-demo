@@ -8,6 +8,7 @@ import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
+import { bookingLog, bookingError } from "@/lib/booking/debug";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -301,6 +302,7 @@ export function ExperienceBookingCard({
     setSubmitting(true);
     setPaymentPhase("loading");
     try {
+      bookingLog("client", "ExperienceBookingCard create-hold request", { experienceId, slotId: selectedSlot.id, rateId: selectedRateId, partySize });
       const createHoldRes = await fetch("/api/booking/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -321,6 +323,7 @@ export function ExperienceBookingCard({
       });
       const holdData = await createHoldRes.json();
       if (!createHoldRes.ok) {
+        bookingLog("client", "ExperienceBookingCard create-hold failed", { status: createHoldRes.status, error: holdData.error });
         setError(holdData.error ?? "Could not reserve slot");
         if (holdData.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
         setPaymentPhase("form");
@@ -330,6 +333,7 @@ export function ExperienceBookingCard({
       setHoldSlotId(selectedSlot.id);
       setHoldExpiresAt(holdData.expiresAt ?? null);
       setPricing(holdData.pricing ?? null);
+      bookingLog("client", "ExperienceBookingCard create-hold success, create-payment-intent request", { holdId: holdData.holdId, payFullAmount: isTicketed ? true : payFullAmount });
 
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
@@ -338,12 +342,14 @@ export function ExperienceBookingCard({
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
+        bookingLog("client", "ExperienceBookingCard create-payment-intent failed", { status: intentRes.status, error: intentData.error });
         setError(intentData.error ?? "Could not start payment");
         setPaymentPhase("form");
         return;
       }
       const secret = intentData.clientSecret;
       if (!secret) {
+        bookingError("client", "ExperienceBookingCard create-payment-intent missing clientSecret", null, { holdId: holdData.holdId });
         setError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
@@ -353,10 +359,12 @@ export function ExperienceBookingCard({
         setPaymentPhase("form");
         return;
       }
+      bookingLog("client", "ExperienceBookingCard create-payment-intent success", { holdId: holdData.holdId });
       setClientSecret(secret);
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (e) {
+      bookingError("client", "ExperienceBookingCard create-hold or create-payment-intent threw", e, {});
       setError(e instanceof Error ? e.message : "Something went wrong");
       setPaymentPhase("form");
     } finally {
@@ -521,11 +529,13 @@ export function ExperienceBookingCard({
               setPaymentPhase("completing");
               invalidateBookingCaches(experienceId);
               if (!holdId || !paymentIntentId) {
+                bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
                 setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
                 setPaymentPhase("success");
                 return;
               }
               try {
+                bookingLog("client", "ExperienceBookingCard complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
                 const res = await fetch("/api/booking/complete-after-payment", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -533,9 +543,13 @@ export function ExperienceBookingCard({
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment failed", { status: res.status, error: (data as { error?: string }).error });
                   setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
+                } else {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: (data as { bookingId?: string }).bookingId });
                 }
-              } catch {
+              } catch (e) {
+                bookingError("client", "ExperienceBookingCard complete-after-payment request failed", e, { holdId });
                 setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
               }
               setPaymentPhase("success");

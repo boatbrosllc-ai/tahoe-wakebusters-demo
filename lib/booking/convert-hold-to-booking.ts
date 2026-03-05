@@ -20,6 +20,7 @@ import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
+import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
 /** Legacy: full payment in one charge. */
@@ -59,10 +60,17 @@ export async function convertHoldToBooking(
   holdId: string,
   input: ConvertHoldInput
 ): Promise<ConvertHoldResult> {
+  const isDeposit = isDepositInput(input);
+  bookingLog("convert-hold", "convertHoldToBooking started", {
+    holdId,
+    paymentStage: isDeposit ? "deposit" : "full",
+    paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
+  });
   const { FieldValue, Timestamp } = getFirestoreExports();
   const holdRef = db.collection("holds").doc(holdId);
   const holdSnap = await holdRef.get();
   if (!holdSnap.exists) {
+    bookingError("convert-hold", "hold not found", null, { holdId });
     throw new Error("Hold not found");
   }
   const hold = holdSnap.data() as Hold;
@@ -95,10 +103,12 @@ export async function convertHoldToBooking(
         }
       }
     }
+    bookingLog("convert-hold", "hold already converted, returning idempotent", { holdId, status: hold.status });
     return { alreadyConverted: true };
   }
   const expiresAtDate = (hold.expiresAt as { toDate(): Date }).toDate();
   if (expiresAtDate < new Date()) {
+    bookingLog("convert-hold", "hold expired", { holdId, expiresAt: expiresAtDate.toISOString() });
     throw new Error("Hold has expired");
   }
 
@@ -106,6 +116,13 @@ export async function convertHoldToBooking(
   const hasExperience = !!hold.experienceId;
   const hasBoat = !!hold.boatId;
   const isListingBoatFlow = hasExperience && hasBoat;
+  bookingLog("convert-hold", "hold valid, resolving flow", {
+    holdId,
+    isSharedHold,
+    isListingBoatFlow,
+    hasExperience,
+    hasBoat,
+  });
   let slotRef: DocumentReference | null;
   let experienceName: string;
   let boatNameForEmail: string;
@@ -317,6 +334,7 @@ export async function convertHoldToBooking(
     createdAt: Timestamp.now() as unknown as FirestoreTimestamp,
   };
 
+  bookingLog("convert-hold", "starting transaction (slot update + booking doc + hold status)", { holdId, bookingId });
   await db.runTransaction(async (tx) => {
     if (isSharedHold && hold.experienceId && parsedSlot && experienceForPricing) {
       const inventoryRef = getDepartureInventoryRef(db, hold.experienceId, parsedSlot.dateStr);
@@ -360,6 +378,7 @@ export async function convertHoldToBooking(
     tx.update(holdRef, { status: "converted" });
   });
 
+  bookingLog("convert-hold", "transaction completed, sending emails and side effects", { holdId, bookingId });
   if (holdDiscountCode) {
     const discountSnap = await db.collection("discounts").where("code", "==", holdDiscountCode).limit(1).get();
     if (!discountSnap.empty) {
@@ -399,7 +418,7 @@ export async function convertHoldToBooking(
       sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext),
     ]);
   } catch (emailErr) {
-    console.error("[convert-hold-to-booking] Brevo send failed", emailErr);
+    bookingError("convert-hold", "Brevo confirmation email failed", emailErr, { bookingId });
   }
   logEmailSent({
     to: customer.email,
@@ -407,12 +426,12 @@ export async function convertHoldToBooking(
     templateId: "booking_confirmation",
     subject: "Booking Confirmation – Boat Bros ATX",
     bookingId,
-  }).catch((err) => console.error("[convert-hold-to-booking] logEmailSent failed", err));
+  }).catch((err) => bookingError("convert-hold", "logEmailSent failed", err, { bookingId }));
   if (waiverResult?.sendSeparateWaiverInvite) {
     try {
       await sendWaiverInviteAndMarkSent(waiverResult);
     } catch (waiverErr) {
-      console.error("[convert-hold-to-booking] Waiver invite send failed", waiverErr);
+      bookingError("convert-hold", "waiver invite send failed", waiverErr, { bookingId });
     }
   }
   if (hold.marketingOptIn) {
@@ -420,9 +439,10 @@ export async function convertHoldToBooking(
     try {
       await upsertBrevoContact(customer.email, customer.name, customer.phone, listId ?? undefined);
     } catch (listErr) {
-      console.error("[convert-hold-to-booking] Brevo list subscribe failed", listErr);
+      bookingError("convert-hold", "Brevo list subscribe failed", listErr, { bookingId });
     }
   }
 
+  bookingLog("convert-hold", "convertHoldToBooking completed", { holdId, bookingId });
   return { bookingId };
 }

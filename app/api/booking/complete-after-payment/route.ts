@@ -10,6 +10,7 @@ import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { convertHoldToBooking, type ConvertHoldInput, type ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 import type { BookingCardDisplay } from "@/lib/booking/types";
+import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
 function parseBody(body: unknown): { holdId: string; paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -22,24 +23,34 @@ function parseBody(body: unknown): { holdId: string; paymentIntentId: string } |
 
 export async function POST(request: NextRequest) {
   try {
+    bookingLog("complete-after-payment", "request started");
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
-      console.error("[complete-after-payment] missing holdId or paymentIntentId in body");
+      bookingLog("complete-after-payment", "invalid body: holdId and paymentIntentId required");
       return NextResponse.json({ error: "holdId and paymentIntentId required" }, { status: 400 });
     }
-    console.log("[complete-after-payment] request", { holdId: input.holdId, paymentIntentId: input.paymentIntentId?.slice(0, 20) + "..." });
+    bookingLog("complete-after-payment", "parsed input", {
+      holdId: input.holdId,
+      paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
+    });
 
     const stripe = getStripe();
     let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
+    bookingLog("complete-after-payment", "PaymentIntent retrieved", {
+      holdId: input.holdId,
+      piStatus: pi.status,
+      piId: pi.id,
+    });
     if (pi.status !== "succeeded") {
       if (pi.status === "processing") {
+        bookingLog("complete-after-payment", "payment still processing, returning 202", { holdId: input.holdId });
         return NextResponse.json(
           { processing: true, message: "Payment is processing. Your booking will be confirmed shortly." },
           { status: 202 }
         );
       }
-      console.error("[complete-after-payment] payment not succeeded", { status: pi.status });
+      bookingLog("complete-after-payment", "payment not succeeded", { holdId: input.holdId, status: pi.status });
       return NextResponse.json(
         { error: "Payment has not succeeded yet. Your booking will be created shortly—check your email and Admin." },
         { status: 400 }
@@ -47,7 +58,10 @@ export async function POST(request: NextRequest) {
     }
     const metadataHoldId = pi.metadata?.holdId;
     if (metadataHoldId !== input.holdId) {
-      console.error("[complete-after-payment] holdId mismatch", { metadataHoldId, inputHoldId: input.holdId });
+      bookingError("complete-after-payment", "holdId mismatch", null, {
+        metadataHoldId: metadataHoldId ?? null,
+        inputHoldId: input.holdId,
+      });
       return NextResponse.json(
         { error: "Payment intent does not match this hold" },
         { status: 400 }
@@ -71,6 +85,17 @@ export async function POST(request: NextRequest) {
     const isDepositByStage = paymentStage === "deposit";
     const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
     const useDepositInput = customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
+    bookingLog("complete-after-payment", "PI metadata and convert decision", {
+      holdId: input.holdId,
+      paymentStage: paymentStage ?? null,
+      totalCentsFromMeta,
+      amountCharged,
+      depositCentsFromMeta,
+      finalCents,
+      isDepositByStage,
+      isDepositByAmount,
+      useDepositInput,
+    });
 
     const convertInput: ConvertHoldInput =
       useDepositInput
@@ -95,24 +120,28 @@ export async function POST(request: NextRequest) {
           };
 
     const db = getDb();
+    bookingLog("complete-after-payment", "calling convertHoldToBooking", {
+      holdId: input.holdId,
+      paymentStage: useDepositInput ? "deposit" : "full",
+    });
     const result = await convertHoldToBooking(db, input.holdId, convertInput);
 
     if ("alreadyConverted" in result) {
-      console.log("[complete-after-payment] already converted", { holdId: input.holdId });
+      bookingLog("complete-after-payment", "hold already converted (idempotent)", { holdId: input.holdId });
       return NextResponse.json({ success: true, alreadyConverted: true });
     }
-    console.log("[complete-after-payment] booking created", { bookingId: result.bookingId, holdId: input.holdId });
+    bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId: input.holdId });
     return NextResponse.json({ success: true, bookingId: result.bookingId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
     if (message === "Hold has expired") {
-      console.warn("[complete-after-payment] hold expired", { holdId: (err as { holdId?: string }).holdId });
+      bookingWarn("complete-after-payment", "hold expired", { holdId: (err as { holdId?: string }).holdId });
       return NextResponse.json(
         { error: "Your booking hold has expired. Please start a new booking." },
         { status: 409 }
       );
     }
-    console.error("[complete-after-payment]", message, err);
+    bookingError("complete-after-payment", "complete after payment failed", err, { message });
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

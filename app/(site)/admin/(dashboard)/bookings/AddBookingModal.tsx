@@ -24,7 +24,7 @@ const CARD_BRANDS = [
 ];
 
 const DURATION_OPTIONS = [2, 3, 4, 6, 8];
-const START_HOURS = Array.from({ length: 12 }, (_, i) => i + 7); // 7–18 (operating hours 7am–7pm)
+const START_HOURS = Array.from({ length: 13 }, (_, i) => i + 7); // 7–19 (last departure 7pm)
 
 type ExperienceOption = { id: string; title: string };
 type BoatOption = { id: string; name: string; experienceIds?: string[] };

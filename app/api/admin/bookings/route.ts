@@ -276,7 +276,7 @@ export async function POST(request: NextRequest) {
 
     if (!experienceId) return NextResponse.json({ error: "experienceId is required" }, { status: 400 });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tripDate)) return NextResponse.json({ error: "tripDate must be YYYY-MM-DD" }, { status: 400 });
-    if (!Number.isInteger(startHour) || startHour < 7 || startHour > 18) return NextResponse.json({ error: "startHour must be 7–18 (operating hours 7am–7pm)" }, { status: 400 });
+    if (!Number.isInteger(startHour) || startHour < 7 || startHour > 19) return NextResponse.json({ error: "startHour must be 7–19 (last departure 7pm)" }, { status: 400 });
     if (!Number.isInteger(durationHours) || durationHours < 1 || durationHours > 12) return NextResponse.json({ error: "durationHours must be 1–12" }, { status: 400 });
     if (!customer.name || !customer.email) return NextResponse.json({ error: "customer name and email are required" }, { status: 400 });
     if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });

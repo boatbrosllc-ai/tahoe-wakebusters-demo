@@ -16,6 +16,7 @@ import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import { sendBookingConfirmationCopyToBusiness } from "@/lib/booking/brevo";
+import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,8 +63,13 @@ export async function POST(request: NextRequest) {
       return { runHandler: true, alreadyCompleted: false };
     });
 
-    if (claimResult.alreadyCompleted) return NextResponse.json({ received: true });
+    bookingLog("stripe-webhook", "event received", { eventId: eventId.slice(0, 24) + "...", eventType: event.type });
+    if (claimResult.alreadyCompleted) {
+      bookingLog("stripe-webhook", "event already completed, skipping", { eventId: eventId.slice(0, 24) + "..." });
+      return NextResponse.json({ received: true });
+    }
     if (!claimResult.runHandler) {
+      bookingLog("stripe-webhook", "event processing in progress or lease held", { eventId: eventId.slice(0, 24) + "..." });
       return NextResponse.json({ error: "Event processing in progress or lease held" }, { status: 500 });
     }
 
@@ -392,7 +398,14 @@ export async function POST(request: NextRequest) {
       const piAmountTotal = piRaw.amount ?? undefined;
       const piCurrency = piRaw.currency ?? undefined;
       const paymentStage = piRaw.metadata?.payment_stage;
-      console.log("[stripe-webhook] payment_intent.succeeded", { eventId, paymentStage, paymentIntentId: piId });
+      const holdIdFromMeta = piRaw.metadata?.holdId;
+      bookingLog("stripe-webhook", "payment_intent.succeeded", {
+        eventId: eventId.slice(0, 24) + "...",
+        paymentStage: paymentStage ?? null,
+        paymentIntentIdPrefix: piId.slice(0, 24) + "...",
+        holdId: holdIdFromMeta ?? null,
+        amount: piAmountTotal,
+      });
 
       if (paymentStage === "final") {
         const bookingId = piRaw.metadata?.bookingId;
@@ -445,10 +458,11 @@ export async function POST(request: NextRequest) {
 
       const holdId = piRaw.metadata?.holdId;
       if (!holdId) {
-        console.error("[stripe-webhook] payment_intent.succeeded missing holdId in metadata");
+        bookingError("stripe-webhook", "payment_intent.succeeded missing holdId in metadata", null, { paymentIntentId: piId });
         await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
+      bookingLog("stripe-webhook", "payment_intent.succeeded resolving PI and calling convertHoldToBooking", { holdId, paymentIntentIdPrefix: piId.slice(0, 24) + "..." });
 
       const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
       const pm = pi.payment_method as Stripe.PaymentMethod | null;
@@ -500,18 +514,19 @@ export async function POST(request: NextRequest) {
       try {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("alreadyConverted" in result) {
+          bookingLog("stripe-webhook", "payment_intent.succeeded hold already converted", { holdId, paymentIntentId: piId });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
-          console.log("[stripe-webhook] payment_intent.succeeded booking created", { bookingId: result.bookingId, holdId });
+          bookingLog("stripe-webhook", "payment_intent.succeeded booking created", { bookingId: result.bookingId, holdId });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
         if (errMsg === "Hold has expired") {
-          console.warn("[stripe-webhook] payment_intent.succeeded hold expired", { holdId, paymentIntentId: piId });
+          bookingWarn("stripe-webhook", "payment_intent.succeeded hold expired", { holdId, paymentIntentId: piId });
           await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold expired", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
-          console.error("[stripe-webhook] payment_intent.succeeded convert failed", convertErr);
+          bookingError("stripe-webhook", "payment_intent.succeeded convertHoldToBooking failed", convertErr, { holdId, paymentIntentId: piId, error: errMsg });
           await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
         return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });

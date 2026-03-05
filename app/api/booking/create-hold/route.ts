@@ -11,6 +11,7 @@ import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
 const HOLD_EXPIRY_MINUTES = 10;
 
@@ -122,8 +123,10 @@ async function hasOverlappingBlock(opts: {
 
 export async function POST(request: NextRequest) {
   try {
+    bookingLog("create-hold", "request started");
     const rl = checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
+      bookingWarn("create-hold", "rate limit exceeded", { retryAfterMs: rl.retryAfterMs });
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
       return NextResponse.json(
         { error: "Too many requests. Please try again in a moment." },
@@ -133,12 +136,22 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     const parsed = parseBody(body);
     if (!parsed.input) {
+      bookingLog("create-hold", "invalid body", { hint: parsed.hint });
       return NextResponse.json(
         { error: "Invalid request body", hint: parsed.hint },
         { status: 400 }
       );
     }
     const input = parsed.input;
+    bookingLog("create-hold", "parsed input", {
+      experienceId: input.experienceId ?? null,
+      boatId: input.boatId ?? null,
+      slotId: input.slotId,
+      rateId: input.rateId,
+      partySize: input.partySize,
+      bookingMode: input.bookingMode,
+      resumeHoldId: input.resumeHoldId ?? null,
+    });
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const hasExperience = !!input.experienceId;
@@ -168,6 +181,11 @@ export async function POST(request: NextRequest) {
     const isListingBoatFlow = hasExperience && hasBoat; // experience slots + boat rates
     const isExperienceOnly = hasExperience && !hasBoat;
     const isLegacyBoat = !hasExperience && hasBoat;
+    bookingLog("create-hold", "flow branch", {
+      isListingBoatFlow,
+      isExperienceOnly,
+      isLegacyBoat,
+    });
     let isSharedTicketed = false;
     let isCharterTicketed = false;
 
@@ -449,6 +467,13 @@ export async function POST(request: NextRequest) {
       discountCodeApplied = result.discount.code;
     }
     const totalCentsWithTip = Math.max(0, pricing.totalCents + tipCents - discountCents);
+    bookingLog("create-hold", "pricing computed", {
+      totalCents: pricing.totalCents,
+      tipCents,
+      discountCents,
+      totalCentsWithTip,
+      discountCodeApplied: discountCodeApplied ?? null,
+    });
     const holdId = db.collection("holds").doc().id;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
@@ -484,6 +509,7 @@ export async function POST(request: NextRequest) {
     let reusedExpiresAt: Date | null = null;
 
     if (isSharedTicketed) {
+      bookingLog("create-hold", "shared ticketed: reserving capacity and creating hold", { holdId, experienceId: expId, dateStr: parseSlotId(input.slotId)?.dateStr });
       const parsedForCapacity = parseSlotId(input.slotId);
       if (!parsedForCapacity) {
         return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
@@ -524,9 +550,11 @@ export async function POST(request: NextRequest) {
       });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
       const response: CreateHoldResponse = { holdId, expiresAt: expiresAt.toISOString(), pricing: responsePricing };
+      bookingLog("create-hold", "shared ticketed hold created", { holdId, expiresAt: expiresAt.toISOString() });
       return NextResponse.json(response);
     }
 
+    bookingLog("create-hold", "charter/legacy: starting transaction (slot hold + hold doc)");
     await db.runTransaction(async (tx) => {
       const assertNotBlocked = async (slotStart: Date, slotEnd: Date) => {
         if (!input.experienceId) return;
@@ -773,6 +801,11 @@ export async function POST(request: NextRequest) {
       tx.set(db.collection("holds").doc(holdId), holdPayload);
     });
 
+    bookingLog("create-hold", "transaction completed", {
+      holdId,
+      reusedHoldId,
+      expiresAt: (reusedHoldId != null && reusedExpiresAt != null ? reusedExpiresAt : expiresAt).toISOString(),
+    });
     const responsePricing = {
       ...pricing,
       totalCents: totalCentsWithTip,
@@ -803,9 +836,10 @@ export async function POST(request: NextRequest) {
       message === "This date is sold out." ||
       message.startsWith("Only ")
     ) {
+      bookingLog("create-hold", "conflict (409)", { message });
       return NextResponse.json({ error: message }, { status: 409 });
     }
-    console.error("[create-hold]", err);
+    bookingError("create-hold", "create hold failed", err, { message });
     return NextResponse.json({ error: "Create hold failed" }, { status: 500 });
   }
 }
