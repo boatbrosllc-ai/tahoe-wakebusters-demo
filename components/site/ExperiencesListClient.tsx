@@ -150,7 +150,7 @@ export function ExperiencesListClient() {
           >
             <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
               <Link
-                href="/lake-austin-pontoon-rentals"
+                href="/experiences/lake-austin-pontoon"
                 className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
               >
                 Lake Austin Pontoon Rentals

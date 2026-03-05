@@ -8,7 +8,7 @@ const BOOKING_SECTION_ID = "pontoon-booking";
 
 /**
  * Embeds the same pontoon booking calendar used on /experiences/lake-austin-pontoon.
- * Used on the SEO page /lake-austin-pontoon-rentals below the content sections.
+ * Used on event landing pages (e.g. bachelorette/bachelor) below the content sections.
  */
 export function PontoonBookingEmbed() {
   const { openWithSelection } = useBookingModal();

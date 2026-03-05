@@ -8,7 +8,7 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 const footerLinks = [
   { href: "/experiences", label: "Experiences" },
   { href: "/boats", label: "Our Boats" },
-  { href: "/lake-austin-boat-rental", label: "Location" },
+  { href: "/location", label: "Location" },
   { href: "/booking", label: "Book" },
   { href: "/our-story", label: "Our Story" },
   { href: "/blog", label: "The Dock" },
@@ -146,7 +146,7 @@ export function Footer() {
           <p className="mt-1">
             <Link href="/contact" className="hover:text-brand-primary transition-colors">Contact</Link>
             {" · "}
-            <Link href="/lake-austin-boat-rental" className="hover:text-brand-primary transition-colors">Location</Link>
+            <Link href="/location" className="hover:text-brand-primary transition-colors">Location</Link>
             {" · "}
             Lake Austin boat rentals, Austin TX. Licensed & insured.
           </p>

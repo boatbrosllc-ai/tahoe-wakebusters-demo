@@ -51,7 +51,7 @@ export function HomeLocation() {
                 Get directions
               </a>
               <Link
-                href="/lake-austin-boat-rental"
+                href="/location"
                 className="inline-flex items-center justify-center min-h-[48px] rounded-xl border-2 border-brand-dark/20 px-5 py-3 text-sm font-semibold text-brand-dark hover:border-brand-primary hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
               >
                 View location & hours

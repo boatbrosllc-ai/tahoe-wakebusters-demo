@@ -9,57 +9,26 @@ import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { LocationPageCTA } from "@/components/site/LocationPageCTA";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
-const canonical = `${baseUrl}/lake-austin-boat-rental`;
+const canonical = `${baseUrl}/location`;
 
 export const metadata: Metadata = {
-  title: "Lake Austin Boat Rentals (Captain Included) | Austin TX | Boat Bros",
+  title: "Our Location | Boat Bros ATX – Austin TX",
   description:
-    "Lake Austin boat rentals with captain included. Pontoon, wake surf, sunset cruise. 5019 N Capital of Texas Hwy, Austin TX. Book online. 5.0 rating, 273+ reviews.",
+    "Boat Bros location and contact. 5019 N Capital of Texas Hwy, Austin TX. Directions, parking, hours, and how to reach us. Call or book online.",
   keywords: [
-    "Lake Austin boat rentals",
-    "Austin boat rentals",
-    "pontoon rental Lake Austin",
-    "boat rental service Austin",
-    "captain included boat rental Austin",
-    "Lake Austin pontoon",
+    "Boat Bros location",
+    "Boat Bros Austin address",
+    "where is Boat Bros",
+    "Boat Bros ATX contact",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Lake Austin Boat Rentals (Captain Included) | Boat Bros",
-    description: "Captain-included boat rentals on Lake Austin. Pontoon, watersports, sunset cruise. Austin TX. Book online.",
+    title: "Our Location | Boat Bros ATX",
+    description: "Find Boat Bros – address, directions, parking, and contact. Austin TX.",
     url: canonical,
     siteName: brand.companyName,
   },
 };
-
-function LocalBusinessJsonLd() {
-  const schema = {
-    "@context": "https://schema.org",
-    "@type": "LocalBusiness",
-    name: location.legalName,
-    image: `${baseUrl}/logos/BB_Horizontal_Logo_DarkTeal_NoBkg.png`,
-    url: location.url,
-    telephone: location.phoneTel,
-    address: {
-      "@type": "PostalAddress",
-      streetAddress: location.address.line1,
-      addressLocality: location.address.city,
-      addressRegion: location.address.state,
-      postalCode: location.address.zip,
-    },
-    geo: location.geo
-      ? {
-          "@type": "GeoCoordinates",
-          latitude: location.geo.latitude,
-          longitude: location.geo.longitude,
-        }
-      : undefined,
-    areaServed: location.areaServed.map((name) => ({ "@type": "Place", name })),
-    sameAs: location.sameAs,
-    priceRange: "$$",
-  };
-  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }} />;
-}
 
 function BreadcrumbJsonLd() {
   const schema = {
@@ -67,16 +36,15 @@ function BreadcrumbJsonLd() {
     "@type": "BreadcrumbList",
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "Home", item: baseUrl },
-      { "@type": "ListItem", position: 2, name: "Lake Austin Boat Rentals", item: canonical },
+      { "@type": "ListItem", position: 2, name: "Location", item: canonical },
     ],
   };
   return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }} />;
 }
 
-export default function LakeAustinBoatRentalPage() {
+export default function LocationPage() {
   return (
     <>
-      <LocalBusinessJsonLd />
       <BreadcrumbJsonLd />
 
       <main id="main-content" className="min-h-screen bg-white pb-24 lg:pb-0 overflow-x-hidden">
@@ -96,19 +64,19 @@ export default function LakeAustinBoatRentalPage() {
                 </li>
                 <li aria-hidden>/</li>
                 <li className="text-white" aria-current="page">
-                  Lake Austin Boat Rentals
+                  Location
                 </li>
               </ol>
             </nav>
             <h1 id="location-hero-heading" className="mt-6 text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-              Lake Austin Boat Rentals (Captain Included)
+              Our Location
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-              Book a{" "}
-              <Link href="/lake-austin-pontoon-rentals" className="text-white font-medium underline decoration-white/50 hover:decoration-white">
-                Lake Austin Pontoon Rentals
+              Find us at {location.addressFormatted}. Get directions, see hours, or{" "}
+              <Link href="/booking" className="text-white font-medium underline decoration-white/50 hover:decoration-white">
+                book online
               </Link>
-              , wake surf, or sunset cruise on Lake Austin. All trips include a licensed captain—you show up and enjoy. Serving Austin, TX and the Lake Austin area.
+              .
             </p>
           </div>
         </section>
@@ -131,12 +99,15 @@ export default function LakeAustinBoatRentalPage() {
           </div>
         </section>
 
-        {/* NAP + Map */}
-        <section className="section-padding bg-white" aria-labelledby="location-contact-heading">
+        {/* Marina / meeting location + map + contact */}
+        <section className="section-padding bg-white" aria-labelledby="marina-heading">
           <div className="container-wide mx-auto max-w-5xl px-5 sm:px-6 lg:px-8">
-            <h2 id="location-contact-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
-              Location & contact
+            <h2 id="marina-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
+              Marina & meeting location
             </h2>
+            <p className="mt-3 text-brand-dark/90 leading-relaxed">
+              We operate from the Austin area near Lake Austin. Your booking confirmation will include the specific marina or dock for your trip. Guests meet the captain at the dock—we&apos;ll send exact meet-up details and a contact for the day of your trip after you book.
+            </p>
             <div className="mt-6 grid gap-6 sm:gap-8 lg:grid-cols-[1fr_1fr] lg:gap-12">
               <div className="min-w-0">
                 <div className="rounded-2xl border border-brand-dark/10 bg-brand-bg/50 p-5 sm:p-8">
@@ -187,26 +158,38 @@ export default function LakeAustinBoatRentalPage() {
           </div>
         </section>
 
-        {/* Why Boat Bros */}
-        <section className="section-padding bg-brand-bg" aria-labelledby="why-boat-bros-heading">
+        {/* Parking instructions */}
+        <section className="section-padding bg-brand-bg" aria-labelledby="parking-heading">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
-            <h2 id="why-boat-bros-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
-              Why Boat Bros
+            <h2 id="parking-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
+              Parking instructions
             </h2>
             <p className="mt-4 text-brand-dark/90 leading-relaxed">
-              We run captain-included boat rentals on Lake Austin so you get a safe, fun day on the water without the hassle. Choose a pontoon for groups, a wake boat for watersports, or a sunset cruise—all with a licensed captain, life vests, and same-day availability when the calendar is open.
+              Parking availability depends on the specific marina or dock for your reservation. We include parking instructions and any fees in your booking confirmation so you can plan ahead. Meet-up location may vary by experience and date—we&apos;ll confirm details after you book. If you have accessibility or parking questions before booking, contact us and we&apos;ll help.
             </p>
           </div>
         </section>
 
-        {/* Service area */}
-        <section className="section-padding bg-white" aria-labelledby="service-area-heading">
+        {/* Arrival timing */}
+        <section className="section-padding bg-white" aria-labelledby="arrival-heading">
+          <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
+            <h2 id="arrival-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
+              Arrival timing
+            </h2>
+            <p className="mt-4 text-brand-dark/90 leading-relaxed">
+              Plan to arrive at the time we confirm in your booking. Your captain will meet you at the dock. We&apos;ll send exact meet-up time and location with your confirmation.
+            </p>
+          </div>
+        </section>
+
+        {/* Service areas */}
+        <section className="section-padding bg-brand-bg" aria-labelledby="service-area-heading">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
             <h2 id="service-area-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
-              We serve the Austin area
+              Service areas
             </h2>
             <p className="mt-2 text-brand-muted">
-              Lake Austin boat rentals for Austin, TX and nearby neighborhoods.
+              Austin, TX and surrounding areas—we operate on and around Lake Austin.
             </p>
             <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2 text-brand-dark">
               {location.areaServed.map((area) => (
@@ -216,54 +199,13 @@ export default function LakeAustinBoatRentalPage() {
                 </li>
               ))}
             </ul>
-          </div>
-        </section>
-
-        {/* How it works */}
-        <section className="section-padding bg-brand-bg" aria-labelledby="how-it-works-heading">
-          <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
-            <h2 id="how-it-works-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
-              How it works
-            </h2>
-            <ol className="mt-6 space-y-4 list-none">
-              <li className="flex gap-4">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-primary text-sm font-bold text-white" aria-hidden>1</span>
-                <div>
-                  <strong className="text-brand-dark">Choose your experience</strong> — Pontoon, watersports, sunset cruise, or seasonal options.
-                </div>
-              </li>
-              <li className="flex gap-4">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-primary text-sm font-bold text-white" aria-hidden>2</span>
-                <div>
-                  <strong className="text-brand-dark">Book online</strong> — Pick your date, see real-time availability, and confirm instantly.
-                </div>
-              </li>
-              <li className="flex gap-4">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-primary text-sm font-bold text-white" aria-hidden>3</span>
-                <div>
-                  <strong className="text-brand-dark">Show up & enjoy</strong> — We&apos;ll send meet-up and parking details. Your captain handles the rest.
-                </div>
-              </li>
-            </ol>
-          </div>
-        </section>
-
-        {/* Parking / meet-up */}
-        <section className="section-padding bg-white" aria-labelledby="parking-heading">
-          <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
-            <h2 id="parking-heading" className="text-2xl font-bold text-brand-dark sm:text-3xl">
-              Parking & meet-up
-            </h2>
-            <p className="mt-4 text-brand-dark/90 leading-relaxed">
-              Exact meet-up location and parking instructions are sent with your booking confirmation. We operate from the Austin area near Lake Austin; your confirmation will include the specific marina or dock, a contact for the day of your trip, and any parking fees or tips. If you have accessibility or parking questions before booking, contact us and we&apos;ll help.
-            </p>
-            <p className="mt-3 text-sm text-brand-muted">
-              Meet-up location may vary by experience and date. We&apos;ll confirm details after you book.
+            <p className="mt-6 text-brand-dark/90">
+              See our <Link href="/experiences" className="text-brand-primary font-medium hover:underline">experiences</Link> and <Link href="/booking" className="text-brand-primary font-medium hover:underline">book online</Link>.
             </p>
           </div>
         </section>
 
-        {/* FAQ */}
+        {/* Logistical FAQs (from location-faq) */}
         <FAQ items={LOCATION_FAQ as FAQItem[]} />
 
         {/* Customer testimonials */}
@@ -290,10 +232,10 @@ export default function LakeAustinBoatRentalPage() {
         <section className="section-padding bg-brand-dark" aria-labelledby="final-cta-heading">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8 text-center">
             <h2 id="final-cta-heading" className="text-2xl font-bold text-white sm:text-3xl">
-              Ready to get on the water?
+              Ready to book?
             </h2>
             <p className="mt-3 text-white/90">
-              Book your Lake Austin boat rental or give us a call.
+              Check availability online or call us.
             </p>
             <div className="mt-8 flex flex-col sm:flex-row flex-wrap items-center justify-center gap-3 sm:gap-4">
               <a

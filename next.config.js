@@ -4,6 +4,11 @@ const path = require('path');
 const nextConfig = {
   // Avoid "generate is not a function" when config.generateBuildId is undefined (Next 14.x)
   generateBuildId: async () => null,
+  redirects: async () => [
+    { source: "/lake-austin-boat-rental", destination: "/location", permanent: true },
+    { source: "/lake-austin-pontoon-rentals", destination: "/experiences/lake-austin-pontoon", permanent: true },
+    { source: "/more", destination: "/menu", permanent: true },
+  ],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },

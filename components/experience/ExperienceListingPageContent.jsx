@@ -245,9 +245,9 @@ export function ExperienceListingPageContent(props) {
         <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experience">
           <p className="text-white/90 text-sm sm:text-base">
             Prefer a pontoon for larger groups or a chill day?{" "}
-            <Link href="/lake-austin-pontoon-rentals" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Lake Austin Pontoon Rentals
-            </Link>
+<Link href="/experiences/lake-austin-pontoon" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+                Lake Austin Pontoon Rentals
+              </Link>
           </p>
         </section>
       )}

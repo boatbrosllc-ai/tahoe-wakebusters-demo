@@ -17,14 +17,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CallCard } from "@/components/site/CallCard";
 
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+
 export const metadata: Metadata = {
   title: "Menu | Lake Austin Boat Rentals",
   description:
     "Boat Bros — Lake Austin boat rentals: pontoon, wake surf, sunset cruise. Book, experiences, FAQs, contact. Austin TX.",
   keywords: ["Lake Austin boat rentals", "Boat Bros", "pontoon rental Lake Austin"],
+  alternates: { canonical: `${baseUrl}/menu` },
   openGraph: {
     title: "Menu | Lake Austin Boat Rentals | Boat Bros",
     description: "Browse experiences, book, story, FAQs, contact. Lake Austin boat rentals.",
+    url: `${baseUrl}/menu`,
   },
 };
 
@@ -74,7 +78,7 @@ const pageLinks = [
   },
 ];
 
-export default function MorePage() {
+export default function MenuPage() {
   return (
     <div className="section-padding bg-brand-bg min-h-screen pt-12 sm:pt-16 pb-28 sm:pb-16 lg:pb-24">
       <div className="container-narrow px-5 sm:px-6 lg:px-8">

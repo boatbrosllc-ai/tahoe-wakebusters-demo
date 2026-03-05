@@ -12,8 +12,9 @@ const CRITICAL_ROUTES = [
   "/experiences/lake-austin-pontoon",
   "/booking",
   "/contact",
-  "/lake-austin-pontoon-rentals",
-  "/lake-austin-boat-rental",
+  "/lake-austin-bachelorette-party-boat-rentals",
+  "/lake-austin-bachelor-party-boat-rentals",
+  "/location",
 ] as const;
 
 export function PrefetchCriticalRoutes() {

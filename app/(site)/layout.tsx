@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { brand } from "@/content/brand";
 import { SiteChrome } from "@/components/site/SiteChrome";
+import { CommercialPageSchema } from "@/components/site/CommercialPageSchema";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 
@@ -77,14 +78,11 @@ export default function SiteLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const jsonLd = localBusinessJsonLd();
+  const jsonLd = JSON.stringify(localBusinessJsonLd());
 
   return (
     <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <CommercialPageSchema jsonLd={jsonLd} />
       <SiteChrome>{children}</SiteChrome>
     </>
   );

@@ -70,6 +70,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
 
+    const expData = expDoc.data() as { slug?: string };
+    const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
+
     // --- Rates ---
     const rates: ExperienceDetailRate[] = ratesSnap.docs
       .filter((d) => typeof (d.data() as ExperienceRate).priceCents === "number")
@@ -86,18 +89,31 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // --- Boats ---
     // Note: rates is NOT embedded per-boat in the JSON payload — it lives at the top-level
     // ExperienceDetailResponse.rates field. Boats only carry fromPriceCents for display.
-    const boats: ExperienceDetailBoat[] = boatsSnap.docs.map((doc) => {
-      const boat = doc.data() as ListingBoat;
-      return {
-        id: doc.id,
-        name: boat.name,
-        slug: boat.slug,
-        description: boat.description,
-        photos: boat.photos ?? [],
-        fromPriceCents,
-        rates, // reference to the shared array — JSON.stringify will duplicate but callers should use top-level rates
-      };
-    });
+    // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
+    // (guards against production data linking the wrong boat types to an experience).
+    const boatTypeForSlug = (slug: string): ((bt: string | undefined) => boolean) => {
+      if (slug === "watersports" || slug === "wake-surf") return (bt) => bt === "wake";
+      if (slug === "pontoon" || slug === "lake-austin-pontoon") return (bt) => bt === "pontoon" || bt === "tritoon";
+      return () => true; // sunset, holiday: no filter
+    };
+    const allowBoatType = boatTypeForSlug(experienceSlug);
+    const boats: ExperienceDetailBoat[] = boatsSnap.docs
+      .filter((doc) => {
+        const boat = doc.data() as ListingBoat;
+        return allowBoatType(boat.boatType);
+      })
+      .map((doc) => {
+        const boat = doc.data() as ListingBoat;
+        return {
+          id: doc.id,
+          name: boat.name,
+          slug: boat.slug,
+          description: boat.description,
+          photos: boat.photos ?? [],
+          fromPriceCents,
+          rates, // reference to the shared array — JSON.stringify will duplicate but callers should use top-level rates
+        };
+      });
 
     // --- Add-ons (exclude tip type — shown separately as Tip now / Tip later buttons) ---
     const addons: ExperienceDetailAddon[] = addonsSnap.docs

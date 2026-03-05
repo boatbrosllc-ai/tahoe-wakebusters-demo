@@ -23,6 +23,21 @@ export interface SocialProofFromExperience {
   tagline?: string;
 }
 
+export interface LakeAustinPontoonLayoutEventOverrides {
+  heroTitle?: string;
+  heroSubtitle?: string;
+  heroIntroParagraph?: string;
+  overviewHeadline?: string;
+  overviewStory?: string;
+  overviewSeoParagraphs?: string[];
+  overviewTimeline?: { step: string; desc: string }[];
+  faqItems?: { question: string; answer: string }[];
+  finalCtaHeadline?: string;
+  finalCtaPrimaryCta?: string;
+  finalCtaSecondaryCta?: string;
+  finalCtaSecondaryHref?: string;
+}
+
 export interface LakeAustinPontoonLayoutProps {
   /** Hero image URL from admin pontoon listing (Firestore). When set, overrides static data. */
   heroImageUrl?: string;
@@ -32,6 +47,8 @@ export interface LakeAustinPontoonLayoutProps {
   overviewImageUrl?: string;
   /** Social proof from admin pontoon listing (rating, ratingCount, stats, tagline). When set, overrides static strip. */
   socialProof?: SocialProofFromExperience;
+  /** Event-specific overrides (e.g. bachelorette/bachelor landing pages). When set, overrides default hero, overview, FAQ, final CTA. */
+  eventOverrides?: LakeAustinPontoonLayoutEventOverrides;
 }
 
 /**
@@ -39,7 +56,7 @@ export interface LakeAustinPontoonLayoutProps {
  * Used by both /experiences/pontoon and /experiences/lake-austin-pontoon.
  * When heroImageUrl / galleryImages are provided (from admin listing), those are used.
  */
-export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewImageUrl, socialProof }: LakeAustinPontoonLayoutProps = {}) {
+export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewImageUrl, socialProof, eventOverrides }: LakeAustinPontoonLayoutProps = {}) {
   const { openWithSelection } = useBookingModal();
   const scrollToBooking = useCallback(() => {
     document.getElementById(BOOKING_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
@@ -54,7 +71,12 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
 
   return (
     <div className="min-h-screen bg-brand-dark">
-      <Hero heroImageUrl={heroImageUrl} introParagraph={HERO.introParagraph} />
+      <Hero
+        heroImageUrl={heroImageUrl}
+        title={eventOverrides?.heroTitle}
+        subtitle={eventOverrides?.heroSubtitle}
+        introParagraph={eventOverrides?.heroIntroParagraph ?? HERO.introParagraph}
+      />
 
       <section
         id={BOOKING_SECTION_ID}
@@ -73,14 +95,24 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
       </section>
 
       <SocialProofStrip rating={socialProof?.rating} ratingCount={socialProof?.ratingCount} stats={socialProof?.stats} tagline={socialProof?.tagline} />
-      <ExperienceOverview overviewImageUrl={overviewImageUrl} />
+      <ExperienceOverview
+        overviewImageUrl={overviewImageUrl}
+        headline={eventOverrides?.overviewHeadline}
+        story={eventOverrides?.overviewStory}
+        seoParagraphs={eventOverrides?.overviewSeoParagraphs}
+        timeline={eventOverrides?.overviewTimeline}
+      />
       <GalleryMosaic id="gallery" images={galleryImages} />
       <IncludedGrid />
       <Reviews />
-      <FAQ />
+      <FAQ items={eventOverrides?.faqItems} />
       <FinalCTA
         onCheckAvailability={scrollToBooking}
         bookingSectionId={BOOKING_SECTION_ID}
+        headline={eventOverrides?.finalCtaHeadline}
+        primaryCta={eventOverrides?.finalCtaPrimaryCta}
+        secondaryCta={eventOverrides?.finalCtaSecondaryCta}
+        secondaryHref={eventOverrides?.finalCtaSecondaryHref}
       />
 
       <StickyMobileBar

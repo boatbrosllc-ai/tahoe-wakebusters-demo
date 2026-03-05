@@ -72,6 +72,12 @@ export async function GET(request: NextRequest) {
       }
       const expData = expDoc.data() as { slug?: string } | undefined;
       const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
+      const experienceSlugLower = experienceSlug.toLowerCase();
+      const allowBoatTypeForSlug = (bt: string | undefined): boolean => {
+        if (experienceSlugLower === "watersports" || experienceSlugLower === "wake-surf") return bt === "wake";
+        if (experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon") return bt === "pontoon" || bt === "tritoon";
+        return true;
+      };
 
       type ExpDataFull = {
         slug?: string;
@@ -110,9 +116,12 @@ export async function GET(request: NextRequest) {
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 
-        // Load boats to resolve the first boatId for slot rows (reuse already-started promise)
+        // Load boats to resolve the first boatId for slot rows (reuse already-started promise).
+        // Filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon.
         const tBoatsSnap = await boatsSnapPromise;
-        let tBoatIds: string[] = tBoatsSnap.docs.map((d) => d.id);
+        let tBoatIds: string[] = tBoatsSnap.docs
+          .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+          .map((d) => d.id);
         if (tBoatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
           const tBoatsBySlugSnap = await db
             .collection("boats")
@@ -120,7 +129,9 @@ export async function GET(request: NextRequest) {
             .where("active", "==", true)
             .where("experienceIds", "array-contains", experienceSlug)
             .get();
-          tBoatIds = tBoatsBySlugSnap.docs.map((d) => d.id);
+          tBoatIds = tBoatsBySlugSnap.docs
+            .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+            .map((d) => d.id);
         }
 
         // Relaxed slot-id parser (same logic as in the non-ticketed branch below)
@@ -352,10 +363,13 @@ export async function GET(request: NextRequest) {
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
       const durationsUnique = Array.from(new Set(durations));
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
-      let boatIds: string[] = boatsSnap.docs.map((d) => d.id);
       // Build boat data map from fetched docs to reuse for grid metadata without redundant per-boat fetches
       const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
       boatsSnap.docs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
+      // Filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon
+      let boatIds: string[] = boatsSnap.docs
+        .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+        .map((d) => d.id);
       // Fallback: boats may be linked by experience slug (e.g. "lake-austin-pontoon-charter") instead of Firestore id.
       if (boatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
         const boatsBySlugSnap = await db
@@ -364,10 +378,12 @@ export async function GET(request: NextRequest) {
           .where("active", "==", true)
           .where("experienceIds", "array-contains", experienceSlug)
           .get();
-        boatIds = boatsBySlugSnap.docs.map((d) => d.id);
         boatsBySlugSnap.docs.forEach((d) => {
           if (!boatDocDataById.has(d.id)) boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string });
         });
+        boatIds = boatsBySlugSnap.docs
+          .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+          .map((d) => d.id);
       }
       // Build experience ID variants upfront so all queries run in parallel across all IDs.
       const allExpIds = Array.from(new Set([

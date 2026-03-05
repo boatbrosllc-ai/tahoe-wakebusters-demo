@@ -14,7 +14,7 @@ const navItems: NavLink[] = [
   { href: "/", label: "Home", icon: Home },
   { href: "/experiences", label: "Experiences", icon: Compass },
   { href: "#", label: "Book now", icon: CalendarCheck, center: true },
-  { href: "/more", label: "Menu", icon: Menu },
+  { href: "/menu", label: "Menu", icon: Menu },
   { href: "/contact", label: "Contact", icon: Mail },
 ];
 

@@ -65,7 +65,7 @@ export default function ContactPage() {
           </p>
           <p className="mt-3">
             <Link
-              href="/lake-austin-boat-rental"
+              href="/location"
               className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
             >
               View our location, map & hours →

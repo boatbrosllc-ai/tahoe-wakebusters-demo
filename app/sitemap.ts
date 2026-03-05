@@ -12,14 +12,15 @@ const staticPaths = [
   "/experiences/watersports",
   "/experiences/sunset",
   "/experiences/holiday",
-  "/lake-austin-pontoon-rentals",
-  "/lake-austin-boat-rental",
+  "/lake-austin-bachelorette-party-boat-rentals",
+  "/lake-austin-bachelor-party-boat-rentals",
+  "/location",
   "/boats",
   "/faqs",
   "/contact",
   "/our-story",
   "/blog",
-  "/more",
+  "/menu",
 ];
 
 type ChangeFreq = MetadataRoute.Sitemap[number]["changeFrequency"];
@@ -28,8 +29,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticEntries: MetadataRoute.Sitemap = staticPaths.map((path) => ({
     url: path ? `${baseUrl}${path}` : baseUrl,
     lastModified: new Date(),
-    changeFrequency: (path === "" || path === "/experiences" || path === "/boats" || path === "/lake-austin-boat-rental" || path === "/lake-austin-pontoon-rentals" ? "weekly" : "monthly") as ChangeFreq,
-    priority: path === "" ? 1 : path === "/experiences" || path === "/boats" ? 0.9 : path === "/lake-austin-boat-rental" || path === "/lake-austin-pontoon-rentals" ? 0.9 : 0.8,
+    changeFrequency: (path === "" || path === "/experiences" || path === "/boats" || path === "/location" || path === "/lake-austin-bachelorette-party-boat-rentals" || path === "/lake-austin-bachelor-party-boat-rentals" ? "weekly" : "monthly") as ChangeFreq,
+    priority: path === "" ? 1 : path === "/experiences" || path === "/boats" ? 0.9 : path === "/location" || path === "/lake-austin-bachelorette-party-boat-rentals" || path === "/lake-austin-bachelor-party-boat-rentals" ? 0.9 : 0.8,
   }));
   const blogEntries: MetadataRoute.Sitemap = blogPosts.map((post) => ({
     url: `${baseUrl}/blog/${post.slug}`,
