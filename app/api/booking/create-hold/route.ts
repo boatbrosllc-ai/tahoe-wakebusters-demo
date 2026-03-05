@@ -237,7 +237,18 @@ export async function POST(request: NextRequest) {
       }
       const boat = boatDoc.data() as ListingBoat & { active?: boolean };
       const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
-      if (boat.isListingBoat !== true || !boatMatchesExperience(boat, expId, expSlug)) {
+      // When Firestore slug is missing, infer from title so boatMatchesExperience uses same variants as experience-detail/slots (boat may have experienceIds: ["watersports"] not doc id).
+      const inferredSlugFromTitle = ((): string => {
+        if (expSlug) return "";
+        const t = (experience.title ?? (experience as { name?: string }).name ?? "").toLowerCase();
+        if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
+        if (/pontoon|tritoon|party/.test(t)) return "pontoon";
+        if (/sunset|cruise/.test(t)) return "sunset";
+        if (/holiday|festive/.test(t)) return "holiday";
+        return "";
+      })();
+      const effectiveSlug = expSlug || inferredSlugFromTitle;
+      if (boat.isListingBoat !== true || !boatMatchesExperience(boat, expId, effectiveSlug)) {
         return NextResponse.json({ error: "Boat not available for this experience" }, { status: 400 });
       }
       if (boat.active === false) {

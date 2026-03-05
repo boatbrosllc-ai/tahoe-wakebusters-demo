@@ -104,9 +104,15 @@ function BookingSuccessContent() {
           </p>
           <dl className="space-y-3 text-brand-dark">
             <div>
-              <dt className="text-sm font-medium text-brand-muted">Booking</dt>
+              <dt className="text-sm font-medium text-brand-muted">Experience</dt>
               <dd className="font-medium">{data.experienceName ?? data.boatName}</dd>
             </div>
+            {data.experienceName && data.boatName && data.experienceName !== data.boatName && (
+              <div>
+                <dt className="text-sm font-medium text-brand-muted">Boat</dt>
+                <dd className="font-medium">{data.boatName}</dd>
+              </div>
+            )}
             <div>
               <dt className="text-sm font-medium text-brand-muted">Date & time</dt>
               <dd>{formatDate(data.startAt)} – {formatDate(data.endAt)}</dd>

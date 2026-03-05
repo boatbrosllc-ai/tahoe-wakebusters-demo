@@ -78,13 +78,14 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
 }
 
 /**
- * Predicate for boatType filtering: watersports => wake only; pontoon => pontoon/tritoon or missing; others => any.
+ * Predicate for boatType filtering: watersports => wake only; pontoon => any except wake (so all boats assigned to listing show); others => any.
  * Use when listing boats or slots so that only eligible boat types appear (e.g. wake boats for watersports).
+ * For pontoon we only exclude "wake" so every boat assigned to the listing is shown (no accidental exclude from missing/wrong boatType).
  */
 export function allowBoatTypeForSlug(slug: string): (boatType: string | undefined) => boolean {
   const s = (slug ?? "").toLowerCase().trim();
-  if (isWatersportsSlug(s)) return (bt) => bt === "wake";
-  if (isPontoonSlug(s)) return (bt) => !bt || bt === "pontoon" || bt === "tritoon";
+  if (isWatersportsSlug(s)) return (bt) => (bt ?? "").toLowerCase() === "wake";
+  if (isPontoonSlug(s)) return (bt) => (bt ?? "").toLowerCase() !== "wake";
   return () => true;
 }
 

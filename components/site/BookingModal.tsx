@@ -1514,9 +1514,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         ? (ticketsLeft === null ? openForDuration > 0 : ticketsLeft > 0 && openForDuration > 0)
                         : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                      const bookedCount = entry?.booked ?? 0;
                       const isFullyBooked = !isPast && (isTicketed
                         ? (ticketsLeft !== null ? ticketsLeft === 0 && openForDuration > 0 : false)
                         : (takenCount > 0 && openForDuration === 0));
+                      const hasBookingsUrgency = !isPast && isAvailable && dataMatchesView && bookedCount > 0;
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
                       const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
@@ -1531,16 +1533,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
-                          title={isHoliday ? "Holiday pricing" : undefined}
+                          title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
                           className={cn(
                             "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
-                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
-                            isHoliday && !isPast && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
-                            isAvailable && !isHoliday &&
+                            isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
+                            hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                            hasBookingsUrgency && !isFullyBooked && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                            isHoliday && !isPast && !hasBookingsUrgency && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
+                            isAvailable && !isHoliday && !hasBookingsUrgency &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                            isAvailable && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
+                            isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                           )}
                         >
@@ -1549,16 +1553,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           {typeof priceCents === "number" && isAvailable && (
                             <span className={cn(
                               "block text-[11px] sm:text-sm font-bold leading-none mt-0.5",
-                              isSelected ? "text-brand-primary" : "text-emerald-800"
+                              isSelected ? "text-brand-primary" : hasBookingsUrgency ? "text-amber-800" : "text-emerald-800"
                             )}>
                               ${(priceCents / 100).toFixed(0)}{isTicketed && <span className="text-[8px] sm:text-[10px] font-normal">/ea</span>}
                             </span>
                           )}
-                          {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && (
+                          {hasBookingsUrgency && (
+                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">
+                              {bookedCount} booked
+                            </span>
+                          )}
+                          {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && !hasBookingsUrgency && (
                             <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">{ticketsLeft} left</span>
                           )}
                           {isFullyBooked && (
-                            <span className="block text-[8px] sm:text-xs font-semibold text-amber-700 leading-none mt-0.5">Full</span>
+                            <span className="block text-[8px] sm:text-xs font-semibold text-red-700 leading-none mt-0.5">Full</span>
                           )}
                         </button>
                       );
