@@ -12,6 +12,20 @@ import type { Experience, ExperienceRate } from "@/lib/booking/types";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  // #region agent log
+  try {
+    const fs = await import("fs");
+    const logPath = "c:\\dev\\Boat Bros\\Project\\.cursor\\debug.log";
+    const line = JSON.stringify({
+      location: "effective-price/route.ts:GET",
+      message: "effective-price handler invoked",
+      data: { path: request.nextUrl.pathname },
+      timestamp: Date.now(),
+      hypothesisId: "H5",
+    }) + "\n";
+    fs.appendFile(logPath, line, () => {});
+  } catch (_) {}
+  // #endregion
   try {
     const experienceId = request.nextUrl.searchParams.get("experienceId");
     const rateId = request.nextUrl.searchParams.get("rateId");
