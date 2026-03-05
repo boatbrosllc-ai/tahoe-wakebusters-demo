@@ -14,44 +14,8 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 
 // Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
-// #region agent log
-const DEBUG_LOG = (msg: string, data?: Record<string, unknown>) => {
-  fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: "Header.tsx:BookingModal-dynamic",
-      message: msg,
-      data: data ?? {},
-      timestamp: Date.now(),
-      hypothesisId: "H2",
-    }),
-  }).catch(() => {});
-};
-// #endregion
 const BookingModal = dynamic(
-  () => {
-    // #region agent log
-    DEBUG_LOG("dynamic import started", {});
-    // #endregion
-    return import("@/components/site/BookingModal")
-      .then((m) => {
-        // #region agent log
-        DEBUG_LOG("dynamic import resolved", { hasBookingModal: !!m.BookingModal });
-        // #endregion
-        return { default: m.BookingModal };
-      })
-      .catch((err: unknown) => {
-        // #region agent log
-        DEBUG_LOG("dynamic import failed", {
-          errName: err instanceof Error ? err.name : String(err),
-          errMessage: err instanceof Error ? err.message : String(err),
-          errStack: err instanceof Error ? err.stack : undefined,
-        });
-        // #endregion
-        throw err;
-      });
-  },
+  () => import("@/components/site/BookingModal").then((m) => ({ default: m.BookingModal })),
   { ssr: false }
 );
 
@@ -76,16 +40,6 @@ export function Header() {
   useEffect(() => {
     if (bookingModalOpen) setHasOpenedBookingModal(true);
   }, [bookingModalOpen]);
-  // #region agent log
-  useEffect(() => {
-    if (hasOpenedBookingModal) {
-      DEBUG_LOG("Header rendering BookingModal (chunk load will be triggered)", {
-        hasOpenedBookingModal,
-        bookingModalOpen,
-      });
-    }
-  }, [hasOpenedBookingModal, bookingModalOpen]);
-  // #endregion
 
   const handleCallClick = () => analytics.callClick("header", "global");
 

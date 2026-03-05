@@ -101,6 +101,15 @@ If booking works locally but fails in production, check:
 
 When config is missing, the booking UI now shows the API error and hint (e.g. “Booking is not configured. Set FIREBASE_* in your deployment.”). Check the message and the host’s env/logs.
 
+### Available dates / calendar not loading in production
+
+If the calendar shows no dates or "Unable to load availability" in production but works locally, the **slots API** (`/api/booking/slots`) is almost always failing because **Firebase is not configured** (or the private key is truncated) in the production environment.
+
+1. **Check the error in the UI** — Open the booking modal on the production site. If you see a message like "Booking is not configured. Slots require Firebase…", that confirms it.
+2. **Check the health endpoint** — Open `https://YOUR_PRODUCTION_DOMAIN/api/health` in the browser. If it returns **503**, the JSON body includes `firebaseDetail` with the exact reason (e.g. `privateKeyStatus: "truncated"`, `summary: "FIREBASE_PRIVATE_KEY is truncated…"`).
+3. **Fix Firebase in production** — In Netlify (or your host): set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` (single line, newlines as `\n`, no quotes). Do **not** use `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify (the file is not present in the deploy). See [Production deployment](#production-deployment-netlify--vercel--etc) above.
+4. **Redeploy** after changing environment variables so the new values are applied.
+
 ## Netlify: get booking working in production
 
 To get the full booking flow (including **more than one month** loading in the calendar) working on Netlify:

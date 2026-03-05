@@ -883,61 +883,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       return () => controller.abort();
     }
     const effectivePriceUrl = `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`;
-    // #region agent log
-    const fullUrl =
-      typeof window !== "undefined" ? `${window.location.origin}${effectivePriceUrl}` : effectivePriceUrl;
-    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "BookingModal.tsx:effective-price-request",
-        message: "effective-price request",
-        data: {
-          fullUrl,
-          origin: typeof window !== "undefined" ? window.location.origin : "",
-          hasCachedPrice: false,
-          effectivePriceUrl,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "H1-H2",
-      }),
-    }).catch(() => {});
-    // #endregion
     fetch(effectivePriceUrl, { signal: controller.signal })
-      .then((res) => {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "BookingModal.tsx:effective-price-response",
-            message: "effective-price response",
-            data: { status: res.status, ok: res.ok, url: fullUrl },
-            timestamp: Date.now(),
-            hypothesisId: "H2",
-          }),
-        }).catch(() => {});
-        // #endregion
-        return res.json();
-      })
+      .then((res) => res.json())
       .then((data) => {
         if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
         else setEffectiveRateCents(null);
       })
       .catch((err) => {
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "BookingModal.tsx:effective-price-catch",
-            message: "effective-price fetch error",
-            data: { errName: err?.name, errMessage: err?.message },
-            timestamp: Date.now(),
-            hypothesisId: "H2",
-          }),
-        }).catch(() => {});
-        // #endregion
         if (err.name !== "AbortError") setEffectiveRateCents(null);
       });
     return () => controller.abort();
@@ -1443,7 +1395,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     </div>
                   </div>
                   {slotsLoadError && (
-                    <p className="text-sm text-amber-700 py-3 px-2 mb-2">{slotsLoadError}</p>
+                    <p className="text-sm text-amber-700 py-3 px-2 mb-2">
+                      {slotsLoadError}
+                      {slotsLoadError.includes("Firebase") || slotsLoadError.includes("not configured") ? (
+                        <span className="block mt-1 text-xs">
+                          Check <a href="/api/health" target="_blank" rel="noopener noreferrer" className="underline">/api/health</a> on this site for details.
+                        </span>
+                      ) : null}
+                    </p>
                   )}
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
                     {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
