@@ -559,6 +559,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     };
   }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar, ratesForSelection]);
 
+  // Client-side timeout (28s) so production server timeouts (e.g. Netlify 10s) surface as retryable errors instead of hanging.
+  const SLOTS_FETCH_TIMEOUT_MS = 28000;
+
   // Fetch all slots for the visible month (with stale guard, production failure log, and one retry)
   useEffect(() => {
     if (!selectedExperience?.id) {
@@ -580,6 +583,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setSlotsLoading(true);
     setSlotsLoadError(null);
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, SLOTS_FETCH_TIMEOUT_MS);
     bookingCache.fetchSlots(
       selectedExperience.id,
       viewMonthStartStr,
@@ -600,9 +608,22 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           setMonthSlots(slots);
           setSlotsLoading(false);
         }
+        // Prefetch next month so it's in cache when user clicks next (avoids production timeout on second request).
+        const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
+        const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
+        const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
+        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch(() => {});
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name === "AbortError") return;
+        if ((err as { name?: string })?.name === "AbortError" && !timedOut) return;
+        if (timedOut) {
+          setSlotsLoadError("Request took too long. Try again or go back to the previous month.");
+          if (lastSlotsRetryForRef.current !== rangeKey) {
+            lastSlotsRetryForRef.current = rangeKey;
+            setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+          }
+          return;
+        }
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
         const status = (err as { status?: number }).status;
         console.warn("[booking] slots fetch failed (check Network tab for /api/booking/slots)", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, status, error: apiBody?.error, hint: apiBody?.hint });
@@ -616,9 +637,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         }
       })
       .finally(() => {
+        clearTimeout(timeoutId);
         if (slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr) setSlotsLoading(false);
       });
-    return () => controller.abort();
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, viewMonthEndStr, slotsRetryTrigger]);
 
   // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 8)

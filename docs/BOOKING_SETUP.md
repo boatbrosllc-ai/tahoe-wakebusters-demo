@@ -110,6 +110,13 @@ If the calendar shows no dates or "Unable to load availability" in production bu
 3. **Fix Firebase in production** — In Netlify (or your host): set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` (single line, newlines as `\n`, no quotes). Do **not** use `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify (the file is not present in the deploy). See [Production deployment](#production-deployment-netlify--vercel--etc) above.
 4. **Redeploy** after changing environment variables so the new values are applied.
 
+### Calendar loads only the first month; next month never loads (production)
+
+If the first month loads but clicking **Next month** never shows availability (or shows "Request took too long"):
+
+1. **Server timeout** — Netlify’s default function timeout is **10 seconds**. The slots and date-prices APIs can take longer for some months. The route files set `maxDuration = 26`; Netlify may still use the default 10s for framework-generated functions. **Fix:** In Netlify → Site configuration → Build & deploy → Functions, set the function timeout to **26 seconds** if the option is available. On some plans you may need to [contact Netlify Support](https://www.netlify.com/support) to increase the limit to 26s for your site.
+2. **Client behavior** — The app now **prefetches the next month** when the current month loads, so the next month is often already in cache when the user clicks Next. If a request still times out, the user sees **"Request took too long. Try again or go back to the previous month."** and can use the retry or try another month.
+
 ## Netlify: get booking working in production
 
 To get the full booking flow (including **more than one month** loading in the calendar) working on Netlify:

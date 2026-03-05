@@ -3,6 +3,9 @@
   publish = ".next"
 
 [functions]
+  # Default timeout for all functions. Next.js API routes (/api/booking/slots, date-prices) use maxDuration=26 in route.ts;
+  # if calendar only loads one month in production, request 26s timeout for your site (Netlify Support or Site settings).
+  timeout = 26
   # Allow long-running booking and cron functions up to 60 seconds
   # (Netlify default is 10s; background functions allow up to 15 min)
   included_files = ["netlify/functions/**"]
