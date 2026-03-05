@@ -4,28 +4,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
-
-function isWatersportsSlug(slug: string): boolean {
-  const s = (slug ?? "").toLowerCase().trim();
-  return (
-    s === "watersports" ||
-    s === "wake-surf" ||
-    s === "lake-austin-wake-boat" ||
-    s === "wake" ||
-    s === "wakeboard" ||
-    s === "wake-board"
-  );
-}
-
-function allowBoatTypeForSlug(slug: string, boatType: string | undefined): boolean {
-  if (isWatersportsSlug(slug)) return boatType === "wake";
-  // Pontoon: allow pontoon/tritoon; also allow missing boatType so boats assigned to the listing still appear.
-  const slugLower = (slug ?? "").toLowerCase().trim();
-  if (slugLower === "pontoon" || slugLower === "lake-austin-pontoon") return !boatType || boatType === "pontoon" || boatType === "tritoon";
-  return true;
-}
 
 export interface BoatOption {
   id: string;
@@ -82,20 +62,23 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const boats: BoatOption[] = Array.from(docById.values())
-      .filter((doc) => allowBoatTypeForSlug(experienceSlug, (doc.data() as ListingBoat).boatType))
-      .map((doc) => {
-        const boat = doc.data() as ListingBoat;
-        return {
-          id: doc.id,
-          name: boat.name,
-          slug: boat.slug,
-          description: boat.description,
-          photos: boat.photos ?? [],
-          fromPriceCents,
-          rates: ratesForBoats,
-        };
-      });
+    const allowBoatType = allowBoatTypeForSlug(experienceSlug);
+    const boatDocs = Array.from(docById.values()).filter((doc) =>
+      allowBoatType((doc.data() as ListingBoat).boatType)
+    );
+    boatDocs.sort((a, b) => a.id.localeCompare(b.id));
+    const boats: BoatOption[] = boatDocs.map((doc) => {
+      const boat = doc.data() as ListingBoat;
+      return {
+        id: doc.id,
+        name: boat.name,
+        slug: boat.slug,
+        description: boat.description,
+        photos: boat.photos ?? [],
+        fromPriceCents,
+        rates: ratesForBoats,
+      };
+    });
     return NextResponse.json({ boats });
   } catch (err) {
     console.error("[booking/boats]", err);

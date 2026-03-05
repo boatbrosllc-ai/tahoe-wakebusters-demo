@@ -52,7 +52,7 @@ That would make "calendars read from bookings (and holds/blocks) and put each on
 - **Bookings** (`bookings` collection) are the **only** source of truth for whether a slot is **booked**.  
   Any booking with status in `paid`, `deposit_paid`, `final_due`, `final_paid`, or `final_processing` occupies that boat+slot.  
   The slots API **always** derives "booked" from the bookings collection and **never** trusts `status: "booked"` on slot docs (those can be stale after cancel or missed updates).  
-  A booking is applied **only to the specific boat** in `booking.boatId`; we never mark all boats as booked for one booking (e.g. when boatId is missing).
+  A booking is applied **only to the specific boat** in `booking.boatId`. If `boatId` is missing or does not match any boat for the experience, the booking is **not** attributed to any boat (no fallback to the first boat): it is skipped from boat-specific occupancy, logged, and counted for telemetry until backfilled.
 
 - **Per-boat slots**: `boats/{boatId}/slots/{slotId}`  
   Each document has `startAt`, `endAt`, `status` (`open` | `held` | `booked` | `blocked`), and when applicable `holdId` or `bookingId`.  
@@ -73,7 +73,8 @@ That would make "calendars read from bookings (and holds/blocks) and put each on
 ## Double-booking prevention
 
 1. **Slots API**
-   - **Bookings first**: Queries `bookings` where `status` is in `paid`, `deposit_paid`, `final_due`, `final_paid`, `final_processing` and merges them into the slot map as `booked` (by experience + boat or boat only in legacy path). This is the only source of "booked".
+   - **Bookings first**: Queries `bookings` where `status` is in `paid`, `deposit_paid`, `final_due`, `final_paid`, `final_processing` and merges them into the slot map as `booked` (by experience + boat or boat only in legacy path). This is the only source of "booked". A booking is merged **only when** `booking.boatId` is present and matches a boat for the experience; if `boatId` is missing or unmatched, the booking is **not** attributed to any boat (unresolved path: log, skip from boat-specific occupancy, and emit telemetry).
+   - **Unresolved bookings**: The API logs `[slots] booking missing or unmatched boatId — skipped from boat-specific occupancy` and emits telemetry (`[slots] unresolved_booking_no_boat_id telemetry` with count and booking IDs). Responses include an `X-Unresolved-Booking-Count` header when any such bookings were seen. Track this until zero; use the backfill migration to populate missing `boatId` on legacy bookings.
    - **Slot docs**: Loads boat slot docs in the date range. Does **not** overwrite keys already set by bookings. For any slot doc with `status: "booked"`, the API treats it as `open` (stale slot doc) unless that slot was already set from a booking.
    - Builds a grid of possible slots; for each boat, `takenRanges` = all non-open slots (held, booked, blocked). Any grid slot that **overlaps** a taken range is returned as `blocked`, not `open`.
    - So the API never returns `open` for a time that overlaps an existing hold or booking, and never shows "booked" without a real booking.
@@ -133,6 +134,18 @@ This gives a single, consistent view of “what’s booked, when, what boat” a
 
 - The admin calendar (and site) call the slots API with the experience **Firestore document id**. Some data may be stored by **slug** (e.g. boats linked with `experienceIds: ["lake-austin-pontoon-charter"]`, or bookings with `experienceId: "lake-austin-pontoon-charter"`).
 - The slots API handles both: it looks up boats by `experienceIds array-contains experienceId` first; if **no boats** are found, it tries `experienceIds array-contains experienceSlug` (from the experience doc). For **bookings**, it queries by experience id and also by experience slug and merges results. So the admin calendar shows slots and booked times even when boats or bookings use the slug.
+
+## Backfill: missing boatId on legacy bookings
+
+Bookings that have a slot-taken status but missing or empty `boatId` are no longer attributed to any boat by the slots API (they are skipped and counted as unresolved). To fix legacy data and drive unresolved count to zero:
+
+1. **List and backfill**  
+   Call the admin backfill API (requires admin session):  
+   - `GET /api/admin/backfill-booking-boat-ids?dryRun=1` — list bookings with missing `boatId` and, where inferrable from the slot doc, the boat that would be set.  
+   - `POST /api/admin/backfill-booking-boat-ids` with `{ "dryRun": false }` — apply updates: set `boatId` on each booking when exactly one boat for that experience has a slot doc with the booking’s `slotId`.
+
+2. **Monitor**  
+   Use the slots API response header `X-Unresolved-Booking-Count` and server logs (`unresolved_booking_no_boat_id` telemetry) until the count is zero. Re-run the backfill after fixing any bookings that could not be inferred automatically (e.g. set `boatId` manually in Firestore or via admin).
 
 ## Checkout consistency (site + mobile)
 

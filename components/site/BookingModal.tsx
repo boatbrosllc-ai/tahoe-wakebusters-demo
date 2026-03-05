@@ -1423,9 +1423,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       );
                     })}
                   </div>
-                  {datePricesLoading && (
-                    <div className="absolute inset-0 bg-white/80 flex items-center justify-center rounded-xl z-10">
-                      <span className="text-sm text-brand-muted">Loading dates &amp; prices…</span>
+                  {slotsLoading && (
+                    <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">
+                      <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                      <span className="text-sm font-medium text-brand-muted">Loading availability…</span>
+                    </div>
+                  )}
+                  {datePricesLoading && !slotsLoading && (
+                    <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">
+                      <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                      <span className="text-sm font-medium text-brand-muted">Loading dates &amp; prices…</span>
                     </div>
                   )}
                 </div>

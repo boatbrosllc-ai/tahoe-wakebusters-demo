@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { getMonthRangeWithAdjacent, toDateStr } from "@/lib/booking/booking-date-range";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -27,18 +28,6 @@ interface ExperienceOption {
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
-}
-
-function getDateRange(days: number): { start: string; end: string } {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + days);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
-}
-
-function toDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
@@ -71,7 +60,12 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
 
-  const dateRange = useMemo(() => getDateRange(60), []);
+  // Range for currently visible month + adjacent months (refetched when calendarMonth changes).
+  const dateRange = useMemo(
+    () =>
+      getMonthRangeWithAdjacent(calendarMonth.getFullYear(), calendarMonth.getMonth()),
+    [calendarMonth.getFullYear(), calendarMonth.getMonth()]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -124,7 +118,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     return () => controller.abort();
   }, [experienceId]);
 
-  // Only fetch slots when we have experience id (resolve by slug first when using FALLBACK_EXPERIENCES).
+  // Refetch slots whenever calendarMonth or experience changes. Range includes visible + adjacent months.
   useEffect(() => {
     if (!selectedExperience) return;
     const controller = new AbortController();

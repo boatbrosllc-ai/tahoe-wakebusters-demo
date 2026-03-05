@@ -11,7 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -22,19 +22,6 @@ export const dynamic = "force-dynamic";
 // Once all historical bookings and holds carry startDateStr, leave this unset so the broad
 // legacy scans are never executed and every request uses only the fast windowed index queries.
 const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_BOOKING_FALLBACK === "1";
-
-/** Slugs that mean "wake / watersports" experience — only wake boats should be shown. */
-function isWatersportsSlug(slug: string): boolean {
-  const s = (slug ?? "").toLowerCase().trim();
-  return (
-    s === "watersports" ||
-    s === "wake-surf" ||
-    s === "lake-austin-wake-boat" ||
-    s === "wake" ||
-    s === "wakeboard" ||
-    s === "wake-board"
-  );
-}
 
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
@@ -71,28 +58,34 @@ export async function GET(request: NextRequest) {
       // Experiences with listing boats: slots are per boat so one boat booked doesn't block others.
       // Optional boatId: return only that boat's slots. Otherwise return slots for all boats (each slot has boatId).
       const expRef = db.collection("experiences").doc(experienceId);
-      // Start rates + boats fetches immediately — they only need expRef (a reference, not a resolved
-      // doc) so they run in parallel with expDoc instead of sequentially after it.
       const ratesSnapPromise = expRef.collection("rates").where("active", "==", true).get();
-      const boatsSnapPromise = db
-        .collection("boats")
-        .where("isListingBoat", "==", true)
-        .where("active", "==", true)
-        .where("experienceIds", "array-contains", experienceId)
-        .get();
       const expDoc = await expRef.get();
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
       }
       const expData = expDoc.data() as { slug?: string } | undefined;
       const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
-      const experienceSlugLower = experienceSlug.toLowerCase();
-      const allowBoatTypeForSlug = (bt: string | undefined): boolean => {
-        if (isWatersportsSlug(experienceSlugLower)) return bt === "wake";
-        // Pontoon: allow pontoon/tritoon; also allow missing boatType so boats assigned to the listing still appear.
-        if (experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon") return !bt || bt === "pontoon" || bt === "tritoon";
-        return true;
-      };
+      const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+      const allowBoatType = allowBoatTypeForSlug(experienceSlug);
+      const boatSnapPromises = experienceIdVariants.map((variantId) =>
+        db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("active", "==", true)
+          .where("experienceIds", "array-contains", variantId)
+          .get()
+      );
+      const [ratesSnap, ...boatSnaps] = await Promise.all([ratesSnapPromise, ...boatSnapPromises]);
+      const mergedBoatDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+      const seenBoatIds = new Set<string>();
+      for (const snap of boatSnaps) {
+        for (const doc of snap.docs) {
+          if (!seenBoatIds.has(doc.id)) {
+            seenBoatIds.add(doc.id);
+            mergedBoatDocs.push(doc);
+          }
+        }
+      }
 
       type ExpDataFull = {
         slug?: string;
@@ -108,7 +101,7 @@ export async function GET(request: NextRequest) {
 
       if (expDataFull?.pricingType === "ticketed") {
         // --- Ticketed experience: one slot per date with capacity enrichment ---
-        const tRatesSnap = await ratesSnapPromise;
+        const tRatesSnap = ratesSnap;
         if (tRatesSnap.empty) {
           console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
           return NextResponse.json({ slots: [] });
@@ -131,39 +124,10 @@ export async function GET(request: NextRequest) {
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 
-        // Load boats to resolve the first boatId for slot rows (reuse already-started promise).
-        // Filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon.
-        const tBoatsSnap = await boatsSnapPromise;
-        let tBoatIds: string[] = tBoatsSnap.docs
-          .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+        // Load boats from variant-based fetch; filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon.
+        const tBoatIds: string[] = mergedBoatDocs
+          .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
           .map((d) => d.id);
-        const tIsPontoonSlug = experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon";
-        if (tIsPontoonSlug) {
-          const [tByPontoon, tByLakeAustin] = await Promise.all([
-            db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
-            db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
-          ]);
-          const tSeen = new Set(tBoatIds);
-          for (const snap of [tByPontoon, tByLakeAustin]) {
-            snap.docs.forEach((d) => {
-              if (allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType) && !tSeen.has(d.id)) {
-                tSeen.add(d.id);
-                tBoatIds.push(d.id);
-              }
-            });
-          }
-        }
-        if (tBoatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
-          const tBoatsBySlugSnap = await db
-            .collection("boats")
-            .where("isListingBoat", "==", true)
-            .where("active", "==", true)
-            .where("experienceIds", "array-contains", experienceSlug)
-            .get();
-          tBoatIds = tBoatsBySlugSnap.docs
-            .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
-            .map((d) => d.id);
-        }
 
         // Relaxed slot-id parser (same logic as in the non-ticketed branch below)
         const parseSlotIdRelaxedT = (slotIdRaw: string): ReturnType<typeof parseSlotId> => {
@@ -390,53 +354,15 @@ export async function GET(request: NextRequest) {
       }
       // --- End ticketed branch ---
 
-      // Both promises started in parallel with expDoc above — await them together here.
-      const [ratesSnap, boatsSnap] = await Promise.all([ratesSnapPromise, boatsSnapPromise]);
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
       const durationsUnique = Array.from(new Set(durations));
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
-      // Build boat data map from fetched docs to reuse for grid metadata without redundant per-boat fetches
       const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
-      boatsSnap.docs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
-      // Filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon
-      let boatIds: string[] = boatsSnap.docs
-        .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
+      mergedBoatDocs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
+      let boatIds: string[] = mergedBoatDocs
+        .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
-      // Pontoon: also include boats linked by slug "pontoon" or "lake-austin-pontoon" (merge so all pontoon boats appear).
-      const isPontoonSlug = experienceSlugLower === "pontoon" || experienceSlugLower === "lake-austin-pontoon";
-      if (isPontoonSlug) {
-        const [boatsByPontoonSnap, boatsByLakeAustinPontoonSnap] = await Promise.all([
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "pontoon").get(),
-          db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", "lake-austin-pontoon").get(),
-        ]);
-        const seenIds = new Set(boatIds);
-        for (const snap of [boatsByPontoonSnap, boatsByLakeAustinPontoonSnap]) {
-          snap.docs.forEach((d) => {
-            if (!boatDocDataById.has(d.id)) boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string });
-            if (allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType) && !seenIds.has(d.id)) {
-              seenIds.add(d.id);
-              boatIds.push(d.id);
-            }
-          });
-        }
-      }
-      // Fallback: boats may be linked by experience slug (e.g. "lake-austin-pontoon-charter") instead of Firestore id.
-      if (boatIds.length === 0 && experienceSlug && experienceSlug !== experienceId) {
-        const boatsBySlugSnap = await db
-          .collection("boats")
-          .where("isListingBoat", "==", true)
-          .where("active", "==", true)
-          .where("experienceIds", "array-contains", experienceSlug)
-          .get();
-        boatsBySlugSnap.docs.forEach((d) => {
-          if (!boatDocDataById.has(d.id)) boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string });
-        });
-        boatIds = boatsBySlugSnap.docs
-          .filter((d) => allowBoatTypeForSlug((d.data() as { boatType?: string }).boatType))
-          .map((d) => d.id);
-      }
-      // Build experience ID variants upfront so all queries run in parallel across all IDs.
-      const allExpIds = getExperienceIdVariants(experienceId, experienceSlug);
+      const allExpIds = experienceIdVariants;
       if (boatIdParam) {
         if (!boatIds.includes(boatIdParam)) {
           return NextResponse.json({ error: "Boat not found or not assigned to this experience" }, { status: 404 });
@@ -511,6 +437,7 @@ export async function GET(request: NextRequest) {
         }
         return null;
       };
+      const unresolvedBookingIds: string[] = [];
       const mergeBookingSlot = (doc: { id: string; data: () => Record<string, unknown> }) => {
         const b = doc.data() as { boatId?: string; slotId?: string; slot_id?: string; status?: string; experienceId?: string };
         if (!isSlotTakenStatus(b.status)) return;
@@ -534,24 +461,30 @@ export async function GET(request: NextRequest) {
           slotEnd = new Date(slotStart.getTime() + parsed.durationHours * 60 * 60 * 1000);
         }
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
-        // Only mark the specific boat that has the booking; fallback to first boat if boatId missing or not in list.
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
-        const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : boatIds[0];
-        if (bid) {
-          const key = `${bid}:${slotIdNorm}`;
-          existingByBoatAndKey.set(key, {
-            id: slotIdNorm,
-            dateStr: parsed.dateStr,
-            startAt: slotStart.toISOString(),
-            endAt: slotEnd.toISOString(),
-            status: "booked",
-            holdId: null,
+        const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : undefined;
+        if (!bid) {
+          unresolvedBookingIds.push(doc.id);
+          console.warn("[slots] booking missing or unmatched boatId — skipped from boat-specific occupancy", {
             bookingId: doc.id,
-            updatedAt: null,
-            boatId: bid,
-            experienceId,
+            experienceId: b.experienceId ?? experienceId,
+            slotId: slotIdNorm,
           });
+          return;
         }
+        const key = `${bid}:${slotIdNorm}`;
+        existingByBoatAndKey.set(key, {
+          id: slotIdNorm,
+          dateStr: parsed.dateStr,
+          startAt: slotStart.toISOString(),
+          endAt: slotEnd.toISOString(),
+          status: "booked",
+          holdId: null,
+          bookingId: doc.id,
+          updatedAt: null,
+          boatId: bid,
+          experienceId,
+        });
       };
 
       const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
@@ -627,6 +560,15 @@ export async function GET(request: NextRequest) {
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
       bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));
 
+      if (unresolvedBookingIds.length > 0) {
+        const uniqueUnresolved = Array.from(new Set(unresolvedBookingIds));
+        console.warn("[slots] unresolved_booking_no_boat_id telemetry", {
+          count: uniqueUnresolved.length,
+          bookingIds: uniqueUnresolved.slice(0, 100),
+          experienceId,
+        });
+      }
+
       /** Map (boatId:normalizedSlotId) -> booking doc id so slot docs can resolve correct bookingId when they store a different id (e.g. Stripe). */
       const bookingIdByBoatAndSlot = new Map<string, string>();
       allBookingDocs.forEach((doc) => {
@@ -637,7 +579,7 @@ export async function GET(request: NextRequest) {
         if (!parsed) return;
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
-        const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : boatIds[0];
+        const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : undefined;
         if (bid) bookingIdByBoatAndSlot.set(`${bid}:${slotIdNorm}`, doc.id);
       });
 
@@ -845,9 +787,13 @@ export async function GET(request: NextRequest) {
             return byDate;
           })()
         : undefined;
+      const responseHeaders: Record<string, string> = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" };
+      if (unresolvedBookingIds.length > 0) {
+        responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
+      }
       return NextResponse.json(
         debugByDate != null ? { slots, byDate: debugByDate } : { slots },
-        { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
+        { headers: responseHeaders }
       );
     }
 

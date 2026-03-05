@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import {
+  getChicagoToday,
+  getDaysInMonth,
+  getMonthRangeWithAdjacent,
+} from "@/lib/booking/booking-date-range";
 import Image from "next/image";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
@@ -35,27 +41,11 @@ interface InitialSelection {
   date?: string;
 }
 
-/** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. */
-function getChicagoToday(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
-}
-
-function getNextDays(days: number): { dateStr: string; label: string; weekday: string }[] {
-  const out: { dateStr: string; label: string; weekday: string }[] = [];
-  // Build the 35-day grid anchored to Chicago "today" so the isPast comparison is consistent.
-  const todayChicago = getChicagoToday();
-  const base = new Date(todayChicago + "T00:00:00");
-  for (let i = 0; i < days; i++) {
-    const d = new Date(base);
-    d.setDate(d.getDate() + i);
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    out.push({
-      dateStr,
-      label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString("en-US", { weekday: "short" }),
-    });
-  }
-  return out;
+/** Initial display month (current month in America/Chicago). */
+function getInitialDisplayMonth(): { year: number; month: number } {
+  const today = getChicagoToday();
+  const [y, m] = today.split("-").map(Number);
+  return { year: y, month: m - 1 };
 }
 
 export function BookingPageClient({ initialSelection }: { initialSelection?: InitialSelection }) {
@@ -83,6 +73,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const boatsSectionRef = useRef<HTMLElement | null>(null);
   const dateSectionRef = useRef<HTMLElement | null>(null);
   const continueSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // Month-based date browsing (current month + prev/next navigation).
+  const [displayMonth, setDisplayMonth] = useState(getInitialDisplayMonth);
 
   // null = not yet fetched; array = fetched (may be empty if no open slots)
   const [allSlots, setAllSlots] = useState<bookingCache.CachedSlotDto[] | null>(null);
@@ -154,18 +147,23 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     return () => controller.abort();
   }, [selectedExperience]);
 
-  const dateOptions = useMemo(() => getNextDays(35), []);
+  // Date options for the currently visible month (month-based pagination).
+  const dateOptions = useMemo(
+    () => getDaysInMonth(displayMonth.year, displayMonth.month),
+    [displayMonth.year, displayMonth.month]
+  );
 
-  // Fetch all slots for the selected experience once — no boatId so all boats are included.
-  // Boat-specific filtering is done client-side in availableDateSet below, so switching boats
-  // never triggers a second round-trip.
+  // Fetch slots for the visible month + adjacent months so prev/next nav has data.
+  // Always request the currently visible month before rendering availability.
   useEffect(() => {
     if (!selectedExperience) {
       setAllSlots(null);
       return;
     }
-    const startDate = dateOptions[0].dateStr;
-    const endDate = dateOptions[dateOptions.length - 1].dateStr;
+    const { start: startDate, end: endDate } = getMonthRangeWithAdjacent(
+      displayMonth.year,
+      displayMonth.month
+    );
     setSlotsLoading(true);
     setAllSlots(null);
     const controller = new AbortController();
@@ -178,7 +176,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       })
       .finally(() => setSlotsLoading(false));
     return () => controller.abort();
-  }, [selectedExperience, dateOptions]);
+  }, [selectedExperience, displayMonth.year, displayMonth.month]);
 
   // Derive available dates in-memory from the cached slot dataset.
   // Switching boats re-derives this set without any API call.
@@ -202,7 +200,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     }
   }, [availableDateSet]);
 
-  const todayChicago = useMemo(() => getChicagoToday(), []);
+  const todayChicago = getChicagoToday();
   const useExperiencePicker = experiences != null && experiences.length > 0;
 
   const canContinue =
@@ -360,6 +358,42 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your date
                 </h2>
+                <div className="flex items-center justify-between mb-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDisplayMonth((prev) =>
+                        prev.month === 0
+                          ? { year: prev.year - 1, month: 11 }
+                          : { year: prev.year, month: prev.month - 1 }
+                      )
+                    }
+                    className="rounded-lg p-2 text-brand-muted hover:bg-brand-dark/5 hover:text-brand-dark transition-colors"
+                    aria-label="Previous month"
+                  >
+                    <ChevronLeft className="h-5 w-5" aria-hidden />
+                  </button>
+                  <p className="text-sm font-semibold text-brand-dark">
+                    {new Date(displayMonth.year, displayMonth.month, 1).toLocaleDateString("en-US", {
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDisplayMonth((prev) =>
+                        prev.month === 11
+                          ? { year: prev.year + 1, month: 0 }
+                          : { year: prev.year, month: prev.month + 1 }
+                      )
+                    }
+                    className="rounded-lg p-2 text-brand-muted hover:bg-brand-dark/5 hover:text-brand-dark transition-colors"
+                    aria-label="Next month"
+                  >
+                    <ChevronRight className="h-5 w-5" aria-hidden />
+                  </button>
+                </div>
                 {slotsLoading ? (
                   <div className="flex items-center gap-2 py-4">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />

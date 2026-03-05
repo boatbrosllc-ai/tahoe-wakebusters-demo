@@ -9,7 +9,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 export interface ExperienceDetailBoat {
@@ -108,27 +108,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // ExperienceDetailResponse.rates field. Boats only carry fromPriceCents for display.
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     // (guards against production data linking the wrong boat types to an experience).
-    const boatTypeForSlug = (slug: string): ((bt: string | undefined) => boolean) => {
-      const s = (slug ?? "").toLowerCase().trim();
-      if (
-        s === "watersports" ||
-        s === "wake-surf" ||
-        s === "lake-austin-wake-boat" ||
-        s === "wake" ||
-        s === "wakeboard" ||
-        s === "wake-board"
-      )
-        return (bt) => bt === "wake";
-      // Pontoon: allow pontoon/tritoon; also allow missing boatType so boats assigned to the listing but without type set still appear.
-      if (s === "pontoon" || s === "lake-austin-pontoon") return (bt) => !bt || bt === "pontoon" || bt === "tritoon";
-      return () => true; // sunset, holiday: no filter
-    };
-    const allowBoatType = boatTypeForSlug(experienceSlug);
+    const allowBoatType = allowBoatTypeForSlug(experienceSlug);
     const boats: ExperienceDetailBoat[] = allBoatDocs
       .filter((doc) => {
         const boat = doc.data() as ListingBoat;
         return allowBoatType(boat.boatType);
       })
+      .sort((a, b) => a.id.localeCompare(b.id))
       .map((doc) => {
         const boat = doc.data() as ListingBoat;
         return {
