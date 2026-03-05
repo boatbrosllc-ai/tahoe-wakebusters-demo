@@ -600,6 +600,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           setMonthSlots(slots);
           setSlotsLoading(false);
         }
+        // Prefetch next month while Lambda is still warm so "Next month" often hits cache (avoids Netlify 10s timeout on second request).
+        const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
+        const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
+        const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
+        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch(() => {});
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
