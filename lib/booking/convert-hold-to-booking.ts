@@ -292,7 +292,6 @@ export async function convertHoldToBooking(
   const finalChargeAtDate = new Date(slotStart.getTime() - 48 * 60 * 60 * 1000);
   const finalChargeAtTimestamp = Timestamp.fromDate(finalChargeAtDate);
 
-  const isDeposit = isDepositInput(input);
   const stripeBlock: Booking["stripe"] = isDeposit
     ? {
         depositPaymentIntentId: input.paymentIntentId,
