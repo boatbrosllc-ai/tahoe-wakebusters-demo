@@ -101,21 +101,36 @@ If booking works locally but fails in production, check:
 
 When config is missing, the booking UI now shows the API error and hint (e.g. “Booking is not configured. Set FIREBASE_* in your deployment.”). Check the message and the host’s env/logs.
 
-### Available dates / calendar not loading in production
+### Calendar not working in production — actual failure points
+
+When the calendar doesn’t work at all in production (no dates, or “Unable to load availability”), the cause is one of these. Check in order:
+
+1. **Slots API returns 503 (Firebase not configured)**  
+   - **Symptom:** Calendar shows an error; the message may include “Booking is not configured” and a `firebaseDetail.summary` (e.g. “FIREBASE_PRIVATE_KEY is truncated…”).  
+   - **Check:** Open the booking modal and read the error text. Or call `GET https://YOUR_PRODUCTION_DOMAIN/api/booking/slots?experienceId=YOUR_EXP_ID&startDate=2025-01-01&endDate=2025-01-31` and inspect the JSON (503 body includes `firebaseDetail`). Or open `https://YOUR_PRODUCTION_DOMAIN/api/health` — if it returns 503, the body has `firebaseDetail` with the exact reason.  
+   - **Fix:** Set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` in Netlify (or your host). Use a **single line** for the key with literal `\n` for newlines; no surrounding quotes. Do **not** set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify (the file is not in the deploy). Redeploy after changing env.
+
+2. **Slots API returns 500 (unhandled error)**  
+   - **Symptom:** Request fails with 500; calendar shows a generic error.  
+   - **Check:** Netlify → Deploys → latest → Functions / Logs; look for errors from `/api/booking/slots`. In the browser, DevTools → Network: open the slots request and check status and response body.  
+   - **Fix:** Usually Firebase config (e.g. invalid or truncated key). Fix env as in (1) and redeploy.
+
+3. **Slots API times out (e.g. Netlify 10s)**  
+   - **Symptom:** First month may load; next month never loads or takes forever. Or both hang and then show a failure.  
+   - **Check:** In Network tab, the request to `/api/booking/slots` stays pending and then fails (e.g. 504 or “net::ERR_EMPTY_RESPONSE”). In Netlify function logs, the handler may log a timeout.  
+   - **Fix:** In Netlify → Site configuration → Build & deploy → Functions, set the function timeout to **26 seconds** if available. Otherwise [contact Netlify Support](https://www.netlify.com/support) to increase the limit to 26s for your site.
+
+4. **Wrong or missing env at runtime**  
+   - **Check:** In Netlify, env vars must be set for the **same context** that runs the Next.js server (e.g. “All” or “Build” so they exist at runtime). Ensure no typos (`FIREBASE_PRIVATE_KEY` not `FIREBASE_PRIVATE_KEY_PATH` unless you use a file).  
+   - **Fix:** Correct the variables, then trigger a new deploy (env is read at deploy/build, not from the repo).
+
+### Available dates / calendar not loading in production (summary)
 
 If the calendar shows no dates or "Unable to load availability" in production but works locally, the **slots API** (`/api/booking/slots`) is almost always failing because **Firebase is not configured** (or the private key is truncated) in the production environment.
 
-1. **Check the error in the UI** — Open the booking modal on the production site. If you see a message like "Booking is not configured. Slots require Firebase…", that confirms it.
-2. **Check the health endpoint** — Open `https://YOUR_PRODUCTION_DOMAIN/api/health` in the browser. If it returns **503**, the JSON body includes `firebaseDetail` with the exact reason (e.g. `privateKeyStatus: "truncated"`, `summary: "FIREBASE_PRIVATE_KEY is truncated…"`).
-3. **Fix Firebase in production** — In Netlify (or your host): set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` (single line, newlines as `\n`, no quotes). Do **not** use `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify (the file is not present in the deploy). See [Production deployment](#production-deployment-netlify--vercel--etc) above.
-4. **Redeploy** after changing environment variables so the new values are applied.
-
-### Calendar loads only the first month; next month never loads (production)
-
-If the first month loads but clicking **Next month** never shows availability (or shows "Request took too long"):
-
-1. **Server timeout** — Netlify’s default function timeout is **10 seconds**. The slots and date-prices APIs can take longer for some months. The route files set `maxDuration = 26`; Netlify may still use the default 10s for framework-generated functions. **Fix:** In Netlify → Site configuration → Build & deploy → Functions, set the function timeout to **26 seconds** if the option is available. On some plans you may need to [contact Netlify Support](https://www.netlify.com/support) to increase the limit to 26s for your site.
-2. **Client behavior** — The app now **prefetches the next month** when the current month loads, so the next month is often already in cache when the user clicks Next. If a request still times out, the user sees **"Request took too long. Try again or go back to the previous month."** and can use the retry or try another month.
+1. **Check the error in the UI** — Open the booking modal on the production site. The message now includes the server’s `firebaseDetail.summary` when present (e.g. “FIREBASE_PRIVATE_KEY is truncated…”).
+2. **Check the health endpoint** — Open `https://YOUR_PRODUCTION_DOMAIN/api/health`. If it returns **503**, the JSON body includes `firebaseDetail` with the exact reason.
+3. **Fix Firebase in production** — See [Calendar not working in production — actual failure points](#calendar-not-working-in-production--actual-failure-points) above. Redeploy after changing env.
 
 ## Netlify: get booking working in production
 

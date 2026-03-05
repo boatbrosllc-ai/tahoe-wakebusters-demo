@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { hasFirebaseConfig } from "@/lib/booking/env";
+import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import {
   buildSlotId,
   getSlotGrid,
@@ -30,9 +30,16 @@ const SLOTS_FIREBASE_HINT =
 
 export async function GET(request: NextRequest) {
   try {
-    if (!hasFirebaseConfig()) {
+    if (!safeHasFirebaseConfig()) {
+      const detail = (() => {
+        try {
+          return getFirebaseConfigStatus();
+        } catch {
+          return { summary: SLOTS_FIREBASE_HINT };
+        }
+      })();
       return NextResponse.json(
-        { error: "Booking is not configured.", hint: SLOTS_FIREBASE_HINT },
+        { error: "Booking is not configured.", hint: SLOTS_FIREBASE_HINT, firebaseDetail: detail },
         { status: 503 }
       );
     }
