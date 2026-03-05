@@ -6,6 +6,31 @@
 
 const PREFIX = "[booking]";
 
+/** True when debug logs should run: development, or NEXT_PUBLIC_BOOKING_DEBUG=1 in env. */
+export function isBookingDebugEnabled(): boolean {
+  if (typeof process === "undefined") return false;
+  const env = process.env as { NODE_ENV?: string; NEXT_PUBLIC_BOOKING_DEBUG?: string };
+  return env.NODE_ENV === "development" || env.NEXT_PUBLIC_BOOKING_DEBUG === "1";
+}
+
+/**
+ * Verbose debug log for dev console. Only logs when isBookingDebugEnabled() is true.
+ * Use for slots fetch, month change, date selection, etc. Filter in console by "[booking:client:debug]".
+ */
+export function bookingDebugLog(
+  step: string,
+  message: string,
+  data?: Record<string, unknown> | null
+): void {
+  if (!isBookingDebugEnabled()) return;
+  const tag = "[booking:client:debug]";
+  if (data != null && Object.keys(data).length > 0) {
+    console.log(`${tag} [${step}] ${message}`, data);
+  } else {
+    console.log(`${tag} [${step}] ${message}`);
+  }
+}
+
 export type BookingLogStep =
   | "create-hold"
   | "create-payment-intent"

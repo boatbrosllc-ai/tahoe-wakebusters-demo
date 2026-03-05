@@ -13,6 +13,7 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
+import { bookingDebugLog } from "@/lib/booking/debug";
 
 interface ExperienceItem {
   id: string;
@@ -168,19 +169,23 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       displayMonth.year,
       displayMonth.month
     );
+    bookingDebugLog("BookingPageClient", "slots fetch start", { experienceId: selectedExperience.id, startDate, endDate });
     setSlotsLoading(true);
     setAllSlots(null);
     setSlotsLoadError(null);
     const controller = new AbortController();
     bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, controller.signal)
       .then((data) => {
-        setAllSlots(Array.isArray(data.slots) ? data.slots : []);
+        const slots = Array.isArray(data.slots) ? data.slots : [];
+        bookingDebugLog("BookingPageClient", "slots fetch success", { slotCount: slots.length, startDate, endDate });
+        setAllSlots(slots);
         setSlotsLoadError(null);
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
         setAllSlots([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        bookingDebugLog("BookingPageClient", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
         setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })

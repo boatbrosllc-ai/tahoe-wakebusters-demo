@@ -8,7 +8,7 @@ import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
-import { bookingLog, bookingError } from "@/lib/booking/debug";
+import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -181,10 +181,13 @@ export function ExperienceBookingCard({
     const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}`;
     if (!forceRefresh && loadedMonthsRef.current.has(key)) return;
     const range = getMonthRange(monthDate);
+    bookingDebugLog("ExperienceBookingCard", "slots fetch start", { experienceId, monthKey: key, startDate: range.start, endDate: range.end });
     setSlotsLoading(true);
     setSlotStolen(false);
     try {
       const data = await fetchSlotsCache(experienceId, range.start, range.end);
+      const slotCount = (data.slots ?? []).length;
+      bookingDebugLog("ExperienceBookingCard", "slots fetch success", { monthKey: key, slotCount });
       setSlots((prev) => {
         // Replace slots in this date range while preserving other months.
         const outsideRange = prev.filter(
@@ -193,7 +196,8 @@ export function ExperienceBookingCard({
         return [...outsideRange, ...(data.slots ?? [])];
       });
       loadedMonthsRef.current.add(key);
-    } catch {
+    } catch (err) {
+      bookingDebugLog("ExperienceBookingCard", "slots fetch failed", { monthKey: key, error: err instanceof Error ? err.message : String(err) });
       // Network errors are non-fatal; stale slot data remains visible.
     } finally {
       setSlotsLoading(false);

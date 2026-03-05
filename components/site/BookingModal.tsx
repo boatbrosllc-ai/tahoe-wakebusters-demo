@@ -15,7 +15,7 @@ import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
-import { bookingLog, bookingError } from "@/lib/booking/debug";
+import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -563,6 +563,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setSlotsLoadError(null);
       return;
     }
+    bookingDebugLog("BookingModal", "slots fetch start", {
+      experienceId: selectedExperience.id,
+      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
+      startDate: viewMonthStartStr,
+      endDate: viewMonthEndStr,
+    });
     setSlotsLoading(true);
     setSlotsLoadError(null);
     const controller = new AbortController();
@@ -575,6 +581,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
         setSlotsLoadError(null);
+        bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
         // Defer setting 3k+ slots so the first render only has detail+rates and stays fast;
         // date-prices effect then runs immediately and the calendar appears. Slots paint next tick.
         if (slots.length > 100) {
@@ -591,6 +598,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         if ((err as { name?: string })?.name === "AbortError") return;
         setMonthSlots([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        bookingDebugLog("BookingModal", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
         setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
@@ -1328,8 +1336,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           if (viewMonthMonth === 1) {
                             setViewMonthYear((y) => y - 1);
                             setViewMonthMonth(12);
+                            bookingDebugLog("BookingModal", "month nav: previous", { to: `${viewMonthYear - 1}-12` });
                           } else {
                             setViewMonthMonth((m) => m - 1);
+                            bookingDebugLog("BookingModal", "month nav: previous", { to: `${viewMonthYear}-${String(viewMonthMonth - 1).padStart(2, "0")}` });
                           }
                         }}
                         className={cn(
@@ -1349,8 +1359,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           if (viewMonthMonth === 12) {
                             setViewMonthYear((y) => y + 1);
                             setViewMonthMonth(1);
+                            bookingDebugLog("BookingModal", "month nav: next", { to: `${viewMonthYear + 1}-01` });
                           } else {
                             setViewMonthMonth((m) => m + 1);
+                            bookingDebugLog("BookingModal", "month nav: next", { to: `${viewMonthYear}-${String(viewMonthMonth + 1).padStart(2, "0")}` });
                           }
                         }}
                         className="rounded-xl p-2.5 text-brand-dark hover:bg-brand-dark/10 active:bg-brand-dark/15 transition-colors touch-manipulation"
@@ -1402,6 +1414,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           disabled={isPast || !isAvailable}
                           onClick={() => {
                             if (!isAvailable) return;
+                            bookingDebugLog("BookingModal", "date selected", { dateStr });
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
