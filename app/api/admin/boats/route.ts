@@ -28,6 +28,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   const boatType = typeof b.boatType === "string" ? b.boatType.trim() || undefined : undefined;
   const heroSubtitle = typeof b.heroSubtitle === "string" ? b.heroSubtitle.trim() || undefined : undefined;
   const capacity = typeof b.capacity === "number" && b.capacity > 0 ? b.capacity : undefined;
+  const color = typeof b.color === "string" ? b.color.trim() || undefined : undefined;
   const parsed = {
     name,
     slug,
@@ -39,6 +40,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
     ...(boatType && { boatType }),
     ...(heroSubtitle && { heroSubtitle }),
     ...(capacity !== undefined && { capacity }),
+    ...(color && { color }),
   };
   return stripUndefined(parsed as Record<string, unknown>) as (Omit<ListingBoat, "active"> & { active?: boolean });
 }

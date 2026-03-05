@@ -65,8 +65,18 @@ function fetchCached<T>(
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
       const p = fetch(url)
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        .then(async (res) => {
+          if (!res.ok) {
+            let body: { error?: string; hint?: string; code?: string } = {};
+            try {
+              body = (await res.json()) as typeof body;
+            } catch {
+              // ignore
+            }
+            const e = new Error(body.error ?? `HTTP ${res.status}`) as Error & { apiBody?: typeof body };
+            e.apiBody = body;
+            throw e;
+          }
           return res.json() as Promise<T>;
         })
         .then((data) => {

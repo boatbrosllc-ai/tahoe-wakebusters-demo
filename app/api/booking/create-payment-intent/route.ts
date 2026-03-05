@@ -58,7 +58,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
     bookingLog("create-payment-intent", "parsed input", { holdId: input.holdId, payFullAmount: input.payFullAmount });
-    const db = getDb();
+    let db: ReturnType<typeof getDb>;
+    try {
+      db = getDb();
+    } catch (configErr) {
+      const msg = configErr instanceof Error ? configErr.message : String(configErr);
+      const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(msg);
+      return NextResponse.json(
+        {
+          error: isConfig ? "Booking is not configured." : "Service temporarily unavailable.",
+          hint: isConfig
+            ? "Set FIREBASE_* and STRIPE_SECRET_KEY in your deployment environment (see docs/BOOKING_SETUP.md)."
+            : undefined,
+        },
+        { status: 503 }
+      );
+    }
     const holdRef = db.collection("holds").doc(input.holdId);
     const holdSnap = await holdRef.get();
     if (!holdSnap.exists) {
@@ -238,6 +253,13 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";
     bookingError("create-payment-intent", "create payment intent failed", err, { message });
-    return NextResponse.json({ error: message }, { status: 500 });
+    const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env|STRIPE_SECRET_KEY/i.test(message);
+    return NextResponse.json(
+      {
+        error: isConfig ? "Booking is not configured." : message,
+        hint: isConfig ? "Set Firebase and Stripe env vars in your deployment (see docs/BOOKING_SETUP.md)." : undefined,
+      },
+      { status: isConfig ? 503 : 500 }
+    );
   }
 }

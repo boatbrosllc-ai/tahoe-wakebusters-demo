@@ -164,11 +164,12 @@ function hexToRgb(hex: string): string {
   return `rgb(${r} ${g} ${b})`;
 }
 
-/** Boat with experienceIds for block-by-experience logic. */
+/** Boat with experienceIds for block-by-experience logic. Optional color (hex) from boat document for calendar. */
 interface BoatItem {
   id: string;
   name: string;
   experienceIds: string[];
+  color?: string;
 }
 
 export default function CalendarsPage() {
@@ -243,9 +244,12 @@ export default function CalendarsPage() {
   const [boatColorsSectionOpen, setBoatColorsSectionOpen] = useState(false);
   const blockPanelRef = useRef<HTMLDivElement>(null);
 
-  /** Resolve color for a boat: custom if set, else default by index. */
+  /** Resolve color for a boat: boat's color (from document) if set, else user override (localStorage), else default by index. */
   const getBoatColorResolved = useCallback(
-    (boatId: string, boatIndex: number) => boatColors[boatId] ?? getBoatColor(boatIndex),
+    (boat: BoatItem, boatIndex: number) => {
+      if (boat.color && /^#([0-9A-Fa-f]{3}){1,2}$/.test(boat.color)) return hexToRgb(boat.color);
+      return boatColors[boat.id] ?? getBoatColor(boatIndex);
+    },
     [boatColors]
   );
 
@@ -305,10 +309,11 @@ export default function CalendarsPage() {
       }
       const boatsData = await boatsRes.json();
       const boats = Array.isArray(boatsData.boats) ? boatsData.boats : [];
-      const boatItems: BoatItem[] = boats.map((b: { id: string; name?: string; experienceIds?: string[] }) => ({
+      const boatItems: BoatItem[] = boats.map((b: { id: string; name?: string; experienceIds?: string[]; color?: string }) => ({
         id: b.id,
         name: b.name ?? b.id,
         experienceIds: Array.isArray(b.experienceIds) ? b.experienceIds : [],
+        color: typeof b.color === "string" && b.color.trim() ? b.color.trim() : undefined,
       }));
       setBoatList(boatItems);
       const boatNameMap = new Map<string, string>();
@@ -1021,12 +1026,11 @@ export default function CalendarsPage() {
               {boatColorsSectionOpen && (
                 <div className="border-t border-brand-dark/10 px-4 py-4 sm:px-6 sm:py-4">
                   <p className="text-xs text-brand-muted mb-4">
-                    Choose a color for each boat. Colors are used on the calendar and week view. Saved in this browser.
+                    Calendar uses each boat&apos;s color when set (edit boat to set). Override below; saved in this browser.
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {boatList.map((boat, idx) => {
-                      const defaultRgb = getBoatColor(idx);
-                      const currentRgb = boatColors[boat.id] ?? defaultRgb;
+                      const currentRgb = getBoatColorResolved(boat, idx);
                       const hex = rgbToHex(currentRgb);
                       const colorInputId = `boat-color-${boat.id}`;
                       return (
@@ -1087,7 +1091,7 @@ export default function CalendarsPage() {
                   All
                 </button>
                 {boatList.map((boat, idx) => {
-                  const color = getBoatColorResolved(boat.id, idx);
+                  const color = getBoatColorResolved(boat, idx);
                   const isSelected = selectedBoatIds.size === 0 || selectedBoatIds.has(boat.id);
                   return (
                     <button
@@ -1137,7 +1141,7 @@ export default function CalendarsPage() {
               boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
               weekStart={weekStart}
               selectedBoatIds={selectedBoatIds.size === 0 ? undefined : Array.from(selectedBoatIds)}
-              boatColorByIndex={boatList.reduce<Record<number, string>>((acc, _, i) => ({ ...acc, [i]: getBoatColorResolved(boatList[i].id, i) }), {})}
+              boatColorByIndex={boatList.reduce<Record<number, string>>((acc, _, i) => ({ ...acc, [i]: getBoatColorResolved(boatList[i], i) }), {})}
               onPrevWeek={() => setWeekStart((w) => { const d = new Date(w); d.setDate(d.getDate() - 7); return d; })}
               onNextWeek={() => setWeekStart((w) => { const d = new Date(w); d.setDate(d.getDate() + 7); return d; })}
               onBookingClick={(bookingId) => { setBookingDetailId(bookingId); setBookingDetailOpen(true); }}
@@ -1407,7 +1411,7 @@ export default function CalendarsPage() {
                     <>
                       <span className="w-px h-4 bg-brand-dark/20 shrink-0 mx-1" aria-hidden />
                       {boatList.map((boat, idx) => {
-                        const c = getBoatColorResolved(boat.id, idx);
+                        const c = getBoatColorResolved(boat, idx);
                         return (
                           <span
                             key={boat.id}
@@ -1512,7 +1516,7 @@ export default function CalendarsPage() {
                                 }
                                 const slot = item.slot;
                                 const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
-                                const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
+                                const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx], boatIdx) : STATUS_COLORS.booked.bg;
                                 const bookingId = slot.bookingSummary?.bookingId ?? slot.bookingId;
                                 return (
                                   <button
@@ -1567,7 +1571,7 @@ export default function CalendarsPage() {
                           ].sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt)).slice(0, 4).map(({ isTicketed, slot }, idx) => {
                             if (isTicketed) return <span key={`t-${idx}`} className="h-2 w-2 rounded-full shrink-0 bg-violet-500" aria-label="Tickets" />;
                             const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
-                            const color = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
+                            const color = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx], boatIdx) : STATUS_COLORS.booked.bg;
                             return <span key={idx} className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} />;
                           })}
                           {bookedForDay.length + ticketedForDay.length > 4 && <span className="text-[9px] text-brand-muted">+{bookedForDay.length + ticketedForDay.length - 4}</span>}
@@ -1672,7 +1676,7 @@ export default function CalendarsPage() {
                         const summary = slot.bookingSummary;
                         const bookingId = summary?.bookingId ?? slot.bookingId;
                         const boatIdx = slot.boatId ? boatList.findIndex((b) => b.id === slot.boatId) : -1;
-                        const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx].id, boatIdx) : STATUS_COLORS.booked.bg;
+                        const boatColor = boatIdx >= 0 ? getBoatColorResolved(boatList[boatIdx], boatIdx) : STATUS_COLORS.booked.bg;
                         const expName = slot.experienceId && experienceNames.has(slot.experienceId) ? experienceNames.get(slot.experienceId) : null;
                         return (
                           <li

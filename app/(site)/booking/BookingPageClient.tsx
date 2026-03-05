@@ -100,7 +100,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         }
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setError("Failed to load");
+        if ((err as { name?: string })?.name === "AbortError") return;
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Failed to load");
+        setError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
       .finally(() => setLoading(false));
     return () => controller.abort();

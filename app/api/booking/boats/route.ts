@@ -31,6 +31,8 @@ export async function GET(request: NextRequest) {
     }
     const expData = expDoc.data() as { slug?: string };
     const experienceSlug = (expData?.slug ?? "").toLowerCase().trim();
+    // Fallback: when Firestore slug is missing (e.g. prod), use experienceId so boat-type filter works (e.g. id "watersports" => wake only).
+    const slugForBoatType = experienceSlug || experienceId.trim().toLowerCase();
 
     const expRatesSnap = await db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get();
     const experienceRates = expRatesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string } & ExperienceRate));
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const allowBoatType = allowBoatTypeForSlug(experienceSlug);
+    const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
     const boatDocs = Array.from(docById.values()).filter((doc) =>
       allowBoatType((doc.data() as ListingBoat).boatType)
     );

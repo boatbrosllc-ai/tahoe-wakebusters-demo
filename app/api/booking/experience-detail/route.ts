@@ -61,6 +61,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
     const expData = expDoc.data() as { slug?: string };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
+    // Fallback: when Firestore slug is missing (e.g. prod data), use experienceId so boat-type filter still works (e.g. id "watersports" => wake only).
+    const slugForBoatType = experienceSlug || experienceId.trim().toLowerCase();
 
     // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
     const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
@@ -108,7 +110,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // ExperienceDetailResponse.rates field. Boats only carry fromPriceCents for display.
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     // (guards against production data linking the wrong boat types to an experience).
-    const allowBoatType = allowBoatTypeForSlug(experienceSlug);
+    const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
     const boats: ExperienceDetailBoat[] = allBoatDocs
       .filter((doc) => {
         const boat = doc.data() as ListingBoat;

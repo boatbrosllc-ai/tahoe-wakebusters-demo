@@ -29,6 +29,8 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (typeof b.heroSubtitle === "string") out.heroSubtitle = b.heroSubtitle.trim();
   if (b.capacity === null) out.capacity = null;
   else if (typeof b.capacity === "number" && b.capacity > 0) out.capacity = b.capacity;
+  if (typeof b.color === "string") out.color = b.color.trim() || undefined;
+  else if (b.color === null) out.color = null;
   const filtered = stripUndefined(out);
   return Object.keys(filtered).length ? (filtered as Partial<ListingBoat>) : null;
 }

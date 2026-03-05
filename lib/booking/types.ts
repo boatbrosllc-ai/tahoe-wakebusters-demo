@@ -61,6 +61,8 @@ export interface ListingBoat {
   heroSubtitle?: string;
   /** Max guests for display and generated description (e.g. "up to 14 guests"). Defaults to 14 when omitted. */
   capacity?: number;
+  /** Optional color for admin calendar (hex e.g. "#14b8a6"). When set, calendar uses this for the boat. */
+  color?: string;
 }
 
 /** Calendar override: one doc per boatType, field rates = { [date YYYY-MM-DD]: hourlyRateCents }. Overrides always win. */

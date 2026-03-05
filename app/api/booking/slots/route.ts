@@ -65,8 +65,10 @@ export async function GET(request: NextRequest) {
       }
       const expData = expDoc.data() as { slug?: string } | undefined;
       const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
+      // Fallback: when Firestore slug is missing (e.g. prod), use experienceId so boat-type filter works (e.g. id "watersports" => wake only).
+      const slugForBoatType = (experienceSlug || experienceId.trim()).toLowerCase();
       const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
-      const allowBoatType = allowBoatTypeForSlug(experienceSlug);
+      const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
       const boatSnapPromises = experienceIdVariants.map((variantId) =>
         db
           .collection("boats")

@@ -89,6 +89,18 @@ The confirmation email is sent by Brevo **after** the booking is created (by the
 
 4. **Booking created but email path not run** — If the booking is created via the Stripe webhook, the email is sent right after. If the webhook never runs (e.g. wrong URL or secret), the client may call `complete-after-payment` instead; that path also sends the email. Ensure at least one of these runs (check Webhook events in Admin → Bookings for errors).
 
+## Production checklist (works locally but not in production)
+
+If booking works locally but fails in production, check:
+
+1. **Environment variables** — In your host (Vercel, Netlify, etc.), set the same vars as in `.env.local`: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (full key on one line with `\n` for newlines), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_BASE_URL`, `BREVO_API_KEY`. Redeploy after changing env.
+2. **Firebase Private Key** — Production cannot read `.env.local`. The key must be in the host’s env as a single line; multi-line values are often truncated. Use literal `\n` for newlines (e.g. `-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n`).
+3. **Stripe Webhook** — In Stripe Dashboard → Webhooks, the endpoint URL must be `https://YOUR_PRODUCTION_DOMAIN/api/stripe/webhook`. Use the same `STRIPE_WEBHOOK_SECRET` from that endpoint in your production env.
+4. **APP_BASE_URL** — Must be your production URL (e.g. `https://boatbrosatx.com`), no trailing slash. Used for success/cancel redirects and emails.
+5. **Experience slug in Firestore** — Each experience document should have a correct `slug` field (`pontoon`, `watersports`, `sunset`, `holiday`). If `slug` is missing or wrong, boat filtering can show the wrong boats (e.g. pontoon for watersports). Re-run setup or edit the experience in Admin to fix.
+
+When config is missing, the booking UI now shows the API error and hint (e.g. “Booking is not configured. Set FIREBASE_* in your deployment.”). Check the message and the host’s env/logs.
+
 ## Production deployment (Netlify / Vercel / etc.)
 
 For **Book now** and experiences to work in production, the server must have Firebase Admin credentials. If they are missing, `/api/experiences` returns 500 and the booking modal shows “No experiences” or “Failed to load experiences.”

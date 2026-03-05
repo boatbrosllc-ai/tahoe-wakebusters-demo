@@ -378,7 +378,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
         setExperiences([]);
-        setExperiencesLoadError("Failed to load experiences");
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Failed to load experiences");
+        setExperiencesLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
@@ -1071,9 +1073,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
-        bookingLog("client", "create-payment-intent failed", { status: intentRes.status, error: intentData.error });
+        bookingLog("client", "create-payment-intent failed", { status: intentRes.status, error: intentData.error, hint: intentData.hint });
         await releaseCreatedHold();
-        setPaymentError(intentData.error ?? "Failed to start payment");
+        const msg = intentData.error ?? "Failed to start payment";
+        setPaymentError(intentData.hint ? `${msg}. ${intentData.hint}` : msg);
         setPaymentPhase("form");
         return;
       }

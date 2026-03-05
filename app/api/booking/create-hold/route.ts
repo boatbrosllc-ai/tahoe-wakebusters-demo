@@ -152,7 +152,23 @@ export async function POST(request: NextRequest) {
       bookingMode: input.bookingMode,
       resumeHoldId: input.resumeHoldId ?? null,
     });
-    const db = getDb();
+    let db: ReturnType<typeof getDb>;
+    try {
+      db = getDb();
+    } catch (configErr) {
+      const msg = configErr instanceof Error ? configErr.message : String(configErr);
+      const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(msg);
+      bookingWarn("create-hold", "config error", { message: msg });
+      return NextResponse.json(
+        {
+          error: isConfig ? "Booking is not configured." : "Service temporarily unavailable.",
+          hint: isConfig
+            ? "Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment."
+            : undefined,
+        },
+        { status: 503 }
+      );
+    }
     const { FieldValue, Timestamp } = getFirestoreExports();
     const hasExperience = !!input.experienceId;
     const hasBoat = !!input.boatId;
@@ -840,6 +856,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: message }, { status: 409 });
     }
     bookingError("create-hold", "create hold failed", err, { message });
-    return NextResponse.json({ error: "Create hold failed" }, { status: 500 });
+    const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(message);
+    return NextResponse.json(
+      {
+        error: isConfig ? "Booking is not configured." : message || "Create hold failed",
+        hint: isConfig
+          ? "Set Firebase and Stripe env vars in your deployment (see docs/BOOKING_SETUP.md)."
+          : undefined,
+      },
+      { status: isConfig ? 503 : 500 }
+    );
   }
 }

@@ -20,6 +20,7 @@ export type BoatFormData = {
   boatType: string;
   heroSubtitle: string;
   capacity: string;
+  color: string;
   photos: string[];
   active: boolean;
   experienceIds: string[];
@@ -35,6 +36,7 @@ function getDefaultFormData(): BoatFormData {
     boatType: "",
     heroSubtitle: "",
     capacity: "",
+    color: "",
     photos: [],
     active: true,
     experienceIds: [],
@@ -53,6 +55,8 @@ function dataFromApi(api: Record<string, unknown>): BoatFormData {
   const photos = Array.isArray(api.photos) ? api.photos.filter((x): x is string => typeof x === "string") : [];
   const experienceIds = Array.isArray(api.experienceIds) ? api.experienceIds.filter((x): x is string => typeof x === "string") : [];
   const cap = api.capacity;
+  const colorRaw = api.color;
+  const color = typeof colorRaw === "string" && /^#([0-9A-Fa-f]{3}){1,2}$/.test(colorRaw.trim()) ? colorRaw.trim() : "";
   return {
     name: typeof api.name === "string" ? api.name : "",
     slug: typeof api.slug === "string" ? api.slug : "",
@@ -60,6 +64,7 @@ function dataFromApi(api: Record<string, unknown>): BoatFormData {
     boatType: typeof api.boatType === "string" ? api.boatType : "",
     heroSubtitle: typeof api.heroSubtitle === "string" ? api.heroSubtitle : "",
     capacity: typeof cap === "number" && cap > 0 ? String(cap) : "",
+    color,
     photos,
     active: api.active !== false,
     experienceIds,
@@ -68,6 +73,7 @@ function dataFromApi(api: Record<string, unknown>): BoatFormData {
 
 function formDataToBody(d: BoatFormData): Record<string, unknown> {
   const capacityNum = d.capacity.trim() ? parseInt(d.capacity, 10) : null;
+  const color = d.color.trim() && /^#([0-9A-Fa-f]{3}){1,2}$/.test(d.color.trim()) ? d.color.trim() : undefined;
   return {
     name: d.name,
     slug: d.slug.trim() || undefined,
@@ -75,6 +81,7 @@ function formDataToBody(d: BoatFormData): Record<string, unknown> {
     boatType: d.boatType || undefined,
     heroSubtitle: d.heroSubtitle.trim(),
     capacity: capacityNum != null && capacityNum > 0 ? capacityNum : null,
+    color: color ?? null,
     photos: d.photos,
     active: d.active,
     experienceIds: d.experienceIds,
@@ -189,6 +196,27 @@ export function BoatForm({
           <label className="block text-sm font-medium text-brand-dark" htmlFor="boat-capacity">Max guests (optional)</label>
           <input id="boat-capacity" type="number" min={1} max={99} className={inputClass} value={data.capacity} onChange={(e) => update("capacity", e.target.value)} placeholder="14" />
           <p className="mt-1 text-xs text-brand-muted">Used in generated description (e.g. “up to 14 guests”). Defaults to 14 if empty.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-brand-dark" htmlFor="boat-color">Calendar color (optional)</label>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              id="boat-color"
+              type="color"
+              value={data.color || "#14b8a6"}
+              onChange={(e) => update("color", e.target.value)}
+              className="h-10 w-14 rounded-lg border border-brand-dark/20 cursor-pointer"
+              aria-label="Boat color for calendar"
+            />
+            <input
+              type="text"
+              className={`${inputClass} flex-1 max-w-[120px] font-mono text-xs`}
+              value={data.color}
+              onChange={(e) => update("color", e.target.value.replace(/[^#0-9A-Fa-f]/g, ""))}
+              placeholder="#14b8a6"
+            />
+          </div>
+          <p className="mt-1 text-xs text-brand-muted">Used on the admin calendar to identify this boat. Leave empty for default palette.</p>
         </div>
         {data.slug.trim() && (
           <p className="text-sm">
