@@ -6,7 +6,7 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience } from "@/lib/booking/experience-aliases";
-import { getDepartureInventoryRef, reserveCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
@@ -525,7 +525,7 @@ export async function POST(request: NextRequest) {
     let reusedExpiresAt: Date | null = null;
 
     if (isSharedTicketed) {
-      bookingLog("create-hold", "shared ticketed: reserving capacity and creating hold", { holdId, experienceId: expId, dateStr: parseSlotId(input.slotId)?.dateStr });
+      bookingLog("create-hold", "shared ticketed: reserving capacity and creating hold", { holdId, experienceId: expId, dateStr: parseSlotId(input.slotId)?.dateStr, resumeHoldId: input.resumeHoldId ?? null });
       const parsedForCapacity = parseSlotId(input.slotId);
       if (!parsedForCapacity) {
         return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
@@ -541,6 +541,8 @@ export async function POST(request: NextRequest) {
         : "";
       const slugVariantsList = getExperienceIdVariants(expId, expSlug);
       const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+      let effectiveHoldId = holdId;
+      let effectiveExpiresAt = expiresAt;
       await db.runTransaction(async (tx) => {
         // Single per-departure inventory doc is read and updated so concurrent requests conflict and retry safely.
         const bookingQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
@@ -561,12 +563,63 @@ export async function POST(request: NextRequest) {
             sold += b.partySize;
           }
         }
+
+        // Honor resumeHoldId: reuse existing hold when valid to avoid reserving fresh capacity on retries.
+        if (input.resumeHoldId && input.resumeHoldId.trim()) {
+          const existingHoldSnap = await tx.get(db.collection("holds").doc(input.resumeHoldId.trim()));
+          if (existingHoldSnap.exists) {
+            const existingHold = existingHoldSnap.data() as Hold & { expiresAt?: { toDate?: () => Date; seconds?: number } };
+            const exp = existingHold.expiresAt;
+            const expiryDate = exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+            const isActive = existingHold.status === "active" && expiryDate > now;
+            const sameExperience = existingHold.experienceId === expId || slugVariantsList.includes(existingHold.experienceId ?? "");
+            const sameSlot = existingHold.slotId === input.slotId;
+            const sameMode = existingHold.bookingMode === "shared";
+            if (isActive && sameExperience && sameSlot && sameMode) {
+              const oldPartySize = typeof existingHold.partySize === "number" ? existingHold.partySize : 0;
+              const delta = input.partySize - oldPartySize;
+              const holdUpdatePayload = {
+                addonSelections: input.addonSelections,
+                partySize: input.partySize,
+                petsCount: input.petsCount,
+                answers: input.answers,
+                customerDraft: input.customerDraft,
+                marketingOptIn: input.marketingOptIn,
+                expiresAt: Timestamp.fromDate(expiresAt),
+                tipCents: tipCents,
+                ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
+                ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
+                ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
+                depositPaymentIntentId: FieldValue.delete(),
+                fullPaymentIntentId: FieldValue.delete(),
+              };
+              if (delta === 0) {
+                // No capacity change: just refresh hold (expiry, pricing, etc.).
+                tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
+              } else if (delta < 0) {
+                // Decrease: release seats by |delta|, then update hold.
+                await releaseCapacity(tx, inventoryRef, -delta);
+                tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
+              } else {
+                // Increase: release old seats then reserve new total (capacity check for increase).
+                await releaseCapacity(tx, inventoryRef, oldPartySize);
+                await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
+                tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
+              }
+              effectiveHoldId = input.resumeHoldId.trim();
+              effectiveExpiresAt = expiresAt;
+              return;
+            }
+          }
+        }
+
+        // No valid reusable hold: create new hold and reserve full party size.
         await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
         tx.set(db.collection("holds").doc(holdId), holdPayload);
       });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
-      const response: CreateHoldResponse = { holdId, expiresAt: expiresAt.toISOString(), pricing: responsePricing };
-      bookingLog("create-hold", "shared ticketed hold created", { holdId, expiresAt: expiresAt.toISOString() });
+      const response: CreateHoldResponse = { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), pricing: responsePricing };
+      bookingLog("create-hold", "shared ticketed hold created", { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), reused: effectiveHoldId !== holdId });
       return NextResponse.json(response);
     }
 
@@ -612,16 +665,28 @@ export async function POST(request: NextRequest) {
                 await assertNotBlocked(slotStartDate, slotEndDate);
                 // Clear stage-specific payment intent IDs when reusing/extending a hold with mutated pricing
                 // so stale intents (wrong amount) cannot be reused.
+                // Reused-hold update must match what a new hold would persist: include all mutable checkout fields
+                // and explicitly clear discount fields when no discount applies (avoid stale payer/discount state).
+                const discountUpdate =
+                  discountCodeApplied && discountCents > 0
+                    ? { discountCode: discountCodeApplied, discountCents, stripeCouponId: FieldValue.delete() }
+                    : {
+                        discountCode: FieldValue.delete(),
+                        discountCents: FieldValue.delete(),
+                        stripeCouponId: FieldValue.delete(),
+                      };
                 tx.update(db.collection("holds").doc(slot.holdId), {
                   addonSelections: input.addonSelections,
                   partySize: input.partySize,
                   petsCount: input.petsCount,
                   answers: input.answers,
+                  customerDraft: input.customerDraft,
+                  marketingOptIn: input.marketingOptIn,
                   expiresAt: Timestamp.fromDate(newExpiresAt),
                   tipCents: tipCents,
                   ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
                   ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
-                  ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
+                  ...discountUpdate,
                   depositPaymentIntentId: FieldValue.delete(),
                   fullPaymentIntentId: FieldValue.delete(),
                 });

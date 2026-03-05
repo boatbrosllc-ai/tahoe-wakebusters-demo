@@ -113,15 +113,35 @@ export async function POST(request: NextRequest) {
       const hold = holdSnap.data() as Hold;
       const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
       if (hold.status !== "active") {
-        console.error("[stripe-webhook] checkout.session.completed hold already converted", { holdId, status: hold.status });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold already converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        bookingLog("stripe-webhook", "checkout.session.completed hold not active (idempotent success)", { holdId, status: hold.status });
+        await writeEventResult(eventId, {
+          status: "completed",
+          processedAt: Timestamp.now(),
+          outcome: "checkout_session_completed_idempotent",
+          error: "Hold not active",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          amountTotal,
+          currency,
+        });
+        return NextResponse.json({ received: true });
       }
       const holdExpiresAt = (hold.expiresAt as { toDate(): Date });
       if (holdExpiresAt.toDate() < new Date()) {
-        console.warn("[stripe-webhook] checkout.session.completed hold expired", { holdId, sessionId });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold expired", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        bookingLog("stripe-webhook", "checkout.session.completed hold expired (idempotent success)", { holdId, sessionId });
+        await writeEventResult(eventId, {
+          status: "completed",
+          processedAt: Timestamp.now(),
+          outcome: "checkout_session_completed_hold_expired",
+          error: "Hold expired",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          amountTotal,
+          currency,
+        });
+        return NextResponse.json({ received: true });
       }
       const hasExperience = !!hold.experienceId;
       const hasBoat = !!hold.boatId;

@@ -207,6 +207,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
+  const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
   const openSlotsForDate = useMemo(() => {
     if (!selectedDate) return [];
@@ -558,9 +559,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!selectedExperience?.id) {
       setMonthSlots([]);
+      setSlotsLoadError(null);
       return;
     }
     setSlotsLoading(true);
+    setSlotsLoadError(null);
     const controller = new AbortController();
     bookingCache.fetchSlots(
       selectedExperience.id,
@@ -570,6 +573,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     )
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
+        setSlotsLoadError(null);
         // Defer setting 3k+ slots so the first render only has detail+rates and stays fast;
         // date-prices effect then runs immediately and the calendar appears. Slots paint next tick.
         if (slots.length > 100) {
@@ -583,7 +587,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         }
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setMonthSlots([]);
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setMonthSlots([]);
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
+        setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
       .finally(() => setSlotsLoading(false));
     return () => controller.abort();
@@ -1351,6 +1359,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       </button>
                     </div>
                   </div>
+                  {slotsLoadError && (
+                    <p className="text-sm text-amber-700 py-3 px-2 mb-2">{slotsLoadError}</p>
+                  )}
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
                     {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
                       <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">

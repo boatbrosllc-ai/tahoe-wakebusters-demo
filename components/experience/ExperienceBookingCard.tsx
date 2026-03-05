@@ -301,6 +301,23 @@ export function ExperienceBookingCard({
     setError(null);
     setSubmitting(true);
     setPaymentPhase("loading");
+    let createdHoldId: string | null = null;
+    const releaseCreatedHold = async () => {
+      if (!createdHoldId) return;
+      try {
+        await fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: createdHoldId }),
+        });
+      } catch {
+        // best-effort
+      }
+      createdHoldId = null;
+      setHoldId(null);
+      setHoldSlotId(null);
+      setHoldExpiresAt(null);
+    };
     try {
       bookingLog("client", "ExperienceBookingCard create-hold request", { experienceId, slotId: selectedSlot.id, rateId: selectedRateId, partySize });
       const createHoldRes = await fetch("/api/booking/create-hold", {
@@ -329,6 +346,7 @@ export function ExperienceBookingCard({
         setPaymentPhase("form");
         return;
       }
+      createdHoldId = holdData.holdId;
       setHoldId(holdData.holdId);
       setHoldSlotId(selectedSlot.id);
       setHoldExpiresAt(holdData.expiresAt ?? null);
@@ -343,6 +361,7 @@ export function ExperienceBookingCard({
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
         bookingLog("client", "ExperienceBookingCard create-payment-intent failed", { status: intentRes.status, error: intentData.error });
+        await releaseCreatedHold();
         setError(intentData.error ?? "Could not start payment");
         setPaymentPhase("form");
         return;
@@ -350,11 +369,13 @@ export function ExperienceBookingCard({
       const secret = intentData.clientSecret;
       if (!secret) {
         bookingError("client", "ExperienceBookingCard create-payment-intent missing clientSecret", null, { holdId: holdData.holdId });
+        await releaseCreatedHold();
         setError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
       }
       if (!STRIPE_PUBLISHABLE_KEY) {
+        await releaseCreatedHold();
         setError("Stripe publishable key not configured. Contact support.");
         setPaymentPhase("form");
         return;
@@ -365,6 +386,7 @@ export function ExperienceBookingCard({
       setPaymentPhase("stripe");
     } catch (e) {
       bookingError("client", "ExperienceBookingCard create-hold or create-payment-intent threw", e, {});
+      await releaseCreatedHold();
       setError(e instanceof Error ? e.message : "Something went wrong");
       setPaymentPhase("form");
     } finally {

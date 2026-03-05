@@ -51,7 +51,20 @@ export async function GET(request: NextRequest) {
     if (daysMs > maxDays * 24 * 60 * 60 * 1000 || daysMs < 0) {
       return NextResponse.json({ error: `Date range must be between 1 and ${maxDays} days` }, { status: 400 });
     }
-    const db = getDb();
+    let db: ReturnType<typeof getDb>;
+    try {
+      db = getDb();
+    } catch (configErr) {
+      const msg = configErr instanceof Error ? configErr.message : String(configErr);
+      const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(msg);
+      return NextResponse.json(
+        {
+          error: isConfig ? "Booking is not configured." : "Service temporarily unavailable.",
+          hint: isConfig ? SLOTS_FIREBASE_HINT : undefined,
+        },
+        { status: 503 }
+      );
+    }
     const { Timestamp } = getFirestoreExports();
 
     if (experienceId) {

@@ -80,6 +80,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   // null = not yet fetched; array = fetched (may be empty if no open slots)
   const [allSlots, setAllSlots] = useState<bookingCache.CachedSlotDto[] | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -169,13 +170,19 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     );
     setSlotsLoading(true);
     setAllSlots(null);
+    setSlotsLoadError(null);
     const controller = new AbortController();
     bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, controller.signal)
       .then((data) => {
         setAllSlots(Array.isArray(data.slots) ? data.slots : []);
+        setSlotsLoadError(null);
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setAllSlots([]);
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setAllSlots([]);
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
+        setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
       .finally(() => setSlotsLoading(false));
     return () => controller.abort();
@@ -397,7 +404,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                     <ChevronRight className="h-5 w-5" aria-hidden />
                   </button>
                 </div>
-                {slotsLoading ? (
+                {slotsLoadError ? (
+                  <p className="text-sm text-amber-700 py-4 px-2">{slotsLoadError}</p>
+                ) : slotsLoading ? (
                   <div className="flex items-center gap-2 py-4">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
                     <p className="text-brand-muted text-sm">Checking availability…</p>

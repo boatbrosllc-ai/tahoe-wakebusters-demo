@@ -237,6 +237,21 @@ export function InlineBookingDetailsStep({
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
+    let createdHoldId: string | null = null;
+    const releaseCreatedHold = async () => {
+      if (!createdHoldId) return;
+      try {
+        await fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: createdHoldId }),
+        });
+      } catch {
+        // best-effort
+      }
+      createdHoldId = null;
+      setHoldId(null);
+    };
     try {
       bookingLog("client", "InlineBookingDetailsStep create-hold request", { experienceId, boatId: boatId ?? undefined, slotId: slot.id, rateId, partySize });
       const holdRes = await fetch("/api/booking/create-hold", {
@@ -267,6 +282,7 @@ export function InlineBookingDetailsStep({
         return;
       }
       const newHoldId = holdData.holdId;
+      createdHoldId = newHoldId;
       setHoldId(newHoldId);
       bookingLog("client", "InlineBookingDetailsStep create-hold success, create-payment-intent request", { holdId: newHoldId, payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
@@ -277,18 +293,21 @@ export function InlineBookingDetailsStep({
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
         bookingLog("client", "InlineBookingDetailsStep create-payment-intent failed", { status: intentRes.status, error: intentData.error });
+        await releaseCreatedHold();
         setPaymentError(intentData.error ?? "Failed to start payment");
         setPaymentPhase("form");
         return;
       }
       if (!intentData.clientSecret) {
         bookingError("client", "InlineBookingDetailsStep create-payment-intent missing clientSecret", null, { holdId: newHoldId });
+        await releaseCreatedHold();
         setPaymentError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
       }
       bookingLog("client", "InlineBookingDetailsStep create-payment-intent success", { holdId: newHoldId });
       if (!STRIPE_PUBLISHABLE_KEY) {
+        await releaseCreatedHold();
         setPaymentError("Stripe not configured.");
         setPaymentPhase("form");
         return;
@@ -298,6 +317,7 @@ export function InlineBookingDetailsStep({
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "InlineBookingDetailsStep create-hold or create-payment-intent threw", err, {});
+      await releaseCreatedHold();
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }
