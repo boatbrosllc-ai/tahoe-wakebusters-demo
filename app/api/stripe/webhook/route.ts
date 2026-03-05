@@ -546,7 +546,7 @@ export async function POST(request: NextRequest) {
           try {
             await db.collection("pendingRefunds").add({
               holdId,
-              paymentIntentId: piId,
+              duplicatePaymentIntentId: piId,
               reason: "hold_expired_after_payment",
               status: "pending",
               createdAt: Timestamp.now(),

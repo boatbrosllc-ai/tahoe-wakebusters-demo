@@ -23,12 +23,14 @@ export async function GET(request: NextRequest) {
       .get();
 
     const refunds = snap.docs.map((d) => {
-      const data = d.data() as PendingRefund;
+      const data = d.data() as PendingRefund & { paymentIntentId?: string };
       const createdAt = data.createdAt ? toDate(data.createdAt as { seconds?: number; toDate?: () => Date }) : null;
+      const duplicatePaymentIntentId = data.duplicatePaymentIntentId ?? data.paymentIntentId;
       return {
         ...data,
         id: d.id,
         createdAt: createdAt?.toISOString() ?? null,
+        duplicatePaymentIntentId,
       };
     });
 

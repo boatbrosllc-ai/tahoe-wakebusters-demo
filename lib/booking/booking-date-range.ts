@@ -5,7 +5,22 @@
 
 /** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. */
 export function getChicagoToday(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+  try {
+    const s = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+    // en-CA can be "YYYY-MM-DD" or "DD/MM/YYYY" depending on env; normalize to YYYY-MM-DD
+    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) return s;
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
 }
 
 /** YYYY-MM-DD from a Date's calendar parts (for month boundaries). */

@@ -14,7 +14,20 @@
  * the cached result available for the next mount). Each caller receives a per-caller
  * race against its own AbortSignal, so state updates are skipped when a component
  * unmounts or its deps change.
+ *
+ * Production: when NEXT_PUBLIC_SITE_URL (or NEXT_PUBLIC_APP_URL) is set, API requests
+ * use that as the base URL so the calendar and booking APIs always hit the correct
+ * origin (avoids CDN/proxy or wrong-origin issues in production).
  */
+
+/** Base URL for API requests. Uses env when set; otherwise same-origin so production always hits the correct host. */
+function getApiBaseUrl(): string {
+  if (typeof window === "undefined") return "";
+  const fromEnv =
+    (process.env.NEXT_PUBLIC_SITE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "").trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  return window.location.origin;
+}
 
 const STALE_MS = {
   experiences: 60_000,
@@ -62,9 +75,11 @@ function fetchCached<T>(
   const basePromise: Promise<T> =
     existing ??
     (() => {
+      const base = getApiBaseUrl();
+      const fullUrl = base ? `${base}${url}` : url;
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
-      const p = fetch(url)
+      const p = fetch(fullUrl, { credentials: "include" })
         .then(async (res) => {
           if (!res.ok) {
             let body: { error?: string; hint?: string; code?: string } = {};

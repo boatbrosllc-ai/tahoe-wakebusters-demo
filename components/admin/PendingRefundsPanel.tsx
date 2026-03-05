@@ -7,6 +7,8 @@ type PendingRefundRow = {
   bookingId?: string;
   holdId?: string;
   duplicatePaymentIntentId?: string;
+  /** Legacy: expired-hold records previously saved with this field; still shown in Payment Intent column. */
+  paymentIntentId?: string;
   reason: string;
   status: string;
   createdAt: string | null;
@@ -113,7 +115,7 @@ export function PendingRefundsPanel() {
                       {r.bookingId ?? r.holdId ?? "—"}
                     </td>
                     <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark break-all font-mono text-xs">
-                      {r.duplicatePaymentIntentId ?? "—"}
+                      {r.duplicatePaymentIntentId ?? r.paymentIntentId ?? "—"}
                     </td>
                   </tr>
                 ))}
@@ -129,7 +131,7 @@ export function PendingRefundsPanel() {
                   {r.bookingId ?? r.holdId ?? "—"}
                 </p>
                 <p className="text-xs text-brand-muted break-all font-mono">
-                  {r.duplicatePaymentIntentId ?? "—"}
+                  {r.duplicatePaymentIntentId ?? r.paymentIntentId ?? "—"}
                 </p>
               </div>
             ))}
