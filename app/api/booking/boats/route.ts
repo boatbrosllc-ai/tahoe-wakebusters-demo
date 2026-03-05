@@ -29,10 +29,19 @@ export async function GET(request: NextRequest) {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string };
     const experienceSlug = (expData?.slug ?? "").toLowerCase().trim();
-    // Fallback: when Firestore slug is missing (e.g. prod), use experienceId so boat-type filter works (e.g. id "watersports" => wake only).
-    const slugForBoatType = experienceSlug || experienceId.trim().toLowerCase();
+    const inferredSlugFromTitle = ((): string => {
+      if (experienceSlug) return "";
+      const t = (expData?.title ?? expData?.name ?? "").toLowerCase();
+      if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
+      if (/pontoon|tritoon|party/.test(t)) return "pontoon";
+      if (/sunset|cruise/.test(t)) return "sunset";
+      if (/holiday|festive/.test(t)) return "holiday";
+      return "";
+    })();
+    const effectiveSlug = experienceSlug || inferredSlugFromTitle;
+    const slugForBoatType = effectiveSlug || experienceId.trim().toLowerCase();
 
     const expRatesSnap = await db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get();
     const experienceRates = expRatesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string } & ExperienceRate));
@@ -45,7 +54,7 @@ export async function GET(request: NextRequest) {
       if (fromPriceCents == null || r.priceCents < fromPriceCents) fromPriceCents = r.priceCents;
     });
 
-    const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+    const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
     const boatSnaps = await Promise.all(
       experienceIdVariants.map((variantId) =>
         db
