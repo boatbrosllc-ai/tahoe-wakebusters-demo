@@ -136,13 +136,16 @@ If the calendar shows no dates or "Unable to load availability" in production bu
 
 To get the full booking flow (including **more than one month** loading in the calendar) working on Netlify:
 
-1. **Use the Next.js runtime**  
+1. **Use the Next.js runtime (required)** — The repo's `netlify.toml` includes `[[plugins]]` with `package = "@netlify/plugin-nextjs"`; `package.json` has the plugin in devDependencies. This runs the real Next.js server so SSR, API routes, and image optimization work. Without it, pages/APIs can return 503.  
    In Netlify → Site configuration → Build & deploy → Build:
    - **Build command:** `npm run build` (or `next build`).
    - **Publish directory:** leave as set by the Netlify Next.js plugin (usually `.next` is handled automatically).  
    If you use **Netlify’s “Detect next.js”** or **@netlify/plugin-nextjs**, API routes under `/api/*` (including `/api/booking/slots`, `/api/booking/create-hold`, etc.) run as serverless functions. Without the Next runtime, those routes won’t exist in production.
 
-2. **Set environment variables** (Site settings → Environment variables → Add variable / Import from .env):
+2. **Function timeout (26 seconds)**  
+   The slots API can exceed Netlify's default 10s; the second calendar month may then 504. The repo's `netlify.toml` sets `[functions."___netlify-handler"] timeout = 26`. If your Netlify UI has **Build & deploy → Functions** and a "Function timeout" (or "Default function timeout") option, set it to **26**. If that option is not available on your plan or UI, the `netlify.toml` value may still be applied by the build; if the second month still times out, contact [Netlify Support](https://www.netlify.com/support) and ask to increase the function timeout to 26 seconds for your site.
+
+3. **Set environment variables** (Site settings → Environment variables → Add variable / Import from .env):
    - **Firebase (required for slots, holds, checkout):**  
      `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (single line, newlines as `\n` — see [Firebase Private Key](#production-deployment-netlify--vercel--etc) below).  
      Do **not** set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in Netlify.
@@ -152,31 +155,34 @@ To get the full booking flow (including **more than one month** loading in the c
    - **Public (if using Stripe or Firebase on the client):** `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, and if using admin login: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `ADMIN_EMAIL`.  
    Set scope to **All** or **Build** so they’re available at build and runtime. Then **Trigger deploy** (or push a commit) so the new vars are applied.
 
-3. **Stripe webhook**  
+4. **Stripe webhook**  
    In Stripe Dashboard → Webhooks, add endpoint URL:  
    `https://YOUR_NETLIFY_DOMAIN/api/stripe/webhook`  
    Events: `checkout.session.completed`, `payment_intent.succeeded`.  
    Copy the signing secret into Netlify as `STRIPE_WEBHOOK_SECRET` and redeploy.
 
-4. **Deploy the latest code**  
+5. **Deploy the latest code**  
    Ensure the repo has the fixes for production (UTC date parsing in the slots API, shared month range in the booking modal). Push to the branch Netlify builds from and wait for the deploy to finish.
 
-5. **Verify**
+6. **Verify**
    - Open the production site → Book now or an experience page.
    - Open the first month; then click **Next month**. The second month should load (no “Unable to load availability”).
+   - Before release: validate with GET /api/health (should not return 503) and direct GET /api/booking/slots?experienceId=...&startDate=...&endDate=... calls to confirm calendar month data loads.
    - If the second month still doesn’t load: Netlify → Deploys → latest → Functions / Logs; look for errors from `/api/booking/slots` (e.g. 400/503). In the browser, DevTools → Network: check the request to `/api/booking/slots?experienceId=...&startDate=...&endDate=...` for the next month and see the response status and body.
 
 ## Production deployment (Netlify / Vercel / etc.)
 
-For **Book now** and experiences to work in production, the server must have Firebase Admin credentials. If they are missing, `/api/experiences` returns 500 and the booking modal shows “No experiences” or “Failed to load experiences.”
+For **Book now** and experiences to work in production, the server must have Firebase Admin credentials. If they are missing or truncated, `/api/booking/slots` returns 503 and calendar month data never loads; `/api/experiences` may return 500 and the booking modal shows “No experiences” or “Failed to load experiences.”
 
-**Set these in your host’s environment** (e.g. Netlify → Site settings → Environment variables):
+**Set these in your host’s environment** (e.g. Netlify → Site settings → Environment variables) exactly as required by `lib/booking/env.ts`:
 
 - `FIREBASE_PROJECT_ID` — your Firebase project ID
 - `FIREBASE_CLIENT_EMAIL` — from the service account JSON (`client_email`)
-- `FIREBASE_PRIVATE_KEY` — **must be the full private key on a single line.** Netlify (and most hosts) do not support multi-line env values. In the service account JSON, `private_key` is multiple lines. To use it in Netlify: open the key in a text editor, replace every actual newline with the two characters backslash + n (`\n`), so you get one long line (e.g. `-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n`). Paste that single line as the value of `FIREBASE_PRIVATE_KEY`. The app will turn `\n` back into newlines at runtime.
+- `FIREBASE_PRIVATE_KEY` — **must be the full private key on a single line** using literal `\n` for newlines. Netlify (and most hosts) do not support multi-line env values. In the service account JSON, `private_key` is multiple lines. To use it in Netlify: open the key in a text editor, replace every actual newline with the two characters backslash + n (`\n`), so you get one long line (e.g. `-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n`). Paste that single line as the value of `FIREBASE_PRIVATE_KEY` (no surrounding quotes). The app will turn `\n` back into newlines at runtime.
 
-**Avoid** relying on `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` in production unless the JSON file is committed or built into the app; most hosts don’t have your local file. Using the three variables above is the reliable approach. **Do not set FIREBASE_SERVICE_ACCOUNT_JSON_PATH in Netlify**—if set, the app tries to read that file at runtime and it does not exist in the deploy, so Firebase fails and the app returns 500.
+**Avoid** using `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify unless the file truly exists at runtime (e.g. committed or built into the deploy). If the path is set but the file is missing, Firebase fails and the app returns 503. Using the three variables above is the reliable approach. **Do not set FIREBASE_SERVICE_ACCOUNT_JSON_PATH in Netlify**—the file is not in the deploy.
+
+**Before release:** validate with `GET /api/health` (should not return 503) and direct `GET /api/booking/slots?experienceId=...&startDate=...&endDate=...` calls to confirm calendar month data loads.
 
 Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. **For admin login in production:** `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` must be the same Firebase project; otherwise the server cannot verify the sign-in token and returns 401. After saving, redeploy so the new env vars are applied.
 

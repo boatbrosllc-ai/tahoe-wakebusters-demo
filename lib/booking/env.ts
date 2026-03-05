@@ -130,7 +130,18 @@ export const bookingEnv = {
 };
 
 export function hasFirebaseConfig(): boolean {
-  if (bookingEnv.firebaseServiceAccountPath) return true;
+  const path = bookingEnv.firebaseServiceAccountPath;
+  if (path) {
+    try {
+      const pathMod = require("path") as typeof import("path");
+      const fs = require("fs") as typeof import("fs");
+      const resolved = pathMod.isAbsolute(path) ? path : pathMod.join(process.cwd(), path);
+      if (!fs.existsSync(resolved)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
   return !!(
     bookingEnv.firebaseProjectId &&
     bookingEnv.firebaseClientEmail &&

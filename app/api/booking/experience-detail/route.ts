@@ -9,8 +9,12 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
+
+const EXPERIENCE_DETAIL_FIREBASE_HINT =
+  "Experience detail requires Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your deployment environment.";
 
 export interface ExperienceDetailBoat {
   id: string;
@@ -49,6 +53,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const experienceId = request.nextUrl.searchParams.get("experienceId");
   if (!experienceId) {
     return NextResponse.json({ error: "experienceId required" }, { status: 400 });
+  }
+
+  if (!safeHasFirebaseConfig()) {
+    const detail = (() => {
+      try {
+        return getFirebaseConfigStatus();
+      } catch {
+        return { summary: EXPERIENCE_DETAIL_FIREBASE_HINT };
+      }
+    })();
+    return NextResponse.json(
+      { error: "Booking is not configured.", hint: EXPERIENCE_DETAIL_FIREBASE_HINT, firebaseDetail: detail },
+      { status: 503 }
+    );
   }
 
   try {

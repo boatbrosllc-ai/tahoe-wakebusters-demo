@@ -109,6 +109,17 @@ export default function AdminHomePage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [healthResult, setHealthResult] = useState<Record<string, unknown> | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const checkBookingHealth = useCallback(() => {
+    setHealthLoading(true);
+    setHealthResult(null);
+    fetch("/api/health", { credentials: "include" })
+      .then(async (res) => ({ status: res.status, ...(await res.json().catch(() => ({}))) }))
+      .then(setHealthResult)
+      .catch((e) => setHealthResult({ error: e instanceof Error ? e.message : String(e) }))
+      .finally(() => setHealthLoading(false));
+  }, []);
   useEffect(() => {
     fetch("/api/admin/dashboard", { credentials: "include" })
       .then(async (res) => {
@@ -156,7 +167,20 @@ export default function AdminHomePage() {
             {greeting} — {dateLabel}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={checkBookingHealth}
+          disabled={healthLoading}
+          className="rounded-xl border border-brand-dark/15 bg-white px-4 py-2 text-sm font-medium text-brand-dark shadow-sm transition-colors hover:bg-brand-bg disabled:opacity-60"
+        >
+          {healthLoading ? "Checking…" : "Check booking health"}
+        </button>
       </div>
+      {healthResult != null && (
+        <div className="rounded-2xl border border-brand-dark/10 bg-white p-4 font-mono text-xs text-brand-dark overflow-x-auto">
+          <pre className="whitespace-pre-wrap break-words">{JSON.stringify(healthResult, null, 2)}</pre>
+        </div>
+      )}
 
       {loading && (
         <>

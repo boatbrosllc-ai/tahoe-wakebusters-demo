@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts",
     "seed": "node scripts/seed-firestore.js",
-    "postinstall": "node scripts/postinstall-next.js"
+    "postinstall": "node scripts/postinstall-next.js",
+    "prepare": "husky"
   },
   "dependencies": {
     "@netlify/functions": "^5.1.2",
@@ -33,6 +34,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.15.0",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "20.19.31",
     "@types/react": "^18.3.0",
@@ -40,10 +42,11 @@
     "autoprefixer": "^10.4.0",
     "eslint": "^8.0.0",
     "eslint-config-next": "^14.2.0",
+    "husky": "^9.1.7",
     "playwright": "^1.58.2",
-    "tsx": "^4.19.2",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
+    "tsx": "^4.19.2",
     "typescript": "5.9.3"
   }
 }

@@ -92,14 +92,11 @@ function formatDate(iso: string) {
 function getMonthRange(monthDate: Date): { start: string; end: string } {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const monthStart = new Date(year, month, 1);
-  const monthEnd = new Date(year, month + 1, 0);
-  const effectiveStart = monthStart < today ? today : monthStart;
+  const firstOfMonth = new Date(year, month, 1);
+  const lastOfMonth = new Date(year, month + 1, 0);
   return {
-    start: effectiveStart.toISOString().slice(0, 10),
-    end: monthEnd.toISOString().slice(0, 10),
+    start: firstOfMonth.toISOString().slice(0, 10),
+    end: lastOfMonth.toISOString().slice(0, 10),
   };
 }
 
@@ -143,6 +140,7 @@ export function ExperienceBookingCard({
   }, [isTicketed, departureHour, departureMinute]);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   const [selectedRateId, setSelectedRateId] = useState<string | null>(rates[0]?.id ?? null);
@@ -183,6 +181,7 @@ export function ExperienceBookingCard({
     const range = getMonthRange(monthDate);
     bookingDebugLog("ExperienceBookingCard", "slots fetch start", { experienceId, monthKey: key, startDate: range.start, endDate: range.end });
     setSlotsLoading(true);
+    setSlotsLoadError(null);
     setSlotStolen(false);
     try {
       const data = await fetchSlotsCache(experienceId, range.start, range.end);
@@ -197,8 +196,11 @@ export function ExperienceBookingCard({
       });
       loadedMonthsRef.current.add(key);
     } catch (err) {
-      bookingDebugLog("ExperienceBookingCard", "slots fetch failed", { monthKey: key, error: err instanceof Error ? err.message : String(err) });
-      // Network errors are non-fatal; stale slot data remains visible.
+      const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+      const message =
+        apiBody?.error ?? apiBody?.hint ?? (err instanceof Error ? err.message : String(err));
+      setSlotsLoadError(message || "Could not load availability.");
+      bookingDebugLog("ExperienceBookingCard", "slots fetch failed", { monthKey: key, error: message });
     } finally {
       setSlotsLoading(false);
     }
@@ -662,6 +664,18 @@ export function ExperienceBookingCard({
             </button>
           </div>
         </div>
+        {slotsLoadError && (
+          <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+            <p>{slotsLoadError}</p>
+            <button
+              type="button"
+              onClick={() => fetchMonthSlots(calendarMonth, true)}
+              className="mt-2 rounded-lg bg-amber-200 px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-300 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {slotsLoading ? (
           <div className="grid grid-cols-7 gap-0.5">
             {Array.from({ length: 35 }, (_, i) => (

@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { hasFirebaseConfig } from "@/lib/booking/env";
+import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import type { ExperienceRate } from "@/lib/booking/types";
+
+const RATES_FIREBASE_HINT =
+  "Rates require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your deployment environment.";
 
 export async function GET(request: NextRequest) {
   try {
-    if (!hasFirebaseConfig()) {
-      return NextResponse.json({ rates: [] });
+    if (!safeHasFirebaseConfig()) {
+      const detail = (() => {
+        try {
+          return getFirebaseConfigStatus();
+        } catch {
+          return { summary: RATES_FIREBASE_HINT };
+        }
+      })();
+      return NextResponse.json(
+        { error: "Booking is not configured.", hint: RATES_FIREBASE_HINT, firebaseDetail: detail },
+        { status: 503 }
+      );
     }
     const experienceId = request.nextUrl.searchParams.get("experienceId");
     if (!experienceId) {
@@ -40,6 +53,9 @@ export async function GET(request: NextRequest) {
     );
   } catch (err) {
     console.error("[experiences/rates]", err);
-    return NextResponse.json({ rates: [] });
+    return NextResponse.json(
+      { error: "Service temporarily unavailable.", hint: RATES_FIREBASE_HINT },
+      { status: 503 }
+    );
   }
 }

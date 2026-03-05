@@ -1,13 +1,21 @@
 [build]
   command = "npm run build"
+  # Publish dir is set by @netlify/plugin-nextjs when present; omit or use .next for static fallback.
   publish = ".next"
 
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
 [functions]
-  # Next.js API routes (/api/booking/slots, date-prices) use maxDuration=26 in route.ts.
-  # If calendar only loads one month in production, set function timeout to 26s in Netlify UI (Site settings → Functions) or ask Netlify Support.
-  # Allow long-running booking and cron functions up to 60 seconds
-  # (Netlify default is 10s; background functions allow up to 15 min)
+  # Next.js API routes (/api/booking/slots, /api/booking/date-prices) use maxDuration=26 in route.ts.
+  # Netlify default is 10s; slots can exceed that so the second calendar month may 504. This file sets timeout = 26
+  # for the handler when supported. If the UI has no "function timeout" option, request a 26s limit via Netlify Support.
   included_files = ["netlify/functions/**"]
+
+# Handler timeout: when the runtime supports ___netlify-handler, 26s allows second-month slots to complete.
+# See: https://docs.netlify.com/build/functions/overview/#default-deployment-options
+[functions."___netlify-handler"]
+  timeout = 26
 
 [functions."booking-reminder-cron"]
   timeout = 60

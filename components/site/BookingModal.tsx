@@ -212,6 +212,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
+  const [experienceDetailLoadError, setExperienceDetailLoadError] = useState<string | null>(null);
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
   const openSlotsForDate = useMemo(() => {
     if (!selectedDate) return [];
@@ -430,14 +431,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setSelectedBoat(null);
       setExperienceRates([]);
       setAddons([]);
+      setExperienceDetailLoadError(null);
       return;
     }
-    setSlotsLoading(true);
+    setExperienceDetailLoadError(null);
     setMonthSlots([]);
     setBoatsLoading(true);
     setAddonsLoading(true);
     setSelectedBoat(null);
     const controller = new AbortController();
+    setExperienceDetailLoadError(null);
     bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
         const boatList = Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
@@ -451,6 +454,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setBoats([]);
         setExperienceRates([]);
         setAddons([]);
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string }; message?: string })?.apiBody;
+        const msg = apiBody?.error ?? apiBody?.hint ?? (err instanceof Error ? err.message : "Could not load experience details.");
+        setExperienceDetailLoadError(msg);
       })
       .finally(() => {
         setBoatsLoading(false);
@@ -477,10 +483,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setRatesLoadError(null);
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") {
-          setRatesSummary(null);
-          setRatesLoadError("We couldn't load rates for this experience.");
-        }
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setRatesSummary(null);
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string }; message?: string })?.apiBody;
+        const msg = apiBody?.error ?? apiBody?.hint ?? (err instanceof Error ? err.message : "We couldn't load rates for this experience.");
+        setRatesLoadError(msg);
       });
     return () => controller.abort();
   }, [selectedExperience?.id]);
@@ -1323,6 +1330,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                 {ratesLoadError && (
                   <p className="text-sm text-amber-700 py-2">{ratesLoadError} Try again or contact us.</p>
                 )}
+                {experienceDetailLoadError && (
+                  <p className="text-sm text-amber-700 py-2">{experienceDetailLoadError} Check /api/health for details.</p>
+                )}
                 {ratesForSelection.length > 0 && !isTicketed && (
                   <div>
                     <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
@@ -1403,11 +1413,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                   {slotsLoadError && (
                     <p className="text-sm text-amber-700 py-3 px-2 mb-2">
                       {slotsLoadError}
-                      {slotsLoadError.includes("Firebase") || slotsLoadError.includes("not configured") ? (
-                        <span className="block mt-1 text-xs">
-                          Check <a href="/api/health" target="_blank" rel="noopener noreferrer" className="underline">/api/health</a> on this site for details.
-                        </span>
-                      ) : null}
+                      <span className="block mt-1 text-xs">
+                        Check <a href="/api/health" target="_blank" rel="noopener noreferrer" className="underline">/api/health</a> on this site for details.
+                      </span>
                     </p>
                   )}
                   <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
