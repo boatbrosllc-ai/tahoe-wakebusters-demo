@@ -60,6 +60,9 @@ export interface ExperienceCalendarSectionViewProps {
   noAvailabilityBecauseNotSetUp: boolean;
   didFetchSlots: boolean;
   hasAnyAvailability: boolean;
+  /** When true, the current month's slot fetch failed; show retry/error banner instead of "No availability." */
+  monthFetchErrorForKey?: boolean;
+  onRetryMonthFetch?: () => void;
   inlineBoatsLoading: boolean;
   inlineBoats: { id: string; name: string; photos?: string[] }[];
   availableBoatIdsForInlineSlot: Set<string>;
@@ -148,6 +151,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     noAvailabilityBecauseNotSetUp,
     didFetchSlots,
     hasAnyAvailability,
+    monthFetchErrorForKey = false,
+    onRetryMonthFetch,
     inlineBoatsLoading,
     inlineBoats,
     availableBoatIdsForInlineSlot,
@@ -318,7 +323,17 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         );
                       })}
                     </div>
-                    {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800"><p>No availability for this month.</p></div>}
+                    {monthFetchErrorForKey && (
+                    <div className="mt-4 rounded-2xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-800">
+                      <p>Could not load availability for this month.</p>
+                      {onRetryMonthFetch && (
+                        <button type="button" onClick={onRetryMonthFetch} className="mt-2 font-medium underline hover:no-underline">
+                          Retry
+                        </button>
+                      )}
+                    </div>
+                  )}
+                    {!monthFetchErrorForKey && didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800"><p>No availability for this month.</p></div>}
                   </>
                 )}
               </div>
@@ -551,7 +566,17 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 <p>Calendar not loading. Check Firebase and run setup in /admin.</p>
                               </div>
                             )}
-                            {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                            {monthFetchErrorForKey && (
+                              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-800">
+                                <p>Could not load availability for this month.</p>
+                                {onRetryMonthFetch && (
+                                  <button type="button" onClick={onRetryMonthFetch} className="mt-2 font-medium underline hover:no-underline">
+                                    Retry
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            {!monthFetchErrorForKey && didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
                               <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-800">
                                 <p>No availability for this month.</p>
                               </div>
@@ -926,7 +951,17 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 <p className="mt-1">Check Firebase config and run setup in <a href="/admin" className="text-brand-primary underline">/admin</a>.</p>
                               </div>
                             )}
-                            {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                            {monthFetchErrorForKey && (
+                              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50/80 px-4 py-4 text-center text-sm text-red-800">
+                                <p className="font-medium">Could not load availability for this month.</p>
+                                {onRetryMonthFetch && (
+                                  <button type="button" onClick={onRetryMonthFetch} className="mt-2 font-medium underline hover:no-underline">
+                                    Retry
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            {!monthFetchErrorForKey && didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
                               <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
                                 <p className="font-medium">No availability for the dates shown. Try another month or call us.</p>
                               </div>
@@ -1234,7 +1269,17 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         <p className="mt-2 text-brand-muted/90">After that, this calendar will show 100% open dates until someone books.</p>
                       </div>
                     )}
-                    {didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
+                    {monthFetchErrorForKey && (
+                      <div className="mt-6 rounded-2xl border border-red-200 bg-red-50/80 px-4 py-4 text-center text-sm text-red-800">
+                        <p className="font-medium">Could not load availability for this month.</p>
+                        {onRetryMonthFetch && (
+                          <button type="button" onClick={onRetryMonthFetch} className="mt-2 font-medium underline hover:no-underline">
+                            Retry
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {!monthFetchErrorForKey && didFetchSlots && !loading && !hasAnyAvailability && !noAvailabilityBecauseNotSetUp && (
                       <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-4 text-center text-sm text-amber-800">
                         <p className="font-medium">No availability for the dates shown.</p>
                         <p className="mt-1 text-amber-700/90">Try another month or call us to request a date.</p>

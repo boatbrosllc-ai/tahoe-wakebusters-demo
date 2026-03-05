@@ -492,7 +492,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     return () => controller.abort();
   }, [selectedExperience?.id]);
 
-  // Use shared date-range helper so month boundaries match API and other booking flows (avoids TZ bugs in production).
+  // Use shared date-range helper so month boundaries match API and other booking flows.
   const { start: viewMonthStartStr, end: viewMonthEndStr } = useMemo(
     () => getMonthRange(viewMonthYear, viewMonthMonth - 1),
     [viewMonthYear, viewMonthMonth]
@@ -524,14 +524,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         controller.signal,
       )
       .then((data) => {
-        if (inFlightKeyRef.current !== key) return;
+        const keyMatch = inFlightKeyRef.current === key;
+        // #region agent log
+        if (!keyMatch) console.warn("[booking:diagnostic:next-month] H5/stale: date-prices response discarded (key mismatch)", { key, inFlightKey: inFlightKeyRef.current });
         const prices = data.prices && typeof data.prices === "object" ? data.prices : {};
+        const priceKeys = Object.keys(prices);
+        console.log("[booking:diagnostic:next-month] date-prices .then", { viewMonthStartStr, keyMatch, priceCount: priceKeys.length, samplePriceKeys: priceKeys.slice(0, 5) });
+        // #endregion
+        if (!keyMatch) return;
         const holidays = new Set<string>(Array.isArray(data?.holidayDateStrings) ? data.holidayDateStrings : []);
         const ticketsAvailable =
           data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object"
             ? data.ticketsAvailableByDate
             : {};
-        const priceCount = Object.keys(prices).length;
+        const priceCount = priceKeys.length;
         bookingLog("client", "date-prices fetch ok", { startDate: viewMonthStartStr, priceCount, holidayCount: holidays.size });
         setDatePrices(prices);
         setHolidayDateStrings(holidays);
@@ -607,7 +613,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     )
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
-        if (slotsRequestRangeRef.current?.start !== viewMonthStartStr || slotsRequestRangeRef.current?.end !== viewMonthEndStr) return;
+        // #region agent log
+        const refMatch = slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr;
+        if (!refMatch) console.warn("[booking:diagnostic:next-month] H5/stale: slots response discarded (ref mismatch)", { viewMonthStartStr, viewMonthEndStr, ref: slotsRequestRangeRef.current, slotCount: slots.length });
+        const sampleSlotDates = slots.slice(0, 3).map((s) => ({ startAt: s.startAt, chicagoKey: isoToChicagoDateStr(s.startAt) }));
+        console.log("[booking:diagnostic:next-month] slots .then", { viewMonthStartStr, refMatch, slotCount: slots.length, sampleSlotDates });
+        // #endregion
+        if (!refMatch) return;
         setSlotsLoadError(null);
         bookingLog("client", "slots fetch ok", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, slotCount: slots.length });
         bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
@@ -754,6 +766,28 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return map;
   }, [monthSlots]);
+  // #region agent log
+  useEffect(() => {
+    if (!selectedExperience?.id || !selectedRateIdForCalendar) return;
+    const firstGridDateStr = dateOptions[0]?.dateStr;
+    if (!firstGridDateStr) return;
+    const slotsKeys = Array.from(slotsByDate.keys()).slice(0, 5);
+    const priceKeys = Object.keys(datePrices).slice(0, 5);
+    const hasSlots = slotsByDate.has(firstGridDateStr);
+    const hasPrice = firstGridDateStr in datePrices;
+    console.log("[booking:diagnostic:next-month] grid vs data", {
+      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
+      viewMonthStartStr,
+      firstGridDateStr,
+      hasSlots,
+      hasPrice,
+      monthSlotsCount: monthSlots.length,
+      datePricesKeyCount: Object.keys(datePrices).length,
+      sampleSlotsByDateKeys: slotsKeys,
+      sampleDatePricesKeys: priceKeys,
+    });
+  }, [viewMonthYear, viewMonthMonth, viewMonthStartStr, dateOptions, slotsByDate, datePrices, monthSlots.length, selectedExperience?.id, selectedRateIdForCalendar]);
+  // #endregion
   /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). */
   const openCountByDateAndDuration = useMemo(() => {
     const map = new Map<string, Map<number, number>>();

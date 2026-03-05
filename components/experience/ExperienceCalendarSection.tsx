@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib } from "@/lib/booking/booking-date-range";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
 
@@ -32,18 +33,12 @@ function formatTime(iso: string) {
 
 /** Range covering one month before through one month after the given calendar month (so nav always has data). */
 function getDateRangeForMonth(calendarMonth: Date): { start: string; end: string } {
-  const y = calendarMonth.getFullYear();
-  const m = calendarMonth.getMonth();
-  const start = new Date(y, m - 1, 1);
-  const end = new Date(y, m + 2, 0); // last day of month + 1
-  return { start: toDateStr(start), end: toDateStr(end) };
+  return getMonthRangeWithAdjacent(calendarMonth.getFullYear(), calendarMonth.getMonth());
 }
 
 /** Returns the date range covering only the visible calendar month (first day through last day). */
 function getVisibleMonthRange(calendarMonth: Date): { start: string; end: string } {
-  const y = calendarMonth.getFullYear();
-  const m = calendarMonth.getMonth();
-  return { start: toDateStr(new Date(y, m, 1)), end: toDateStr(new Date(y, m + 1, 0)) };
+  return getMonthRange(calendarMonth.getFullYear(), calendarMonth.getMonth());
 }
 
 /**
@@ -58,26 +53,11 @@ function mergeSlots(existing: SlotDto[], incoming: SlotDto[]): SlotDto[] {
   return [...retained, ...incoming];
 }
 
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-/** Days in a calendar month for compact grid (dateStr, label, weekday). Month is 1-based. */
-function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
-  const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const last = new Date(year, month, 0);
-  const count = last.getDate();
-  for (let day = 1; day <= count; day++) {
-    const d = new Date(year, month - 1, day);
-    out.push({
-      dateStr: toDateStr(d),
-      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
-    });
-  }
-  return out;
+/** Days in a calendar month for compact grid (dateStr, label, weekday). month is 0-based. */
+function getDaysInMonth(year: number, monthZeroBased: number): { dateStr: string; label: string; weekday: string }[] {
+  return getDaysInMonthFromLib(year, monthZeroBased);
 }
 
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
@@ -181,12 +161,18 @@ export function ExperienceCalendarSection({
   /** True when Effect 1 already populated rates from the slug endpoint response; skips the standalone rates fetch in Effect 2. */
   const ratesLoadedFromSlug = useRef(false);
   /**
-   * Tracks "experienceId:YYYY-MM" month keys already loaded into slot state so navigation to a
-   * previously-seen (or already-prefetched) month skips the loading indicator.
+   * Tracks "experienceId:YYYY-MM" month keys successfully loaded into slot state. Only updated on
+   * successful fetch so retries and revisits show loading/error until success.
    */
   const fetchedMonthKeysRef = useRef<Set<string>>(new Set());
+  /** Month key currently being fetched; used so we only clear loading when that request completes. */
+  const currentCalendarMonthKeyRef = useRef<string>("");
   /** Tracks adjacent month keys already background-prefetched to avoid duplicate idle fetches. */
   const prefetchedMonthKeysRef = useRef<Set<string>>(new Set());
+  /** Month keys that had a fetch failure; UI shows retry/error banner instead of "No availability." */
+  const [monthFetchErrors, setMonthFetchErrors] = useState<Record<string, boolean>>({});
+  /** Incremented on retry to re-run the slot fetch effect for the current month. */
+  const [retryCount, setRetryCount] = useState(0);
   /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
   const [inlineStepIndex, setInlineStepIndex] = useState(() => pricingTypeProp === "ticketed" ? 1 : 0);
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
@@ -301,31 +287,44 @@ export function ExperienceCalendarSection({
   // Defined before the fetch effect so React runs it first when experienceId changes.
   useEffect(() => {
     setSlots([]);
+    setMonthFetchErrors({});
     fetchedMonthKeysRef.current = new Set();
     prefetchedMonthKeysRef.current = new Set();
   }, [experienceId]);
 
   // Fetch slots for the visible month only. Merges into existing state so already-seen months
   // remain in the slot collection and calendar edge-cells keep their data while navigating.
-  // Loading indicator is only shown the first time a month is visited.
+  // Mark month as fetched only on success; do not clear slots on failure so prior months stay visible.
   useEffect(() => {
     if (!experienceId) return;
-    const monthKey = `${experienceId}:${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, "0")}`;
+    const monthKey = `${experienceId}:${toDateStr(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)).slice(0, 7)}`;
     const alreadyFetched = fetchedMonthKeysRef.current.has(monthKey);
-    fetchedMonthKeysRef.current.add(monthKey);
-    if (!alreadyFetched) setLoading(true);
+    currentCalendarMonthKeyRef.current = monthKey;
+    if (!alreadyFetched) {
+      setLoading(true);
+      setMonthFetchErrors((prev) => {
+        const next = { ...prev };
+        delete next[monthKey];
+        return next;
+      });
+    }
     const { start, end } = getVisibleMonthRange(calendarMonth);
     const controller = new AbortController();
     bookingCache.fetchSlots(experienceId, start, end, controller.signal)
-      .then((data) => setSlots((prev) => mergeSlots(prev, (data?.slots ?? []) as SlotDto[])))
+      .then((data) => {
+        setSlots((prev) => mergeSlots(prev, (data?.slots ?? []) as SlotDto[]));
+        fetchedMonthKeysRef.current.add(monthKey);
+      })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name !== "AbortError") {
-          if (!alreadyFetched) setSlots([]);
+          setMonthFetchErrors((prev) => ({ ...prev, [monthKey]: true }));
         }
       })
-      .finally(() => { if (!alreadyFetched) setLoading(false); });
+      .finally(() => {
+        if (currentCalendarMonthKeyRef.current === monthKey) setLoading(false);
+      });
     return () => controller.abort();
-  }, [experienceId, calendarMonth]);
+  }, [experienceId, calendarMonth, retryCount]);
 
   // After the visible month loads, prefetch the previous and next months in the background so
   // navigating feels instant. Uses requestIdleCallback when available (Safari 16.4+, Chrome/Firefox),
@@ -339,7 +338,7 @@ export function ExperienceCalendarSection({
     const doPrefetch = () => {
       for (const offset of [-1, 1]) {
         const adj = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + offset, 1);
-        const adjKey = `${experienceId}:${adj.getFullYear()}-${String(adj.getMonth() + 1).padStart(2, "0")}`;
+        const adjKey = `${experienceId}:${toDateStr(new Date(adj.getFullYear(), adj.getMonth(), 1)).slice(0, 7)}`;
         if (prefetchedMonthKeysRef.current.has(adjKey)) continue;
         prefetchedMonthKeysRef.current.add(adjKey);
         const { start, end } = getVisibleMonthRange(adj);
@@ -553,12 +552,27 @@ export function ExperienceCalendarSection({
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
+  const currentMonthKey = experienceId
+    ? `${experienceId}:${toDateStr(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)).slice(0, 7)}`
+    : "";
+  const monthFetchErrorForKey = !!monthFetchErrors[currentMonthKey];
+  const onRetryMonthFetch = useCallback(() => {
+    if (!currentMonthKey) return;
+    fetchedMonthKeysRef.current.delete(currentMonthKey);
+    setMonthFetchErrors((prev) => {
+      const next = { ...prev };
+      delete next[currentMonthKey];
+      return next;
+    });
+    setRetryCount((c) => c + 1);
+  }, [currentMonthKey]);
+
   /** Compact step-2-style calendar grid (leading blanks + days). Used when onOpenInModal. */
   const step2CompactGrid = useMemo(() => {
     const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth() + 1; // 1-based for getDaysInMonth
-    const dateOptions = getDaysInMonth(year, month);
-    const first = new Date(year, calendarMonth.getMonth(), 1);
+    const monthZeroBased = calendarMonth.getMonth();
+    const dateOptions = getDaysInMonth(year, monthZeroBased);
+    const first = new Date(year, monthZeroBased, 1);
     const leadingBlanks = first.getDay();
     return [...Array(leadingBlanks).fill(null), ...dateOptions];
   }, [calendarMonth]);
@@ -769,6 +783,8 @@ export function ExperienceCalendarSection({
     noAvailabilityBecauseNotSetUp,
     didFetchSlots,
     hasAnyAvailability,
+    monthFetchErrorForKey,
+    onRetryMonthFetch,
     inlineBoatsLoading,
     inlineBoats,
     availableBoatIdsForInlineSlot,
