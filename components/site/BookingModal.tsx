@@ -16,7 +16,7 @@ import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
-import { getMonthRange } from "@/lib/booking/booking-date-range";
+import { getMonthRange, toMonthKey } from "@/lib/booking/booking-date-range";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -101,15 +101,19 @@ function toLocalDateStr(d: Date): string {
 /** Weekday labels: always Sunday first so headers match the calendar grid (getDay() 0 = Sunday). */
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-/** All days in a given calendar month (1-based). */
+/** Day key YYYY-MM-DD from (year, month 1-based, day). Deterministic, no Date keys. */
+function toDayKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** All days in a given calendar month. month is 1-based. dateStr is always YYYY-MM-DD (no Date/toISOString). */
 function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
   const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const last = new Date(year, month, 0);
-  const count = last.getDate();
-  for (let day = 1; day <= count; day++) {
+  const lastDay = new Date(year, month, 0).getDate();
+  for (let day = 1; day <= lastDay; day++) {
     const d = new Date(year, month - 1, day);
     out.push({
-      dateStr: toLocalDateStr(d),
+      dateStr: toDayKey(year, month, day),
       label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
       weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
     });
@@ -205,6 +209,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const inFlightKeyRef = useRef<string | null>(null);
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
+  /** When this matches viewMonthStartStr, grid uses monthSlots/datePrices for the visible month. State (not ref) so grid re-renders when data arrives. */
+  const [monthDataRangeStart, setMonthDataRangeStart] = useState<string | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
   const lastSlotsRetryForRef = useRef<string | null>(null);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
@@ -309,17 +315,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => getDaysInMonth(viewMonthYear, viewMonthMonth),
     [viewMonthYear, viewMonthMonth]
   );
-  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). */
+  /** Month key YYYY-MM for deterministic indexing (no Date keys). */
+  const viewMonthKey = useMemo(() => toMonthKey(viewMonthYear, viewMonthMonth), [viewMonthYear, viewMonthMonth]);
+  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when slots/prices change so cells see fresh data. */
   const step3CalendarGrid = useMemo(() => {
     const first = new Date(viewMonthYear, viewMonthMonth - 1, 1);
     const leadingBlanks = first.getDay();
     return [...Array(leadingBlanks).fill(null), ...dateOptions];
-  }, [viewMonthYear, viewMonthMonth, dateOptions]);
+  }, [viewMonthYear, viewMonthMonth, dateOptions, monthSlots, datePrices]);
   const viewMonthLabel = useMemo(
     () => new Date(viewMonthYear, viewMonthMonth - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
     [viewMonthYear, viewMonthMonth]
   );
   const isViewMonthCurrent = viewMonthYear === today.year && viewMonthMonth === today.month;
+  /** Force calendar grid to remount when month or data changes (fixes prod memo/closure not updating when slots/prices arrive). */
+  const calendarRenderKey = `${viewMonthKey}|${monthDataRangeStart ?? ""}|s:${monthSlots.length}|p:${Object.keys(datePrices).length}|r:${selectedRateIdForCalendar ?? ""}`;
 
   useEffect(() => {
     if (!open) return;
@@ -347,6 +357,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setEffectiveRateCents(null);
     setDatePrices({});
     setMonthSlots([]);
+    setMonthDataRangeStart(null);
     setSelectedSlot(null);
     setPartySize(1);
     setPetsCount(0);
@@ -436,6 +447,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     setExperienceDetailLoadError(null);
     setMonthSlots([]);
+    setMonthDataRangeStart(null);
     setBoatsLoading(true);
     setAddonsLoading(true);
     setSelectedBoat(null);
@@ -539,9 +551,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             : {};
         const priceCount = priceKeys.length;
         bookingLog("client", "date-prices fetch ok", { startDate: viewMonthStartStr, priceCount, holidayCount: holidays.size });
-        setDatePrices(prices);
-        setHolidayDateStrings(holidays);
-        setTicketsAvailableByDate(ticketsAvailable);
+        setDatePrices({ ...prices });
+        setHolidayDateStrings(new Set(holidays));
+        setTicketsAvailableByDate({ ...ticketsAvailable });
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -560,29 +572,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         }
       });
 
-    const otherRateIds = ratesForSelection.map((r) => r.id).filter((id) => id !== selectedRateIdForCalendar);
-    if (otherRateIds.length > 0) {
-      bookingCache.prefetchDatePrices(
-        selectedExperience.id,
-        viewMonthStartStr,
-        daysInViewMonth,
-        otherRateIds,
-        controller.signal,
-        2,
-      );
-    }
-
     return () => {
       controller.abort();
       inFlightKeyRef.current = null;
     };
-  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar, ratesForSelection]);
+  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar]);
 
   // Fetch all slots for the visible month (with stale guard, production failure log, and one retry)
   useEffect(() => {
     if (!selectedExperience?.id) {
       setMonthSlots([]);
       setSlotsLoadError(null);
+      setMonthDataRangeStart(null);
       return;
     }
     const rangeKey = `${viewMonthStartStr}|${viewMonthEndStr}`;
@@ -623,13 +624,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setSlotsLoadError(null);
         bookingLog("client", "slots fetch ok", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, slotCount: slots.length });
         bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
+        const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {
-            setMonthSlots(slots);
+            setMonthDataRangeStart(viewMonthStartStr);
+            setMonthSlots(nextSlots);
             setSlotsLoading(false);
           }, 0);
         } else {
-          setMonthSlots(slots);
+          setMonthDataRangeStart(viewMonthStartStr);
+          setMonthSlots(nextSlots);
           setSlotsLoading(false);
         }
         // Prefetch next month while Lambda is still warm so "Next month" often hits cache (avoids Netlify 10s timeout on second request).
@@ -657,6 +661,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         console.warn("[booking] slots fetch failed (check Network tab for /api/booking/slots)", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, status, error: apiBody?.error, hint: apiBody?.hint, firebaseDetail: apiBody?.firebaseDetail });
         bookingDebugLog("BookingModal", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         setMonthSlots([]);
+        setMonthDataRangeStart(null);
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
         const parts = [msg, apiBody?.hint, apiBody?.firebaseDetail?.summary].filter(Boolean);
         setSlotsLoadError(parts.join(" "));
@@ -711,7 +716,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const controller = new AbortController();
     fetch(
       `/api/booking/ticket-availability?experienceId=${encodeURIComponent(selectedExperience.id)}&date=${encodeURIComponent(selectedDate)}`,
-      { signal: controller.signal },
+      { signal: controller.signal, cache: "no-store" },
     )
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -766,27 +771,29 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return map;
   }, [monthSlots]);
-  // #region agent log
+  // #region agent log — first 3 grid dates: lookup key, exists in slots/prices, sample keys present
   useEffect(() => {
     if (!selectedExperience?.id || !selectedRateIdForCalendar) return;
-    const firstGridDateStr = dateOptions[0]?.dateStr;
-    if (!firstGridDateStr) return;
-    const slotsKeys = Array.from(slotsByDate.keys()).slice(0, 5);
-    const priceKeys = Object.keys(datePrices).slice(0, 5);
-    const hasSlots = slotsByDate.has(firstGridDateStr);
-    const hasPrice = firstGridDateStr in datePrices;
+    const firstThree = dateOptions.slice(0, 3).map((opt) => opt.dateStr);
+    if (firstThree.length === 0) return;
+    const slotsKeys = Array.from(slotsByDate.keys()).slice(0, 8);
+    const priceKeys = Object.keys(datePrices).slice(0, 8);
+    const lookupDiagnostics = firstThree.map((dayKey) => ({
+      lookupKey: dayKey,
+      hasSlots: slotsByDate.has(dayKey),
+      hasPrice: dayKey in datePrices,
+    }));
     console.log("[booking:diagnostic:next-month] grid vs data", {
-      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
+      viewMonthKey,
       viewMonthStartStr,
-      firstGridDateStr,
-      hasSlots,
-      hasPrice,
+      firstThreeGridDateKeys: firstThree,
+      lookupDiagnostics,
       monthSlotsCount: monthSlots.length,
       datePricesKeyCount: Object.keys(datePrices).length,
       sampleSlotsByDateKeys: slotsKeys,
       sampleDatePricesKeys: priceKeys,
     });
-  }, [viewMonthYear, viewMonthMonth, viewMonthStartStr, dateOptions, slotsByDate, datePrices, monthSlots.length, selectedExperience?.id, selectedRateIdForCalendar]);
+  }, [viewMonthKey, viewMonthStartStr, dateOptions, slotsByDate, datePrices, monthSlots.length, selectedExperience?.id, selectedRateIdForCalendar]);
   // #endregion
   /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). */
   const openCountByDateAndDuration = useMemo(() => {
@@ -1149,6 +1156,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         if (holdRes.status === 409) {
           bookingCache.invalidate(`slots|${selectedExperience.id}`);
           setMonthSlots([]);
+          setMonthDataRangeStart(null);
           if (isTicketed) {
             setStep(2);
             setSelectedDate(null);
@@ -1478,15 +1486,16 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       </span>
                     </p>
                   )}
-                  <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
-                    {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
-                      <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">
-                        {dayLabel}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 mt-0.5 sm:mt-1">
-                    {step3CalendarGrid.map((cell, idx) => {
+                  <div key={calendarRenderKey}>
+                    <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
+                      {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
+                        <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">
+                          {dayLabel}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 mt-0.5 sm:mt-1">
+                      {step3CalendarGrid.map((cell, idx) => {
                       if (cell == null) {
                         return <div key={`empty-${idx}`} className="aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px]" />;
                       }
@@ -1494,12 +1503,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       const isSelected = selectedDate === dateStr;
                       const todayStr = toLocalDateStr(new Date());
                       const isPast = dateStr < todayStr;
-                      const entry = slotsByDate.get(dateStr);
+                      const dataMatchesView = monthDataRangeStart === viewMonthStartStr;
+                      const entry = dataMatchesView ? slotsByDate.get(dateStr) : undefined;
                       const openForDuration =
                         rateForCalendar?.durationHours != null
                           ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
                           : entry?.open ?? 0;
-                      const ticketsLeft = isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
+                      const ticketsLeft = dataMatchesView && isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
                       const isAvailable = !isPast && (isTicketed
                         ? (ticketsLeft === null ? openForDuration > 0 : ticketsLeft > 0 && openForDuration > 0)
                         : openForDuration > 0);
@@ -1508,8 +1518,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         ? (ticketsLeft !== null ? ticketsLeft === 0 && openForDuration > 0 : false)
                         : (takenCount > 0 && openForDuration === 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
-                      const priceCents = datePrices[dateStr];
-                      const isHoliday = holidayDateStrings.has(dateStr);
+                      const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
+                      const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
                       return (
                         <button
                           key={dateStr}
@@ -1553,6 +1563,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         </button>
                       );
                     })}
+                    </div>
                   </div>
                   {slotsLoading && (
                     <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">

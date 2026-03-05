@@ -17,10 +17,11 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
-function toISODate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+/** YYYY-MM-DD from date parts. Use UTC so keys are deterministic across server timezones. */
+function toISODateUTC(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
@@ -80,19 +81,17 @@ export async function GET(request: NextRequest) {
 
     let start: Date;
     if (startDateParam && /^\d{4}-\d{2}-\d{2}$/.test(startDateParam)) {
-      start = new Date(startDateParam + "T00:00:00");
+      start = new Date(startDateParam + "T12:00:00.000Z");
       if (isNaN(start.getTime())) start = new Date();
     } else {
       start = new Date();
     }
-    start.setHours(0, 0, 0, 0);
     const prices: Record<string, number> = {};
     const holidayDateStrings: string[] = [];
     const dateStrs: string[] = [];
     for (let i = 0; i < days; i++) {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      const dateStr = toISODate(d);
+      const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+      const dateStr = toISODateUTC(d);
       dateStrs.push(dateStr);
       prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
       // Only mark holiday highlights for charter experiences
@@ -179,9 +178,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const noStoreHeaders = {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    };
     return NextResponse.json(
       { prices, holidayDateStrings, pricingType: exp.pricingType ?? "charter", ticketsAvailableByDate },
-      { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
+      { headers: noStoreHeaders }
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load date prices";

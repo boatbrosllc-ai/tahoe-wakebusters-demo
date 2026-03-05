@@ -129,6 +129,7 @@ function fetchCached<T>(
         typeof window !== "undefined" && (!base || base === window.location.origin);
       const fetchOpts: RequestInit = {
         credentials: isSameOrigin ? "include" : "omit",
+        cache: "no-store",
       };
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.

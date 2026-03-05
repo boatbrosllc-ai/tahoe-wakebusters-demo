@@ -82,12 +82,19 @@ export function formatBookingDateTimeFromIso(iso: string): string {
 }
 
 /**
- * Returns the YYYY-MM-DD calendar date for a UTC ISO string in America/Chicago timezone.
- * Use this instead of iso.slice(0, 10) for slot times — late-evening slots (e.g. 7pm CST)
- * have a UTC timestamp on the following day, so slicing gives the wrong calendar date.
+ * Returns the YYYY-MM-DD calendar date for an ISO string in America/Chicago timezone.
+ * Deterministic string key only (no Date used as key). Use for slot day keys so grid lookup matches.
  */
 export function isoToChicagoDateStr(iso: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: BOOKING_DISPLAY_TIMEZONE,
-  }).format(new Date(iso));
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year")?.value ?? "";
+  const m = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+  return `${y}-${m}-${day}`;
 }

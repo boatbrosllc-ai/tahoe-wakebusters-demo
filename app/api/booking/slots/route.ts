@@ -20,6 +20,12 @@ export const dynamic = "force-dynamic";
 /** Ask host for longer timeout so second-month requests don't time out (Netlify default 10s). */
 export const maxDuration = 26;
 
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+  Pragma: "no-cache",
+  Expires: "0",
+} as const;
+
 // Set LEGACY_BOOKING_FALLBACK=1 only during / immediately after a startDateStr backfill migration.
 // Once all historical bookings and holds carry startDateStr, leave this unset so the broad
 // legacy scans are never executed and every request uses only the fast windowed index queries.
@@ -375,7 +381,7 @@ export async function GET(request: NextRequest) {
           });
         }
         tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
-        return NextResponse.json({ slots: tSlots }, { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } });
+        return NextResponse.json({ slots: tSlots }, { headers: NO_STORE_HEADERS });
       }
       // --- End ticketed branch ---
 
@@ -812,7 +818,7 @@ export async function GET(request: NextRequest) {
             return byDate;
           })()
         : undefined;
-      const responseHeaders: Record<string, string> = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" };
+      const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
       if (unresolvedBookingIds.length > 0) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
       }
@@ -859,10 +865,7 @@ export async function GET(request: NextRequest) {
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
       };
     });
-    return NextResponse.json(
-      { slots },
-      { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } }
-    );
+    return NextResponse.json({ slots }, { headers: NO_STORE_HEADERS });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const startDate = request.nextUrl.searchParams.get("startDate");

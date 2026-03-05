@@ -28,11 +28,18 @@ export function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Date range for a single calendar month. month is 0-indexed (0 = January). */
+/** Month key YYYY-MM (e.g. 2026-03). Deterministic, no Date keys. */
+export function toMonthKey(year: number, month1Based: number): string {
+  return `${year}-${String(month1Based).padStart(2, "0")}`;
+}
+
+/** Date range for a single calendar month. month is 0-indexed (0 = January). Builds from string only for start; end uses last day. */
 export function getMonthRange(year: number, month: number): { start: string; end: string } {
-  const start = new Date(year, month, 1);
-  const end = new Date(year, month + 1, 0);
-  return { start: toDateStr(start), end: toDateStr(end) };
+  const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const start = `${monthKey}-01`;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const end = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
+  return { start, end };
 }
 
 /** Range covering one month before through one month after (for visible + adjacent prefetch). */
