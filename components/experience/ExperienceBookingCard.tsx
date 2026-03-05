@@ -9,9 +9,9 @@ import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
+import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
-const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
-const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 function BookingPaymentForm({
   onSuccess,
@@ -378,9 +378,9 @@ export function ExperienceBookingCard({
         setPaymentPhase("form");
         return;
       }
-      if (!STRIPE_PUBLISHABLE_KEY) {
+      if (!isStripeCheckoutReady) {
         await releaseCreatedHold();
-        setError("Stripe publishable key not configured. Contact support.");
+        setError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
         setPaymentPhase("form");
         return;
       }
@@ -593,6 +593,12 @@ export function ExperienceBookingCard({
       <h3 className="text-lg font-semibold text-brand-dark mb-1">Book this experience</h3>
       <p className="text-sm text-brand-muted mb-4">Pick a date and time, then your details. We&apos;ll hold your slot while you complete payment.</p>
 
+      {!isStripeCheckoutReady && (
+        <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" role="alert">
+          <p className="font-semibold">Payment unavailable</p>
+          <p className="mt-1 text-amber-800">{STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE}</p>
+        </div>
+      )}
       {slotStolen && (
         <p className="mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2">
           That time was just booked—pick another.
@@ -946,7 +952,7 @@ export function ExperienceBookingCard({
       <Button
         size="lg"
         className="w-full rounded-xl"
-        disabled={!canProceed || submitting}
+        disabled={!canProceed || submitting || !isStripeCheckoutReady}
         onClick={handleCreateHoldAndPayment}
       >
         {submitting ? "Preparing payment…" : "Continue to payment"}

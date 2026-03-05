@@ -17,7 +17,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({ error: "slug required" }, { status: 400 });
     }
     if (!hasFirebaseConfig()) {
-      return NextResponse.json({});
+      return NextResponse.json(
+        {
+          error: "Booking is not configured. Set Firebase env vars (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY) in your host.",
+          hint: "Configure Firebase in your deployment environment to load experience data.",
+          code: "FIREBASE_NOT_CONFIGURED",
+        },
+        { status: 503 }
+      );
     }
     const db = getDb();
     const normalizedSlug = slug.trim().toLowerCase();
@@ -28,8 +35,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       expSnap = await db.collection("experiences").where("slug", "==", fallbackSlug).where("active", "==", true).limit(1).get();
     }
     if (expSnap.empty) {
-      // 200 + empty so clients get no 404 in console; they check data?.id for fallback UI
-      return NextResponse.json({});
+      return NextResponse.json(
+        { error: "Experience not found", hint: "No active experience matches this slug." },
+        { status: 404 }
+      );
     }
     const doc = expSnap.docs[0];
     const experience = { ...doc.data(), id: doc.id } as Experience & { id: string };
@@ -51,7 +60,28 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     };
     return NextResponse.json(response);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isConfigMissing =
+      message.includes("Firebase config missing") ||
+      message.includes("FIREBASE_PRIVATE_KEY is truncated") ||
+      message.includes("Missing required env");
     console.error("[experiences/[slug]]", err);
-    return NextResponse.json({});
+    if (isConfigMissing) {
+      return NextResponse.json(
+        {
+          error: "Booking is not configured. Set Firebase env vars (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY) in your host.",
+          hint: "Configure Firebase in your deployment environment to load experience data.",
+          code: "FIREBASE_NOT_CONFIGURED",
+        },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json(
+      {
+        error: "Failed to load experience",
+        hint: process.env.NODE_ENV === "development" ? message : undefined,
+      },
+      { status: 500 }
+    );
   }
 }

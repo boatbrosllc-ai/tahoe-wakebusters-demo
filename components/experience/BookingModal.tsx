@@ -41,28 +41,40 @@ export function BookingModal({
   const [fetchedData, setFetchedData] = useState<BookingData | null>(null);
   const [fetchComplete, setFetchComplete] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const doFetch = useCallback(() => {
     if (!firestoreSlug) return;
     setFetchComplete(false);
     setRetrying(true);
+    setFetchError(null);
     fetch(`/api/experiences/${firestoreSlug}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data?.id) return;
-        setFetchedData({
-          experienceId: data.id,
-          experienceName: data.experience?.title ?? "",
-          slug: data.experience?.slug ?? firestoreSlug,
-          rates: data.rates ?? [],
-          addons: data.addons ?? [],
-          maxGuests: data.experience?.maxGuests ?? 14,
-          petsMax: data.experience?.petsMax ?? 0,
-          pricingType: data.experience?.pricingType,
-          maxCapacity: data.experience?.maxCapacity,
-          departureHour: data.experience?.departureHour,
-          departureMinute: data.experience?.departureMinute,
-        });
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.id) {
+          setFetchedData({
+            experienceId: data.id,
+            experienceName: data.experience?.title ?? "",
+            slug: data.experience?.slug ?? firestoreSlug,
+            rates: data.rates ?? [],
+            addons: data.addons ?? [],
+            maxGuests: data.experience?.maxGuests ?? 14,
+            petsMax: data.experience?.petsMax ?? 0,
+            pricingType: data.experience?.pricingType,
+            maxCapacity: data.experience?.maxCapacity,
+            departureHour: data.experience?.departureHour,
+            departureMinute: data.experience?.departureMinute,
+          });
+          setFetchError(null);
+        } else if (!res.ok) {
+          const error = typeof data?.error === "string" ? data.error : "Failed to load booking data";
+          const hint = typeof data?.hint === "string" ? data.hint : undefined;
+          setFetchError(hint ? `${error}. ${hint}` : error);
+          setFetchedData(null);
+        } else {
+          setFetchError(null);
+          setFetchedData(null);
+        }
       })
       .finally(() => {
         setFetchComplete(true);
@@ -86,22 +98,6 @@ export function BookingModal({
     }
     doFetch();
   }, [open, firestoreSlug, bookingData, doFetch]);
-
-  useEffect(() => {
-    if (!open || bookingData || !firestoreSlug || data || loading) return;
-    if (process.env.NODE_ENV !== "development" || typeof window === "undefined") return;
-    const key = "boat-bros-seed-triggered";
-    if (!sessionStorage.getItem(key)) {
-      sessionStorage.setItem(key, "1");
-      fetch("/api/booking/seed-experiences", { method: "POST" }).catch(() => {});
-    }
-    const t1 = setTimeout(doFetch, 3000);
-    const t2 = setTimeout(doFetch, 8000);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [open, bookingData, firestoreSlug, data, loading, doFetch]);
 
   return (
     <Dialog
@@ -143,7 +139,7 @@ export function BookingModal({
         {!data && !loading && firestoreSlug && (
           <div className="py-8 text-center space-y-4">
             <p className="text-sm text-brand-muted">
-              Booking isn&apos;t loading yet. Give it a moment, then click Try again.
+              {fetchError ?? "Booking setup is required. This experience may not be configured yet."}
             </p>
             <Button
               type="button"
@@ -155,15 +151,13 @@ export function BookingModal({
             >
               {retrying ? "Loading…" : "Try again"}
             </Button>
-            {process.env.NODE_ENV !== "development" && (
-              <a
-                href={`tel:${siteConfig.phoneTel}`}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-brand-primary px-6 py-3 text-sm font-medium text-brand-primary hover:bg-brand-primary/10 transition-colors"
-                aria-label={`Call ${siteConfig.phone} to book`}
-              >
-                Call to book
-              </a>
-            )}
+            <a
+              href={`tel:${siteConfig.phoneTel}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-brand-primary px-6 py-3 text-sm font-medium text-brand-primary hover:bg-brand-primary/10 transition-colors"
+              aria-label={`Call ${siteConfig.phone} to book`}
+            >
+              Call to book
+            </a>
           </div>
         )}
       </div>

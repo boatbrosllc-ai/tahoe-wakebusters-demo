@@ -18,8 +18,9 @@ import { siteConfig } from "@/config/site";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 
-const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
-const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
+
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 interface ExperienceItem {
   id: string;
@@ -204,6 +205,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const inFlightKeyRef = useRef<string | null>(null);
+  const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
+  const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
+  const lastSlotsRetryForRef = useRef<string | null>(null);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
@@ -556,13 +560,18 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     };
   }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, daysInViewMonth, selectedRateIdForCalendar, ratesForSelection]);
 
-  // Fetch all slots for the visible month
+  // Fetch all slots for the visible month (with stale guard, production failure log, and one retry)
   useEffect(() => {
     if (!selectedExperience?.id) {
       setMonthSlots([]);
       setSlotsLoadError(null);
       return;
     }
+    const rangeKey = `${viewMonthStartStr}|${viewMonthEndStr}`;
+    if (slotsRequestRangeRef.current?.start !== viewMonthStartStr || slotsRequestRangeRef.current?.end !== viewMonthEndStr) {
+      lastSlotsRetryForRef.current = null;
+    }
+    slotsRequestRangeRef.current = { start: viewMonthStartStr, end: viewMonthEndStr };
     bookingDebugLog("BookingModal", "slots fetch start", {
       experienceId: selectedExperience.id,
       viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
@@ -580,10 +589,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     )
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
+        if (slotsRequestRangeRef.current?.start !== viewMonthStartStr || slotsRequestRangeRef.current?.end !== viewMonthEndStr) return;
         setSlotsLoadError(null);
         bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
-        // Defer setting 3k+ slots so the first render only has detail+rates and stays fast;
-        // date-prices effect then runs immediately and the calendar appears. Slots paint next tick.
         if (slots.length > 100) {
           setTimeout(() => {
             setMonthSlots(slots);
@@ -596,15 +604,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
-        setMonthSlots([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const status = (err as { status?: number }).status;
+        console.warn("[booking] slots fetch failed (check Network tab for /api/booking/slots)", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, status, error: apiBody?.error, hint: apiBody?.hint });
         bookingDebugLog("BookingModal", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
+        setMonthSlots([]);
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
         setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
+        if (lastSlotsRetryForRef.current !== rangeKey) {
+          lastSlotsRetryForRef.current = rangeKey;
+          setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+        }
       })
-      .finally(() => setSlotsLoading(false));
+      .finally(() => {
+        if (slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr) setSlotsLoading(false);
+      });
     return () => controller.abort();
-  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, viewMonthEndStr]);
+  }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, viewMonthEndStr, slotsRetryTrigger]);
 
   // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 8)
   useEffect(() => {
@@ -867,11 +883,24 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setEffectiveRateCents(cachedPrice);
       return () => controller.abort();
     }
-    fetch(
-      `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`,
-      { signal: controller.signal }
-    )
-      .then((res) => res.json())
+    const effectivePriceUrl = `/api/booking/effective-price?experienceId=${encodeURIComponent(selectedExperience.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`;
+    fetch(effectivePriceUrl, { signal: controller.signal })
+      .then((res) => {
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "BookingModal.tsx:effective-price response",
+            message: "effective-price client received",
+            data: { status: res.status, ok: res.ok, url: effectivePriceUrl },
+            timestamp: Date.now(),
+            hypothesisId: "F",
+          }),
+        }).catch(() => {});
+        // #endregion
+        return res.json();
+      })
       .then((data) => {
         if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
         else setEffectiveRateCents(null);
@@ -998,10 +1027,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentError("Please choose Tip now or Tip later.");
       return;
     }
-    if (!STRIPE_PUBLISHABLE_KEY) {
-      setPaymentError(
-        "Stripe publishable key not found. Add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY to .env.local (no quotes), then restart the dev server (npm run dev)."
-      );
+    if (!isStripeCheckoutReady) {
+      setPaymentError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
       return;
     }
     setPaymentError(null);
@@ -1629,6 +1656,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
             >
               {paymentPhase === "form" && (
                 <>
+                {step === 4 && !isStripeCheckoutReady && (
+                  <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" role="alert">
+                    <p className="font-semibold">Payment unavailable</p>
+                    <p className="mt-1 text-amber-800">{STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE}</p>
+                  </div>
+                )}
                 <div className="flex flex-col flex-1 min-h-0">
                   <div
                     className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-6 scroll-smooth overscroll-y-contain touch-pan-y"
@@ -2224,7 +2257,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       <button
                         type="button"
                         onClick={handleProceedToPayment}
-                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base"
+                        disabled={!isStripeCheckoutReady}
+                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         Proceed to payment
                       </button>

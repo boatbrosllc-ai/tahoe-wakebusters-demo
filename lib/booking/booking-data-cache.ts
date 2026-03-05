@@ -73,8 +73,9 @@ function fetchCached<T>(
             } catch {
               // ignore
             }
-            const e = new Error(body.error ?? `HTTP ${res.status}`) as Error & { apiBody?: typeof body };
+            const e = new Error(body.error ?? `HTTP ${res.status}`) as Error & { apiBody?: typeof body; status?: number };
             e.apiBody = body;
+            (e as Error & { status?: number }).status = res.status;
             throw e;
           }
           return res.json() as Promise<T>;

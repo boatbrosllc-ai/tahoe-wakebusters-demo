@@ -82,6 +82,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const [allSlots, setAllSlots] = useState<bookingCache.CachedSlotDto[] | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
+  const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
+  const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
+  const lastSlotsRetryForRef = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -159,7 +162,6 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   );
 
   // Fetch slots for the visible month + adjacent months so prev/next nav has data.
-  // Always request the currently visible month before rendering availability.
   useEffect(() => {
     if (!selectedExperience) {
       setAllSlots(null);
@@ -169,6 +171,11 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       displayMonth.year,
       displayMonth.month
     );
+    const rangeKey = `${startDate}|${endDate}`;
+    if (slotsRequestRangeRef.current?.start !== startDate || slotsRequestRangeRef.current?.end !== endDate) {
+      lastSlotsRetryForRef.current = null;
+    }
+    slotsRequestRangeRef.current = { start: startDate, end: endDate };
     bookingDebugLog("BookingPageClient", "slots fetch start", { experienceId: selectedExperience.id, startDate, endDate });
     setSlotsLoading(true);
     setAllSlots(null);
@@ -176,6 +183,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     const controller = new AbortController();
     bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, controller.signal)
       .then((data) => {
+        if (slotsRequestRangeRef.current?.start !== startDate || slotsRequestRangeRef.current?.end !== endDate) return;
         const slots = Array.isArray(data.slots) ? data.slots : [];
         bookingDebugLog("BookingPageClient", "slots fetch success", { slotCount: slots.length, startDate, endDate });
         setAllSlots(slots);
@@ -183,15 +191,23 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
-        setAllSlots([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+        const status = (err as { status?: number }).status;
+        console.warn("[booking] slots fetch failed (BookingPageClient)", { startDate, endDate, status, error: apiBody?.error, hint: apiBody?.hint });
         bookingDebugLog("BookingPageClient", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
+        setAllSlots([]);
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
         setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
+        if (lastSlotsRetryForRef.current !== rangeKey) {
+          lastSlotsRetryForRef.current = rangeKey;
+          setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+        }
       })
-      .finally(() => setSlotsLoading(false));
+      .finally(() => {
+        if (slotsRequestRangeRef.current?.start === startDate && slotsRequestRangeRef.current?.end === endDate) setSlotsLoading(false);
+      });
     return () => controller.abort();
-  }, [selectedExperience, displayMonth.year, displayMonth.month]);
+  }, [selectedExperience, displayMonth.year, displayMonth.month, slotsRetryTrigger]);
 
   // Derive available dates in-memory from the cached slot dataset.
   // Switching boats re-derives this set without any API call.

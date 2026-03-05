@@ -26,13 +26,28 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
   const firestoreSlug = STATIC_TO_FIRESTORE_SLUG[slug] ?? null;
   const [apiData, setApiData] = useState<ExperienceDetailFromApi | null>(null);
   const [loading, setLoading] = useState(!!firestoreSlug);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const refetch = useCallback(() => {
     if (!firestoreSlug) return;
     setLoading(true);
+    setFetchError(null);
     fetch(`/api/experiences/${firestoreSlug}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => data?.id && setApiData(data))
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.id) {
+          setApiData(data);
+          setFetchError(null);
+        } else if (!res.ok) {
+          const error = typeof data?.error === "string" ? data.error : "Failed to load booking data";
+          const hint = typeof data?.hint === "string" ? data.hint : undefined;
+          setFetchError(hint ? `${error}. ${hint}` : error);
+          setApiData(null);
+        } else {
+          setApiData(null);
+          setFetchError(null);
+        }
+      })
       .finally(() => setLoading(false));
   }, [firestoreSlug]);
 
@@ -42,27 +57,22 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
       return;
     }
     let cancelled = false;
+    setFetchError(null);
     fetch(`/api/experiences/${firestoreSlug}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (data?.id) {
+        if (res.ok && data?.id) {
           setApiData(data);
-          return;
-        }
-        if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
-          const key = "boat-bros-seed-triggered";
-          if (!sessionStorage.getItem(key)) {
-            sessionStorage.setItem(key, "1");
-            fetch("/api/booking/seed-experiences", { method: "POST" }).catch(() => {});
-          }
-          const retryMs = 3000;
-          setTimeout(() => {
-            if (cancelled) return;
-            fetch(`/api/experiences/${firestoreSlug}`)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((d) => d?.id && setApiData(d));
-          }, retryMs);
+          setFetchError(null);
+        } else if (!res.ok) {
+          const error = typeof data?.error === "string" ? data.error : "Failed to load booking data";
+          const hint = typeof data?.hint === "string" ? data.hint : undefined;
+          setFetchError(hint ? `${error}. ${hint}` : error);
+          setApiData(null);
+        } else {
+          setApiData(null);
+          setFetchError(null);
         }
       })
       .finally(() => {
@@ -107,6 +117,7 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
           firestoreSlug={firestoreSlug}
           onOpenBookingModal={onOpenBookingModal}
           onRefetch={refetch}
+          setupMessage={fetchError ?? "Booking setup is required. This experience may not be configured yet."}
         />
       ) : null}
       <div className="mt-6 pt-6 border-t border-brand-dark/10">
@@ -125,15 +136,17 @@ function StaticCalendarFallback({
   firestoreSlug,
   onOpenBookingModal,
   onRefetch,
+  setupMessage,
 }: {
   firestoreSlug: string;
   onOpenBookingModal?: () => void;
   onRefetch?: () => void;
+  setupMessage: string;
 }) {
   return (
     <>
       <p className="mt-4 text-sm text-brand-muted">
-        The calendar will appear here in a moment. You can also open the booking modal or try loading again.
+        {setupMessage}
       </p>
       <div className="mt-3 flex flex-col gap-2">
         {onOpenBookingModal && (
