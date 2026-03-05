@@ -11,7 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -93,18 +93,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
       }
       const expData = expDoc.data() as { slug?: string; title?: string; name?: string } | undefined;
-      const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
-      const inferredSlugFromTitle = ((): string => {
-        if (experienceSlug) return "";
-        const t = (expData?.title ?? expData?.name ?? "").toLowerCase();
-        if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
-        if (/pontoon|tritoon|party/.test(t)) return "pontoon";
-        if (/sunset|cruise/.test(t)) return "sunset";
-        if (/holiday|festive/.test(t)) return "holiday";
-        return "";
-      })();
+      const experienceSlug = (typeof expData?.slug === "string" ? expData.slug.trim() : "").toLowerCase();
+      const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
       const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-      const slugForBoatType = (effectiveSlug || experienceId.trim()).toLowerCase();
+      const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "").toLowerCase();
       const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
       const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
       const boatSnapPromises = experienceIdVariants.map((variantId) =>
@@ -206,7 +198,8 @@ export async function GET(request: NextRequest) {
         };
 
         // Build experience ID variants once so all queries run in parallel across all IDs.
-        const tAllExpIds = getExperienceIdVariants(experienceId, experienceSlug);
+        // Use effectiveSlug (incl. inferred from title) so sunset/holiday match when Firestore slug is missing.
+        const tAllExpIds = getExperienceIdVariants(experienceId, effectiveSlug);
 
         // Windowed query: parallel == queries per experience ID use the deployed (experienceId, startDateStr) index.
         // Note: `in` + range on a different field is rejected by Firestore, so we use per-ID parallel calls.

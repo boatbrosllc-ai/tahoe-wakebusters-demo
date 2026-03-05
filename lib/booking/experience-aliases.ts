@@ -63,6 +63,34 @@ export function isPontoonSlug(slug: string): boolean {
 }
 
 /**
+ * Slug to use for boat-type filtering. Prefers title-inferred slug when it indicates watersports or pontoon
+ * so that wake-only / no-wake filtering applies even if the experience has a different explicit slug.
+ */
+export function getSlugForBoatTypeFilter(
+  experienceSlug: string,
+  inferredFromTitle: string,
+  experienceId: string
+): string {
+  const inferred = (inferredFromTitle ?? "").toLowerCase().trim();
+  if (inferred && (isWatersportsSlug(inferred) || isPontoonSlug(inferred))) return inferred;
+  const effective = (experienceSlug ?? "").trim() || inferred || (experienceId ?? "").trim().toLowerCase();
+  return effective;
+}
+
+/**
+ * Infer a canonical slug from experience title/name (e.g. "Wake & Surf" -> "watersports").
+ * Call with title/name only; use for boat-type filter so watersports/pontoon always filter correctly.
+ */
+export function inferSlugFromTitle(titleOrName: string | undefined): string {
+  const t = (titleOrName ?? "").toLowerCase();
+  if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
+  if (/pontoon|tritoon|party/.test(t)) return "pontoon";
+  if (/sunset|cruise/.test(t)) return "sunset";
+  if (/holiday|festive/.test(t)) return "holiday";
+  return "";
+}
+
+/**
  * Builds the URL/static slug → canonical Firestore slug map from the alias families.
  * Used by static-slug-map so both stay aligned.
  */
@@ -78,14 +106,20 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
 }
 
 /**
- * Predicate for boatType filtering: watersports => wake only; pontoon => any except wake (so all boats assigned to listing show); others => any.
+ * Predicate for boatType filtering: watersports => wake only (never show pontoon/tritoon); pontoon => any except wake; others => any.
  * Use when listing boats or slots so that only eligible boat types appear (e.g. wake boats for watersports).
- * For pontoon we only exclude "wake" so every boat assigned to the listing is shown (no accidental exclude from missing/wrong boatType).
+ * For watersports we explicitly reject pontoon/tritoon so they never appear even if mis-assigned or slug is wrong.
  */
 export function allowBoatTypeForSlug(slug: string): (boatType: string | undefined) => boolean {
   const s = (slug ?? "").toLowerCase().trim();
-  if (isWatersportsSlug(s)) return (bt) => (bt ?? "").toLowerCase() === "wake";
-  if (isPontoonSlug(s)) return (bt) => (bt ?? "").toLowerCase() !== "wake";
+  if (isWatersportsSlug(s)) {
+    return (bt) => {
+      const b = (bt ?? "").toLowerCase().trim();
+      if (b === "pontoon" || b === "tritoon") return false;
+      return b === "wake";
+    };
+  }
+  if (isPontoonSlug(s)) return (bt) => (bt ?? "").toLowerCase().trim() !== "wake";
   return () => true;
 }
 

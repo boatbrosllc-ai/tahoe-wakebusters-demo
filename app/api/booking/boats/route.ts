@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 export interface BoatOption {
@@ -31,17 +31,9 @@ export async function GET(request: NextRequest) {
     }
     const expData = expDoc.data() as { slug?: string; title?: string; name?: string };
     const experienceSlug = (expData?.slug ?? "").toLowerCase().trim();
-    const inferredSlugFromTitle = ((): string => {
-      if (experienceSlug) return "";
-      const t = (expData?.title ?? expData?.name ?? "").toLowerCase();
-      if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
-      if (/pontoon|tritoon|party/.test(t)) return "pontoon";
-      if (/sunset|cruise/.test(t)) return "sunset";
-      if (/holiday|festive/.test(t)) return "holiday";
-      return "";
-    })();
+    const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    const slugForBoatType = effectiveSlug || experienceId.trim().toLowerCase();
+    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "");
 
     const expRatesSnap = await db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get();
     const experienceRates = expRatesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string } & ExperienceRate));

@@ -1151,22 +1151,44 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         bookingLog("client", "create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
         const message = holdData.error ?? "Failed to create hold";
         const hint = holdData.hint ? ` ${holdData.hint}` : "";
-        setPaymentError(holdRes.status === 409 ? "This time is no longer available. Please choose another date or time." : `${message}${hint}`);
         setPaymentPhase("form");
         if (holdRes.status === 409) {
+          const boatTakenOnly = !isTicketed && boats.length > 1;
+          setPaymentError(
+            boatTakenOnly
+              ? "This boat was just booked. Please choose another boat below."
+              : "This time is no longer available. Please choose another date or time."
+          );
           bookingCache.invalidate(`slots|${selectedExperience.id}`);
-          setMonthSlots([]);
-          setMonthDataRangeStart(null);
-          if (isTicketed) {
-            setStep(2);
-            setSelectedDate(null);
-          } else if (boats.length > 0) {
+          // Refetch slots for current month so calendar and boat list stay visible and up to date
+          bookingCache
+            .fetchSlots(selectedExperience.id, viewMonthStartStr, viewMonthEndStr)
+            .then((data) => {
+              const nextSlots = (data?.slots ?? []) as SlotDto[];
+              setMonthDataRangeStart(viewMonthStartStr);
+              setMonthSlots(nextSlots);
+            })
+            .catch(() => {
+              setMonthSlots([]);
+              setMonthDataRangeStart(null);
+            });
+          if (boatTakenOnly) {
             setStep(3);
-            setSelectedSlot(null);
+            setSelectedBoat(null);
           } else {
-            setStep(2);
-            setSelectedDate(null);
+            if (isTicketed) {
+              setStep(2);
+              setSelectedDate(null);
+            } else if (boats.length > 0) {
+              setStep(3);
+              setSelectedSlot(null);
+            } else {
+              setStep(2);
+              setSelectedDate(null);
+            }
           }
+        } else {
+          setPaymentError(`${message}${hint}`);
         }
         return;
       }
@@ -1725,7 +1747,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           </div>
                         )}
                         <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-0")}>
-                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>
+                            {boat.name}{isBooked ? " (Booked)" : ""}
+                          </span>
                         </div>
                       </button>
                     );

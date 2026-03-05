@@ -673,7 +673,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                           <span className="text-[10px] font-bold text-white uppercase tracking-wide px-2 py-1 rounded bg-slate-800/90 border border-white/20">Booked</span>
                                         </div>
                                       )}
-                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-0")}><span className={cn("text-[10px] font-semibold truncate block", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span></div>
+                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-0")}><span className={cn("text-[10px] font-semibold truncate block", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{isBooked ? " (Booked)" : ""}</span></div>
                                     </button>
                                   );
                                 })}
@@ -1033,7 +1033,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         </div>
                                       )}
                                       <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-0")}>
-                                        <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}</span>
+                                        <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{isBooked ? " (Booked)" : ""}</span>
                                       </div>
                                     </button>
                                   );

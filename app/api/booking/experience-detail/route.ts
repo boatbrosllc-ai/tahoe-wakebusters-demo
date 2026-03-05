@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
-import { getExperienceIdVariants, allowBoatTypeForSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 const EXPERIENCE_DETAIL_FIREBASE_HINT =
@@ -79,18 +79,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
     const expData = expDoc.data() as { slug?: string; title?: string; name?: string };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
-    // When Firestore slug is missing, infer from title so boat-type filter still works (Watersports => wake only, Pontoon => pontoon only).
-    const inferredSlugFromTitle = ((): string => {
-      if (experienceSlug) return "";
-      const t = (expData?.title ?? expData?.name ?? "").toLowerCase();
-      if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
-      if (/pontoon|tritoon|party/.test(t)) return "pontoon";
-      if (/sunset|cruise/.test(t)) return "sunset";
-      if (/holiday|festive/.test(t)) return "holiday";
-      return "";
-    })();
+    const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    const slugForBoatType = effectiveSlug || experienceId.trim().toLowerCase();
+    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "");
 
     // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
     const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
