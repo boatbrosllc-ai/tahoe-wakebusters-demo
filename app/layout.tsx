@@ -7,10 +7,12 @@ const syne = Syne({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-display",
+  preload: false,
 });
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com"),
+  icons: { icon: "/brand/logo.svg" },
 };
 
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID?.trim();

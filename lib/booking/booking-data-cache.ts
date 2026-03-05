@@ -15,18 +15,62 @@
  * race against its own AbortSignal, so state updates are skipped when a component
  * unmounts or its deps change.
  *
- * Production: when NEXT_PUBLIC_SITE_URL (or NEXT_PUBLIC_APP_URL) is set, API requests
- * use that as the base URL so the calendar and booking APIs always hit the correct
- * origin (avoids CDN/proxy or wrong-origin issues in production).
+ * Production: when NEXT_PUBLIC_SITE_URL (or NEXT_PUBLIC_APP_URL) is set and valid and
+ * matches the current origin, API requests use it; otherwise the cache falls back to
+ * same-origin and logs a guarded warning so misconfiguration is diagnosable. Public
+ * availability requests use credentials only for same-origin to avoid cross-origin issues.
  */
 
-/** Base URL for API requests. Uses env when set; otherwise same-origin so production always hits the correct host. */
+/**
+ * Returns the base URL for API requests. Validates env-provided URL; falls back to
+ * same-origin when invalid or when origin does not match the current page (avoids
+ * wrong production value breaking availability requests). Logs a guarded warning
+ * when an override is rejected so production misconfiguration is diagnosable.
+ */
 function getApiBaseUrl(): string {
   if (typeof window === "undefined") return "";
+  const origin = window.location.origin;
+  const isLocal =
+    origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1");
+  if (isLocal) return origin;
+
   const fromEnv =
     (process.env.NEXT_PUBLIC_SITE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "").trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
-  return window.location.origin;
+  if (!fromEnv) return origin;
+
+  const normalized = fromEnv.replace(/\/$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
+      console.warn(
+        "[booking-data-cache] NEXT_PUBLIC_SITE_URL (or APP_URL) is not a valid URL; using same-origin.",
+        { value: fromEnv },
+      );
+    }
+    return origin;
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
+      console.warn(
+        "[booking-data-cache] NEXT_PUBLIC_SITE_URL must be http or https; using same-origin.",
+        { value: fromEnv },
+      );
+    }
+    return origin;
+  }
+  const envOrigin = parsed.origin;
+  if (envOrigin !== origin) {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
+      console.warn(
+        "[booking-data-cache] NEXT_PUBLIC_SITE_URL origin does not match current origin; using same-origin to avoid cross-origin requests.",
+        { envOrigin, currentOrigin: origin, value: fromEnv },
+      );
+    }
+    return origin;
+  }
+  return envOrigin;
 }
 
 const STALE_MS = {
@@ -77,9 +121,15 @@ function fetchCached<T>(
     (() => {
       const base = getApiBaseUrl();
       const fullUrl = base ? `${base}${url}` : url;
+      // Same-origin: use credentials. Cross-origin: omit to avoid forcing credentialed CORS for public availability.
+      const isSameOrigin =
+        typeof window !== "undefined" && (!base || base === window.location.origin);
+      const fetchOpts: RequestInit = {
+        credentials: isSameOrigin ? "include" : "omit",
+      };
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
-      const p = fetch(fullUrl, { credentials: "include" })
+      const p = fetch(fullUrl, fetchOpts)
         .then(async (res) => {
           if (!res.ok) {
             let body: { error?: string; hint?: string; code?: string } = {};

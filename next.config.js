@@ -9,6 +9,9 @@ const nextConfig = {
     { source: "/lake-austin-pontoon-rentals", destination: "/experiences/lake-austin-pontoon", permanent: true },
     { source: "/more", destination: "/menu", permanent: true },
   ],
+  rewrites: async () => [
+    { source: "/favicon.ico", destination: "/brand/logo.svg" },
+  ],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },

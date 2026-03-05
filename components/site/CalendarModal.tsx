@@ -56,6 +56,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [rates, setRates] = useState<RateOption[]>([]);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
+  const [slotsRetryKey, setSlotsRetryKey] = useState(0);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -123,12 +125,21 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     if (!selectedExperience) return;
     const controller = new AbortController();
     if (selectedExperience.id) {
+      setSlotsLoadError(null);
       setSlotsLoading(true);
       setSlots([]);
       bookingCache.fetchSlots(selectedExperience.id, dateRange.start, dateRange.end, controller.signal)
-        .then((data) => setSlots((data?.slots ?? []) as SlotDto[]))
+        .then((data) => {
+          setSlots((data?.slots ?? []) as SlotDto[]);
+          setSlotsLoadError(null);
+        })
         .catch((err: unknown) => {
-          if ((err as { name?: string })?.name !== "AbortError") setSlots([]);
+          if ((err as { name?: string })?.name === "AbortError") return;
+          setSlots([]);
+          const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
+          const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Failed to load availability");
+          const hint = apiBody?.hint;
+          setSlotsLoadError(hint ? `${msg} ${hint}` : msg);
         })
         .finally(() => setSlotsLoading(false));
       return () => controller.abort();
@@ -147,7 +158,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         if ((err as { name?: string })?.name !== "AbortError") setSlotsLoading(false);
       });
     return () => controller.abort();
-  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end]);
+  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end, slotsRetryKey]);
 
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
@@ -293,6 +304,20 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
               </span>
             ))}
           </div>
+
+          {/* Slots load error: visible inline message + retry */}
+          {slotsLoadError && (
+            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+              <p className="font-medium">{slotsLoadError}</p>
+              <button
+                type="button"
+                onClick={() => setSlotsRetryKey((k) => k + 1)}
+                className="mt-2 rounded-md bg-red-100 px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-200 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {/* Calendar grid */}
           <div className="grid grid-cols-7 gap-0.5 sm:gap-1 flex-1 min-h-0 overflow-y-auto">
