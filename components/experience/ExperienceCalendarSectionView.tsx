@@ -258,20 +258,25 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full shrink-0">
-                      {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
+                    <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 mt-2 min-w-0 w-full shrink-0">
+                      {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
                       {step2CompactGrid.map((cell, idx) => {
                         if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-[44px]", darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]")} />;
                         const { dateStr, label, weekday } = cell;
                         const isSelected = selectedDate === dateStr;
                         const isPast = dateStr < todayStr;
-                        const openForDate = slotsByDate.get(dateStr)?.open ?? 0;
+                        const entry = slotsByDate.get(dateStr);
+                        const openForDate = entry?.open ?? 0;
+                        const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                        const bookedCount = entry?.booked ?? 0;
+                        const isFullyBooked = !isPast && takenCount > 0 && openForDate === 0;
                         const slotData = slotDataByDate?.get(dateStr);
                         const isCharterLocked = slotData?.isCharterLocked ?? false;
                         const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
                         const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                         const isFullyUnavailable = isCharterLocked;
                         const isAvailable = !isPast && openForDate > 0 && !isFullyUnavailable;
+                        const hasBookingsUrgency = !isPast && isAvailable && !isSoldOutShared && bookedCount > 0;
                         const priceCents = datePrices[dateStr];
                         const isHoliday = holidayDateStrings.has(dateStr);
                         return (
@@ -280,30 +285,37 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             type="button"
                             disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable}
                             onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
-                            title={isHoliday ? "Holiday pricing" : undefined}
+                            title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
                             className={cn(
-                              "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px]",
-                              darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]",
-                              isHoliday && "ring-1 ring-violet-400/80",
+                              "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] md:min-h-[64px] touch-manipulation",
+                              darkCard ? "sm:min-h-[52px]" : "sm:min-h-[58px]",
+                              isHoliday && "ring-1.5 ring-violet-400/80",
                               darkCard
                                 ? cn(
                                     isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
-                                    !isPast && !isAvailable && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                    !isPast && !isAvailable && !isSoldOutShared && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                    isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                     isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                    isAvailable && !isSoldOutShared && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                    isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                     isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                   )
                                 : cn(
                                     isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                                    !isPast && !isAvailable && !isSoldOutShared && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
+                                    !isPast && !isAvailable && !isSoldOutShared && !isFullyBooked && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
+                                    isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                     isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                    isAvailable && !isSoldOutShared && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
+                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                    isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                     isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                   )
                             )}
                           >
-                            <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
-                            <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate")}>{label.split(" ")[1] ?? label}</span>
+                            <span className={cn("block text-[8px] sm:text-[10px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                            <span className={cn("block font-semibold text-[9px] sm:text-[10px] md:text-sm leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
                             {isFullyUnavailable && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>}
                             {!isFullyUnavailable && isSoldOutShared && (
                               <>
@@ -311,12 +323,16 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                               </>
                             )}
-                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && (
+                            {!isFullyUnavailable && hasBookingsUrgency && (
+                              <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                            )}
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && (
                               <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
                             )}
-                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (
+                            {!isFullyUnavailable && isFullyBooked && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (
                               typeof priceCents === "number"
-                                ? <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>
+                                ? <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate mt-0.5", darkCard ? "text-emerald-200" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>
                                 : <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>
                             )}
                           </button>
@@ -478,8 +494,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             </div>
                           </div>
                           <div className="mt-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
-                            <div className="grid grid-cols-7 gap-0.5 sm:gap-1 mt-2 min-w-0 w-full">
-                              {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[10px] sm:text-xs font-semibold uppercase", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
+                            <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 mt-2 min-w-0 w-full">
+                              {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
                               {step2CompactGrid.map((cell, idx) => {
                                 if (cell == null) return <div key={`blank-${idx}`} className={cn("min-h-[44px]", darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]")} />;
                                 const { dateStr, label, weekday } = cell;
@@ -490,7 +506,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   : (openCountByDateForDuration.get(dateStr) ?? 0);
                                 const entry = slotsByDate.get(dateStr);
                                 const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                                const bookedCount = entry?.booked ?? 0;
                                 const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                                const hasBookingsUrgency = !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasPriceForDay = typeof datePrices[dateStr] === "number";
                                 const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
                                 const priceCents = datePrices[dateStr];
@@ -506,35 +524,38 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     type="button"
                                     disabled={isPast || !isAvailable || isFullyUnavailable}
                                     onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
-                                    title={isHoliday ? "Holiday pricing" : undefined}
+                                    title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
                                     className={cn(
-                                      "rounded border p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px]",
-                                      darkCard ? "sm:min-h-[52px]" : "sm:min-h-[48px]",
-                                      isHoliday && "ring-1.5 ring-violet-400/80 ring-offset-1 ring-offset-transparent",
+                                      "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] touch-manipulation",
+                                      darkCard ? "sm:min-h-[52px]" : "sm:min-h-[58px]",
+                                      isHoliday && "ring-1.5 ring-violet-400/80",
                                       darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
                                       !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
                                       darkCard
                                         ? cn(
                                             isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
                                             !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
-                                            isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
+                                            isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                             isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                            isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                            isAvailable && !isSoldOutShared && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                            hasBookingsUrgency && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isAvailable && !isSoldOutShared && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                             isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                           )
                                         : cn(
                                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
-                                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
+                                            isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                             isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                            isAvailable && !isSoldOutShared && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
-                                            isAvailable && !isSoldOutShared && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
+                                            hasBookingsUrgency && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                            hasBookingsUrgency && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                            isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                           )
                                     )}
                                   >
-                                    <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                                    <span className={cn("block text-[8px] sm:text-[10px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
                                     <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
                                     {isTicketed && isFullyUnavailable && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>
@@ -545,17 +566,20 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                                       </>
                                     )}
-                                    {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && (
+                                    {hasBookingsUrgency && (
+                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                                    )}
+                                    {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && !hasBookingsUrgency && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
+                                    {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
                                       if (typeof priceCents === "number") {
                                         return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
                                       }
                                       return <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>;
                                     })()}
                                     {!isTicketed && typeof priceCents === "number" && isAvailable && <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}</span>}
-                                    {isFullyBooked && <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
+                                    {isFullyBooked && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
                                   </button>
                                 );
                               })}
@@ -681,7 +705,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             )}
                           </div>
                           <div className="flex flex-col gap-1 mt-3">
-                            <button type="button" disabled={inlineBoatsLoading || (inlineBoats.length > 0 && !selectedBoatInline)} onClick={() => { if (!selectedDate || !selectedSlotInline) return; if (experienceForDetails && ratesForDetails && addonsForDetails) goToInlineStep?.(4); else onOpenInModal?.({ experienceId: experienceId ?? undefined, experienceSlug: experienceSlug ?? undefined, date: selectedDate, slotId: selectedSlotInline.id, boatId: selectedBoatInline?.id ?? (selectedSlotInline as { boatId?: string }).boatId }); }} className="w-full rounded-lg bg-brand-primary text-white font-semibold py-2.5 px-3 min-h-[44px] touch-manipulation text-sm hover:bg-brand-primary/90 disabled:opacity-50">Continue to checkout</button>
+                            <button type="button" disabled={inlineBoatsLoading || (inlineBoats.length > 0 && !selectedBoatInline)} onClick={() => { if (!selectedDate || !selectedSlotInline) return; if (experienceForDetails && ratesForDetails && addonsForDetails) goToInlineStep?.(4); else onOpenInModal?.({ experienceId: experienceId ?? undefined, experienceSlug: experienceSlug ?? undefined, date: selectedDate, slotId: selectedSlotInline.id, boatId: selectedBoatInline?.id ?? (selectedSlotInline as { boatId?: string }).boatId }); }} className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation text-sm hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Continue to checkout</button>
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="w-full rounded-lg border-2 border-white/30 px-3 py-2 min-h-[44px] touch-manipulation text-xs font-semibold text-white hover:bg-white/10">Change time</button>}
                           </div>
                         </>
@@ -809,7 +833,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 </div>
                               </div>
                             </div>
-                            <div className="grid grid-cols-7 gap-px sm:gap-0.5 min-w-0 w-full">
+                            <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 min-w-0 w-full">
                               {WEEKDAY_LABELS.map((d) => (
                                 <div key={d} className={cn("py-0.5 text-center text-[9px] sm:text-[10px] font-semibold uppercase", darkCard ? "text-white/70" : "text-brand-muted")}>
                                   {d}
@@ -825,7 +849,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
                                 const entry = slotsByDate.get(dateStr);
                                 const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
+                                const bookedCount = entry?.booked ?? 0;
                                 const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
+                                const hasBookingsUrgency = !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasPriceForDay = typeof datePrices[dateStr] === "number";
                                 const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
                                 const priceCents = datePrices[dateStr];
@@ -841,9 +867,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     type="button"
                                     disabled={isPast || !isAvailable || isFullyUnavailable3}
                                     onClick={() => (isAvailable || isSoldOutShared3) && handleDayClick(dateStr)}
-                                    title={isHoliday ? "Holiday pricing" : undefined}
+                                    title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
                                     className={cn(
-                                      "rounded border min-h-[44px] min-w-[44px] sm:min-h-[48px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full",
+                                      "rounded-lg sm:rounded-xl border-2 min-h-[44px] min-w-[44px] sm:min-h-[58px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full touch-manipulation",
                                       isHoliday && !isPast && "ring-1.5 ring-violet-400/80",
                                       darkCard && isHoliday && !isPast && "bg-violet-500/15 border-violet-400/40",
                                       !darkCard && isHoliday && !isPast && "bg-violet-50/90 border-violet-300/60",
@@ -851,24 +877,27 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         ? cn(
                                             isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
                                             !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared3 && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
-                                            isFullyBooked && "bg-amber-500/25 text-amber-200 border-amber-400/50 cursor-not-allowed",
+                                            isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                             isSoldOutShared3 && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                            isAvailable && !isSoldOutShared3 && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                            isAvailable && !isSoldOutShared3 && isHoliday && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                            hasBookingsUrgency && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                            isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isAvailable && !isSoldOutShared3 && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                             isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                           )
                                         : cn(
                                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared3 && "bg-brand-dark/5 border-brand-dark/10 cursor-not-allowed",
-                                            isFullyBooked && "bg-amber-100/90 text-amber-900 border-amber-400/50 cursor-not-allowed",
+                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared3 && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
+                                            isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                             isSoldOutShared3 && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                            isAvailable && !isSoldOutShared3 && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60",
-                                            isAvailable && !isSoldOutShared3 && isHoliday && "text-violet-900 border-violet-400/60 hover:bg-violet-100",
+                                            hasBookingsUrgency && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                            hasBookingsUrgency && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                            isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                            isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                           )
                                     )}
                                   >
-                                    <span className={cn("block text-[8px] sm:text-[9px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
+                                    <span className={cn("block text-[8px] sm:text-[10px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
                                     <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
                                     {isTicketed && isFullyUnavailable3 && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>
@@ -879,21 +908,24 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                                       </>
                                     )}
-                                    {isTicketed && !isFullyUnavailable3 && showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0 && isAvailable && (
+                                    {hasBookingsUrgency && (
+                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                                    )}
+                                    {isTicketed && !isFullyUnavailable3 && showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0 && isAvailable && !hasBookingsUrgency && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft3} left</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable3 && isAvailable && !isSoldOutShared3 && !(showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0) && (() => {
+                                    {isTicketed && !isFullyUnavailable3 && isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !(showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0) && (() => {
                                       if (typeof priceCents === "number") {
-                                        return <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
+                                        return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
                                       }
                                       return <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>;
                                     })()}
                                     {!isTicketed && typeof priceCents === "number" && isAvailable && (
-                                      <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>
+                                      <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>
                                         ${(priceCents / 100).toFixed(0)}
                                       </span>
                                     )}
-                                    {isFullyBooked && <span className={cn("block text-[7px] sm:text-[8px] font-semibold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>Full</span>}
+                                    {isFullyBooked && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
                                   </button>
                                 );
                               })}
@@ -913,7 +945,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                           type="button"
                                           onClick={() => setSelectedSlotInline(slot)}
                                           className={cn(
-                                            "rounded-lg border-2 px-3 py-2.5 text-sm font-medium transition-all min-h-[44px] touch-manipulation w-full sm:w-auto",
+                                            "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all min-h-[44px] touch-manipulation w-full sm:w-auto",
                                             darkCard
                                               ? isSelected
                                                 ? "border-brand-primary bg-brand-primary text-white"
@@ -1089,7 +1121,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 });
                               }
                             }}
-                            className="w-full rounded-lg bg-brand-primary text-white font-semibold py-2 px-3 text-xs hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 text-sm hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             Continue to checkout
                           </button>
