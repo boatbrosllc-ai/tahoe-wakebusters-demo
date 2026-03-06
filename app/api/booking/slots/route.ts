@@ -142,10 +142,11 @@ export async function GET(request: NextRequest) {
         }
         let tDurationHours: number;
         // Prefer the explicit tripDurationHours on the experience doc; fall back to rate's durationHours.
-        if (typeof expDataFull.tripDurationHours === "number" && expDataFull.tripDurationHours > 0) {
-          tDurationHours = expDataFull.tripDurationHours;
-        } else if (expDataFull.defaultRateId) {
-          const defaultRate = tRatesSnap.docs.find((d) => d.id === expDataFull.defaultRateId);
+        const tripHours = expDataFull?.tripDurationHours;
+        if (typeof tripHours === "number" && tripHours > 0) {
+          tDurationHours = tripHours;
+        } else if (expDataFull?.defaultRateId) {
+          const defaultRate = tRatesSnap.docs.find((d) => d.id === expDataFull?.defaultRateId);
           tDurationHours = defaultRate
             ? (defaultRate.data() as ExperienceRate).durationHours
             : (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
@@ -153,8 +154,8 @@ export async function GET(request: NextRequest) {
           tDurationHours = (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
         }
 
-        const tDepartureHour = expDataFull.departureHour ?? (isTicketedBySlug ? 19 : 10);
-        const tDepartureMinute = expDataFull.departureMinute ?? 0;
+        const tDepartureHour = expDataFull?.departureHour ?? (isTicketedBySlug ? 19 : 10);
+        const tDepartureMinute = expDataFull?.departureMinute ?? 0;
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 
@@ -368,10 +369,10 @@ export async function GET(request: NextRequest) {
           const slotEndMs = slotEnd.getTime();
           const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
           const spotsBooked = spotsByDate.get(dateStr) ?? 0;
-          const maxCapacity = expDataFull.maxCapacity ?? 0;
+          const maxCapacity = expDataFull?.maxCapacity ?? 0;
           const spotsRemaining = Math.max(0, maxCapacity - spotsBooked);
           const isCharterLocked = charterLockedDates.has(dateStr);
-          const showSpotsRemaining = expDataFull.showSpotsRemaining ?? false;
+          const showSpotsRemaining = expDataFull?.showSpotsRemaining ?? false;
           tSlots.push({
             id: slotId,
             dateStr,
