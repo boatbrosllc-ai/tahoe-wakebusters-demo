@@ -41,7 +41,7 @@ export function getSlugLookupCandidates(slug: string): string[] {
   const family = getFamilyVariants(s);
   if (family.length === 0) return [s];
   const ordered = [s, ...family.filter((f) => f !== s)];
-  return [...new Set(ordered)];
+  return Array.from(new Set(ordered));
 }
 
 /**
