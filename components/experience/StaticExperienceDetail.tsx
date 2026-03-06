@@ -25,7 +25,8 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
   const { openWithSelection } = useBookingModal();
   const slug = experience.slug;
   const bookHref = `/experiences/${slug}/book`;
-  const firestoreSlug = STATIC_TO_FIRESTORE_SLUG[slug] ?? null;
+  /** Firestore slug to resolve experience (map variant → canonical, or use slug itself for canonical e.g. sunset/holiday). */
+  const firestoreSlug = (STATIC_TO_FIRESTORE_SLUG[slug] ?? slug) || null;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   // Photo 1 = hero/experience section; gallery starts with photo 2 (index 1)
   const gallery = (experience.gallery ?? []).slice(1);

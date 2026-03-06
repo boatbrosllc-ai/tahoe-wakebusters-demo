@@ -14,7 +14,7 @@ export const maxDuration = 26;
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
 import { parseSlotId } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
@@ -54,8 +54,8 @@ export async function GET(request: NextRequest) {
     const experienceSlug = (typeof exp?.slug === "string" ? exp.slug.trim() : "").toLowerCase();
     const inferredSlugFromTitle = inferSlugFromTitle(exp?.title ?? exp?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    // Match experience-detail and slots: sunset/holiday are ticketed unless explicitly charter
-    const isTicketedInferred = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && exp.pricingType !== "charter";
+    // Match experience-detail and slots: sunset/holiday family are ticketed unless explicitly charter
+    const isTicketedInferred = isTicketedExperienceSlug(effectiveSlug) && exp.pricingType !== "charter";
     const isTicketed = exp.pricingType === "ticketed" || isTicketedInferred;
     const holidayDates = exp.holidayDates;
     const weekendDays = exp.weekendDays;

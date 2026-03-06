@@ -11,11 +11,12 @@ import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { slugMatches } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
-import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
+import { bookingError } from "@/lib/booking/debug";
 import { getMonthRange, toMonthKey } from "@/lib/booking/booking-date-range";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
@@ -413,7 +414,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   useEffect(() => {
     if (!open || !initialSelection || !experiences?.length) return;
     const exp = experiences.find(
-      (e) => e.id === initialSelection.experienceId || e.slug === initialSelection.experienceSlug
+      (e) =>
+        e.id === initialSelection.experienceId ||
+        (initialSelection.experienceSlug != null && slugMatches(initialSelection.experienceSlug, e.slug ?? ""))
     );
     if (exp) {
       setSelectedExperience(exp);
@@ -547,7 +550,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     inFlightKeyRef.current = key;
     setDatePricesLoading(true);
     const controller = new AbortController();
-    bookingLog("client", "date-prices fetch start", { experienceId: selectedExperience.id, startDate: viewMonthStartStr, days: daysInViewMonth, rateId: selectedRateIdForCalendar });
 
     bookingCache
       .fetchDatePrices(
@@ -559,20 +561,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       )
       .then((data) => {
         const keyMatch = inFlightKeyRef.current === key;
-        // #region agent log
-        if (!keyMatch) console.warn("[booking:diagnostic:next-month] H5/stale: date-prices response discarded (key mismatch)", { key, inFlightKey: inFlightKeyRef.current });
         const prices = data.prices && typeof data.prices === "object" ? data.prices : {};
-        const priceKeys = Object.keys(prices);
-        console.log("[booking:diagnostic:next-month] date-prices .then", { viewMonthStartStr, keyMatch, priceCount: priceKeys.length, samplePriceKeys: priceKeys.slice(0, 5) });
-        // #endregion
         if (!keyMatch) return;
         const holidays = new Set<string>(Array.isArray(data?.holidayDateStrings) ? data.holidayDateStrings : []);
         const ticketsAvailable =
           data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object"
             ? data.ticketsAvailableByDate
             : {};
-        const priceCount = priceKeys.length;
-        bookingLog("client", "date-prices fetch ok", { startDate: viewMonthStartStr, priceCount, holidayCount: holidays.size });
         setDatePrices({ ...prices });
         setHolidayDateStrings(new Set(holidays));
         setTicketsAvailableByDate({ ...ticketsAvailable });
@@ -613,18 +608,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       lastSlotsRetryForRef.current = null;
     }
     slotsRequestRangeRef.current = { start: viewMonthStartStr, end: viewMonthEndStr };
-    bookingLog("client", "slots fetch start", {
-      experienceId: selectedExperience.id,
-      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
-      startDate: viewMonthStartStr,
-      endDate: viewMonthEndStr,
-    });
-    bookingDebugLog("BookingModal", "slots fetch start", {
-      experienceId: selectedExperience.id,
-      viewMonth: `${viewMonthYear}-${String(viewMonthMonth).padStart(2, "0")}`,
-      startDate: viewMonthStartStr,
-      endDate: viewMonthEndStr,
-    });
     setSlotsLoading(true);
     setSlotsLoadError(null);
     const controller = new AbortController();
@@ -636,16 +619,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     )
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
-        // #region agent log
         const refMatch = slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr;
-        if (!refMatch) console.warn("[booking:diagnostic:next-month] H5/stale: slots response discarded (ref mismatch)", { viewMonthStartStr, viewMonthEndStr, ref: slotsRequestRangeRef.current, slotCount: slots.length });
-        const sampleSlotDates = slots.slice(0, 3).map((s) => ({ startAt: s.startAt, chicagoKey: isoToChicagoDateStr(s.startAt) }));
-        console.log("[booking:diagnostic:next-month] slots .then", { viewMonthStartStr, refMatch, slotCount: slots.length, sampleSlotDates });
-        // #endregion
         if (!refMatch) return;
         setSlotsLoadError(null);
-        bookingLog("client", "slots fetch ok", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, slotCount: slots.length });
-        bookingDebugLog("BookingModal", "slots fetch success", { slotCount: slots.length, startDate: viewMonthStartStr, endDate: viewMonthEndStr });
         const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {
@@ -662,11 +638,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
         const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
-        bookingLog("client", "slots prefetch start", { nextStart, nextEnd });
-        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch((prefetchErr: unknown) => {
-          const status = (prefetchErr as { status?: number }).status;
-          if (typeof status === "number") bookingLog("client", "slots prefetch failed (next month)", { nextStart, nextEnd, status });
-        });
+        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch(() => {});
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -680,8 +652,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
           hint: apiBody?.hint,
           firebaseSummary: apiBody?.firebaseDetail?.summary,
         });
-        console.warn("[booking] slots fetch failed (check Network tab for /api/booking/slots)", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, status, error: apiBody?.error, hint: apiBody?.hint, firebaseDetail: apiBody?.firebaseDetail });
-        bookingDebugLog("BookingModal", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         setMonthSlots([]);
         setMonthDataRangeStart(null);
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
@@ -689,7 +659,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setSlotsLoadError(parts.join(" "));
         if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
-          bookingLog("client", "slots fetch retry scheduled", { startDate: viewMonthStartStr, endDate: viewMonthEndStr, in: "1.5s" });
           setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
         }
       })
@@ -782,17 +751,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       string,
       { open: number; held: number; booked: number; blocked: number }
     >();
+    const ticketed = selectedExperience?.pricingType === "ticketed";
     for (const s of monthSlots) {
       const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
       const e = map.get(day)!;
-      if (s.status === "open") e.open++;
-      else if (s.status === "held") e.held++;
+      if (s.status === "open") {
+        const soldOut = ticketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0;
+        if (!soldOut) e.open++;
+      } else if (s.status === "held") e.held++;
       else if (s.status === "booked") e.booked++;
       else e.blocked++;
     }
     return map;
-  }, [monthSlots]);
+  }, [monthSlots, selectedExperience?.pricingType]);
 
   /** Ticketed: booked count per date from slot.spotsBooked (API). Used so calendar shows yellow when there are bookings. */
   const ticketsBookedByDate = useMemo(() => {
@@ -807,35 +779,13 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     return map;
   }, [monthSlots]);
 
-  // #region agent log — first 3 grid dates: lookup key, exists in slots/prices, sample keys present
-  useEffect(() => {
-    if (!selectedExperience?.id || !selectedRateIdForCalendar) return;
-    const firstThree = dateOptions.slice(0, 3).map((opt) => opt.dateStr);
-    if (firstThree.length === 0) return;
-    const slotsKeys = Array.from(slotsByDate.keys()).slice(0, 8);
-    const priceKeys = Object.keys(datePrices).slice(0, 8);
-    const lookupDiagnostics = firstThree.map((dayKey) => ({
-      lookupKey: dayKey,
-      hasSlots: slotsByDate.has(dayKey),
-      hasPrice: dayKey in datePrices,
-    }));
-    console.log("[booking:diagnostic:next-month] grid vs data", {
-      viewMonthKey,
-      viewMonthStartStr,
-      firstThreeGridDateKeys: firstThree,
-      lookupDiagnostics,
-      monthSlotsCount: monthSlots.length,
-      datePricesKeyCount: Object.keys(datePrices).length,
-      sampleSlotsByDateKeys: slotsKeys,
-      sampleDatePricesKeys: priceKeys,
-    });
-  }, [viewMonthKey, viewMonthStartStr, dateOptions, slotsByDate, datePrices, monthSlots.length, selectedExperience?.id, selectedRateIdForCalendar]);
-  // #endregion
-  /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). */
+  /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). Ticketed: only count slots with spotsRemaining > 0 so sold-out dates don't show as available. */
   const openCountByDateAndDuration = useMemo(() => {
     const map = new Map<string, Map<number, number>>();
+    const ticketed = selectedExperience?.pricingType === "ticketed";
     for (const s of monthSlots) {
       if (s.status !== "open") continue;
+      if (ticketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) continue;
       const day = isoToChicagoDateStr(s.startAt);
       const dur = parseSlotId(s.id)?.durationHours;
       if (dur == null) continue;
@@ -844,7 +794,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       byDur.set(dur, (byDur.get(dur) ?? 0) + 1);
     }
     return map;
-  }, [monthSlots]);
+  }, [monthSlots, selectedExperience?.pricingType]);
   // One row per start time (multiple boats can have same slot); use first slot per time for selection. Sorted chronologically by time of day.
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
@@ -1156,15 +1106,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setHoldId(null);
     };
     try {
-      bookingLog("client", "create-hold request", {
-        experienceId: selectedExperience.id,
-        boatId: selectedBoat?.id ?? undefined,
-        slotId: selectedSlot.id,
-        rateId: selectedRateId,
-        partySize,
-        bookingMode: isTicketed ? "shared" : "charter",
-        resumeHoldId: lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId : undefined,
-      });
       const holdRes = await fetch("/api/booking/create-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1187,7 +1128,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
-        bookingLog("client", "create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
         const message = holdData.error ?? "Failed to create hold";
         const hint = holdData.hint ? ` ${holdData.hint}` : "";
         setPaymentPhase("form");
@@ -1235,7 +1175,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       createdHoldId = newHoldId;
       setHoldId(newHoldId);
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
-      bookingLog("client", "create-hold success, requesting payment intent", { holdId: newHoldId, payFullAmount: isTicketed ? true : payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1243,7 +1182,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
-        bookingLog("client", "create-payment-intent failed", { status: intentRes.status, error: intentData.error, hint: intentData.hint });
         await releaseCreatedHold();
         const msg = intentData.error ?? "Failed to start payment";
         setPaymentError(intentData.hint ? `${msg}. ${intentData.hint}` : msg);
@@ -1258,7 +1196,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setPaymentPhase("form");
         return;
       }
-      bookingLog("client", "create-payment-intent success, showing Stripe form", { holdId: newHoldId, paymentIntentId: intentData.paymentIntentId ?? null });
       setClientSecret(secret);
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       setPaymentPhase("stripe");
@@ -1503,10 +1440,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           if (viewMonthMonth === 1) {
                             setViewMonthYear((y) => y - 1);
                             setViewMonthMonth(12);
-                            bookingDebugLog("BookingModal", "month nav: previous", { to: `${viewMonthYear - 1}-12` });
                           } else {
                             setViewMonthMonth((m) => m - 1);
-                            bookingDebugLog("BookingModal", "month nav: previous", { to: `${viewMonthYear}-${String(viewMonthMonth - 1).padStart(2, "0")}` });
                           }
                         }}
                         className={cn(
@@ -1526,10 +1461,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           if (viewMonthMonth === 12) {
                             setViewMonthYear((y) => y + 1);
                             setViewMonthMonth(1);
-                            bookingDebugLog("BookingModal", "month nav: next", { to: `${viewMonthYear + 1}-01` });
                           } else {
                             setViewMonthMonth((m) => m + 1);
-                            bookingDebugLog("BookingModal", "month nav: next", { to: `${viewMonthYear}-${String(viewMonthMonth + 1).padStart(2, "0")}` });
                           }
                         }}
                         className="rounded-xl p-2.5 text-brand-dark hover:bg-brand-dark/10 active:bg-brand-dark/15 transition-colors touch-manipulation"
@@ -1567,19 +1500,21 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       const dataMatchesView = monthDataRangeStart === viewMonthStartStr;
                       const entry = dataMatchesView ? slotsByDate.get(dateStr) : undefined;
                       const openForDuration =
-                        rateForCalendar?.durationHours != null
-                          ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
-                          : entry?.open ?? 0;
+                        isTicketed
+                          ? (entry?.open ?? 0)
+                          : (rateForCalendar?.durationHours != null
+                            ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
+                            : (entry?.open ?? 0));
                       const ticketsLeft = dataMatchesView && isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
                       const isAvailable = !isPast && (isTicketed
-                        ? (ticketsLeft === null ? openForDuration > 0 : ticketsLeft > 0 && openForDuration > 0)
+                        ? openForDuration > 0
                         : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                       const bookedCount = entry?.booked ?? 0;
                       const ticketsBooked = dataMatchesView && isTicketed ? (ticketsBookedByDate[dateStr] ?? 0) : 0;
                       const displayBookedCount = isTicketed ? ticketsBooked : bookedCount;
                       const isFullyBooked = !isPast && (isTicketed
-                        ? (ticketsLeft !== null ? ticketsLeft === 0 && openForDuration > 0 : false)
+                        ? (entry != null && (ticketsLeft === 0 || (ticketsLeft == null && (entry?.open ?? 0) === 0)))
                         : (takenCount > 0 && openForDuration === 0));
                       const hasBookingsUrgency = !isPast && dataMatchesView && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
@@ -1589,10 +1524,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         <button
                           key={dateStr}
                           type="button"
-                          disabled={isPast || !isAvailable}
+                          disabled={isPast || !isAvailable || isFullyBooked}
                           onClick={() => {
                             if (!isAvailable) return;
-                            bookingDebugLog("BookingModal", "date selected", { dateStr });
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
@@ -2462,7 +2396,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         if (!holdId || !paymentIntentId) return;
                         setPaymentError(null);
                         setPaymentPhase("completing");
-                        bookingLog("client", "complete-after-payment retry (Try again)", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
                         try {
                           const res = await fetch("/api/booking/complete-after-payment", {
                             method: "POST",
@@ -2471,11 +2404,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           });
                           const data = await res.json().catch(() => ({}));
                           if (res.ok && data?.success) {
-                            bookingLog("client", "complete-after-payment retry success", { holdId });
                             setPaymentPhase("success");
                             setPaymentError(null);
                           } else {
-                            bookingLog("client", "complete-after-payment retry failed", { status: res.status, error: data?.error });
                             setPaymentError((data?.error as string) || "Please contact us to confirm your reservation.");
                             setPaymentPhase("successWithWarning");
                           }
@@ -2569,7 +2500,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setPaymentPhase("success");
                             return;
                           }
-                          bookingLog("client", "complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
                           try {
                             const res = await fetch("/api/booking/complete-after-payment", {
                               method: "POST",
@@ -2578,7 +2508,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             });
                             const data = await res.json().catch(() => ({}));
                             if (res.ok) {
-                              bookingLog("client", "complete-after-payment success", { holdId, alreadyConverted: data?.alreadyConverted, bookingId: data?.bookingId });
                               setPaymentPhase("success");
                             } else {
                               bookingError("client", "complete-after-payment failed", null, { status: res.status, error: data?.error });

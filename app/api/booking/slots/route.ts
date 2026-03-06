@@ -11,7 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -34,6 +34,15 @@ const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_BOOKING_FALLBACK === "1";
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
 
+/** Normalize to YYYY-MM-DD or null (handles Firestore/API returning ISO strings like "2025-11-01T00:00:00.000Z"). */
+function toDateStrOnly(v: unknown): string | null {
+  if (v == null) return null;
+  const s = typeof v === "string" ? v.trim() : null;
+  if (!s || s.length < 10) return null;
+  const sliced = s.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(sliced) ? sliced : null;
+}
+
 /** Returns true if the slot date is within the experience's seasonal window (specific dates or month range). Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used. */
 function isSeasonalAllowed(
   seasonal: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string } | undefined,
@@ -41,15 +50,22 @@ function isSeasonalAllowed(
   slotDateStr?: string
 ): boolean {
   if (!seasonal?.enabled) return true;
-  const startDate = typeof seasonal.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(seasonal.startDate) ? seasonal.startDate : null;
-  const endDate = typeof seasonal.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(seasonal.endDate) ? seasonal.endDate : null;
+  const startDate = toDateStrOnly(seasonal.startDate);
+  const endDate = toDateStrOnly(seasonal.endDate);
   if (startDate && endDate) {
     const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
     return dateStr >= startDate && dateStr <= endDate;
   }
   const startMonth = seasonal.startMonth ?? 1;
   const endMonth = seasonal.endMonth ?? 12;
-  const month = slotStart.getMonth() + 1; // 1–12
+  // Use slot calendar date (slotDateStr) for month when available so we match admin intent in listing timezone
+  let month: number;
+  if (slotDateStr && /^\d{4}-\d{2}-\d{2}$/.test(slotDateStr)) {
+    const m = parseInt(slotDateStr.slice(5, 7), 10);
+    month = Number.isNaN(m) ? slotStart.getMonth() + 1 : m;
+  } else {
+    month = slotStart.getMonth() + 1; // 1–12
+  }
   if (startMonth <= endMonth) return month >= startMonth && month <= endMonth;
   return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
 }
@@ -153,7 +169,8 @@ export async function GET(request: NextRequest) {
         seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string };
       };
       const expDataFull = expData as ExpDataFull | undefined;
-      const isTicketedBySlug = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expDataFull?.pricingType !== "charter";
+      // Sunset/holiday always use ticketed branch so calendar shows one slot per date; ignore pricingType when slug is in that family.
+      const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
       const useTicketedBranch = expDataFull?.pricingType === "ticketed" || isTicketedBySlug;
 
       if (useTicketedBranch) {
@@ -388,7 +405,7 @@ export async function GET(request: NextRequest) {
         for (const { dateStr, startHour, startMinute, durationHours: dur } of ticketedGrid) {
           const slotId = buildSlotId(dateStr, startHour, dur, startMinute);
           const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, dur, startMinute);
-          if (!isSeasonalAllowed(expDataFull?.seasonal, slotStart, dateStr)) continue;
+          // Ticketed: do not filter by seasonal here so calendar always shows dates. Seasonal is enforced at booking (create-hold, create-checkout).
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
           const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
@@ -846,7 +863,7 @@ export async function GET(request: NextRequest) {
 
       const seasonalCharter = (expData as { seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string } })?.seasonal;
       const slotsToReturn = seasonalCharter?.enabled
-        ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt)))
+        ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt), s.dateStr))
         : slots;
 
       const debugByDate = request.nextUrl.searchParams.get("debug") === "1" || request.nextUrl.searchParams.get("byDate") === "1"

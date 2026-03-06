@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 const EXPERIENCE_DETAIL_FIREBASE_HINT =
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    const isTicketedInferred = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expData?.pricingType !== "charter";
+    const isTicketedInferred = isTicketedExperienceSlug(effectiveSlug) && expData?.pricingType !== "charter";
     const pricingType = expData?.pricingType === "ticketed" || isTicketedInferred ? "ticketed" as const : (expData?.pricingType ?? undefined);
     const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name);
 

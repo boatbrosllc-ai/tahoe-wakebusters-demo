@@ -32,6 +32,19 @@ function getFamilyVariants(slug: string): string[] {
 }
 
 /**
+ * Returns slugs to try when looking up an experience by slug (requested first, then family).
+ * Use in get-experience-by-slug and /api/experiences/[slug] so "sunset" finds a doc with slug "sunset-cruise".
+ */
+export function getSlugLookupCandidates(slug: string): string[] {
+  const s = (slug ?? "").toLowerCase().trim();
+  if (!s) return [];
+  const family = getFamilyVariants(s);
+  if (family.length === 0) return [s];
+  const ordered = [s, ...family.filter((f) => f !== s)];
+  return [...new Set(ordered)];
+}
+
+/**
  * Returns all experience ID variants that are considered the same experience for matching.
  * Includes the document id, the slug (if different), and all aliases for the experience family
  * (e.g. pontoon + lake-austin-pontoon + pontoon-party; watersports + wake-surf + wake; sunset + sunset-cruise; holiday).
@@ -60,6 +73,29 @@ export function isWatersportsSlug(slug: string): boolean {
 export function isPontoonSlug(slug: string): boolean {
   const family = getFamilyVariants(slug);
   return family.length > 0 && family[0] === "pontoon";
+}
+
+/**
+ * Returns true if the slug is in the sunset or holiday family (ticketed experiences).
+ * Use in slots API so "sunset-cruise" and "sunset" both use the ticketed branch.
+ */
+export function isTicketedExperienceSlug(slug: string): boolean {
+  const family = getFamilyVariants(slug);
+  if (family.length === 0) return false;
+  const canonical = family[0];
+  return canonical === "sunset" || canonical === "holiday";
+}
+
+/**
+ * Returns true if requestedSlug matches docSlug (equal or same family).
+ * Use when resolving experience from list so "sunset" matches an experience with slug "sunset-cruise".
+ */
+export function slugMatches(requestedSlug: string, docSlug: string): boolean {
+  const r = (requestedSlug ?? "").toLowerCase().trim();
+  const d = (docSlug ?? "").toLowerCase().trim();
+  if (r === d) return true;
+  const family = getFamilyVariants(r);
+  return family.includes(d);
 }
 
 /**

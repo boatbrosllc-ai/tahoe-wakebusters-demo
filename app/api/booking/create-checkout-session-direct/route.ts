@@ -32,17 +32,27 @@ function parseBody(body: unknown): { experienceId: string; slotId: string; boatI
   return { experienceId, slotId, boatId, partySize, petsCount, discountCode: discountCode || undefined };
 }
 
-function isSeasonalAllowed(exp: Experience, slotStart: Date): boolean {
+function toDateStrOnly(v: unknown): string | null {
+  if (v == null) return null;
+  const s = typeof v === "string" ? v.trim() : null;
+  if (!s || s.length < 10) return null;
+  const sliced = s.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(sliced) ? sliced : null;
+}
+
+function isSeasonalAllowed(exp: Experience, slotStart: Date, slotDateStr?: string): boolean {
   if (!exp.seasonal?.enabled) return true;
-  const startDate = typeof exp.seasonal.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(exp.seasonal.startDate) ? exp.seasonal.startDate : null;
-  const endDate = typeof exp.seasonal.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(exp.seasonal.endDate) ? exp.seasonal.endDate : null;
+  const startDate = toDateStrOnly(exp.seasonal.startDate);
+  const endDate = toDateStrOnly(exp.seasonal.endDate);
   if (startDate && endDate) {
-    const slotDateStr = slotStart.toISOString().slice(0, 10);
-    return slotDateStr >= startDate && slotDateStr <= endDate;
+    const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
+    return dateStr >= startDate && dateStr <= endDate;
   }
   const startMonth = exp.seasonal.startMonth ?? 1;
   const endMonth = exp.seasonal.endMonth ?? 12;
-  const month = slotStart.getMonth() + 1;
+  const month = slotDateStr && /^\d{4}-\d{2}-\d{2}$/.test(slotDateStr)
+    ? parseInt(slotDateStr.slice(5, 7), 10) || slotStart.getMonth() + 1
+    : slotStart.getMonth() + 1;
   if (startMonth <= endMonth) return month >= startMonth && month <= endMonth;
   return month >= startMonth || month <= endMonth;
 }
@@ -150,7 +160,7 @@ export async function POST(request: NextRequest) {
     } else {
       slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
     }
-    if (!isSeasonalAllowed(experience, slotStart)) {
+    if (!isSeasonalAllowed(experience, slotStart, parsed.dateStr)) {
       return NextResponse.json({ error: "Experience not available for this date" }, { status: 400 });
     }
     const addonsById = new Map<string, ExperienceAddon>();

@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { getSlugLookupCandidates } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate, ExperienceAddon } from "./types";
 
 export interface ExperienceWithDetails {
@@ -12,12 +13,13 @@ export interface ExperienceWithDetails {
 export async function getExperienceBySlug(slug: string): Promise<ExperienceWithDetails | null> {
   const db = getDb();
   const normalizedSlug = slug.trim().toLowerCase();
-  let snap = await db.collection("experiences").where("slug", "==", normalizedSlug).where("active", "==", true).limit(1).get();
-  if (snap.empty && (normalizedSlug === "pontoon" || normalizedSlug === "lake-austin-pontoon")) {
-    const fallbackSlug = normalizedSlug === "pontoon" ? "lake-austin-pontoon" : "pontoon";
-    snap = await db.collection("experiences").where("slug", "==", fallbackSlug).where("active", "==", true).limit(1).get();
+  const candidates = getSlugLookupCandidates(normalizedSlug);
+  let snap = null;
+  for (const candidate of candidates) {
+    snap = await db.collection("experiences").where("slug", "==", candidate).where("active", "==", true).limit(1).get();
+    if (!snap.empty) break;
   }
-  if (snap.empty) return null;
+  if (!snap || snap.empty) return null;
   const doc = snap.docs[0];
   const experience = doc.data() as Experience;
   const ratesSnap = await db.collection("experiences").doc(doc.id).collection("rates").where("active", "==", true).get();

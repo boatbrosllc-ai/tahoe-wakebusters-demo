@@ -111,19 +111,16 @@ function fetchCached<T>(
 
   const cached = dataCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < staleMs) {
-    if (typeof window !== "undefined") console.log("[booking:diagnostic] API cache hit", { key });
     return Promise.resolve(cached.data as T);
   }
 
   const existing = inFlight.get(key) as Promise<T> | undefined;
-  if (existing && typeof window !== "undefined") console.log("[booking:diagnostic] API request dedup (in-flight)", { key });
 
   const basePromise: Promise<T> =
     existing ??
     (() => {
       const base = getApiBaseUrl();
       const fullUrl = base ? `${base}${url}` : url;
-      if (typeof window !== "undefined") console.log("[booking:diagnostic] API request start", { key, url });
       // Same-origin: use credentials. Cross-origin: omit to avoid forcing credentialed CORS for public availability.
       const isSameOrigin =
         typeof window !== "undefined" && (!base || base === window.location.origin);
@@ -151,8 +148,6 @@ function fetchCached<T>(
           return res.json() as Promise<T>;
         })
         .then((data) => {
-          const durationMs = Date.now() - startMs;
-          if (typeof window !== "undefined") console.log("[booking:diagnostic] API request ok", { key, durationMs });
           dataCache.delete(key); // remove then re-insert to update insertion order (LRU)
           dataCache.set(key, { data, fetchedAt: Date.now() });
           evictOldestIfNeeded();
@@ -168,7 +163,7 @@ function fetchCached<T>(
           const status = (err as { status?: number }).status;
           const apiBody = (err as { apiBody?: { error?: string; hint?: string; firebaseDetail?: { summary?: string } } }).apiBody;
           if (typeof status === "number" && status >= 400) {
-            console.error("[booking:diagnostic] API request failed (HTTP)", {
+            console.error("[booking] API request failed (HTTP)", {
               key,
               url,
               status,
@@ -178,8 +173,7 @@ function fetchCached<T>(
               firebaseSummary: apiBody?.firebaseDetail?.summary,
             });
           } else {
-            // No HTTP status = network error, timeout, or connection closed (e.g. server killed at 10s).
-            console.error("[booking:diagnostic] API request failed (no response)", {
+            console.error("[booking] API request failed (no response)", {
               key,
               url,
               durationMs,

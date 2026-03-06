@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
+import { getSlugLookupCandidates } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 export interface ExperienceDetailResponse {
@@ -28,13 +29,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
     const db = getDb();
     const normalizedSlug = slug.trim().toLowerCase();
-    let expSnap = await db.collection("experiences").where("slug", "==", normalizedSlug).where("active", "==", true).limit(1).get();
-    // Pontoon is referenced as "pontoon" in code (e.g. firestoreSlug) but may be stored as "lake-austin-pontoon" in Firestore (URL slug).
-    if (expSnap.empty && (normalizedSlug === "pontoon" || normalizedSlug === "lake-austin-pontoon")) {
-      const fallbackSlug = normalizedSlug === "pontoon" ? "lake-austin-pontoon" : "pontoon";
-      expSnap = await db.collection("experiences").where("slug", "==", fallbackSlug).where("active", "==", true).limit(1).get();
+    const candidates = getSlugLookupCandidates(normalizedSlug);
+    let expSnap = null;
+    for (const candidate of candidates) {
+      expSnap = await db.collection("experiences").where("slug", "==", candidate).where("active", "==", true).limit(1).get();
+      if (!expSnap.empty) break;
     }
-    if (expSnap.empty) {
+    if (!expSnap || expSnap.empty) {
       return NextResponse.json(
         { error: "Experience not found", hint: "No active experience matches this slug." },
         { status: 404 }
