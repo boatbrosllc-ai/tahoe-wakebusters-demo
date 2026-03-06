@@ -290,7 +290,7 @@ export async function convertHoldToBooking(
   const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
   const fullInput = input as ConvertHoldInputFull;
   const customer = fullInput.customerOverride ?? hold.customerDraft;
-  const specialNotes = fullInput.specialNotesOverride ?? hold.answers?.comments?.trim() || undefined;
+  const specialNotes = fullInput.specialNotesOverride ?? (hold.answers?.comments?.trim() || undefined);
   const bookingId = db.collection("bookings").doc().id;
   const parsedSlot = parseSlotId(hold.slotId);
   const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
