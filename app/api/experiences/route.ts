@@ -4,6 +4,14 @@ import type { Experience } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceBySlug } from "@/content/experiences";
 
+function inferTicketedFromSlugOrTitle(exp: Experience): boolean {
+  const slug = (exp.slug ?? "").toLowerCase();
+  const title = (exp.title ?? (exp as { name?: string }).name ?? "").toLowerCase();
+  if (/sunset|cruise/.test(slug) || /sunset|cruise/.test(title)) return true;
+  if (/holiday|festive/.test(slug) || /holiday|festive/.test(title)) return true;
+  return false;
+}
+
 export interface ExperienceListItem {
   id: string;
   slug: string;
@@ -31,6 +39,7 @@ export async function GET() {
         let fromPriceCents: number | null = exp.fromPriceCents ?? null;
         const contentExp = getExperienceBySlug(exp.slug ?? "");
         if (contentExp?.fromPriceCents != null) fromPriceCents = contentExp.fromPriceCents;
+        const isTicketed = exp.pricingType === "ticketed" || (exp.pricingType !== "charter" && inferTicketedFromSlugOrTitle(exp));
         return {
           id: doc.id,
           slug: exp.slug ?? "",
@@ -42,10 +51,10 @@ export async function GET() {
           fromPriceCents,
           active: exp.active ?? true,
           sortOrder: exp.sortOrder,
-          ...(exp.pricingType && { pricingType: exp.pricingType }),
-          ...(exp.pricingType === "ticketed" && exp.maxCapacity != null && { maxCapacity: exp.maxCapacity }),
-          ...(exp.pricingType === "ticketed" && exp.departureHour != null && { departureHour: exp.departureHour }),
-          ...(exp.pricingType === "ticketed" && exp.departureMinute != null && { departureMinute: exp.departureMinute }),
+          ...(isTicketed && { pricingType: "ticketed" as const }),
+          ...(isTicketed && (exp.maxCapacity != null ? { maxCapacity: exp.maxCapacity } : { maxCapacity: 35 })),
+          ...(isTicketed && { departureHour: exp.departureHour ?? 19 }),
+          ...(isTicketed && { departureMinute: exp.departureMinute ?? 0 }),
         };
       });
     // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)

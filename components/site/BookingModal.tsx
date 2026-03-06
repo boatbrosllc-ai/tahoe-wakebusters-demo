@@ -460,6 +460,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         if (boatList.length === 1) setSelectedBoat(boatList[0]);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
+        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number };
+        if (detail?.pricingType || detail?.departureHour != null) {
+          setSelectedExperience((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  ...(detail.pricingType && { pricingType: detail.pricingType }),
+                  ...(detail.pricingType === "ticketed" && detail.maxCapacity != null && { maxCapacity: detail.maxCapacity }),
+                  ...(detail.pricingType === "ticketed" && detail.departureHour != null && { departureHour: detail.departureHour }),
+                  ...(detail.pricingType === "ticketed" && detail.departureMinute != null && { departureMinute: detail.departureMinute }),
+                }
+              : null
+          );
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -750,7 +764,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       if (s.status === "open") available.add(s.boatId);
       else {
         unavailable.add(s.boatId);
-        if (s.status === "booked") booked.add(s.boatId);
+        booked.add(s.boatId);
       }
     }
     return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };

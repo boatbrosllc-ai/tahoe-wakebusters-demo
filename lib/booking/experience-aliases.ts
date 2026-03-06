@@ -65,6 +65,8 @@ export function isPontoonSlug(slug: string): boolean {
 /**
  * Slug to use for boat-type filtering. Prefers title-inferred slug when it indicates watersports or pontoon
  * so that wake-only / no-wake filtering applies even if the experience has a different explicit slug.
+ * If the effective slug is not in any family (e.g. Firestore doc id, or slug with spaces), infer from
+ * keywords so wake experiences never show pontoon/tritoon and pontoon experiences never show wake.
  */
 export function getSlugForBoatTypeFilter(
   experienceSlug: string,
@@ -73,7 +75,14 @@ export function getSlugForBoatTypeFilter(
 ): string {
   const inferred = (inferredFromTitle ?? "").toLowerCase().trim();
   if (inferred && (isWatersportsSlug(inferred) || isPontoonSlug(inferred))) return inferred;
-  const effective = (experienceSlug ?? "").trim() || inferred || (experienceId ?? "").trim().toLowerCase();
+  const effective = (experienceSlug ?? "").trim().toLowerCase() || inferred || (experienceId ?? "").trim().toLowerCase();
+  // If effective is in a known family, use it (e.g. "lake-austin-wake-boat" -> watersports family).
+  if (effective && (isWatersportsSlug(effective) || isPontoonSlug(effective))) return effective;
+  // Fallback: infer from raw string (doc id, slug with spaces, or any identifier). Ensures we never
+  // treat a wake experience as "other" and show all boats (e.g. tritoons on wake listing).
+  const raw = `${(experienceSlug ?? "").trim()} ${(experienceId ?? "").trim()}`.toLowerCase();
+  if (/wake|surf|watersport|wakeboard|tube/.test(raw)) return "watersports";
+  if (/pontoon|tritoon|party/.test(raw)) return "pontoon";
   return effective;
 }
 

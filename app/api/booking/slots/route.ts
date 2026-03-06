@@ -130,8 +130,10 @@ export async function GET(request: NextRequest) {
         defaultRateId?: string;
       };
       const expDataFull = expData as ExpDataFull | undefined;
+      const isTicketedBySlug = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expDataFull?.pricingType !== "charter";
+      const useTicketedBranch = expDataFull?.pricingType === "ticketed" || isTicketedBySlug;
 
-      if (expDataFull?.pricingType === "ticketed") {
+      if (useTicketedBranch) {
         // --- Ticketed experience: one slot per date with capacity enrichment ---
         const tRatesSnap = ratesSnap;
         if (tRatesSnap.empty) {
@@ -151,7 +153,7 @@ export async function GET(request: NextRequest) {
           tDurationHours = (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
         }
 
-        const tDepartureHour = expDataFull.departureHour ?? 10;
+        const tDepartureHour = expDataFull.departureHour ?? (isTicketedBySlug ? 19 : 10);
         const tDepartureMinute = expDataFull.departureMinute ?? 0;
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);

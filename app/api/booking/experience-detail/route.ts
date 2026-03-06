@@ -47,6 +47,10 @@ export interface ExperienceDetailResponse {
   boats: ExperienceDetailBoat[];
   rates: ExperienceDetailRate[];
   addons: ExperienceDetailAddon[];
+  pricingType?: "charter" | "ticketed";
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -77,10 +81,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string; title?: string; name?: string };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
+    const isTicketedInferred = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expData?.pricingType !== "charter";
+    const pricingType = expData?.pricingType === "ticketed" || isTicketedInferred ? "ticketed" as const : (expData?.pricingType ?? undefined);
     const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "");
 
     // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
@@ -165,7 +171,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       })
       .filter((a) => a.type !== "tip");
 
-    const payload: ExperienceDetailResponse = { boats, rates, addons };
+    const payload: ExperienceDetailResponse = {
+      boats,
+      rates,
+      addons,
+      ...(pricingType && { pricingType }),
+      ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
+    };
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=120" },
     });

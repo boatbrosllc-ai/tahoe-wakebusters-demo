@@ -407,7 +407,7 @@ export function ExperienceCalendarSection({
       if (s.status === "open") available.add(boatId);
       else {
         unavailable.add(boatId);
-        if (s.status === "booked") booked.add(boatId);
+        booked.add(boatId);
       }
     }
     return { availableBoatIdsForInlineSlot: available, unavailableBoatIdsForInlineSlot: unavailable, bookedBoatIdsForInlineSlot: booked };
