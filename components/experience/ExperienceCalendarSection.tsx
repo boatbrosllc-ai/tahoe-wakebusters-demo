@@ -22,6 +22,7 @@ export interface SlotDto {
   status: SlotStatus;
   boatId?: string;
   spotsRemaining?: number;
+  spotsBooked?: number;
   isCharterLocked?: boolean;
   showSpotsRemaining?: boolean;
   maxCapacity?: number;
@@ -173,6 +174,10 @@ export function ExperienceCalendarSection({
   const [monthFetchErrors, setMonthFetchErrors] = useState<Record<string, boolean>>({});
   /** Incremented on retry to re-run the slot fetch effect for the current month. */
   const [retryCount, setRetryCount] = useState(0);
+  /** Month keys we've already auto-retried once (first response was 0 slots); avoid infinite retry loop. */
+  const autoRetriedMonthKeysRef = useRef<Set<string>>(new Set());
+  /** Month keys we've already retried once after AbortError (e.g. Strict Mode); avoid infinite loop. */
+  const abortRetriedMonthKeysRef = useRef<Set<string>>(new Set());
   /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
   const [inlineStepIndex, setInlineStepIndex] = useState(() => pricingTypeProp === "ticketed" ? 1 : 0);
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
@@ -283,13 +288,46 @@ export function ExperienceCalendarSection({
 
   const dateRange = useMemo(() => getDateRangeForMonth(calendarMonth), [calendarMonth]);
 
+  // Log once on mount to confirm calendar section runs (and with what ids)
+  useEffect(() => {
+    const monthKey = experienceId
+      ? `${experienceId}:${toDateStr(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)).slice(0, 7)}`
+      : null;
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "ExperienceCalendarSection.tsx:mount",
+        message: "Calendar section mount or experienceId set",
+        data: { experienceIdProp: experienceIdProp ?? null, experienceId, monthKey },
+        timestamp: Date.now(),
+        hypothesisId: "H0",
+      }),
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- intentional: log once on mount only
+
   // Clear accumulated slot state when the experience changes so stale slots never bleed through.
   // Defined before the fetch effect so React runs it first when experienceId changes.
   useEffect(() => {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "ExperienceCalendarSection.tsx:clearEffect",
+        message: "Calendar clear effect ran",
+        data: { experienceId },
+        timestamp: Date.now(),
+        hypothesisId: "H4",
+      }),
+    }).catch(() => {});
+    // #endregion
     setSlots([]);
     setMonthFetchErrors({});
     fetchedMonthKeysRef.current = new Set();
     prefetchedMonthKeysRef.current = new Set();
+    autoRetriedMonthKeysRef.current = new Set();
+    abortRetriedMonthKeysRef.current = new Set();
   }, [experienceId]);
 
   // Fetch slots for the visible month only. Merges into existing state so already-seen months
@@ -300,6 +338,19 @@ export function ExperienceCalendarSection({
     const monthKey = `${experienceId}:${toDateStr(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)).slice(0, 7)}`;
     const alreadyFetched = fetchedMonthKeysRef.current.has(monthKey);
     currentCalendarMonthKeyRef.current = monthKey;
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "ExperienceCalendarSection.tsx:slotsEffect",
+        message: "Slots effect ran",
+        data: { experienceId, monthKey, alreadyFetched, willFetch: !alreadyFetched },
+        timestamp: Date.now(),
+        hypothesisId: "H1",
+      }),
+    }).catch(() => {});
+    // #endregion
     if (!alreadyFetched) {
       setLoading(true);
       setMonthFetchErrors((prev) => {
@@ -312,15 +363,67 @@ export function ExperienceCalendarSection({
     const controller = new AbortController();
     bookingCache.fetchSlots(experienceId, start, end, controller.signal)
       .then((data) => {
-        setSlots((prev) => mergeSlots(prev, (data?.slots ?? []) as SlotDto[]));
-        fetchedMonthKeysRef.current.add(monthKey);
+        const slotList = (data?.slots ?? []) as SlotDto[];
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "ExperienceCalendarSection.tsx:slotsThen",
+            message: "Slots fetch resolved",
+            data: { monthKey, slotCount: slotList.length },
+            timestamp: Date.now(),
+            hypothesisId: "H3",
+          }),
+        }).catch(() => {});
+        // #endregion
+        setSlots((prev) => mergeSlots(prev, slotList));
+        if (slotList.length > 0) {
+          fetchedMonthKeysRef.current.add(monthKey);
+        } else if (!autoRetriedMonthKeysRef.current.has(monthKey)) {
+          autoRetriedMonthKeysRef.current.add(monthKey);
+          window.setTimeout(() => setRetryCount((c) => c + 1), 400);
+        } else {
+          fetchedMonthKeysRef.current.add(monthKey);
+        }
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") {
+        const name = (err as { name?: string })?.name;
+        const isAbort = name === "AbortError";
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "ExperienceCalendarSection.tsx:slotsCatch",
+            message: "Slots fetch failed",
+            data: { monthKey, errorName: name, aborted: isAbort },
+            timestamp: Date.now(),
+            hypothesisId: "H2",
+          }),
+        }).catch(() => {});
+        // #endregion
+        if (isAbort) {
+          if (!abortRetriedMonthKeysRef.current.has(monthKey)) {
+            abortRetriedMonthKeysRef.current.add(monthKey);
+            window.setTimeout(() => setRetryCount((c) => c + 1), 150);
+          }
+        } else {
           setMonthFetchErrors((prev) => ({ ...prev, [monthKey]: true }));
         }
       })
       .finally(() => {
+        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "ExperienceCalendarSection.tsx:slotsFinally",
+            message: "Slots fetch finally",
+            data: { monthKey, currentRef: currentCalendarMonthKeyRef.current, willClearLoading: currentCalendarMonthKeyRef.current === monthKey },
+            timestamp: Date.now(),
+            hypothesisId: "H5",
+          }),
+        }).catch(() => {});
         if (currentCalendarMonthKeyRef.current === monthKey) setLoading(false);
       });
     return () => controller.abort();
@@ -506,14 +609,14 @@ export function ExperienceCalendarSection({
   }, [slots]);
 
   const slotDataByDate = useMemo(() => {
-    if (!isTicketed) return new Map<string, { spotsRemaining: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
-    const map = new Map<string, { spotsRemaining: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
+    if (!isTicketed) return new Map<string, { spotsRemaining: number | null; spotsBooked: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
+    const map = new Map<string, { spotsRemaining: number | null; spotsBooked: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();
     for (const s of slots) {
       const dateStr = isoToChicagoDateStr(s.startAt);
       if (!map.has(dateStr)) {
         map.set(dateStr, {
-          // null means the API hasn't returned capacity data — treat as available
           spotsRemaining: typeof s.spotsRemaining === "number" ? s.spotsRemaining : null,
+          spotsBooked: typeof s.spotsBooked === "number" ? s.spotsBooked : null,
           isCharterLocked: s.isCharterLocked ?? false,
           showSpotsRemaining: s.showSpotsRemaining ?? false,
         });
@@ -631,7 +734,10 @@ export function ExperienceCalendarSection({
     ) => {
       const entry = slotsByDate.get(dateStr);
       const openCount = entry?.open ?? 0;
-      const bookedCount = entry?.booked ?? 0;
+      // Ticketed: booked count is in slotDataByDate.spotsBooked; charter uses entry.booked
+      const bookedCount = isTicketed
+        ? (slotDataByDate.get(dateStr)?.spotsBooked ?? 0)
+        : (entry?.booked ?? 0);
       const heldCount = entry?.held ?? 0;
       const blockedCount = entry?.blocked ?? 0;
       cells.push({
@@ -661,7 +767,7 @@ export function ExperienceCalendarSection({
       pushCell(toDateStr(d), d.getDate(), false, true);
     }
     return cells;
-  }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr]);
+  }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr, isTicketed, slotDataByDate]);
 
   const goPrevMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
   const goNextMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));

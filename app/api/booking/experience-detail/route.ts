@@ -89,6 +89,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const pricingType = expData?.pricingType === "ticketed" || isTicketedInferred ? "ticketed" as const : (expData?.pricingType ?? undefined);
     const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name);
 
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experience-detail/route.ts:slug", message: "experience-detail slug inputs", data: { experienceId, experienceSlug, inferredSlugFromTitle, slugForBoatType, titleOrName: (expData?.title ?? expData?.name) ?? null }, timestamp: Date.now(), hypothesisId: "H1" }) }).catch(() => {});
+    // #endregion
+
     // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
     const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
     const boatPromises = experienceIdVariants.map((variantId) =>
@@ -135,6 +139,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // ExperienceDetailResponse.rates field. Boats only carry fromPriceCents for display.
     // When slug/title don't identify the listing (e.g. doc id only), infer from assigned boats so we never show pontoon on wake listing.
     const slugEffective = inferSlugFromAssignedBoats(slugForBoatType, allBoatDocs);
+    // #region agent log
+    const allBoatTypes = allBoatDocs.map((d) => (d.data() as ListingBoat).boatType);
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experience-detail/route.ts:afterInfer", message: "slugEffective and boat counts", data: { experienceId, slugEffective, allBoatDocsCount: allBoatDocs.length, allBoatTypes }, timestamp: Date.now(), hypothesisId: "H1,H4" }) }).catch(() => {});
+    // #endregion
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     const allowBoatType = allowBoatTypeForSlug(slugEffective);
     let boatDocsFiltered = allBoatDocs.filter((doc) => {
@@ -147,6 +155,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
       );
     }
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "experience-detail/route.ts:response", message: "final boats returned", data: { experienceId, boatsReturnedCount: boatDocsFiltered.length, boatIds: boatDocsFiltered.map((d) => d.id) }, timestamp: Date.now(), hypothesisId: "H1,H4" }) }).catch(() => {});
+    // #endregion
     const boats: ExperienceDetailBoat[] = [...boatDocsFiltered]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((doc) => {
@@ -186,7 +197,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
     };
     return NextResponse.json(payload, {
-      headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=120" },
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },
     });
   } catch (err) {
     console.error("[booking/experience-detail]", err);

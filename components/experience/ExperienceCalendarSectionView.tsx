@@ -109,7 +109,7 @@ export interface ExperienceCalendarSectionViewProps {
   autoSwitchBanner?: boolean;
   setAutoSwitchBanner?: (v: boolean) => void;
   showSpotsRemaining?: boolean;
-  slotDataByDate?: Map<string, { spotsRemaining: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>;
+  slotDataByDate?: Map<string, { spotsRemaining: number | null; spotsBooked: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>;
 }
 
 export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionViewProps) {
@@ -269,14 +269,18 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const openForDate = entry?.open ?? 0;
                         const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                         const bookedCount = entry?.booked ?? 0;
-                        const isFullyBooked = !isPast && takenCount > 0 && openForDate === 0;
                         const slotData = slotDataByDate?.get(dateStr);
                         const isCharterLocked = slotData?.isCharterLocked ?? false;
                         const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
+                        const spotsBookedFirst = slotData?.spotsBooked ?? null;
+                        const isTicketedCell = slotData != null;
+                        const isFullyBooked = !isPast && (isTicketedCell ? spotsLeft === 0 : (takenCount > 0 && openForDate === 0));
                         const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                         const isFullyUnavailable = isCharterLocked;
-                        const isAvailable = !isPast && openForDate > 0 && !isFullyUnavailable;
-                        const hasBookingsUrgency = !isPast && isAvailable && !isSoldOutShared && bookedCount > 0;
+                        const isAvailable = !isPast && (isTicketedCell ? (openForDate > 0 && spotsLeft !== 0) : (openForDate > 0 && !isFullyUnavailable));
+                        const hasBookingsUrgency = !isPast && (isTicketedCell ? (spotsBookedFirst ?? 0) > 0 && spotsLeft !== 0 : (isAvailable && !isSoldOutShared && bookedCount > 0));
+                        const hasBookingsOnDateFirst = isTicketedCell && !isPast && (spotsBookedFirst ?? 0) > 0;
+                        const displayBookedFirst = isTicketedCell ? (spotsBookedFirst ?? 0) : bookedCount;
                         const priceCents = datePrices[dateStr];
                         const isHoliday = holidayDateStrings.has(dateStr);
                         return (
@@ -285,7 +289,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             type="button"
                             disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable}
                             onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
-                            title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
+                            title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedFirst} already booked this day` : undefined}
                             className={cn(
                               "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] md:min-h-[64px] touch-manipulation",
                               darkCard ? "sm:min-h-[52px]" : "sm:min-h-[58px]",
@@ -296,9 +300,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     !isPast && !isAvailable && !isSoldOutShared && !isFullyBooked && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
                                     isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                     isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && "bg-amber-500/25 text-amber-200 border-amber-400/50",
-                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                    isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                    (hasBookingsUrgency || hasBookingsOnDateFirst) && !isFullyBooked && !isSoldOutShared && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDateFirst && !isFullyBooked && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                    isAvailable && isHoliday && !hasBookingsUrgency && !hasBookingsOnDateFirst && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                     isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                   )
                                 : cn(
@@ -306,10 +310,10 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     !isPast && !isAvailable && !isSoldOutShared && !isFullyBooked && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                                     isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                     isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
-                                    hasBookingsUrgency && !isFullyBooked && !isSoldOutShared && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
-                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                                    isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
+                                    (hasBookingsUrgency || hasBookingsOnDateFirst) && !isFullyBooked && !isSoldOutShared && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                    (hasBookingsUrgency || hasBookingsOnDateFirst) && !isFullyBooked && !isSoldOutShared && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                    isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDateFirst && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                    isAvailable && isHoliday && !hasBookingsUrgency && !hasBookingsOnDateFirst && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                     isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                   )
                             )}
@@ -323,14 +327,14 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                               </>
                             )}
-                            {!isFullyUnavailable && hasBookingsUrgency && (
-                              <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                            {!isFullyUnavailable && (hasBookingsUrgency || hasBookingsOnDateFirst) && (
+                              <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{displayBookedFirst} booked</span>
                             )}
-                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && (
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDateFirst && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && (
                               <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
                             )}
                             {!isFullyUnavailable && isFullyBooked && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
-                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (
+                            {!isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDateFirst && !isFullyBooked && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (
                               typeof priceCents === "number"
                                 ? <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate mt-0.5", darkCard ? "text-emerald-200" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>
                                 : <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>
@@ -507,8 +511,6 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const entry = slotsByDate.get(dateStr);
                                 const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                                 const bookedCount = entry?.booked ?? 0;
-                                const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
-                                const hasBookingsUrgency = !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasPriceForDay = typeof datePrices[dateStr] === "number";
                                 const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
                                 const priceCents = datePrices[dateStr];
@@ -516,15 +518,24 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const slotData = isTicketed ? slotDataByDate.get(dateStr) : undefined;
                                 const isCharterLocked = slotData?.isCharterLocked ?? false;
                                 const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
+                                const spotsBooked = slotData?.spotsBooked ?? null;
                                 const isSoldOutShared = isTicketed && bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                                 const isFullyUnavailable = isTicketed && isCharterLocked;
+                                const isFullyBookedTicketed = isTicketed && !isPast && spotsLeft === 0 && slotData != null;
+                                const isFullyBookedCharter = !isTicketed && !isPast && takenCount > 0 && openForDuration === 0;
+                                const isFullyBooked = isFullyBookedTicketed || isFullyBookedCharter;
+                                const hasBookingsUrgencyTicketed = isTicketed && !isPast && (spotsBooked ?? 0) > 0 && spotsLeft !== 0;
+                                const hasBookingsUrgencyCharter = !isTicketed && !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
+                                const hasBookingsUrgency = hasBookingsUrgencyTicketed || hasBookingsUrgencyCharter;
+                                const hasBookingsOnDate = isTicketed && !isPast && (spotsBooked ?? 0) > 0;
+                                const displayBookedCount = isTicketed ? (spotsBooked ?? 0) : bookedCount;
                                 return (
                                   <button
                                     key={dateStr}
                                     type="button"
                                     disabled={isPast || !isAvailable || isFullyUnavailable}
                                     onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
-                                    title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
+                                    title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency || hasBookingsOnDate) ? `${displayBookedCount} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] touch-manipulation",
                                       darkCard ? "sm:min-h-[52px]" : "sm:min-h-[58px]",
@@ -537,9 +548,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                             !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
                                             isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                             isSoldOutShared && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                            hasBookingsUrgency && "bg-amber-500/25 text-amber-200 border-amber-400/50",
-                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                            isAvailable && !isSoldOutShared && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                            (hasBookingsUrgency || hasBookingsOnDate) && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDate && !isFullyBooked && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isAvailable && !isSoldOutShared && isHoliday && !hasBookingsUrgency && !hasBookingsOnDate && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                             isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                           )
                                         : cn(
@@ -547,10 +558,10 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                             !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                                             isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                             isSoldOutShared && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                            hasBookingsUrgency && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
-                                            hasBookingsUrgency && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
-                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                                            isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
+                                            (hasBookingsUrgency || hasBookingsOnDate) && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                            (hasBookingsUrgency || hasBookingsOnDate) && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                            isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDate && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                            isAvailable && isHoliday && !hasBookingsUrgency && !hasBookingsOnDate && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                           )
                                     )}
@@ -566,13 +577,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                                       </>
                                     )}
-                                    {hasBookingsUrgency && (
-                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                                    {(hasBookingsUrgency || hasBookingsOnDate) && (
+                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{displayBookedCount} booked</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && !hasBookingsUrgency && (
+                                    {isTicketed && !isFullyUnavailable && showSpotsRemaining && spotsLeft !== null && spotsLeft > 0 && isAvailable && !hasBookingsUrgency && !hasBookingsOnDate && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft} left</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
+                                    {isTicketed && !isFullyUnavailable && isAvailable && !isSoldOutShared && !hasBookingsUrgency && !hasBookingsOnDate && !(showSpotsRemaining && spotsLeft !== null && spotsLeft > 0) && (() => {
                                       if (typeof priceCents === "number") {
                                         return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
                                       }
@@ -849,25 +860,28 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const openForDuration = openCountByDateForDuration.get(dateStr) ?? 0;
                                 const entry = slotsByDate.get(dateStr);
                                 const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
-                                const bookedCount = entry?.booked ?? 0;
-                                const isFullyBooked = !isPast && takenCount > 0 && openForDuration === 0;
-                                const hasBookingsUrgency = !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
-                                const hasPriceForDay = typeof datePrices[dateStr] === "number";
-                                const isAvailable = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay));
+                                const bookedCount3 = entry?.booked ?? 0;
+                                const hasPriceForDay3 = typeof datePrices[dateStr] === "number";
+                                const isAvailable3 = !isPast && (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay3));
                                 const priceCents = datePrices[dateStr];
                                 const isHoliday = holidayDateStrings.has(dateStr);
                                 const slotData3 = isTicketed ? slotDataByDate.get(dateStr) : undefined;
                                 const isCharterLocked3 = slotData3?.isCharterLocked ?? false;
                                 const spotsLeft3 = slotData3 ? (slotData3.spotsRemaining ?? null) : null;
+                                const spotsBooked3 = slotData3?.spotsBooked ?? null;
                                 const isSoldOutShared3 = isTicketed && bookingMode === "shared" && spotsLeft3 === 0 && !isCharterLocked3;
                                 const isFullyUnavailable3 = isTicketed && isCharterLocked3;
+                                const isFullyBooked3 = !isPast && (isTicketed ? (spotsLeft3 === 0 && slotData3 != null) : (takenCount > 0 && openForDuration === 0));
+                                const hasBookingsUrgency3 = !isPast && (isTicketed ? (spotsBooked3 ?? 0) > 0 && spotsLeft3 !== 0 : (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay3)) && bookedCount3 > 0 && !isFullyBooked3);
+                                const hasBookingsOnDate3 = isTicketed && !isPast && (spotsBooked3 ?? 0) > 0;
+                                const displayBookedCount3 = isTicketed ? (spotsBooked3 ?? 0) : bookedCount3;
                                 return (
                                   <button
                                     key={dateStr}
                                     type="button"
-                                    disabled={isPast || !isAvailable || isFullyUnavailable3}
-                                    onClick={() => (isAvailable || isSoldOutShared3) && handleDayClick(dateStr)}
-                                    title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
+                                    disabled={isPast || !isAvailable3 || isFullyUnavailable3}
+                                    onClick={() => (isAvailable3 || isSoldOutShared3) && handleDayClick(dateStr)}
+                                    title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency3 || hasBookingsOnDate3) ? `${displayBookedCount3} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 min-h-[44px] min-w-[44px] sm:min-h-[58px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full touch-manipulation",
                                       isHoliday && !isPast && "ring-1.5 ring-violet-400/80",
@@ -876,29 +890,29 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                       darkCard
                                         ? cn(
                                             isPast && "opacity-60 cursor-not-allowed border-white/20 text-white/50",
-                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared3 && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
-                                            isFullyBooked && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
+                                            !isPast && !isAvailable3 && !isFullyBooked3 && !isSoldOutShared3 && "border-white/20 text-white/50 bg-white/5 cursor-not-allowed",
+                                            isFullyBooked3 && "bg-red-500/20 text-red-200 border-red-400/50 cursor-not-allowed",
                                             isSoldOutShared3 && "bg-amber-500/20 text-amber-200 border-amber-400/40 cursor-pointer",
-                                            hasBookingsUrgency && "bg-amber-500/25 text-amber-200 border-amber-400/50",
-                                            isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
-                                            isAvailable && !isSoldOutShared3 && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-white border-violet-400/60 hover:bg-violet-500/25",
+                                            (hasBookingsUrgency3 || hasBookingsOnDate3) && "bg-amber-500/25 text-amber-200 border-amber-400/50",
+                                            isAvailable3 && !isSoldOutShared3 && !hasBookingsUrgency3 && !hasBookingsOnDate3 && !isFullyBooked3 && !isHoliday && "bg-emerald-500/30 text-white border-emerald-400/60 hover:bg-emerald-500/45 hover:border-emerald-400",
+                                            isAvailable3 && !isSoldOutShared3 && isHoliday && !hasBookingsUrgency3 && !hasBookingsOnDate3 && !isFullyBooked3 && "text-white border-violet-400/60 hover:bg-violet-500/25",
                                             isSelected && "border-brand-primary bg-brand-primary/50 text-white font-semibold ring-2 ring-brand-primary/60"
                                           )
                                         : cn(
                                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                                            !isPast && !isAvailable && !isFullyBooked && !isSoldOutShared3 && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
-                                            isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
+                                            !isPast && !isAvailable3 && !isFullyBooked3 && !isSoldOutShared3 && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
+                                            isFullyBooked3 && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                                             isSoldOutShared3 && "bg-amber-50 text-amber-800 border-amber-300 cursor-pointer",
-                                            hasBookingsUrgency && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
-                                            hasBookingsUrgency && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
-                                            isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                                            isAvailable && isHoliday && !hasBookingsUrgency && !isFullyBooked && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
+                                            (hasBookingsUrgency3 || hasBookingsOnDate3) && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
+                                            (hasBookingsUrgency3 || hasBookingsOnDate3) && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
+                                            isAvailable3 && !isSoldOutShared3 && !hasBookingsUrgency3 && !hasBookingsOnDate3 && !isFullyBooked3 && !isHoliday && "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                                            isAvailable3 && isHoliday && !hasBookingsUrgency3 && !hasBookingsOnDate3 && !isFullyBooked3 && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
                                           )
                                     )}
                                   >
                                     <span className={cn("block text-[8px] sm:text-[10px] uppercase leading-tight truncate", darkCard ? "text-white/70" : "text-brand-muted")}>{weekday}</span>
-                                    <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
+                                    <span className={cn("block font-semibold text-[9px] sm:text-[10px] leading-tight truncate", darkCard && (isAvailable3 || isSelected) ? "text-white" : darkCard ? "text-white/80" : "")}>{label.split(" ")[1] ?? label}</span>
                                     {isTicketed && isFullyUnavailable3 && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-white/60" : "text-brand-muted")}>Unavailable</span>
                                     )}
@@ -908,24 +922,24 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         <span className={cn("block text-[7px] sm:text-[8px] leading-tight truncate", darkCard ? "text-amber-300/80" : "text-amber-600/80")}>Charter avail.</span>
                                       </>
                                     )}
-                                    {hasBookingsUrgency && (
-                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{bookedCount} booked</span>
+                                    {(hasBookingsUrgency3 || hasBookingsOnDate3) && (
+                                      <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-amber-200" : "text-amber-700")}>{displayBookedCount3} booked</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable3 && showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0 && isAvailable && !hasBookingsUrgency && (
+                                    {isTicketed && !isFullyUnavailable3 && showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0 && isAvailable3 && !hasBookingsUrgency3 && !hasBookingsOnDate3 && (
                                       <span className={cn("block text-[8px] sm:text-[9px] font-bold leading-tight truncate", darkCard ? "text-amber-200" : "text-amber-700")}>{spotsLeft3} left</span>
                                     )}
-                                    {isTicketed && !isFullyUnavailable3 && isAvailable && !isSoldOutShared3 && !hasBookingsUrgency && !(showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0) && (() => {
+                                    {isTicketed && !isFullyUnavailable3 && isAvailable3 && !isSoldOutShared3 && !hasBookingsUrgency3 && !hasBookingsOnDate3 && !(showSpotsRemaining && spotsLeft3 !== null && spotsLeft3 > 0) && (() => {
                                       if (typeof priceCents === "number") {
                                         return <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>${(priceCents / 100).toFixed(0)}/ea</span>;
                                       }
                                       return <span className={cn("block text-[8px] sm:text-[9px] font-semibold leading-tight truncate", darkCard ? "text-emerald-200" : "text-emerald-800")}>Open</span>;
                                     })()}
-                                    {!isTicketed && typeof priceCents === "number" && isAvailable && (
+                                    {!isTicketed && typeof priceCents === "number" && isAvailable3 && (
                                       <span className={cn("block text-[10px] sm:text-xs font-bold leading-tight truncate", darkCard ? "text-emerald-200" : isSelected ? "text-brand-primary" : "text-emerald-800")}>
                                         ${(priceCents / 100).toFixed(0)}
                                       </span>
                                     )}
-                                    {isFullyBooked && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
+                                    {isFullyBooked3 && <span className={cn("block text-[8px] sm:text-[10px] font-semibold leading-tight truncate mt-0.5", darkCard ? "text-red-200" : "text-red-700")}>Full</span>}
                                   </button>
                                 );
                               })}
@@ -1256,9 +1270,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               isClickable && "cursor-pointer hover:ring-2 hover:ring-brand-primary/30",
                               isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/10",
                               isHoliday && cell.isCurrentMonth && !isPast && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border border-violet-200/60",
-                              hasOpen && cell.isCurrentMonth && !isPast && !isHoliday && "bg-green-50/80 hover:bg-green-100 text-green-900",
-                              hasOpen && cell.isCurrentMonth && !isPast && isHoliday && "hover:bg-violet-100/80 text-violet-900",
-                              hasBooked && !hasOpen && cell.isCurrentMonth && !isPast && "bg-brand-dark/5 text-brand-muted"
+                              hasBooked && cell.isCurrentMonth && !isPast && "bg-amber-100/90 hover:bg-amber-100 text-amber-900 border border-amber-200/60",
+                              hasOpen && !hasBooked && cell.isCurrentMonth && !isPast && !isHoliday && "bg-green-50/80 hover:bg-green-100 text-green-900",
+                              hasOpen && !hasBooked && cell.isCurrentMonth && !isPast && isHoliday && "hover:bg-violet-100/80 text-violet-900"
                             )}
                           >
                             <span className="text-sm font-semibold sm:text-base shrink-0">{cell.day}</span>
@@ -1285,8 +1299,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         Holiday pricing
                       </span>
                       <span className="flex items-center gap-2">
-                        <span className="h-3 w-3 rounded bg-brand-dark/10" aria-hidden />
-                        Booked
+                        <span className="h-3 w-3 rounded bg-amber-200 border border-amber-300" aria-hidden />
+                        Has bookings
                       </span>
                     </div>
                     {noAvailabilityBecauseNotSetUp && (

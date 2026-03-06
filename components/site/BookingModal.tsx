@@ -52,6 +52,9 @@ interface SlotDto {
   endAt: string;
   status: string;
   boatId?: string;
+  /** Ticketed: number of tickets already booked on this slot's date (from API). */
+  spotsBooked?: number;
+  spotsRemaining?: number;
 }
 
 interface RateOption {
@@ -456,6 +459,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
         const boatList = Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
+        // #region agent log
+        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "BookingModal.tsx:experience-detail.then", message: "boats received from API", data: { experienceId: selectedExperience?.id, boatCount: boatList.length, boatIds: boatList.map((b) => b.id), boatNames: boatList.map((b) => b.name), singleBoatAutoSelect: boatList.length === 1 }, timestamp: Date.now(), hypothesisId: "H2,H5" }) }).catch(() => {});
+        // #endregion
         setBoats(boatList);
         if (boatList.length === 1) setSelectedBoat(boatList[0]);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
@@ -785,6 +791,20 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     }
     return map;
   }, [monthSlots]);
+
+  /** Ticketed: booked count per date from slot.spotsBooked (API). Used so calendar shows yellow when there are bookings. */
+  const ticketsBookedByDate = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const s of monthSlots) {
+      const booked = s.spotsBooked;
+      if (typeof booked === "number" && booked > 0) {
+        const day = isoToChicagoDateStr(s.startAt);
+        map[day] = booked; // one slot per date for ticketed
+      }
+    }
+    return map;
+  }, [monthSlots]);
+
   // #region agent log — first 3 grid dates: lookup key, exists in slots/prices, sample keys present
   useEffect(() => {
     if (!selectedExperience?.id || !selectedRateIdForCalendar) return;
@@ -1045,6 +1065,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     !(isTicketed && ticketCounts != null && ticketCounts.available === 0);
   const handleStep2Next = () => {
     if (!canGoFromStep2) return;
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "BookingModal.tsx:handleStep2Next", message: "step 2 next click", data: { experienceId: selectedExperience?.id, boatsLength: boats.length, isTicketed, goingToStep: isTicketed ? 4 : boats.length === 1 ? 4 : 3 }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {});
+    // #endregion
     if (isTicketed) {
       setStep(4);
       setPaymentPhase("form");
@@ -1551,10 +1574,12 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                         : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                       const bookedCount = entry?.booked ?? 0;
+                      const ticketsBooked = dataMatchesView && isTicketed ? (ticketsBookedByDate[dateStr] ?? 0) : 0;
+                      const displayBookedCount = isTicketed ? ticketsBooked : bookedCount;
                       const isFullyBooked = !isPast && (isTicketed
                         ? (ticketsLeft !== null ? ticketsLeft === 0 && openForDuration > 0 : false)
                         : (takenCount > 0 && openForDuration === 0));
-                      const hasBookingsUrgency = !isPast && isAvailable && dataMatchesView && bookedCount > 0;
+                      const hasBookingsUrgency = !isPast && dataMatchesView && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
                       const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
@@ -1569,7 +1594,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
-                          title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${bookedCount} already booked this day` : undefined}
+                          title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedCount} already booked this day` : undefined}
                           className={cn(
                             "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
@@ -1596,7 +1621,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           )}
                           {hasBookingsUrgency && (
                             <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">
-                              {bookedCount} booked
+                              {displayBookedCount} booked
                             </span>
                           )}
                           {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && !hasBookingsUrgency && (

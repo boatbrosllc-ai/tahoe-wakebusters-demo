@@ -14,6 +14,7 @@ export const maxDuration = 26;
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
@@ -49,8 +50,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ prices: {} });
     }
 
-    const exp = expSnap.data() as Experience;
-    const isTicketed = exp.pricingType === "ticketed";
+    const exp = expSnap.data() as Experience & { name?: string };
+    const experienceSlug = (typeof exp?.slug === "string" ? exp.slug.trim() : "").toLowerCase();
+    const inferredSlugFromTitle = inferSlugFromTitle(exp?.title ?? exp?.name);
+    const effectiveSlug = experienceSlug || inferredSlugFromTitle;
+    // Match experience-detail and slots: sunset/holiday are ticketed unless explicitly charter
+    const isTicketedInferred = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && exp.pricingType !== "charter";
+    const isTicketed = exp.pricingType === "ticketed" || isTicketedInferred;
     const holidayDates = exp.holidayDates;
     const weekendDays = exp.weekendDays;
     const friSunDays = exp.friSunDays;
@@ -64,7 +70,7 @@ export async function GET(request: NextRequest) {
     // For ticketed experiences, the listing page overrides the display price with the static
     // content fromPriceCents (e.g. $35/ticket from content/experiences.ts). Use the same
     // override here so the calendar shows the same per-ticket price as the listing page.
-    const contentExp = getExperienceBySlug(exp.slug ?? "");
+    const contentExp = getExperienceBySlug(effectiveSlug || (exp.slug ?? ""));
     const ticketedDisplayPriceCents =
       isTicketed && contentExp?.fromPriceCents != null
         ? contentExp.fromPriceCents
@@ -109,56 +115,66 @@ export async function GET(request: NextRequest) {
       const startStr = dateStrs[0];
       const endStr = dateStrs[dateStrs.length - 1];
 
-      // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
-      const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
-
+      const allExpIds = getExperienceIdVariants(experienceId, effectiveSlug);
       type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
-      const promises: [Promise<QuerySnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>] = [
-        // Windowed bookings via (experienceId, startDateStr) composite index.
-        db.collection("bookings")
-          .where("experienceId", "==", experienceId)
-          .where("startDateStr", ">=", startStr)
-          .where("startDateStr", "<=", endStr)
-          .get(),
-        // Windowed holds via (experienceId, startDateStr) index; status filtered in-memory to avoid
-        // requiring a three-field (experienceId, status, startDateStr) composite index.
-        db.collection("holds")
-          .where("experienceId", "==", experienceId)
-          .where("startDateStr", ">=", startStr)
-          .where("startDateStr", "<=", endStr)
-          .get(),
-        // Legacy fallback for holds written before startDateStr was stored.
-        legacyFallbackEnabled
-          ? db.collection("holds")
-              .where("experienceId", "==", experienceId)
-              .where("status", "==", "active")
-              .limit(100)
-              .get()
-          : Promise.resolve({ docs: [], empty: true, size: 0 } as unknown as QuerySnapshot),
-      ];
-      const [bookingsSnap, holdsWindowedSnap, holdsLegacySnap] = await Promise.all(promises);
 
-      // Merge windowed and legacy hold docs; dedup by id.
-      const holdDocMap = new Map<string, (typeof holdsWindowedSnap.docs)[0]>();
-      for (const doc of holdsWindowedSnap.docs) holdDocMap.set(doc.id, doc);
-      for (const doc of holdsLegacySnap.docs) {
-        if (holdDocMap.has(doc.id)) continue;
-        const legacyData = doc.data() as { startDateStr?: string };
-        if (legacyData.startDateStr) continue; // already covered by windowed query
-        holdDocMap.set(doc.id, doc);
+      // Bookings: one query per experience ID variant, then merge (so sunset/holiday match regardless of stored experienceId)
+      const bookingsSnaps = await Promise.all(
+        allExpIds.map((expId) =>
+          db.collection("bookings")
+            .where("experienceId", "==", expId)
+            .where("startDateStr", ">=", startStr)
+            .where("startDateStr", "<=", endStr)
+            .get()
+        )
+      );
+      const holdsWindowedSnaps = await Promise.all(
+        allExpIds.map((expId) =>
+          db.collection("holds")
+            .where("experienceId", "==", expId)
+            .where("startDateStr", ">=", startStr)
+            .where("startDateStr", "<=", endStr)
+            .get()
+        )
+      );
+      const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
+      const holdsLegacySnaps = legacyFallbackEnabled
+        ? await Promise.all(
+            allExpIds.map((expId) =>
+              db.collection("holds")
+                .where("experienceId", "==", expId)
+                .where("status", "==", "active")
+                .limit(100)
+                .get()
+            )
+          )
+        : ([] as QuerySnapshot[]);
+
+      const holdDocMap = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();
+      for (const snap of holdsWindowedSnaps) {
+        for (const doc of snap.docs) holdDocMap.set(doc.id, doc);
+      }
+      for (const snap of holdsLegacySnaps) {
+        for (const doc of snap.docs) {
+          if (holdDocMap.has(doc.id)) continue;
+          const legacyData = doc.data() as { startDateStr?: string };
+          if (legacyData.startDateStr) continue;
+          holdDocMap.set(doc.id, doc);
+        }
       }
 
-      // Aggregate sold + onHold per date (filter status/expiry in memory)
       const now = Date.now();
       const soldByDate: Record<string, number> = {};
       const heldByDate: Record<string, number> = {};
-      for (const doc of bookingsSnap.docs) {
-        const b = doc.data() as { slotId?: string; partySize?: number; status?: string };
-        if (!b.slotId || typeof b.partySize !== "number") continue;
-        if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-        const parsed = parseSlotId(b.slotId);
-        if (!parsed || !dateSet.has(parsed.dateStr)) continue;
-        soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
+      for (const snap of bookingsSnaps) {
+        for (const doc of snap.docs) {
+          const b = doc.data() as { slotId?: string; partySize?: number; status?: string };
+          if (!b.slotId || typeof b.partySize !== "number") continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const parsed = parseSlotId(b.slotId);
+          if (!parsed || !dateSet.has(parsed.dateStr)) continue;
+          soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
+        }
       }
       for (const doc of Array.from(holdDocMap.values())) {
         const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
@@ -185,7 +201,7 @@ export async function GET(request: NextRequest) {
       Expires: "0",
     };
     return NextResponse.json(
-      { prices, holidayDateStrings, pricingType: exp.pricingType ?? "charter", ticketsAvailableByDate },
+      { prices, holidayDateStrings, pricingType: isTicketed ? "ticketed" : (exp.pricingType ?? "charter"), ticketsAvailableByDate },
       { headers: noStoreHeaders }
     );
   } catch (err) {
