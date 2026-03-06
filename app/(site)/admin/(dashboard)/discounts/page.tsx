@@ -172,6 +172,7 @@ export default function AdminDiscountsPage() {
                   type="number"
                   min={1}
                   max={100}
+                  step={1}
                   value={createPercent}
                   onChange={(e) => setCreatePercent(parseInt(e.target.value, 10) || 0)}
                   className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"

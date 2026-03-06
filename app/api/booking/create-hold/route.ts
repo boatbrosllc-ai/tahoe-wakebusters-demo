@@ -10,6 +10,7 @@ import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/li
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
+import { signReleaseToken } from "@/lib/booking/releaseToken";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
@@ -40,6 +41,11 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   } else {
     if (typeof customerDraft.name !== "string") missing.push("customerDraft.name");
     if (typeof customerDraft.email !== "string") missing.push("customerDraft.email");
+    else {
+      const email = (customerDraft.email as string).trim();
+      if (email.length > 254) missing.push("customerDraft.email (must be at most 254 characters)");
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) missing.push("customerDraft.email (must be a valid email format)");
+    }
     if (typeof customerDraft.phone !== "string") missing.push("customerDraft.phone");
   }
   if (missing.length) {
@@ -65,7 +71,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       answers,
       customerDraft: {
         name: (customerDraft!.name as string).trim(),
-        email: (customerDraft!.email as string).trim(),
+        email: (customerDraft!.email as string).trim().slice(0, 254),
         phone: (customerDraft!.phone as string).trim(),
       },
       marketingOptIn,
@@ -140,8 +146,14 @@ async function hasOverlappingBlock(opts: {
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-hold", "request started");
-    const rl = checkRateLimit(getClientKey(request));
+    const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
+      if (rl.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
       bookingWarn("create-hold", "rate limit exceeded", { retryAfterMs: rl.retryAfterMs });
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
       return NextResponse.json(
@@ -649,7 +661,13 @@ export async function POST(request: NextRequest) {
         tx.set(db.collection("holds").doc(holdId), holdPayload);
       });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
-      const response: CreateHoldResponse = { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), pricing: responsePricing };
+      const releaseToken = signReleaseToken(effectiveHoldId, Math.floor(effectiveExpiresAt.getTime() / 1000));
+      const response: CreateHoldResponse = {
+        holdId: effectiveHoldId,
+        expiresAt: effectiveExpiresAt.toISOString(),
+        pricing: responsePricing,
+        ...(releaseToken ? { releaseToken } : {}),
+      };
       bookingLog("create-hold", "shared ticketed hold created", { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), reused: effectiveHoldId !== holdId });
       return NextResponse.json(response);
     }
@@ -923,18 +941,23 @@ export async function POST(request: NextRequest) {
       totalCents: totalCentsWithTip,
     };
     if (reusedHoldId != null && reusedExpiresAt != null) {
+      const expiresAtDate = reusedExpiresAt as Date;
+      const releaseToken = signReleaseToken(reusedHoldId, Math.floor(expiresAtDate.getTime() / 1000));
       const response: CreateHoldResponse = {
         holdId: reusedHoldId,
-        expiresAt: (reusedExpiresAt as Date).toISOString(),
+        expiresAt: expiresAtDate.toISOString(),
         pricing: responsePricing,
+        ...(releaseToken ? { releaseToken } : {}),
       };
       return NextResponse.json(response);
     }
 
+    const releaseToken = signReleaseToken(holdId, Math.floor(expiresAt.getTime() / 1000));
     const response: CreateHoldResponse = {
       holdId,
       expiresAt: expiresAt.toISOString(),
       pricing: responsePricing,
+      ...(releaseToken ? { releaseToken } : {}),
     };
     return NextResponse.json(response);
   } catch (err) {

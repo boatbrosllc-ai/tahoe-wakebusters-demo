@@ -9,6 +9,7 @@ import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
+import { signReleaseToken } from "@/lib/booking/releaseToken";
 import type { Hold, Rate, Addon, Boat } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 
@@ -185,8 +186,12 @@ export async function POST(request: NextRequest) {
       (sessionParams as { ui_mode?: string }).ui_mode = "custom";
       sessionParams.return_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
     } else {
+      const holdExpiresAt = (hold.expiresAt as { toDate(): Date }).toDate();
+      const releaseToken = signReleaseToken(input.holdId, Math.floor(holdExpiresAt.getTime() / 1000));
       sessionParams.success_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
-      sessionParams.cancel_url = `${baseUrl}/booking/cancel?holdId=${input.holdId}`;
+      sessionParams.cancel_url = releaseToken
+        ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}&release_token=${encodeURIComponent(releaseToken)}`
+        : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}`;
       sessionParams.phone_number_collection = { enabled: true };
       if (!stripeCouponId) sessionParams.allow_promotion_codes = true;
       sessionParams.custom_fields = [

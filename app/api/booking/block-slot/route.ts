@@ -17,9 +17,26 @@ async function isAllowed(request: NextRequest): Promise<boolean> {
   return unauthorized === null;
 }
 
+/**
+ * Allow skipping auth only when explicitly enabled and running locally.
+ * Disabled by default. Set BLOCK_SKIP_AUTH_LOCAL=1 only for local dev convenience.
+ */
+function isLocalDevBypassAllowed(): boolean {
+  if (process.env.BLOCK_SKIP_AUTH_LOCAL !== "1" || process.env.NODE_ENV === "production") return false;
+  try {
+    const vercel = process.env.VERCEL;
+    const netlify = process.env.NETLIFY;
+    if (vercel === "1" || netlify === "1") return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    if (process.env.NODE_ENV === "production" && !(await isAllowed(request))) {
+    const skipAuth = isLocalDevBypassAllowed();
+    if (!skipAuth && !(await isAllowed(request))) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const body = await request.json();

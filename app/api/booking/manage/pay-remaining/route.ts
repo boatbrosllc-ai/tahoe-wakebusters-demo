@@ -38,6 +38,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     }
     const booking = bookingSnap.data() as Booking;
+    if (payload.email != null) {
+      const bookingEmail = booking.customer?.email?.trim().toLowerCase();
+      if (bookingEmail !== payload.email) {
+        return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+      }
+    }
     const customerId = booking.stripe?.customerId;
     const finalCents = booking.stripe?.finalAmountCents ?? 0;
     if (!customerId) {
@@ -61,16 +67,14 @@ export async function POST(request: NextRequest) {
       if (currentStatus === "final_paid") {
         throw new Error("Booking is already fully paid");
       }
+      // Allow retry when status is final_processing but PI ID is missing (e.g. previous attempt updated status then failed before persisting PI).
       if (currentPiId && (currentStatus === "final_processing" || currentStatus === "final_due" || currentStatus === "final_failed" || currentStatus === "final_requires_action")) {
         return { useExisting: true, existingPiId: currentPiId };
       }
       if (!ALLOWED_STATUSES.includes(currentStatus as (typeof ALLOWED_STATUSES)[number])) {
         throw new Error("Booking is not in a state that allows paying remaining balance");
       }
-      tx.update(bookingRef, {
-        status: "final_processing",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      // Do not update status here; we will set status + finalPaymentIntentId together after PI is created successfully.
       return { useExisting: false };
     });
 
@@ -79,6 +83,14 @@ export async function POST(request: NextRequest) {
       const pi = await stripe.paymentIntents.retrieve(txResult.existingPiId);
       if (pi.status === "succeeded") {
         return NextResponse.json({ error: "This booking is already fully paid" }, { status: 400 });
+      }
+      if (pi.status === "processing") {
+        return NextResponse.json({
+          status: "processing",
+          message: "Your payment is still processing. Please wait a moment and refresh the page to check status.",
+          paymentIntentId: pi.id,
+          finalCents,
+        });
       }
       if (pi.status === "requires_payment_method" || pi.status === "requires_confirmation" || pi.status === "requires_action") {
         if (!pi.client_secret) {
@@ -99,7 +111,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const idempotencyKey = `final_charge_${payload.bookingId}`;
+    const idempotencyKey = `final_charge_manual_${payload.bookingId}`;
     let paymentIntent: Awaited<ReturnType<typeof stripe.paymentIntents.create>>;
     try {
       paymentIntent = await stripe.paymentIntents.create(
@@ -128,6 +140,14 @@ export async function POST(request: NextRequest) {
           if (pi.status === "succeeded") {
             return NextResponse.json({ error: "This booking is already fully paid" }, { status: 400 });
           }
+          if (pi.status === "processing") {
+            return NextResponse.json({
+              status: "processing",
+              message: "Your payment is still processing. Please wait a moment and refresh the page to check status.",
+              paymentIntentId: pi.id,
+              finalCents,
+            });
+          }
           if (pi.status === "requires_payment_method" || pi.status === "requires_confirmation" || pi.status === "requires_action") {
             if (!pi.client_secret) {
               return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
@@ -155,6 +175,7 @@ export async function POST(request: NextRequest) {
     }
     await bookingRef.update({
       "stripe.finalPaymentIntentId": paymentIntent.id,
+      status: "final_processing",
       updatedAt: FieldValue.serverTimestamp(),
     });
     return NextResponse.json({

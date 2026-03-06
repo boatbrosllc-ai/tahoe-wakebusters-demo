@@ -1,125 +1,53 @@
 /**
  * Release a hold so the slot goes back to open. Used when the user cancels
- * checkout (cancel URL includes holdId). No auth required — holdId is unguessable.
- * POST body: { holdId: string } or GET ?holdId=...
+ * checkout. Requires either (1) a signed release token (bound to holdId and expiry),
+ * or (2) admin auth (Bearer BLOCK_SECRET/SEED_SECRET or admin session) when no token.
+ * POST body: { holdId: string, release_token?: string } or GET ?holdId=...&release_token=...
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { verifyReleaseToken } from "@/lib/booking/releaseToken";
+import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import type { Hold, Slot } from "@/lib/booking/types";
+import type { Firestore } from "firebase-admin/firestore";
 
-function getHoldId(request: NextRequest): string | null {
-  const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    return null; // POST with JSON body handled in POST
-  }
-  return request.nextUrl.searchParams.get("holdId");
+async function isAdminAllowed(request: NextRequest): Promise<boolean> {
+  const secret = process.env.BLOCK_SECRET ?? process.env.SEED_SECRET;
+  if (secret && request.headers.get("authorization") === `Bearer ${secret}`) return true;
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  return unauthorized === null;
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    let holdId: string | null = null;
-    const contentType = request.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      const body = await request.json().catch(() => ({}));
-      holdId = typeof (body as { holdId?: string }).holdId === "string" ? (body as { holdId: string }).holdId : null;
-    }
-    if (!holdId) holdId = request.nextUrl.searchParams.get("holdId");
-    if (!holdId || holdId.length < 10) {
-      return NextResponse.json({ error: "holdId required" }, { status: 400 });
-    }
-
-    const db = getDb();
-    const { FieldValue } = getFirestoreExports();
-    const holdRef = db.collection("holds").doc(holdId);
-    const holdSnap = await holdRef.get();
-    if (!holdSnap.exists) {
-      return NextResponse.json({ released: false, message: "Hold not found or already released" });
-    }
-    const hold = holdSnap.data() as Hold;
-    if (hold.status !== "active") {
-      return NextResponse.json({ released: false, message: "Hold already released or converted" });
-    }
-
-    const experienceId = hold.experienceId as string | undefined;
-    const boatId = hold.boatId as string | undefined;
-    const slotId = hold.slotId as string;
-    if (!slotId || (!experienceId && !boatId)) {
-      return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
-    }
-
-    const slotRef = boatId
-      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
-      : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
-
-    const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
-    const dateStr =
-      (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(hold.slotId)?.dateStr ?? "";
-
-    await db.runTransaction(async (tx) => {
-      const slotSnap = await tx.get(slotRef);
-      if (!slotSnap.exists) {
-        if (isSharedHold && experienceId && dateStr) {
-          const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-          await releaseCapacity(tx, inventoryRef, hold.partySize);
-        }
-        await tx.update(holdRef, { status: "expired" });
-        return;
-      }
-      const slot = slotSnap.data() as Slot;
-      if (slot.holdId !== holdId) {
-        if (isSharedHold && experienceId && dateStr) {
-          const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-          await releaseCapacity(tx, inventoryRef, hold.partySize);
-        }
-        await tx.update(holdRef, { status: "expired" });
-        return;
-      }
-      tx.update(slotRef, {
-        status: "open",
-        holdId: FieldValue.delete(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      if (isSharedHold && experienceId && dateStr) {
-        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-        await releaseCapacity(tx, inventoryRef, hold.partySize);
-      }
-      tx.update(holdRef, { status: "expired" });
-    });
-
-    return NextResponse.json({ released: true });
-  } catch (err) {
-    console.error("[release-hold]", err);
-    return NextResponse.json({ error: "Failed to release hold" }, { status: 500 });
-  }
-}
-
-/** GET so cancel page can call /api/booking/release-hold?holdId=... without CORS preflight */
-export async function GET(request: NextRequest) {
-  const holdId = request.nextUrl.searchParams.get("holdId");
-  if (!holdId || holdId.length < 10) {
-    return NextResponse.json({ error: "holdId required" }, { status: 400 });
-  }
-
-  const db = getDb();
+/**
+ * Shared release logic: load hold, validate, run transaction to expire hold and
+ * release slot (and shared-departure capacity when applicable). Caller must
+ * have already validated holdId and auth (token or admin).
+ * Returns { released: true } on success, or { released: false, message } when
+ * hold not found or already released/converted.
+ */
+async function releaseHold(
+  db: Firestore,
+  holdId: string
+): Promise<{ released: true } | { released: false; message: string }> {
   const { FieldValue } = getFirestoreExports();
   const holdRef = db.collection("holds").doc(holdId);
   const holdSnap = await holdRef.get();
   if (!holdSnap.exists) {
-    return NextResponse.json({ released: false, message: "Hold not found or already released" });
+    return { released: false, message: "Hold not found or already released" };
   }
   const hold = holdSnap.data() as Hold;
   if (hold.status !== "active") {
-    return NextResponse.json({ released: false, message: "Hold already released or converted" });
+    return { released: false, message: "Hold already released or converted" };
   }
 
   const experienceId = hold.experienceId as string | undefined;
   const boatId = hold.boatId as string | undefined;
   const slotId = hold.slotId as string;
   if (!slotId || (!experienceId && !boatId)) {
-    return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
+    throw new Error("Invalid hold");
   }
 
   const slotRef = boatId
@@ -161,5 +89,78 @@ export async function GET(request: NextRequest) {
     tx.update(holdRef, { status: "expired" });
   });
 
-  return NextResponse.json({ released: true });
+  return { released: true };
+}
+
+/** Parse holdId and release_token from POST (body or query) or GET (query only). */
+function parseHoldParams(request: NextRequest): Promise<{ holdId: string | null; releaseToken: string | null }> {
+  const holdIdFromQuery = request.nextUrl.searchParams.get("holdId");
+  const releaseTokenFromQuery = request.nextUrl.searchParams.get("release_token");
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return request.json().catch(() => ({})).then((body: { holdId?: string; release_token?: string }) => ({
+      holdId: typeof body.holdId === "string" ? body.holdId : holdIdFromQuery,
+      releaseToken: typeof body.release_token === "string" ? body.release_token : releaseTokenFromQuery,
+    }));
+  }
+  return Promise.resolve({ holdId: holdIdFromQuery, releaseToken: releaseTokenFromQuery });
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { holdId, releaseToken } = await parseHoldParams(request);
+    if (!holdId || holdId.length < 10) {
+      return NextResponse.json({ error: "holdId required" }, { status: 400 });
+    }
+    const hasToken = !!releaseToken;
+    if (hasToken) {
+      const payload = verifyReleaseToken(releaseToken!);
+      if (!payload || payload.holdId !== holdId) {
+        return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+      }
+    } else {
+      const allowed = await isAdminAllowed(request);
+      if (!allowed) {
+        return NextResponse.json({ error: "release_token required or admin auth" }, { status: 400 });
+      }
+    }
+
+    const db = getDb();
+    const result = await releaseHold(db, holdId);
+    return NextResponse.json(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Invalid hold") {
+      return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
+    }
+    console.error("[release-hold]", err);
+    return NextResponse.json({ error: "Failed to release hold" }, { status: 500 });
+  }
+}
+
+/** GET so cancel page can call /api/booking/release-hold?holdId=...&release_token=... without CORS preflight */
+export async function GET(request: NextRequest) {
+  const holdId = request.nextUrl.searchParams.get("holdId");
+  const releaseToken = request.nextUrl.searchParams.get("release_token");
+  if (!holdId || holdId.length < 10) {
+    return NextResponse.json({ error: "holdId required" }, { status: 400 });
+  }
+  if (!releaseToken) {
+    return NextResponse.json({ error: "release_token required" }, { status: 400 });
+  }
+  const payload = verifyReleaseToken(releaseToken);
+  if (!payload || payload.holdId !== holdId) {
+    return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+  }
+
+  try {
+    const db = getDb();
+    const result = await releaseHold(db, holdId);
+    return NextResponse.json(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Invalid hold") {
+      return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
+    }
+    console.error("[release-hold]", err);
+    return NextResponse.json({ error: "Failed to release hold" }, { status: 500 });
+  }
 }

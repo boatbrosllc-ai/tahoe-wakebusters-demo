@@ -100,6 +100,8 @@ export interface ExperienceCalendarSectionViewProps {
   setDirectDiscountCode: (v: string) => void;
   directCheckoutLoading: string | null;
   setDirectCheckoutLoading: (v: string | null) => void;
+  directCheckoutError: string | null;
+  setDirectCheckoutError: (v: string | null) => void;
   bookHref?: string | null;
   isTicketed?: boolean;
   departureTimeLabel?: string | null;
@@ -182,6 +184,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     setDirectDiscountCode,
     directCheckoutLoading,
     setDirectCheckoutLoading,
+    directCheckoutError,
+    setDirectCheckoutError,
     bookHref,
     isTicketed = false,
     departureTimeLabel,
@@ -1350,6 +1354,12 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
         className="max-w-md w-[calc(100vw-2rem)] sm:w-full"
       >
         <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+          {directCheckoutError && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex items-center justify-between gap-2">
+              <span>{directCheckoutError}</span>
+              <button type="button" onClick={() => setDirectCheckoutError(null)} className="text-red-600 underline text-xs">Dismiss</button>
+            </div>
+          )}
           {directCheckout && (
             <div>
               <label className="block text-xs font-semibold text-brand-dark mb-1.5">Discount code (optional)</label>
@@ -1436,6 +1446,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                           disabled={!experienceId || !!directCheckoutLoading}
                           onClick={async () => {
                             if (!experienceId || directCheckoutLoading) return;
+                            setDirectCheckoutError(null);
                             setDirectCheckoutLoading(slot.id);
                             try {
                               const res = await fetch("/api/booking/create-checkout-session-direct", {
@@ -1457,7 +1468,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 return;
                               }
                               const msg = (data as { error?: string }).error ?? "Checkout failed";
-                              alert(msg);
+                              setDirectCheckoutError(msg);
                             } finally {
                               setDirectCheckoutLoading(null);
                             }

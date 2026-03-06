@@ -28,6 +28,9 @@ export const handler = schedule("15 * * * *", async () => {
     const body = await res.json().catch(() => ({}));
     console.log(`[final-payment-reminder-cron] Response status: ${res.status}`, body);
 
+    if (!res.ok) {
+      return { statusCode: 500 };
+    }
     return { statusCode: 200 };
   } catch (err) {
     console.error("[final-payment-reminder-cron] Fetch error:", err);

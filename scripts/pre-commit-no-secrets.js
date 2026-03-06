@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Pre-commit hook: block staging of files that may contain secrets.
+ * Pre-commit hook: block staging of files that may contain secrets; run lint and booking tests.
  * Run via: husky .husky/pre-commit -> node scripts/pre-commit-no-secrets.js
  */
 const { execSync } = require("child_process");
@@ -27,4 +27,19 @@ for (const f of staged) {
     }
   }
 }
+
+try {
+  execSync("npm run lint", { stdio: "inherit" });
+} catch {
+  console.error("Pre-commit: lint failed. Fix errors and try again.");
+  process.exit(1);
+}
+
+try {
+  execSync("npm run test:booking", { stdio: "inherit" });
+} catch {
+  console.error("Pre-commit: booking tests failed. Fix tests and try again.");
+  process.exit(1);
+}
+
 process.exit(0);

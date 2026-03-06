@@ -9,15 +9,32 @@ import { brand } from "@/content/brand";
 function CancelContent() {
   const searchParams = useSearchParams();
   const holdId = searchParams.get("holdId");
+  const releaseToken = searchParams.get("release_token");
   const [released, setReleased] = useState<boolean | null>(null);
+  const [apiError, setApiError] = useState(false);
   const [loading, setLoading] = useState(!!holdId);
 
-  const releaseHold = useCallback(async (id: string) => {
+  const releaseHold = useCallback(async (id: string, token: string | null) => {
+    if (!token) {
+      setReleased(false);
+      setApiError(true);
+      setLoading(false);
+      return;
+    }
+    setApiError(false);
     try {
-      const res = await fetch(`/api/booking/release-hold?holdId=${encodeURIComponent(id)}`);
+      const params = new URLSearchParams({ holdId: id, release_token: token });
+      const res = await fetch(`/api/booking/release-hold?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setApiError(true);
+        setReleased(false);
+        setLoading(false);
+        return;
+      }
       setReleased(data.released === true);
     } catch {
+      setApiError(true);
       setReleased(false);
     } finally {
       setLoading(false);
@@ -25,15 +42,19 @@ function CancelContent() {
   }, []);
 
   useEffect(() => {
-    if (holdId) releaseHold(holdId);
-    else setLoading(false);
-  }, [holdId, releaseHold]);
+    if (holdId && releaseToken) releaseHold(holdId, releaseToken);
+    else if (holdId) {
+      setApiError(true);
+      setReleased(false);
+      setLoading(false);
+    } else setLoading(false);
+  }, [holdId, releaseToken, releaseHold]);
 
   const message =
     released === true
       ? "No charge was made. Your held slot has been released so others can book it."
-      : released === false
-        ? "No charge was made. If you had a held slot, it will be released shortly or may already be available again."
+      : apiError || released === false
+        ? "This link is invalid or expired. If you had a held slot, it may already be released."
         : holdId && loading
           ? "Releasing your held slot…"
           : "No charge was made. Your held slot has been released so others can book it.";
@@ -43,6 +64,21 @@ function CancelContent() {
       <div className="container-narrow px-4 sm:px-6 lg:px-8 text-center">
         <h1 className="text-2xl sm:text-3xl font-bold text-brand-dark mb-2">Checkout cancelled</h1>
         <p className="text-brand-muted mb-8">{message}</p>
+        {holdId && releaseToken && (apiError || released === false) && (
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            className="mb-4"
+            onClick={() => {
+              setLoading(true);
+              releaseHold(holdId, releaseToken);
+            }}
+            disabled={loading}
+          >
+            {loading ? "Releasing…" : "Release my hold"}
+          </Button>
+        )}
         <Button asChild size="lg">
           <Link href="/booking">Back to booking</Link>
         </Button>

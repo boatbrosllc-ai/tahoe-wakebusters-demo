@@ -235,7 +235,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const useExperiencePicker = experiences != null && experiences.length > 0;
 
   const canContinue =
-    selectedExperience && (selectedBoat || boats.length === 0) && selectedDate;
+    selectedExperience && !boatsLoading && (selectedBoat || boats.length === 0) && selectedDate;
 
   const handleContinueToCheckout = () => {
     if (!canContinue || !selectedExperience) return;

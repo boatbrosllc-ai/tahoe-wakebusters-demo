@@ -5,6 +5,9 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection, Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
@@ -69,6 +72,13 @@ export async function GET(request: NextRequest) {
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
+    const { Timestamp } = getFirestoreExports();
+    const endOfDay = (d: Date) => {
+      const end = new Date(d);
+      end.setHours(23, 59, 59, 999);
+      return end;
+    };
+
     let query = db.collection("bookings") as FirebaseFirestore.Query;
 
     if (fromTripDate && toTripDate) {
@@ -78,6 +88,8 @@ export async function GET(request: NextRequest) {
         .orderBy("startDateStr", "desc");
     } else {
       query = query.orderBy("createdAt", "desc");
+      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
     }
 
     if (statusFilter) query = query.where("status", "==", statusFilter);
@@ -97,26 +109,6 @@ export async function GET(request: NextRequest) {
       docs = docs.slice(0, limit);
     }
 
-    if (fromDateVal || toDateVal) {
-      docs = docs.filter((d) => {
-        const b = d.data() as Booking;
-        const createdAt = b.createdAt
-          ? (typeof (b.createdAt as { toDate?: () => Date }).toDate === "function"
-            ? (b.createdAt as { toDate: () => Date }).toDate()
-            : typeof (b.createdAt as { seconds?: number }).seconds === "number"
-              ? new Date((b.createdAt as { seconds: number }).seconds * 1000)
-              : null)
-          : null;
-        if (!createdAt) return false;
-        if (fromDateVal && createdAt < fromDateVal) return false;
-        if (toDateVal) {
-          const endOfDay = new Date(toDateVal);
-          endOfDay.setHours(23, 59, 59, 999);
-          if (createdAt > endOfDay) return false;
-        }
-        return true;
-      });
-    }
     const experienceIds = new Set<string>();
     const boatIds = new Set<string>();
     docs.forEach((d) => {
@@ -129,12 +121,14 @@ export async function GET(request: NextRequest) {
     const experienceAddons = new Map<string, Map<string, string>>(); // experienceId -> addonId -> name
     await Promise.all(
       Array.from(experienceIds).map(async (id) => {
-        const expSnap = await db.collection("experiences").doc(id).get();
+        const [expSnap, addonsSnap] = await Promise.all([
+          db.collection("experiences").doc(id).get(),
+          db.collection("experiences").doc(id).collection("addons").get(),
+        ]);
         if (expSnap.exists) {
           const data = expSnap.data() as { title?: string };
           experienceNames.set(id, data.title ?? id);
         }
-        const addonsSnap = await db.collection("experiences").doc(id).collection("addons").get();
         const addonMap = new Map<string, string>();
         addonsSnap.docs.forEach((ad) => {
           const a = ad.data() as { name?: string };
@@ -278,6 +272,8 @@ export async function POST(request: NextRequest) {
     if (!Number.isInteger(startHour) || startHour < 7 || startHour > 19) return NextResponse.json({ error: "startHour must be 7–19 (last departure 7pm)" }, { status: 400 });
     if (!Number.isInteger(durationHours) || durationHours < 1 || durationHours > 12) return NextResponse.json({ error: "durationHours must be 1–12" }, { status: 400 });
     if (!customer.name || !customer.email) return NextResponse.json({ error: "customer name and email are required" }, { status: 400 });
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(customer.email)) return NextResponse.json({ error: "Invalid email format" }, { status: 400 });
     if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });
 
     const db = getDb();
@@ -285,12 +281,46 @@ export async function POST(request: NextRequest) {
 
     const expSnap = await db.collection("experiences").doc(experienceId).get();
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
+    const exp = expSnap.data() as { pricingType?: string; slug?: string; maxCapacity?: number };
 
     if (boatId) {
       const boatSnap = await db.collection("boats").doc(boatId).get();
       const boatData = boatSnap.data() as { experienceIds?: string[] } | undefined;
       const assigned = boatData?.experienceIds?.includes(experienceId);
       if (!boatSnap.exists || !assigned) boatId = undefined;
+    }
+
+    const partySizeNum = Number.isInteger(partySize) && partySize > 0 ? partySize : 1;
+    if (exp.pricingType === "ticketed") {
+      const slugVariants = getExperienceIdVariants(experienceId, exp.slug ?? "");
+      const soldSnaps = await Promise.all(
+        slugVariants.map((v) =>
+          db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate).get()
+        )
+      );
+      const seen = new Set<string>();
+      let sold = 0;
+      for (const snap of soldSnaps) {
+        for (const doc of snap.docs) {
+          if (seen.has(doc.id)) continue;
+          seen.add(doc.id);
+          const b = doc.data() as { partySize?: number; status?: string };
+          if (typeof b.partySize !== "number") continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          sold += b.partySize;
+        }
+      }
+      const inventoryRef = getDepartureInventoryRef(db, experienceId, tripDate);
+      const invSnap = await inventoryRef.get();
+      const reservedSeats = invSnap.exists ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
+      const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
+      const available = Math.max(0, capacity - sold - reservedSeats);
+      if (partySizeNum > available) {
+        return NextResponse.json(
+          { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
+          { status: 409 }
+        );
+      }
     }
 
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();

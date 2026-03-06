@@ -33,8 +33,17 @@ export async function GET(request: NextRequest) {
     in7Days.setDate(in7Days.getDate() + 6);
     const in7DaysStr = getDateStrInSlotTimezone(in7Days);
 
-    const [bookingsSnap, experiencesSnap] = await Promise.all([
-      db.collection("bookings").get(),
+    const SLOT_TAKEN_FOR_UPCOMING = ["paid", "final_paid", "deposit_paid", "final_due", "final_processing"];
+    const [bookingsSnap, upcomingSnap, experiencesSnap] = await Promise.all([
+      db.collection("bookings").orderBy("createdAt", "desc").limit(500).get(),
+      db
+        .collection("bookings")
+        .where("status", "in", SLOT_TAKEN_FOR_UPCOMING)
+        .where("startDateStr", ">=", todayStr)
+        .where("startDateStr", "<=", in7DaysStr)
+        .orderBy("startDateStr", "desc")
+        .limit(500)
+        .get(),
       db.collection("experiences").get(),
     ]);
 
@@ -77,21 +86,24 @@ export async function GET(request: NextRequest) {
         experienceName: expName,
       });
 
-      if (b.status !== "paid") return;
+      // Upcoming is now filled from upcomingSnap below
+    });
+
+    upcomingSnap.docs.forEach((d) => {
+      const b = d.data() as Booking;
       const parsed = parseSlotId(b.slotId);
       if (!parsed) return;
       const { dateStr } = parsed;
-      if (dateStr >= todayStr && dateStr <= in7DaysStr) {
-        upcomingBookings.push({
-          id: d.id,
-          tripDateStr: dateStr,
-          timeLabel: formatTimeLabel(dateStr, parsed.startHour, parsed.durationHours),
-          experienceName: expName,
-          customerName: b.customer?.name ?? "",
-          customerEmail: b.customer?.email ?? "",
-          totalCents: b.pricing?.totalCents ?? 0,
-        });
-      }
+      const expName = b.experienceId ? experienceNames.get(b.experienceId) ?? "—" : "—";
+      upcomingBookings.push({
+        id: d.id,
+        tripDateStr: dateStr,
+        timeLabel: formatTimeLabel(dateStr, parsed.startHour, parsed.durationHours),
+        experienceName: expName,
+        customerName: b.customer?.name ?? "",
+        customerEmail: b.customer?.email ?? "",
+        totalCents: b.pricing?.totalCents ?? 0,
+      });
     });
 
     recentBookings.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

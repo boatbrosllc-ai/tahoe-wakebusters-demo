@@ -28,6 +28,9 @@ export const handler = schedule("5 * * * *", async () => {
     const body = await res.json().catch(() => ({}));
     console.log(`[booking-reminder-cron] Response status: ${res.status}`, body);
 
+    if (!res.ok) {
+      return { statusCode: 500 };
+    }
     return { statusCode: 200 };
   } catch (err) {
     console.error("[booking-reminder-cron] Fetch error:", err);

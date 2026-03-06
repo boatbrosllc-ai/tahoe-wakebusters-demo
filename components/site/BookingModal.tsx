@@ -285,7 +285,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
   const isTicketed = selectedExperience?.pricingType === "ticketed";
   /** Max sellable tickets (ticketed) or max guests (charter). */
-  const ticketMax = isTicketed ? 36 : (selectedExperience?.maxGuests ?? 14);
+  const ticketMax = isTicketed ? (selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36) : (selectedExperience?.maxGuests ?? 14);
   /** Ticketed: cap to live availability so UI and submit stay in sync. */
   const availableTickets = ticketCounts?.available ?? ticketMax;
   const effectiveTicketMax = Math.min(ticketMax, availableTickets);
@@ -464,9 +464,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     bookingCache.fetchExperienceDetail(selectedExperience.id, controller.signal)
       .then((data) => {
         const boatList = Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
-        // #region agent log
-        fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "BookingModal.tsx:experience-detail.then", message: "boats received from API", data: { experienceId: selectedExperience?.id, boatCount: boatList.length, boatIds: boatList.map((b) => b.id), boatNames: boatList.map((b) => b.name), singleBoatAutoSelect: boatList.length === 1 }, timestamp: Date.now(), hypothesisId: "H2,H5" }) }).catch(() => {});
-        // #endregion
         setBoats(boatList);
         if (boatList.length === 1) setSelectedBoat(boatList[0]);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
@@ -1017,9 +1014,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     !(isTicketed && ticketCounts != null && ticketCounts.available === 0);
   const handleStep2Next = () => {
     if (!canGoFromStep2) return;
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: "BookingModal.tsx:handleStep2Next", message: "step 2 next click", data: { experienceId: selectedExperience?.id, boatsLength: boats.length, isTicketed, goingToStep: isTicketed ? 4 : boats.length === 1 ? 4 : 3 }, timestamp: Date.now(), hypothesisId: "H5" }) }).catch(() => {});
-    // #endregion
     if (isTicketed) {
       setStep(4);
       setPaymentPhase("form");
@@ -1091,18 +1085,23 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     let createdHoldId: string | null = null;
+    let createdReleaseToken: string | null = null;
     const releaseCreatedHold = async () => {
       if (!createdHoldId) return;
       try {
         await fetch("/api/booking/release-hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ holdId: createdHoldId }),
+          body: JSON.stringify({
+            holdId: createdHoldId,
+            ...(createdReleaseToken && { release_token: createdReleaseToken }),
+          }),
         });
       } catch {
         // best-effort
       }
       createdHoldId = null;
+      createdReleaseToken = null;
       setHoldId(null);
     };
     try {
@@ -1171,8 +1170,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         }
         return;
       }
-      const { holdId: newHoldId } = holdData;
+      const { holdId: newHoldId, releaseToken: newReleaseToken } = holdData;
       createdHoldId = newHoldId;
+      createdReleaseToken = newReleaseToken ?? null;
       setHoldId(newHoldId);
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
       const intentRes = await fetch("/api/booking/create-payment-intent", {
@@ -2266,7 +2266,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           setAppliedDiscountError(null);
                           setAppliedDiscountLoading(true);
                           try {
-                            const totalBeforeDiscount = (priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)) + priceSummary.salesTaxCents + priceSummary.tipCents;
+                            const totalBeforeDiscount = (priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)) + priceSummary.salesTaxCents;
                             const res = await fetch("/api/booking/validate-discount", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -2655,3 +2655,5 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     </Dialog>
   );
 }
+
+export default BookingModal;

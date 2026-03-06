@@ -157,7 +157,7 @@ export async function POST(request: NextRequest) {
         timeZone: "America/Chicago",
       });
 
-      const payLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId: doc.id }))}`;
+      const payLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId: doc.id, customerEmail: toEmail }))}`;
 
       try {
         await sendFinalPaymentRequestEmail({

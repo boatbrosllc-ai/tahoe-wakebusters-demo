@@ -1,13 +1,24 @@
 /**
  * POST /api/admin/bookings/[id]/cancel
  * Cancel a booking (set status to "canceled") and release the slot so it becomes available again.
- * Requires admin session.
+ * Optionally issues a Stripe refund when the booking has a payment intent. Requires admin session.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
+
+function parseBody(body: unknown): { refund?: boolean } {
+  if (body == null || typeof body !== "object") return { refund: true };
+  const o = body as Record<string, unknown>;
+  const refund = o.refund;
+  if (refund === false) return { refund: false };
+  return { refund: true };
+}
 
 export async function POST(
   request: NextRequest,
@@ -18,6 +29,13 @@ export async function POST(
 
   const { id: bookingId } = await params;
   if (!bookingId) return NextResponse.json({ error: "Missing booking id" }, { status: 400 });
+
+  let body: { refund?: boolean } = { refund: true };
+  try {
+    body = parseBody(await request.json().catch(() => ({})));
+  } catch {
+    // keep default
+  }
 
   try {
     const db = getDb();
@@ -36,7 +54,8 @@ export async function POST(
     const boatId = booking.boatId;
     const slotId = booking.slotId;
     if (!slotId) {
-      return NextResponse.json({ error: "Booking has no slot" }, { status: 400 });
+      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
+      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
     }
 
     // Listing-boat flow: slot lives under boats/{boatId}/slots. Else: experiences/{experienceId}/slots.
@@ -47,17 +66,17 @@ export async function POST(
         : null;
     if (!slotRef) {
       await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false });
+      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
     }
     const slotSnap = await slotRef.get();
     if (!slotSnap.exists) {
       await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false });
+      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
     }
     const slot = slotSnap.data() as { status?: string; bookingId?: string };
     if (slot.status !== "booked" || slot.bookingId !== bookingId) {
       await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false });
+      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
     }
 
     await db.runTransaction(async (tx) => {
@@ -68,9 +87,80 @@ export async function POST(
         bookingId: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
+      // Ticketed/shared: release capacity in departure inventory so the slot can be rebooked.
+      const isShared = booking.bookingMode === "shared";
+      const expId = booking.experienceId;
+      const dateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
+      if (isShared && expId && dateStr && (booking.partySize ?? 0) > 0) {
+        const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+        await releaseCapacity(tx, inventoryRef, booking.partySize ?? 0);
+      }
     });
 
-    return NextResponse.json({ ok: true, slotReleased: true });
+    let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; error?: string }> = [];
+    const skippedRefunds: Array<{ paymentIntentId: string; reason: string }> = [];
+    if (body.refund !== false && process.env.STRIPE_SECRET_KEY) {
+      const intentIds = [
+        booking.stripe?.paymentIntentId,
+        booking.stripe?.depositPaymentIntentId,
+        booking.stripe?.finalPaymentIntentId,
+      ].filter((id): id is string => typeof id === "string" && id.length > 0);
+      const distinctIds = Array.from(new Set(intentIds));
+      const stripe = getStripe();
+      for (const piId of distinctIds) {
+        try {
+          const pi = await stripe.paymentIntents.retrieve(piId);
+          if (pi.status !== "succeeded") {
+            skippedRefunds.push({
+              paymentIntentId: piId,
+              reason: `PaymentIntent status is '${pi.status}', not 'succeeded'; skipping refund`,
+            });
+            continue;
+          }
+          const refund = await stripe.refunds.create({ payment_intent: piId });
+          refunds.push({
+            paymentIntentId: piId,
+            id: refund.id,
+            status: refund.status ?? undefined,
+          });
+        } catch (refundErr) {
+          const msg = refundErr instanceof Error ? refundErr.message : String(refundErr);
+          console.error("[admin/cancel] Stripe refund failed", { bookingId, piId }, refundErr);
+          refunds.push({ paymentIntentId: piId, error: msg });
+        }
+      }
+    }
+
+    let cancellationPolicyWarning: string | undefined;
+    const expId = booking.experienceId;
+    if (expId) {
+      try {
+        const expSnap = await db.collection("experiences").doc(expId).get();
+        if (expSnap.exists) {
+          const exp = expSnap.data() as { cancellationPolicy?: { fullText?: string; noRefundAfterHours?: number } };
+          if (exp.cancellationPolicy?.noRefundAfterHours != null) {
+            const slotDateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
+            if (slotDateStr) {
+              const slotStart = new Date(slotDateStr + "T00:00:00");
+              const cutoff = new Date(slotStart.getTime() - (exp.cancellationPolicy.noRefundAfterHours ?? 0) * 60 * 60 * 1000);
+              if (new Date() > cutoff) {
+                cancellationPolicyWarning = "No-refund window may have passed per experience cancellation policy. Review before confirming refund.";
+              }
+            }
+          }
+        }
+      } catch {
+        // non-fatal; omit warning
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      slotReleased: true,
+      refunds,
+      ...(skippedRefunds.length > 0 && { skippedRefunds }),
+      ...(cancellationPolicyWarning && { cancellationPolicyWarning }),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

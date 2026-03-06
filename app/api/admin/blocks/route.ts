@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
     let q = db
       .collection("blocks")
       .where("experienceId", "==", experienceId)
+      .where("startAt", ">=", Timestamp.fromDate(rangeStart))
       .where("startAt", "<=", Timestamp.fromDate(rangeEnd));
     const snap = await q.get();
 

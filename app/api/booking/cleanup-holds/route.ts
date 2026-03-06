@@ -1,68 +1,109 @@
 /**
  * Cleanup expired holds: set slot back to open, set hold status to expired.
  * Call via cron (e.g. Vercel Cron, or on-demand with a secret key).
+ *
+ * Pagination: iterates all eligible holds using cursor-based pages until no
+ * results remain. Emits per-run metrics: matched, processed, skipped, failed.
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+
+const PAGE_SIZE = 100;
+const BATCH_SIZE = 10;
 
 export async function GET(request: NextRequest) {
   try {
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
     if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 503 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const now = Timestamp.now();
-    const holdsSnap = await db.collection("holds").where("status", "==", "active").where("expiresAt", "<", now).limit(100).get();
-    let released = 0;
 
-    const releaseHold = async (doc: (typeof holdsSnap.docs)[0]): Promise<boolean> => {
+    let matched = 0;
+    let processed = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    const releaseHold = async (doc: QueryDocumentSnapshot<DocumentData>): Promise<"processed" | "skipped" | "failed"> => {
       const hold = doc.data();
       const boatId = hold.boatId as string | undefined;
       const experienceId = hold.experienceId as string | undefined;
       const slotId = hold.slotId as string;
-      if (!slotId || (!boatId && !experienceId)) return false;
+      if (!slotId || (!boatId && !experienceId)) return "skipped";
       const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
       const dateStr =
         (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(slotId)?.dateStr ?? "";
       const slotRef = boatId
         ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
         : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
-      await db.runTransaction(async (tx) => {
-        const slotSnap = await tx.get(slotRef);
-        if (!slotSnap.exists) {
-          if (isSharedHold && experienceId && dateStr) {
-            const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-            await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+      let didUpdate = false;
+      try {
+        await db.runTransaction(async (tx) => {
+          const slotSnap = await tx.get(slotRef);
+          if (!slotSnap.exists) {
+            if (isSharedHold && experienceId && dateStr) {
+              const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+              await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+            }
+            tx.update(doc.ref, { status: "expired" });
+            didUpdate = true;
+            return;
           }
+          const slot = slotSnap.data();
+          if (slot?.holdId !== doc.id) return;
+          tx.update(slotRef, {
+            status: "open",
+            holdId: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
           tx.update(doc.ref, { status: "expired" });
-          return;
-        }
-        const slot = slotSnap.data();
-        if (slot?.holdId !== doc.id) return;
-        tx.update(slotRef, {
-          status: "open",
-          holdId: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
+          didUpdate = true;
         });
-        tx.update(doc.ref, { status: "expired" });
-      });
-      return true;
+        return didUpdate ? "processed" : "skipped";
+      } catch {
+        return "failed";
+      }
     };
 
-    // Process in parallel batches of 10 — holds operate on distinct slot docs so there are no conflicts
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < holdsSnap.docs.length; i += BATCH_SIZE) {
-      const batch = holdsSnap.docs.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((doc) => releaseHold(doc).catch(() => false)));
-      released += results.filter(Boolean).length;
+    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+
+    while (true) {
+      let q = db
+        .collection("holds")
+        .where("status", "==", "active")
+        .where("expiresAt", "<", now)
+        .orderBy("expiresAt", "asc")
+        .limit(PAGE_SIZE);
+
+      if (cursor) q = q.startAfter(cursor);
+
+      const holdsSnap = await q.get();
+      if (holdsSnap.empty) break;
+
+      matched += holdsSnap.size;
+
+      for (let i = 0; i < holdsSnap.docs.length; i += BATCH_SIZE) {
+        const batch = holdsSnap.docs.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(batch.map((doc) => releaseHold(doc).catch(() => "failed" as const)));
+        for (const r of results) {
+          if (r === "processed") processed++;
+          else if (r === "skipped") skipped++;
+          else failed++;
+        }
+      }
+
+      if (holdsSnap.size < PAGE_SIZE) break;
+      cursor = holdsSnap.docs[holdsSnap.docs.length - 1];
     }
-    return NextResponse.json({ ok: true, released });
+
+    return NextResponse.json({ ok: true, matched, processed, skipped, failed });
   } catch (err) {
     console.error("[cleanup-holds]", err);
     return NextResponse.json({ error: "Cleanup failed" }, { status: 500 });

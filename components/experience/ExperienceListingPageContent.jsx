@@ -204,6 +204,7 @@ export function ExperienceListingPageContent(props) {
         heroImageUrl={heroImageUrl}
         title={heroTitle}
         subtitle={heroSubtitle}
+        imagePosition={slug === "watersports" ? "center 30%" : undefined}
       />
 
       <section
@@ -216,6 +217,28 @@ export function ExperienceListingPageContent(props) {
               experienceId={id}
               experienceSlug={experience.slug}
               onOpenInModal={handleOpenInModal}
+              experienceForDetails={{
+                id,
+                title: experience.title ?? "",
+                maxGuests: experience.maxGuests ?? 14,
+                petsMax: experience.petsMax ?? 0,
+              }}
+              ratesForDetails={rates.map((r) => ({
+                id: r.id,
+                durationHours: r.durationHours,
+                displayName: r.displayName,
+                priceCents: r.priceCents,
+              }))}
+              addonsForDetails={addons
+                .filter((a) => a.type !== "tip")
+                .map((a) => ({
+                  id: a.id,
+                  name: a.name,
+                  description: a.description,
+                  priceCents: a.priceCents,
+                  type: a.type,
+                  maxQty: a.maxQty,
+                }))}
               variant="dark-card"
               pricingType={experience.pricingType}
               departureHour={experience.departureHour}

@@ -13,8 +13,14 @@ export const dynamic = "force-dynamic";
  * Used at checkout to preview discount before creating hold (same logic as create-hold).
  */
 export async function POST(request: NextRequest) {
-  const rl = checkRateLimit(getClientKey(request));
+  const rl = await checkRateLimit(getClientKey(request));
   if (!rl.allowed) {
+    if (rl.serverError) {
+      return NextResponse.json(
+        { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+        { status: 503 }
+      );
+    }
     const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
     return NextResponse.json(
       { error: "Too many requests. Please try again in a moment." },

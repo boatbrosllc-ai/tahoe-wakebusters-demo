@@ -70,6 +70,7 @@ export async function GET(request: NextRequest) {
     const blocksSnap = await db
       .collection("blocks")
       .where("experienceId", "==", experienceId)
+      .where("startAt", ">=", Timestamp.fromDate(rangeStart))
       .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
       .get();
 

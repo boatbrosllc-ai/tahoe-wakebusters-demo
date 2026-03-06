@@ -13,6 +13,7 @@ export function Hero({
   title,
   subtitle,
   introParagraph,
+  imagePosition,
 }: {
   /** When set (e.g. from admin pontoon listing), overrides static HERO image. */
   heroImageUrl?: string;
@@ -22,6 +23,8 @@ export function Hero({
   subtitle?: string;
   /** Optional intro paragraph below subtitle (e.g. for SEO). */
   introParagraph?: string;
+  /** Optional object-position for the hero image (e.g. "center 30%" to show more of top). */
+  imagePosition?: string;
 }) {
   const reduceMotion = useReducedMotion();
   const motionProps = reduceMotion
@@ -43,7 +46,11 @@ export function Hero({
           src={heroSrc}
           alt=""
           fill
-          className="object-cover object-[center_85%] sm:object-[center_65%] scale-[1.02] sm:scale-105"
+          className={cn(
+            "object-cover scale-[1.02] sm:scale-105",
+            !imagePosition && "object-[center_85%] sm:object-[center_65%]"
+          )}
+          style={imagePosition ? { objectPosition: imagePosition } : undefined}
           priority
           sizes="100vw"
         />

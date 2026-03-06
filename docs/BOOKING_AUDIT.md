@@ -1,0 +1,155 @@
+# Booking system audit
+
+**Scope:** All code related to creating, saving, using, and managing bookings (holds, slots, payments, admin, crons).  
+**Date:** 2025-03-06  
+**Type:** Read-only audit — no edits.  
+**Updates:** 2025-03-06 — Critical and medium issues below have been fixed (see commit / changelog).
+
+---
+
+## 1. Architecture overview
+
+- **Customer flow:** Create hold → Pay (Payment Element or Stripe Checkout) → Webhook and/or `complete-after-payment` converts hold to booking → Confirmation email, receipt/success page, manage link.
+- **Data:** Firestore `bookings`, `holds`, `slots` (under experiences or boats), `departureInventory` (ticketed), `blocks`, `stripeEvents`, `discounts`, `pendingRefunds`.
+- **Payments:** Stripe Payment Intents (deposit + final) or legacy Checkout Session (full or redirect). Webhook handles `payment_intent.succeeded` and `checkout.session.completed`; idempotency via `stripeEvents` lease and hold status.
+
+---
+
+## 2. Critical issues
+
+### 2.1 Shared/ticketed: `checkout.session.completed` does not release departure capacity
+
+**Location:** `app/api/stripe/webhook/route.ts` — `checkout.session.completed` branch.
+
+**Issue:** When a **shared** (ticketed) hold is paid via **Stripe Checkout** (redirect flow), the webhook creates the booking and marks the hold converted but **never** calls `checkCapacityAndRelease` on `departureInventory`. Capacity was reserved at create-hold via `reserveCapacity`; on conversion we must decrement `reservedSeats` (and validate sold count). `convertHoldToBooking` does this; the inline `checkout.session.completed` handler does not.
+
+**Impact:** For the deprecated redirect Checkout path with shared/ticketed holds, `reservedSeats` stays inflated. Availability can show “sold out” incorrectly or capacity accounting is wrong.
+
+**Recommendation:** Either (a) call the same shared-departure release logic used in `convert-hold-to-booking` inside the `checkout.session.completed` transaction (compute sold, call `checkCapacityAndRelease`), or (b) refactor so `checkout.session.completed` delegates to `convertHoldToBooking` for consistency and reuse.
+
+---
+
+### 2.2 Cron auth inconsistency: `reminder-cron` returns 401 for Unauthorized — **FIXED**
+
+**Location:** `app/api/booking/reminder-cron/route.ts`.
+
+**Issue:** Other cron routes return **401** for wrong/missing `CRON_SECRET`; `reminder-cron` returned **503**.
+
+**Fix applied:** Unauthorized response is now `status: 401` to match other crons.
+
+---
+
+## 3. Medium / design considerations
+
+### 3.1 Admin “Add booking” (POST) and ticketed capacity
+
+**Location:** `app/api/admin/bookings/route.ts` — POST handler.
+
+**Issue:** Admin-created bookings set `startDateStr`, create/update a **slot** doc, and check overlap via existing slots + bookings. They do **not** set `bookingMode` or update `departureInventory`. If an admin adds a manual booking for a **ticketed** experience/date, capacity in `departureInventory` is unchanged; only slot docs (charter path) are used.
+
+**Impact:** If “Add booking” is used for ticketed experiences, total sold can exceed capacity (no reserve/release in departure inventory). In practice this flow may be charter-only; worth documenting or restricting.
+
+**Recommendation:** Either document that admin create is charter-only, or add shared-departure capacity handling when the experience is ticketed (e.g. decrement available / update inventory when creating the booking).
+
+---
+
+### 3.2 Duplicate conversion handling (hold already converted)
+
+**Location:** `lib/booking/convert-hold-to-booking.ts` and webhook.
+
+**Observation:** When a hold is already `converted`, `convertHoldToBooking` flags a second PaymentIntent (different from the one stored on the hold) via `pendingRefunds` and returns `alreadyConverted`. Webhook uses event lease and hold status to avoid double work. This is sound.
+
+**Minor:** The webhook’s `checkout.session.completed` path does not have the same “duplicate PI → pendingRefunds” check when hold is already converted; it only checks `hold.status !== "active"` and returns idempotent success. If a second payment ever hit the same session/hold, consider logging or flagging similarly.
+
+---
+
+### 3.3 Run-final-charges: lock and retry
+
+**Location:** `app/api/booking/run-final-charges/route.ts`.
+
+**Observation:** `finalChargeLockAt` (10 min) prevents duplicate attempts; on Stripe failure status becomes `final_requires_action` or `final_failed` and email is sent. Lock is not cleared on failure, so retry is after 10 min. Intentional and reasonable.
+
+**Note:** If Stripe returns a retryable error (e.g. temporary decline), the booking stays `final_due` until the next run; the lock applies per run, so it will be retried on a later cron cycle. No issue.
+
+---
+
+### 3.4 Receipt by `payment_intent_id`: deposit vs full
+
+**Location:** `app/api/booking/receipt/route.ts`.
+
+**Observation:** Lookup by `payment_intent_id` checks both `stripe.paymentIntentId` (legacy full) and `stripe.depositPaymentIntentId`. Success page can pass `payment_intent_id` after Payment Element flow and get the booking; receipt token is issued when not provided. Correct.
+
+---
+
+### 3.5 Direct checkout and ticketed
+
+**Location:** `app/api/booking/create-checkout-session-direct/route.ts`.
+
+**Observation:** Creates a hold and slot (charter/listing-boat style); does **not** set `bookingMode: "shared"` or use `reserveCapacity`. So direct checkout is charter-only. If the UI ever sent ticketed params here, capacity would not be reserved. Currently aligned with charter path only.
+
+---
+
+## 4. Lower priority / hygiene
+
+### 4.1 Unused component — **FIXED**
+
+**Location:** `components/experience/BookingModal.tsx` (removed).
+
+**Issue:** Not imported anywhere. The live flow uses `components/site/BookingModal.tsx`.
+
+**Fix applied:** File removed.
+
+---
+
+### 4.2 Legacy booking docs without `startDateStr`
+
+**Locations:** Slots API, create-hold, create-checkout-session-direct, admin bookings POST.
+
+**Observation:** Several paths have a “legacy” fallback that queries bookings without `startDateStr` (e.g. by `experienceId` + status) and filter in code. Comments mention backfilling `startDateStr` and eventually removing the fallback.
+
+**Recommendation:** Run a one-off backfill for `startDateStr` from `slotId` where missing, then remove legacy branches when safe.
+
+---
+
+### 4.3 Webhook event lease
+
+**Location:** `app/api/stripe/webhook/route.ts`.
+
+**Observation:** `PROCESSING_LEASE_MS = 5 * 60 * 1000`; stale “processing” events can be re-claimed. Good for retries and duplicate delivery.
+
+---
+
+### 4.4 Rate limiting
+
+**Location:** `lib/booking/rate-limit.ts`; used in create-hold, create-checkout-session-direct, validate-discount, etc.
+
+**Observation:** Client key from trusted headers; Redis or in-memory. Document which endpoints are rate-limited and under what key for operations/monitoring.
+
+---
+
+## 5. Summary table
+
+| Area                         | Status   | Notes                                                                 |
+|-----------------------------|----------|-----------------------------------------------------------------------|
+| Hold → booking (Payment Element) | OK       | `convertHoldToBooking` + webhook `payment_intent.succeeded`; shared capacity released. |
+| Hold → booking (Checkout redirect) | Bug      | `checkout.session.completed` does not release shared-departure capacity. |
+| Admin cancel                | OK       | Releases slot + shared-departure capacity (recent fix).               |
+| Admin resend confirmation   | OK       | Supports boat-only and experience bookings.                           |
+| Cron auth                   | Inconsistent | `reminder-cron` returns 503; others return 401 for unauthorized.   |
+| Admin “Add booking”         | Caveat   | No departure inventory update for ticketed.                           |
+| Receipt / success page      | OK       | Handles session_id, payment_intent_id, receipt_token; shared/ticketed slot fallback. |
+| Run-final-charges           | OK       | Lock, idempotency, final_requires_action / final_failed + email.     |
+| Release hold (GET/POST)     | OK       | Shared logic; shared capacity released.                              |
+| Cancel page UX              | OK       | Clear error + retry when token present.                               |
+| Status badges (admin)       | OK       | Shared helper for list and detail.                                   |
+| Error clear on success (admin) | OK    | Resend/cancel clear `error` state.                                   |
+
+---
+
+## 6. File reference (no changes)
+
+- **APIs:** `app/api/booking/*` (create-hold, release-hold, create-checkout-session, create-checkout-session-direct, create-payment-intent, complete-after-payment, slots, receipt, manage/*, cleanup-holds, run-final-charges, reminder-cron, final-payment-reminder-cron, etc.), `app/api/admin/bookings/*`, `app/api/stripe/webhook/route.ts`.
+- **Pages:** `app/(site)/booking/page.tsx`, `BookingPageClient.tsx`, success, cancel, manage; admin bookings, discounts, financials, calendars.
+- **Components:** `components/site/BookingModal.tsx`, HoldCountdown, InlineBookingDetailsStep, ExperienceBookingCard, ExperienceCalendarSection*, admin calendar/week view.
+- **Lib:** `lib/booking/types.ts`, `firebase-admin.ts`, `stripe-client.ts`, `brevo.ts`, `convert-hold-to-booking.ts`, `shared-departure-inventory.ts`, `manageToken.ts`, `receiptToken.ts`, `releaseToken.ts`, `rate-limit.ts`, `experience-slots.ts`, `pricing.ts`, `discount.ts`, email templates, reminder-emails.
+- **Cron entrypoints:** `netlify/functions/cleanup-holds.mts`, `booking-reminder-cron.mts`, `final-payment-reminder-cron.mts`, `run-final-charges.mts`.

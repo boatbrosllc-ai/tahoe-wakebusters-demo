@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
 
@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
+    const { Timestamp } = getFirestoreExports();
     const fromParam = request.nextUrl.searchParams.get("from");
     const toParam = request.nextUrl.searchParams.get("to");
     const experienceIdFilter = request.nextUrl.searchParams.get("experienceId") ?? undefined;
@@ -25,7 +26,21 @@ export async function GET(request: NextRequest) {
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
-    const snap = await db.collection("bookings").orderBy("createdAt", "desc").limit(2000).get();
+    const toDateEndOfDay = (d: Date) => {
+      const end = new Date(d);
+      end.setHours(23, 59, 59, 999);
+      return end;
+    };
+
+    let query = db.collection("bookings").orderBy("createdAt", "desc");
+
+    if (fromDateVal || toDateVal) {
+      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
+    }
+
+    const PAGE_SIZE = 500;
+    const snap = await query.limit(PAGE_SIZE).get();
 
     const experienceIds = new Set<string>();
     snap.docs.forEach((d) => {
@@ -49,13 +64,7 @@ export async function GET(request: NextRequest) {
     const recent: { id: string; createdAt: string; customerEmail: string; totalCents: number; status: string; experienceName: string }[] = [];
     const byExperienceMap = new Map<string, { revenueCents: number; bookingCount: number }>();
 
-    const toDateEndOfDay = (d: Date) => {
-      const end = new Date(d);
-      end.setHours(23, 59, 59, 999);
-      return end;
-    };
-
-    snap.docs.forEach((d, i) => {
+    snap.docs.forEach((d) => {
       const b = d.data() as Booking;
       const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
       const totalCents = b.pricing?.totalCents ?? 0;

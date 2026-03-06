@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 // Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
 const BookingModal = dynamic(
-  () => import("@/components/site/BookingModal").then((m) => ({ default: m.BookingModal })),
+  () => import("@/components/site/BookingModal"),
   { ssr: false }
 );
 

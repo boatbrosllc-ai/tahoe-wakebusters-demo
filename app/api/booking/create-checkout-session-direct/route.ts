@@ -6,6 +6,7 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { signReleaseToken } from "@/lib/booking/releaseToken";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
@@ -59,8 +60,14 @@ function isSeasonalAllowed(exp: Experience, slotStart: Date, slotDateStr?: strin
 
 export async function POST(request: NextRequest) {
   try {
-    const rl = checkRateLimit(getClientKey(request));
+    const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
+      if (rl.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
       return NextResponse.json(
         { error: "Too many requests. Please try again in a moment." },
@@ -378,19 +385,45 @@ export async function POST(request: NextRequest) {
       experienceId: input.experienceId,
     };
     if (input.boatId) metadata.boatId = input.boatId;
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      line_items: lineItems,
-      ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
-      customer_email: undefined,
-      phone_number_collection: { enabled: true },
-      custom_fields: [
-        { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
-      ],
-      metadata,
-      success_url: `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/booking/cancel?holdId=${holdId}`,
-    });
+    const releaseToken = signReleaseToken(holdId, Math.floor(expiresAt.getTime() / 1000));
+    let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: lineItems,
+        ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
+        customer_email: undefined,
+        phone_number_collection: { enabled: true },
+        custom_fields: [
+          { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
+        ],
+        metadata,
+        success_url: `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: releaseToken
+          ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(holdId)}&release_token=${encodeURIComponent(releaseToken)}`
+          : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(holdId)}`,
+      });
+    } catch (sessionErr) {
+      if (stripeCouponId) {
+        try {
+          await stripe.coupons.del(stripeCouponId);
+        } catch (delErr) {
+          console.error("[create-checkout-session-direct] Failed to delete orphaned coupon", stripeCouponId, delErr);
+        }
+      }
+      try {
+        await db.runTransaction(async (tx) => {
+          const slotSnap = await tx.get(slotRef);
+          if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === holdId) {
+            tx.update(slotRef, { status: "open", holdId: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
+          }
+          tx.update(db.collection("holds").doc(holdId), { status: "expired" });
+        });
+      } catch {
+        /* best-effort */
+      }
+      throw sessionErr;
+    }
 
     if (session.url) {
       await db.collection("holds").doc(holdId).update({ checkoutSessionId: session.id });

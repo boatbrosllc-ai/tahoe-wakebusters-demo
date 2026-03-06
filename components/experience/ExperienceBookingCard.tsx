@@ -133,7 +133,7 @@ export function ExperienceBookingCard({
   className,
 }: ExperienceBookingCardProps) {
   const isTicketed = pricingType === "ticketed";
-  const effectiveMax = isTicketed ? 36 : maxGuests;
+  const effectiveMax = isTicketed ? (maxCapacity ?? 36) : maxGuests;
   const departurTimeLabel = useMemo(() => {
     if (!isTicketed || departureHour == null) return null;
     return formatDepartureTime(departureHour, departureMinute ?? 0);
@@ -308,18 +308,23 @@ export function ExperienceBookingCard({
     setSubmitting(true);
     setPaymentPhase("loading");
     let createdHoldId: string | null = null;
+    let createdReleaseToken: string | null = null;
     const releaseCreatedHold = async () => {
       if (!createdHoldId) return;
       try {
         await fetch("/api/booking/release-hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ holdId: createdHoldId }),
+          body: JSON.stringify({
+            holdId: createdHoldId,
+            ...(createdReleaseToken && { release_token: createdReleaseToken }),
+          }),
         });
       } catch {
         // best-effort
       }
       createdHoldId = null;
+      createdReleaseToken = null;
       setHoldId(null);
       setHoldSlotId(null);
       setHoldExpiresAt(null);
@@ -353,6 +358,7 @@ export function ExperienceBookingCard({
         return;
       }
       createdHoldId = holdData.holdId;
+      createdReleaseToken = holdData.releaseToken ?? null;
       setHoldId(holdData.holdId);
       setHoldSlotId(selectedSlot.id);
       setHoldExpiresAt(holdData.expiresAt ?? null);

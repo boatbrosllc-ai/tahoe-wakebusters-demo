@@ -32,6 +32,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     }
     const booking = bookingSnap.data() as Booking;
+    if (payload.email != null) {
+      const bookingEmail = booking.customer?.email?.trim().toLowerCase();
+      if (bookingEmail !== payload.email) {
+        return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+      }
+    }
     const stripe = booking.stripe ?? {};
     const card = booking.card;
     const status = booking.status;

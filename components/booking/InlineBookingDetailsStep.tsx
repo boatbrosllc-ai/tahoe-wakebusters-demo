@@ -138,6 +138,7 @@ export function InlineBookingDetailsStep({
   spotsRemaining,
 }: InlineBookingDetailsStepProps) {
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
+  const [priceLoading, setPriceLoading] = useState(true);
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -171,9 +172,11 @@ export function InlineBookingDetailsStep({
     : experienceMaxGuests;
 
   const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
+  const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()), [customerEmail]);
 
   useEffect(() => {
     const controller = new AbortController();
+    setPriceLoading(true);
     // fetchDatePrices uses the shared module-level cache, so if the calendar section already
     // loaded prices for this month the result comes back instantly without a network round-trip.
     bookingCache.fetchDatePrices(experienceId, selectedDate, 1, rateId, controller.signal)
@@ -184,7 +187,8 @@ export function InlineBookingDetailsStep({
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name !== "AbortError") setEffectiveRateCents(null);
-      });
+      })
+      .finally(() => setPriceLoading(false));
     return () => controller.abort();
   }, [experienceId, rateId, selectedDate]);
 
@@ -217,10 +221,12 @@ export function InlineBookingDetailsStep({
   }, [effectiveRateCents, rateDisplayName, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
 
   const handleProceedToPayment = async () => {
+    if (effectiveRateCents === null) return;
     if (
       !customerName.trim() ||
       !customerEmail.trim() ||
       !customerPhone.trim() ||
+      !emailValid ||
       !cancellationAck ||
       tipChoice === null
     ) {
@@ -238,18 +244,23 @@ export function InlineBookingDetailsStep({
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     let createdHoldId: string | null = null;
+    let createdReleaseToken: string | null = null;
     const releaseCreatedHold = async () => {
       if (!createdHoldId) return;
       try {
         await fetch("/api/booking/release-hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ holdId: createdHoldId }),
+          body: JSON.stringify({
+            holdId: createdHoldId,
+            ...(createdReleaseToken && { release_token: createdReleaseToken }),
+          }),
         });
       } catch {
         // best-effort
       }
       createdHoldId = null;
+      createdReleaseToken = null;
       setHoldId(null);
     };
     try {
@@ -283,6 +294,7 @@ export function InlineBookingDetailsStep({
       }
       const newHoldId = holdData.holdId;
       createdHoldId = newHoldId;
+      createdReleaseToken = holdData.releaseToken ?? null;
       setHoldId(newHoldId);
       bookingLog("client", "InlineBookingDetailsStep create-hold success, create-payment-intent request", { holdId: newHoldId, payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
@@ -438,7 +450,11 @@ export function InlineBookingDetailsStep({
           <div className="mt-3 pt-3 border-t border-brand-dark/10 space-y-1.5 text-sm">
             <div className="flex justify-between">
               <span className="text-brand-muted">{rateDisplayName}</span>
-              <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
+              {priceLoading ? (
+                <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden="true" />
+              ) : (
+                <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
+              )}
             </div>
             {priceSummary.addonLines.map((line) => (
               <div key={line.name} className="flex justify-between">
@@ -501,8 +517,11 @@ export function InlineBookingDetailsStep({
               value={customerEmail}
               onChange={(e) => setCustomerEmail(e.target.value)}
               placeholder="Email *"
-              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
+              className={cn("w-full rounded-lg border px-3 py-2.5 min-h-[44px] text-base touch-manipulation", customerEmail.length > 0 && !emailValid ? "border-red-500" : "border-brand-dark/15")}
             />
+            {customerEmail.length > 0 && !emailValid && (
+              <p className="text-xs text-red-600">Please enter a valid email address.</p>
+            )}
             <input
               type="tel"
               value={customerPhone}
@@ -689,7 +708,7 @@ export function InlineBookingDetailsStep({
                 setAppliedDiscountLoading(true);
                 setAppliedDiscountError(null);
                 try {
-                  const totalBefore = priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0) + priceSummary.salesTaxCents + priceSummary.tipCents;
+                  const totalBefore = priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0) + priceSummary.salesTaxCents;
                   const res = await fetch("/api/booking/validate-discount", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -763,7 +782,8 @@ export function InlineBookingDetailsStep({
           <button
             type="button"
             onClick={handleProceedToPayment}
-            className="w-full sm:w-auto sm:shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
+            disabled={priceLoading || effectiveRateCents === null}
+            className="w-full sm:w-auto sm:shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 disabled:pointer-events-none"
           >
             Proceed to payment
           </button>

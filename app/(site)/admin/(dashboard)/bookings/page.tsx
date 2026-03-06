@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
-import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet } from "lucide-react";
+import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet, Mail, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
 
@@ -99,6 +99,10 @@ export default function AdminBookingsPage() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [cancelRefund, setCancelRefund] = useState(true);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
 
   const buildParams = useCallback((cursor?: string | null) => {
     const params = new URLSearchParams();
@@ -261,6 +265,16 @@ export default function AdminBookingsPage() {
 
   function formatCents(cents: number) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+  }
+
+  /** Shared status badge styling for list and detail (aligns with detail modal). */
+  function getBookingStatusBadgeClass(status: string): string {
+    if (status === "paid" || status === "final_paid") return "bg-green-100 text-green-800";
+    if (status === "canceled" || status === "refunded") return "bg-amber-100 text-amber-800";
+    if (status === "final_failed" || status === "final_requires_action") return "bg-red-100 text-red-800";
+    if (status === "final_due" || status === "deposit_paid") return "bg-blue-100 text-blue-800";
+    if (status === "final_processing") return "bg-yellow-100 text-yellow-800";
+    return "bg-gray-100 text-gray-800";
   }
 
   const handleBookingClick = (booking: AdminBookingCalendarItem) => {
@@ -546,13 +560,7 @@ export default function AdminBookingsPage() {
                       </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4">
                         <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                            b.status === "paid"
-                              ? "bg-green-100 text-green-800"
-                              : b.status === "canceled"
-                                ? "bg-amber-100 text-amber-800"
-                                : "bg-gray-100 text-gray-800"
-                          }`}
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${getBookingStatusBadgeClass(b.status)}`}
                         >
                           {b.status}
                         </span>
@@ -581,13 +589,7 @@ export default function AdminBookingsPage() {
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-brand-dark text-sm">{b.customer?.name || "—"}</span>
                   <span
-                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${
-                      b.status === "paid"
-                        ? "bg-green-100 text-green-800"
-                        : b.status === "canceled"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-gray-100 text-gray-800"
-                    }`}
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${getBookingStatusBadgeClass(b.status)}`}
                   >
                     {b.status}
                   </span>
@@ -725,7 +727,11 @@ export default function AdminBookingsPage() {
         open={detailOpen}
         onOpenChange={(open) => {
           setDetailOpen(open);
-          if (!open) setSelectedBooking(null);
+          if (!open) {
+            setSelectedBooking(null);
+            setCancelConfirmOpen(false);
+            setCancelRefund(true);
+          }
         }}
         title={selectedBooking ? `Booking — ${selectedBooking.customer?.name ?? "Customer"}` : undefined}
         fullScreenOnMobile
@@ -735,19 +741,7 @@ export default function AdminBookingsPage() {
             {/* Status + Trip */}
             <div className="flex flex-wrap items-center gap-3 border-b border-brand-dark/10 pb-4">
               <span
-                className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
-                  selectedBooking.status === "paid" || selectedBooking.status === "final_paid"
-                    ? "bg-green-100 text-green-800"
-                    : selectedBooking.status === "canceled"
-                      ? "bg-amber-100 text-amber-800"
-                      : selectedBooking.status === "final_failed" || selectedBooking.status === "final_requires_action"
-                        ? "bg-red-100 text-red-800"
-                        : selectedBooking.status === "final_due" || selectedBooking.status === "deposit_paid"
-                          ? "bg-blue-100 text-blue-800"
-                          : selectedBooking.status === "final_processing"
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-gray-100 text-gray-800"
-                }`}
+                className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getBookingStatusBadgeClass(selectedBooking.status)}`}
               >
                 {selectedBooking.status}
               </span>
@@ -975,6 +969,128 @@ export default function AdminBookingsPage() {
                 </dl>
               </section>
             )}
+
+            {/* Actions */}
+            <section className="border-t border-brand-dark/10 pt-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-3">Actions</h3>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={resendLoading}
+                  onClick={async () => {
+                    if (!selectedBooking?.id) return;
+                    setResendLoading(true);
+                    try {
+                      const res = await fetch(`/api/admin/bookings/${selectedBooking.id}/resend-confirmation`, {
+                        method: "POST",
+                        credentials: "include",
+                      });
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok) throw new Error(data.error ?? "Failed to send");
+                      setError(null);
+                      setDetailOpen(false);
+                      setSelectedBooking(null);
+                      setRefreshKey((k) => k + 1);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Failed to resend email");
+                    } finally {
+                      setResendLoading(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5"
+                >
+                  <Mail className="w-4 h-4" aria-hidden />
+                  {resendLoading ? "Sending…" : "Resend confirmation email"}
+                </Button>
+                {selectedBooking.status !== "canceled" && selectedBooking.status !== "refunded" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="inline-flex items-center gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-50"
+                    onClick={() => setCancelConfirmOpen(true)}
+                  >
+                    <Ban className="w-4 h-4" aria-hidden />
+                    Cancel booking
+                  </Button>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+      </Dialog>
+
+      {/* Cancel booking confirmation */}
+      <Dialog
+        open={cancelConfirmOpen}
+        onOpenChange={(open) => {
+          setCancelConfirmOpen(open);
+          if (!open) setCancelRefund(true);
+        }}
+        title="Cancel booking?"
+      >
+        {selectedBooking && (
+          <div className="space-y-4 text-sm">
+            <p className="text-brand-dark">
+              This will cancel the booking for <strong>{selectedBooking.customer?.name ?? "the customer"}</strong>
+              {selectedBooking.pricing && (
+                <> (amount: <strong>{formatCents(selectedBooking.pricing.totalCents)}</strong>)</>
+              )}.
+            </p>
+            <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              A Stripe refund will be issued to the customer unless you opt out below (e.g. for penalty-free cancellations).
+            </p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cancelRefund}
+                onChange={(e) => setCancelRefund(e.target.checked)}
+                className="rounded border-brand-dark/30"
+              />
+              <span className="text-brand-dark">Issue refund via Stripe</span>
+            </label>
+            <div className="flex gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCancelConfirmOpen(false)}
+              >
+                Back
+              </Button>
+              <Button
+                type="button"
+                className="bg-amber-600 hover:bg-amber-700"
+                disabled={cancelLoading}
+                onClick={async () => {
+                  if (!selectedBooking?.id) return;
+                  setCancelLoading(true);
+                  try {
+                    const res = await fetch(`/api/admin/bookings/${selectedBooking.id}/cancel`, {
+                      method: "POST",
+                      credentials: "include",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ refund: cancelRefund }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.error ?? "Failed to cancel");
+                    setError(null);
+                    setCancelConfirmOpen(false);
+                    setDetailOpen(false);
+                    setSelectedBooking(null);
+                    setCancelRefund(true);
+                    setRefreshKey((k) => k + 1);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Failed to cancel booking");
+                  } finally {
+                    setCancelLoading(false);
+                  }
+                }}
+              >
+                {cancelLoading ? "Canceling…" : "Confirm cancel"}
+              </Button>
+            </div>
           </div>
         )}
       </Dialog>

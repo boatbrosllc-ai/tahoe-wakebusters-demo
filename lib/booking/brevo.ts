@@ -203,12 +203,13 @@ export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestPa
 }
 
 /**
- * Send "final charge failed" or "action required" email. No manage link; ask guest to contact us.
+ * Send "final charge failed" or "action required" email. When manageLink is provided,
+ * includes a prominent CTA button to update card and pay; otherwise asks guest to contact us.
  */
 export async function sendFinalChargeFailedEmail(
   toEmail: string,
   toName: string,
-  _manageLink: string | undefined,
+  manageLink: string | undefined,
   requiresAction: boolean
 ): Promise<void> {
   const subject = requiresAction
@@ -217,11 +218,16 @@ export async function sendFinalChargeFailedEmail(
   const body = requiresAction
     ? "Your card requires verification to complete the remaining balance. Please reply to this email or contact us to update your card or complete payment."
     : "We couldn't charge the remaining balance for your upcoming trip. Please reply to this email or contact us to update your card or pay the remaining balance.";
+  const ctaHtml =
+    manageLink
+      ? `<p style="margin-top: 24px;"><a href="${manageLink.replace(/"/g, "&quot;")}" style="display: inline-block; background: #0d9488; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">Update your card and pay now</a></p>`
+      : "";
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">
   <p>Hi ${toName.replace(/</g, "&lt;")},</p>
   <p>${body.replace(/</g, "&lt;")}</p>
+  ${ctaHtml}
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
   const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {

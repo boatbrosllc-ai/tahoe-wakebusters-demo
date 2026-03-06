@@ -28,6 +28,9 @@ export const handler = schedule("20 */4 * * *", async () => {
     const body = await res.json().catch(() => ({}));
     console.log(`[run-final-charges] Response status: ${res.status}`, body);
 
+    if (!res.ok) {
+      return { statusCode: 500 };
+    }
     return { statusCode: 200 };
   } catch (err) {
     console.error("[run-final-charges] Fetch error:", err);

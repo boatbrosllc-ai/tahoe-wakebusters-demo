@@ -7,12 +7,45 @@ import { BookingCTA } from "@/components/site/BookingCTA";
 import { Button } from "@/components/ui/button";
 import type { Experience } from "@/content/experiences";
 import { STATIC_TO_FIRESTORE_SLUG } from "@/lib/booking/static-slug-map";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 
 interface ExperienceDetailFromApi {
   id: string;
   experience: { title: string; slug: string; maxGuests: number; petsMax: number };
   rates: { id: string; durationHours: number; displayName: string; priceCents: number; active: boolean }[];
   addons: { id: string; name: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
+}
+
+function mapCacheResultToApiData(
+  data: import("@/lib/booking/booking-data-cache").ExperienceBySlugResult,
+  firestoreSlug: string
+): ExperienceDetailFromApi | null {
+  if (!data?.id) return null;
+  const exp = data.experience;
+  return {
+    id: data.id,
+    experience: {
+      title: exp?.title ?? "",
+      slug: firestoreSlug,
+      maxGuests: exp?.maxGuests ?? 14,
+      petsMax: exp?.petsMax ?? 0,
+    },
+    rates: (data.rates ?? []).map((r) => ({
+      id: r.id,
+      durationHours: r.durationHours,
+      displayName: r.displayName,
+      priceCents: r.priceCents,
+      active: true,
+    })),
+    addons: (data.addons ?? []).map((a) => ({
+      id: a.id ?? "",
+      name: a.name,
+      priceCents: a.priceCents,
+      type: a.type as "toggle" | "quantity" | "tip",
+      active: true,
+      maxQty: a.maxQty,
+    })),
+  };
 }
 
 interface StaticExperienceBookingSectionProps {
@@ -32,21 +65,25 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
     if (!firestoreSlug) return;
     setLoading(true);
     setFetchError(null);
-    fetch(`/api/experiences/${firestoreSlug}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data?.id) {
-          setApiData(data);
+    bookingCache.invalidate("experience-slug|" + firestoreSlug);
+    bookingCache
+      .fetchExperienceBySlug(firestoreSlug)
+      .then((data) => {
+        const mapped = mapCacheResultToApiData(data, firestoreSlug);
+        if (mapped) {
+          setApiData(mapped);
           setFetchError(null);
-        } else if (!res.ok) {
-          const error = typeof data?.error === "string" ? data.error : "Failed to load booking data";
-          const hint = typeof data?.hint === "string" ? data.hint : undefined;
-          setFetchError(hint ? `${error}. ${hint}` : error);
-          setApiData(null);
         } else {
           setApiData(null);
-          setFetchError(null);
+          setFetchError("Failed to load booking data");
         }
+      })
+      .catch((err: unknown) => {
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } }).apiBody;
+        const error = typeof apiBody?.error === "string" ? apiBody.error : "Failed to load booking data";
+        const hint = typeof apiBody?.hint === "string" ? apiBody.hint : undefined;
+        setFetchError(hint ? `${error}. ${hint}` : error);
+        setApiData(null);
       })
       .finally(() => setLoading(false));
   }, [firestoreSlug]);
@@ -56,31 +93,30 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
       setLoading(false);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     setFetchError(null);
-    fetch(`/api/experiences/${firestoreSlug}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok && data?.id) {
-          setApiData(data);
+    bookingCache
+      .fetchExperienceBySlug(firestoreSlug, controller.signal)
+      .then((data) => {
+        const mapped = mapCacheResultToApiData(data, firestoreSlug);
+        if (mapped) {
+          setApiData(mapped);
           setFetchError(null);
-        } else if (!res.ok) {
-          const error = typeof data?.error === "string" ? data.error : "Failed to load booking data";
-          const hint = typeof data?.hint === "string" ? data.hint : undefined;
-          setFetchError(hint ? `${error}. ${hint}` : error);
-          setApiData(null);
         } else {
           setApiData(null);
-          setFetchError(null);
+          setFetchError("Failed to load booking data");
         }
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch((err: unknown) => {
+        if ((err as { name?: string }).name === "AbortError") return;
+        const apiBody = (err as { apiBody?: { error?: string; hint?: string } }).apiBody;
+        const error = typeof apiBody?.error === "string" ? apiBody.error : "Failed to load booking data";
+        const hint = typeof apiBody?.hint === "string" ? apiBody.hint : undefined;
+        setFetchError(hint ? `${error}. ${hint}` : error);
+        setApiData(null);
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
   }, [firestoreSlug]);
 
   if (loading && !apiData) {

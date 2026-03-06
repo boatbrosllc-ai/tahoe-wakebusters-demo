@@ -82,11 +82,11 @@ export function BookingPreviewCard({
         <span className="text-white font-medium w-8 text-right" aria-hidden="true">{guests}</span>
       </div>
 
-      <p className="text-white/90 text-sm mb-1">Starting at</p>
-      <p className="text-2xl font-bold text-white mb-4">
-        ${price}
+      <p className="text-2xl font-bold text-white mb-1">
+        From ${price}
         <span className="text-white/70 text-base font-normal"> / trip</span>
       </p>
+      <p className="text-white/60 text-sm mb-4">Prices vary by date</p>
 
       <Button
         size="lg"

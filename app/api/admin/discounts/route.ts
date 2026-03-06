@@ -45,7 +45,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const code = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";
     const type = body.type === "percent" || body.type === "fixed" ? body.type : "percent";
-    const percent = type === "percent" && typeof body.percent === "number" ? Math.min(100, Math.max(0, body.percent)) : undefined;
+    const percent = type === "percent" && typeof body.percent === "number"
+      ? Math.min(100, Math.max(1, Math.round(body.percent)))
+      : undefined;
     const valueCents = type === "fixed" && typeof body.valueCents === "number" ? Math.max(0, Math.floor(body.valueCents)) : undefined;
     const expiresAtParam = typeof body.expiresAt === "string" ? body.expiresAt : null;
     const maxRedemptions = typeof body.maxRedemptions === "number" && body.maxRedemptions > 0 ? Math.floor(body.maxRedemptions) : undefined;

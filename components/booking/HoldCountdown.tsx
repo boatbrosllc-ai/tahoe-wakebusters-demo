@@ -45,7 +45,14 @@ export function HoldCountdown({
 
   if (remaining === null) {
     if (expiredLabel) {
-      return <span className={className}>{expiredLabel}</span>;
+      return (
+        <span className={className}>
+          <span>{expiredLabel}</span>
+          <span className="sr-only" aria-live="assertive" aria-atomic="true">
+            Time expired
+          </span>
+        </span>
+      );
     }
     return null;
   }
@@ -55,9 +62,22 @@ export function HoldCountdown({
     ? `${minutes}:${seconds.toString().padStart(2, "0")}`
     : `${minutes} min ${seconds} sec`;
 
+  // Announce notable milestones to screen readers only (e.g. 2 min, 1 min).
+  const milestone =
+    minutes === 2 && seconds === 0
+      ? "2 minutes remaining"
+      : minutes === 1 && seconds === 0
+        ? "1 minute remaining"
+        : null;
+
   return (
-    <span className={className} role="timer" aria-live="polite">
-      {label} {timeStr}
+    <span className={className}>
+      <span role="timer">{label} {timeStr}</span>
+      {milestone ? (
+        <span className="sr-only" aria-live="assertive" aria-atomic="true">
+          {milestone}
+        </span>
+      ) : null}
     </span>
   );
 }

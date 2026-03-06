@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts",
+    "test": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/rate-limit.test.ts",
+    "test:booking": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/rate-limit.test.ts",
+    "test:ci": "npm run lint && npm run test:booking",
     "seed": "node scripts/seed-firestore.js",
     "postinstall": "node scripts/postinstall-next.js",
     "prepare": "husky"

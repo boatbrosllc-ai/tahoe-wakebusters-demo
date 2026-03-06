@@ -28,6 +28,9 @@ export const handler = schedule("*/30 * * * *", async () => {
     const body = await res.json().catch(() => ({}));
     console.log(`[cleanup-holds] Response status: ${res.status}`, body);
 
+    if (!res.ok) {
+      return { statusCode: 500 };
+    }
     return { statusCode: 200 };
   } catch (err) {
     console.error("[cleanup-holds] Fetch error:", err);

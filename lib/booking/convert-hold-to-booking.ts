@@ -29,6 +29,12 @@ export interface ConvertHoldInputFull {
   paymentIntentId: string;
   amountTotalCents?: number;
   currency?: string;
+  /** When provided (e.g. from Stripe Checkout session), overrides hold.customerDraft. */
+  customerOverride?: { name: string; email: string; phone: string };
+  /** When provided (e.g. from Checkout custom field), overrides hold.answers?.comments. */
+  specialNotesOverride?: string;
+  /** Optional Stripe Checkout Session ID to store on the booking. */
+  checkoutSessionId?: string;
 }
 
 /** 50/50: deposit paid; booking created with final_due and finalChargeAt. */
@@ -282,8 +288,9 @@ export async function convertHoldToBooking(
   const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
   const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
   const finalPricing = { ...pricing, totalCents: Math.max(0, pricing.totalCents + holdTipCents - holdDiscountCents) };
-  const customer = hold.customerDraft;
-  const specialNotes = hold.answers?.comments?.trim() || undefined;
+  const fullInput = input as ConvertHoldInputFull;
+  const customer = fullInput.customerOverride ?? hold.customerDraft;
+  const specialNotes = fullInput.specialNotesOverride ?? hold.answers?.comments?.trim() || undefined;
   const bookingId = db.collection("bookings").doc().id;
   const parsedSlot = parseSlotId(hold.slotId);
   const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
@@ -316,6 +323,7 @@ export async function convertHoldToBooking(
         paymentIntentId: input.paymentIntentId,
         ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
         ...(input.currency && { currency: input.currency }),
+        ...(fullInput.checkoutSessionId && { checkoutSessionId: fullInput.checkoutSessionId }),
       };
 
   const booking: Omit<Booking, "createdAt"> & { createdAt: FirestoreTimestamp } = {
@@ -384,10 +392,20 @@ export async function convertHoldToBooking(
     tx.set(db.collection("bookings").doc(bookingId), booking);
     tx.update(holdRef, { status: "converted" });
     if (discountRef) {
-      tx.update(discountRef, {
-        usedCount: FieldValue.increment(1),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      const discountSnap = await tx.get(discountRef);
+      if (discountSnap.exists) {
+        const discountData = discountSnap.data() as { usedCount?: number; maxRedemptions?: number };
+        const usedCount = discountData.usedCount ?? 0;
+        const maxRedemptions = discountData.maxRedemptions;
+        if (typeof maxRedemptions === "number" && usedCount >= maxRedemptions) {
+          throw new Error("This code has reached its usage limit");
+        }
+        const newCount = usedCount + 1;
+        tx.update(discountRef, {
+          usedCount: newCount,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
     }
   });
 

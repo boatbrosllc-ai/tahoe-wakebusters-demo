@@ -34,3 +34,35 @@
 
 [functions."warm-booking"]
   timeout = 10
+
+# Rate limit booking mutation APIs (per IP, 30/min). Complements app-level Redis limiter.
+# Next.js serves /api/*; these redirects apply the limit then pass through.
+[[redirects]]
+  from = "/api/booking/create-hold"
+  to = "/api/booking/create-hold"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 30
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+[[redirects]]
+  from = "/api/booking/create-checkout-session-direct"
+  to = "/api/booking/create-checkout-session-direct"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 30
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+[[redirects]]
+  from = "/api/booking/validate-discount"
+  to = "/api/booking/validate-discount"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 30
+  window_size = 60
+  aggregate_by = ["ip", "domain"]

@@ -1,13 +1,13 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useState, useRef, Suspense } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 interface ReceiptData {
   bookingId: string;
-  customer: { name: string; email: string; phone: string };
+  customer?: { name: string; email: string; phone: string };
   boatName: string;
   experienceName?: string;
   startAt: string | null;
@@ -16,6 +16,7 @@ interface ReceiptData {
   addonSelections: { addonId: string; qty: number }[];
   pricing: { totalCents: number; currency: string };
   status: string;
+  receiptToken?: string;
 }
 
 function formatDate(iso: string | null) {
@@ -34,23 +35,44 @@ function formatDate(iso: string | null) {
 function BookingSuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
+  const paymentIntentId = searchParams.get("payment_intent_id");
+  const receiptTokenParam = searchParams.get("receipt_token");
   const [data, setData] = useState<ReceiptData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [storedReceiptToken, setStoredReceiptToken] = useState<string | null>(null);
+  const fetchedRef = useRef(false);
 
-  const fetchReceipt = useCallback(async (sid: string) => {
+  const fetchReceipt = useCallback(async (sid: string | null, piId: string | null, rToken: string | null) => {
+    if (fetchedRef.current && rToken) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/booking/receipt?session_id=${encodeURIComponent(sid)}`);
+      const params = new URLSearchParams();
+      if (rToken) params.set("receipt_token", rToken);
+      else if (sid) params.set("session_id", sid);
+      else if (piId) params.set("payment_intent_id", piId);
+      const res = await fetch(`/api/booking/receipt?${params.toString()}`);
+      if (res.status === 401) {
+        setError("This receipt link is invalid or has expired.");
+        setData(null);
+        return;
+      }
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body.error ?? "Could not load booking");
+        let errBody: Record<string, unknown> = {};
+        try {
+          errBody = await res.json();
+        } catch {}
+        setError((errBody.error as string) ?? `Server error ${res.status}`);
         setData(null);
         return;
       }
       const json = await res.json();
       setData(json);
+      if (json.receiptToken) {
+        setStoredReceiptToken(json.receiptToken);
+        fetchedRef.current = true;
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
       setData(null);
@@ -60,12 +82,14 @@ function BookingSuccessContent() {
   }, []);
 
   useEffect(() => {
-    if (sessionId) fetchReceipt(sessionId);
-    else {
+    const token = receiptTokenParam ?? storedReceiptToken;
+    if (token || sessionId || paymentIntentId) {
+      fetchReceipt(sessionId ?? null, paymentIntentId ?? null, token);
+    } else {
       setLoading(false);
-      setError("Missing session_id");
+      setError("Missing session_id, payment_intent_id, or receipt_token");
     }
-  }, [sessionId, fetchReceipt]);
+  }, [sessionId, paymentIntentId, receiptTokenParam, storedReceiptToken, fetchReceipt]);
 
   if (loading) {
     return (
@@ -100,7 +124,9 @@ function BookingSuccessContent() {
         <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 sm:p-8">
           <h1 className="text-2xl sm:text-3xl font-bold text-brand-dark mb-2">You&apos;re all set</h1>
           <p className="text-brand-muted mb-6">
-            A confirmation email has been sent to {data.customer.email}.
+            {data.customer?.email
+              ? `A confirmation email has been sent to ${data.customer.email}.`
+              : "A confirmation email has been sent to the email address on your booking."}
           </p>
           <dl className="space-y-3 text-brand-dark">
             <div>
@@ -125,7 +151,7 @@ function BookingSuccessContent() {
             )}
             <div>
               <dt className="text-sm font-medium text-brand-muted">Guest</dt>
-              <dd>{data.customer.name} · {data.customer.phone}</dd>
+              <dd>{data.customer ? `${data.customer.name} · ${data.customer.phone}` : "—"}</dd>
             </div>
             <div>
               <dt className="text-sm font-medium text-brand-muted">Total paid</dt>

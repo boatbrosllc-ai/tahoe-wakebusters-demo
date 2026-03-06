@@ -490,6 +490,8 @@ export interface CreateHoldResponse {
   holdId: string;
   expiresAt: string; // ISO
   pricing: BookingPricing;
+  /** Signed token for release-hold (cancel URL). Omitted when RELEASE_TOKEN_SECRET (or MANAGE_BOOKING_SECRET) is unset. */
+  releaseToken?: string;
 }
 
 export interface CreateCheckoutSessionInput {

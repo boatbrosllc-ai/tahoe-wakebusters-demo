@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { buildSlotId } from "@/lib/booking/experience-slots";
 
 const SLOT_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours per slot
 const FIRST_SLOT_HOUR = 9;
@@ -69,7 +70,11 @@ export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get("authorization");
     const secret = process.env.SEED_SECRET ?? process.env.CRON_SECRET;
-    if (secret && authHeader !== `Bearer ${secret}`) {
+    if (process.env.NODE_ENV === "production") {
+      if (!secret || authHeader !== `Bearer ${secret}`) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    } else if (secret && authHeader !== `Bearer ${secret}`) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const db = getDb();
@@ -138,15 +143,18 @@ export async function POST(request: NextRequest) {
         .limit(1)
         .get();
       if (existingSlots.empty) {
+        const durationHours = 4;
         for (let d = 0; d < 14; d++) {
           const day = new Date(start);
           day.setDate(day.getDate() + d);
+          const dateStr = day.getFullYear() + "-" + String(day.getMonth() + 1).padStart(2, "0") + "-" + String(day.getDate()).padStart(2, "0");
           for (let h = FIRST_SLOT_HOUR; h < LAST_SLOT_HOUR; h++) {
             const slotStart = new Date(day);
             slotStart.setHours(h, 0, 0, 0);
             const slotEnd = new Date(slotStart.getTime() + SLOT_DURATION_MS);
             if (slotEnd.getHours() > LAST_SLOT_HOUR || slotEnd.getDate() !== slotStart.getDate()) continue;
-            await slotsRef.doc().set({
+            const slotId = buildSlotId(dateStr, h, durationHours);
+            await slotsRef.doc(slotId).set({
               startAt: Timestamp.fromDate(slotStart),
               endAt: Timestamp.fromDate(slotEnd),
               status: "open",

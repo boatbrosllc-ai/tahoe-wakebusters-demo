@@ -198,8 +198,17 @@ export function ManageBookingClient() {
     setLoading(true);
     setError(null);
     fetch(`/api/booking/manage/get?token=${encodeURIComponent(token)}`)
-      .then((res) => res.json())
-      .then((d) => {
+      .then(async (res) => {
+        let body: Record<string, unknown> = {};
+        try {
+          body = await res.json();
+        } catch {}
+        if (!res.ok) {
+          setError((body.error as string) ?? `Server error ${res.status}`);
+          setData(null);
+          return;
+        }
+        const d = body as { error?: string } & ManageData;
         if (d.error) {
           setError(d.error);
           setData(null);
@@ -304,11 +313,15 @@ export function ManageBookingClient() {
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ token }),
                     });
-                    const d = await res.json().catch(() => ({}));
                     if (!res.ok) {
-                      setSetupError((d as { error?: string }).error ?? "Failed");
+                      let errBody: Record<string, unknown> = {};
+                      try {
+                        errBody = await res.json();
+                      } catch {}
+                      setSetupError((errBody.error as string) ?? `Server error ${res.status}`);
                       return;
                     }
+                    const d = await res.json();
                     setSetupClientSecret((d as { clientSecret: string }).clientSecret);
                   } catch (e) {
                     setSetupError(e instanceof Error ? e.message : "Failed");
@@ -353,17 +366,21 @@ export function ManageBookingClient() {
                     setPayError(null);
                     setPayLoading(true);
                     try {
-                      const res = await fetch("/api/booking/manage/pay-remaining", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ token }),
-                      });
-                      const d = await res.json().catch(() => ({}));
-                      if (!res.ok) {
-                        setPayError((d as { error?: string }).error ?? "Failed");
-                        return;
-                      }
-                      setPayClientSecret((d as { clientSecret: string }).clientSecret);
+                    const res = await fetch("/api/booking/manage/pay-remaining", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ token }),
+                    });
+                    if (!res.ok) {
+                      let errBody: Record<string, unknown> = {};
+                      try {
+                        errBody = await res.json();
+                      } catch {}
+                      setPayError((errBody.error as string) ?? `Server error ${res.status}`);
+                      return;
+                    }
+                    const d = await res.json();
+                    setPayClientSecret((d as { clientSecret: string }).clientSecret);
                     } catch (e) {
                       setPayError(e instanceof Error ? e.message : "Failed");
                     } finally {

@@ -144,6 +144,7 @@ export function ExperienceCalendarSection({
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [selectedDurationForModal, setSelectedDurationForModal] = useState<number | null>(null);
   const [directCheckoutLoading, setDirectCheckoutLoading] = useState<string | null>(null);
+  const [directCheckoutError, setDirectCheckoutError] = useState<string | null>(null);
   const [directDiscountCode, setDirectDiscountCode] = useState("");
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
@@ -187,9 +188,18 @@ export function ExperienceCalendarSection({
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
-  const [bookingMode, setBookingMode] = useState<"shared" | "charter">("shared");
+  const [bookingMode, setBookingMode] = useState<"shared" | "charter">(
+    () => (pricingTypeProp === "ticketed" ? "shared" : "charter")
+  );
   const [autoSwitchBanner, setAutoSwitchBanner] = useState(false);
   const [fetchedShowSpotsRemaining, setFetchedShowSpotsRemaining] = useState(false);
+
+  // On listing page (onOpenInModal): charter-only experiences get bookingMode "charter" so the details step shows deposit vs full. Ticketed get "shared".
+  useEffect(() => {
+    if (!onOpenInModal) return;
+    const ticketed = fetchedPricingType === "ticketed" || pricingTypeProp === "ticketed";
+    setBookingMode(ticketed ? "shared" : "charter");
+  }, [onOpenInModal, fetchedPricingType, pricingTypeProp]);
 
   useEffect(() => {
     if (experienceIdProp) {
@@ -854,6 +864,8 @@ export function ExperienceCalendarSection({
     setDirectDiscountCode,
     directCheckoutLoading,
     setDirectCheckoutLoading,
+    directCheckoutError,
+    setDirectCheckoutError,
     bookHref,
     isTicketed,
     departureTimeLabel,
