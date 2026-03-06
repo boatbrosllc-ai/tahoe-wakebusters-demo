@@ -273,11 +273,12 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          const deptHour = experience.departureHour;
+          // Align with slots API: use experience defaults and rate duration when experience.tripDurationHours is missing
+          const deptHour = experience.departureHour ?? 10;
           const deptMinute = experience.departureMinute ?? 0;
-          const tripDuration = experience.tripDurationHours;
+          const tripDuration = experience.tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
           if (
-            deptHour == null || tripDuration == null ||
+            tripDuration == null ||
             parsedForValidation.startHour !== deptHour ||
             parsedForValidation.startMinute !== deptMinute ||
             parsedForValidation.durationHours !== tripDuration
@@ -367,11 +368,12 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          const deptHour = experience.departureHour;
+          // Align with slots API: use experience defaults and rate duration when experience.tripDurationHours is missing
+          const deptHour = experience.departureHour ?? 10;
           const deptMinute = experience.departureMinute ?? 0;
-          const tripDuration = experience.tripDurationHours;
+          const tripDuration = experience.tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
           if (
-            deptHour == null || tripDuration == null ||
+            tripDuration == null ||
             parsedForValidation.startHour !== deptHour ||
             parsedForValidation.startMinute !== deptMinute ||
             parsedForValidation.durationHours !== tripDuration
