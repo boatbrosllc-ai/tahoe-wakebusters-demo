@@ -119,6 +119,30 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
 }
 
 /**
+ * When slug is not in a known family (e.g. experience has no slug/title, only doc id), infer from
+ * assigned boats so we never show pontoon on a wake-only listing. Use after fetching boat docs.
+ * - All wake → watersports
+ * - All pontoon/tritoon → pontoon
+ * - Mixed or any wake present → watersports (only show wake; safe default so pontoon never appears on wake listing)
+ */
+export function inferSlugFromAssignedBoats(
+  slugForBoatType: string,
+  boatDocs: { data: () => { boatType?: string } }[]
+): string {
+  if (isWatersportsSlug(slugForBoatType) || isPontoonSlug(slugForBoatType)) return slugForBoatType;
+  if (boatDocs.length === 0) return slugForBoatType;
+  const types = new Set(
+    boatDocs.map((d) => (d.data().boatType ?? "").toLowerCase().trim()).filter(Boolean)
+  );
+  if (types.size === 0) return slugForBoatType;
+  if (types.has("wake") && !types.has("pontoon") && !types.has("tritoon")) return "watersports";
+  if (!types.has("wake") && (types.has("pontoon") || types.has("tritoon"))) return "pontoon";
+  // Mixed or wake + pontoon: treat as watersports so we only show wake (never show pontoon on wake listing)
+  if (types.has("wake")) return "watersports";
+  return "pontoon";
+}
+
+/**
  * Predicate for boatType filtering: watersports => wake only (never show pontoon/tritoon); pontoon => any except wake; others => any.
  * Use when listing boats or slots so that only eligible boat types appear (e.g. wake boats for watersports).
  * For watersports we explicitly reject pontoon/tritoon so they never appear even if mis-assigned or slug is wrong.

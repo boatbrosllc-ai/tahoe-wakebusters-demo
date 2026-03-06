@@ -375,8 +375,13 @@ export function ExperienceCalendarSection({
     const controller = new AbortController();
     bookingCache.fetchBoats(experienceId, controller.signal)
       .then((data) => {
-        if (data?.boats && Array.isArray(data.boats)) setInlineBoats(data.boats as BoatOption[]);
-        else setInlineBoats([]);
+        if (data?.boats && Array.isArray(data.boats)) {
+          const list = data.boats as BoatOption[];
+          setInlineBoats(list);
+          if (list.length === 1) setSelectedBoatInline(list[0]);
+        } else {
+          setInlineBoats([]);
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name !== "AbortError") setInlineBoats([]);
@@ -472,6 +477,13 @@ export function ExperienceCalendarSection({
       goToInlineStep(1);
     }
   }, [isTicketed, onOpenInModal, goToInlineStep]);
+
+  // Watersports / single-boat: skip the boat step — auto-assign the only boat and go to checkout
+  useEffect(() => {
+    if (inlineStepIndex === 3 && inlineBoats.length === 1 && !inlineBoatsLoading && onOpenInModal) {
+      goToInlineStep(4);
+    }
+  }, [inlineStepIndex, inlineBoats.length, inlineBoatsLoading, onOpenInModal, goToInlineStep]);
 
   /** Single-pass derivation of slotsByDate (counts) and openSlotsByDate (open slot arrays). */
   const { slotsByDate, openSlotsByDate } = useMemo(() => {

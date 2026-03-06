@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 export interface BoatOption {
@@ -64,12 +64,14 @@ export async function GET(request: NextRequest) {
         if (!docById.has(d.id)) docById.set(d.id, d);
       });
     }
+    const allBoatDocsList = Array.from(docById.values());
+    const slugEffective = inferSlugFromAssignedBoats(slugForBoatType, allBoatDocsList);
 
-    const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
-    let boatDocs = Array.from(docById.values()).filter((doc) =>
+    const allowBoatType = allowBoatTypeForSlug(slugEffective);
+    let boatDocs = allBoatDocsList.filter((doc) =>
       allowBoatType((doc.data() as ListingBoat).boatType)
     );
-    if (isWatersportsSlug(slugForBoatType)) {
+    if (isWatersportsSlug(slugEffective)) {
       boatDocs = boatDocs.filter(
         (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
       );

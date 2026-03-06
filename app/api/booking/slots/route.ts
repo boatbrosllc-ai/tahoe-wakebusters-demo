@@ -11,7 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -98,7 +98,6 @@ export async function GET(request: NextRequest) {
       const effectiveSlug = experienceSlug || inferredSlugFromTitle;
       const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name).toLowerCase();
       const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
-      const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
       const boatSnapPromises = experienceIdVariants.map((variantId) =>
         db
           .collection("boats")
@@ -118,6 +117,9 @@ export async function GET(request: NextRequest) {
           }
         }
       }
+      // When slug/title don't identify the listing, infer from assigned boats so we never show pontoon on wake listing.
+      const slugEffective = inferSlugFromAssignedBoats(slugForBoatType, mergedBoatDocs);
+      const allowBoatType = allowBoatTypeForSlug(slugEffective);
 
       type ExpDataFull = {
         slug?: string;
@@ -163,7 +165,7 @@ export async function GET(request: NextRequest) {
         let tBoatIds: string[] = mergedBoatDocs
           .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
           .map((d) => d.id);
-        if (isWatersportsSlug(slugForBoatType)) {
+        if (isWatersportsSlug(slugEffective)) {
           tBoatIds = tBoatIds.filter((id) => {
             const doc = mergedBoatDocs.find((d) => d.id === id);
             return ((doc?.data() as { boatType?: string })?.boatType ?? "").toLowerCase().trim() === "wake";
@@ -404,7 +406,7 @@ export async function GET(request: NextRequest) {
       let boatIds: string[] = mergedBoatDocs
         .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
-      if (isWatersportsSlug(slugForBoatType)) {
+      if (isWatersportsSlug(slugEffective)) {
         boatIds = boatIds.filter(
           (id) => (boatDocDataById.get(id)?.boatType ?? "").toLowerCase().trim() === "wake"
         );
