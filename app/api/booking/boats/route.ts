@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 export interface BoatOption {
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     const experienceSlug = (expData?.slug ?? "").toLowerCase().trim();
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "");
+    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name);
 
     const expRatesSnap = await db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get();
     const experienceRates = expRatesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string } & ExperienceRate));
@@ -66,9 +66,14 @@ export async function GET(request: NextRequest) {
     }
 
     const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
-    const boatDocs = Array.from(docById.values()).filter((doc) =>
+    let boatDocs = Array.from(docById.values()).filter((doc) =>
       allowBoatType((doc.data() as ListingBoat).boatType)
     );
+    if (isWatersportsSlug(slugForBoatType)) {
+      boatDocs = boatDocs.filter(
+        (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
+      );
+    }
     boatDocs.sort((a, b) => a.id.localeCompare(b.id));
     const boats: BoatOption[] = boatDocs.map((doc) => {
       const boat = doc.data() as ListingBoat;

@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 const EXPERIENCE_DETAIL_FIREBASE_HINT =
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
     const isTicketedInferred = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expData?.pricingType !== "charter";
     const pricingType = expData?.pricingType === "ticketed" || isTicketedInferred ? "ticketed" as const : (expData?.pricingType ?? undefined);
-    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "");
+    const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name);
 
     // Boats may be linked by doc id or any canonical slug alias (e.g. pontoon / lake-austin-pontoon). Query by each variant and merge.
     const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
@@ -136,11 +136,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     // (guards against production data linking the wrong boat types to an experience).
     const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
-    const boats: ExperienceDetailBoat[] = allBoatDocs
-      .filter((doc) => {
-        const boat = doc.data() as ListingBoat;
-        return allowBoatType(boat.boatType);
-      })
+    let boatDocsFiltered = allBoatDocs.filter((doc) => {
+      const boat = doc.data() as ListingBoat;
+      return allowBoatType(boat.boatType);
+    });
+    // Hard guarantee: watersports must never show pontoon/tritoon — only wake boats.
+    if (isWatersportsSlug(slugForBoatType)) {
+      boatDocsFiltered = boatDocsFiltered.filter(
+        (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
+      );
+    }
+    const boats: ExperienceDetailBoat[] = [...boatDocsFiltered]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((doc) => {
         const boat = doc.data() as ListingBoat;

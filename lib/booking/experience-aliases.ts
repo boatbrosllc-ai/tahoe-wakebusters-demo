@@ -67,20 +67,24 @@ export function isPontoonSlug(slug: string): boolean {
  * so that wake-only / no-wake filtering applies even if the experience has a different explicit slug.
  * If the effective slug is not in any family (e.g. Firestore doc id, or slug with spaces), infer from
  * keywords so wake experiences never show pontoon/tritoon and pontoon experiences never show wake.
+ * @param titleOrName - Optional experience title/name; included in keyword fallback so we never miss watersports/pontoon.
  */
 export function getSlugForBoatTypeFilter(
   experienceSlug: string,
   inferredFromTitle: string,
-  experienceId: string
+  experienceId: string,
+  titleOrName?: string
 ): string {
   const inferred = (inferredFromTitle ?? "").toLowerCase().trim();
   if (inferred && (isWatersportsSlug(inferred) || isPontoonSlug(inferred))) return inferred;
   const effective = (experienceSlug ?? "").trim().toLowerCase() || inferred || (experienceId ?? "").trim().toLowerCase();
   // If effective is in a known family, use it (e.g. "lake-austin-wake-boat" -> watersports family).
   if (effective && (isWatersportsSlug(effective) || isPontoonSlug(effective))) return effective;
-  // Fallback: infer from raw string (doc id, slug with spaces, or any identifier). Ensures we never
-  // treat a wake experience as "other" and show all boats (e.g. tritoons on wake listing).
-  const raw = `${(experienceSlug ?? "").trim()} ${(experienceId ?? "").trim()}`.toLowerCase();
+  // Treat effective as a title-like string (e.g. "lake austin wake boat" with spaces).
+  const fromEffective = inferSlugFromTitle(effective);
+  if (fromEffective && (isWatersportsSlug(fromEffective) || isPontoonSlug(fromEffective))) return fromEffective;
+  // Fallback: infer from slug + experienceId + title so we never treat watersports as "other".
+  const raw = `${(experienceSlug ?? "").trim()} ${(experienceId ?? "").trim()} ${(titleOrName ?? "").trim()}`.toLowerCase();
   if (/wake|surf|watersport|wakeboard|tube/.test(raw)) return "watersports";
   if (/pontoon|tritoon|party/.test(raw)) return "pontoon";
   return effective;

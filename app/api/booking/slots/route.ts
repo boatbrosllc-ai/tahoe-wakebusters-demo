@@ -11,7 +11,7 @@ import {
   getTicketedSlotGrid,
   parseSlotId,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
       const experienceSlug = (typeof expData?.slug === "string" ? expData.slug.trim() : "").toLowerCase();
       const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
       const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-      const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "").toLowerCase();
+      const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name).toLowerCase();
       const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
       const allowBoatType = allowBoatTypeForSlug(slugForBoatType);
       const boatSnapPromises = experienceIdVariants.map((variantId) =>
@@ -159,9 +159,15 @@ export async function GET(request: NextRequest) {
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 
         // Load boats from variant-based fetch; filter by boatType so Watersports shows only wake boats, Pontoon only pontoon/tritoon.
-        const tBoatIds: string[] = mergedBoatDocs
+        let tBoatIds: string[] = mergedBoatDocs
           .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
           .map((d) => d.id);
+        if (isWatersportsSlug(slugForBoatType)) {
+          tBoatIds = tBoatIds.filter((id) => {
+            const doc = mergedBoatDocs.find((d) => d.id === id);
+            return ((doc?.data() as { boatType?: string })?.boatType ?? "").toLowerCase().trim() === "wake";
+          });
+        }
 
         // Relaxed slot-id parser (same logic as in the non-ticketed branch below)
         const parseSlotIdRelaxedT = (slotIdRaw: string): ReturnType<typeof parseSlotId> => {
@@ -397,6 +403,11 @@ export async function GET(request: NextRequest) {
       let boatIds: string[] = mergedBoatDocs
         .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
+      if (isWatersportsSlug(slugForBoatType)) {
+        boatIds = boatIds.filter(
+          (id) => (boatDocDataById.get(id)?.boatType ?? "").toLowerCase().trim() === "wake"
+        );
+      }
       const allExpIds = experienceIdVariants;
       if (boatIdParam) {
         if (!boatIds.includes(boatIdParam)) {
