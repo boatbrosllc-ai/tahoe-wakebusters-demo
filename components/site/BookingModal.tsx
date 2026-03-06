@@ -222,13 +222,15 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [experienceDetailLoadError, setExperienceDetailLoadError] = useState<string | null>(null);
-  /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. */
+  /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. Ticketed: exclude sold-out slots (spotsRemaining === 0) so we don't show 7am/1pm when date is fully booked. */
   const openSlotsForDate = useMemo(() => {
     if (!selectedDate) return [];
-    return monthSlots.filter(
-      (s) => isoToChicagoDateStr(s.startAt) === selectedDate && s.status === "open"
-    );
-  }, [selectedDate, monthSlots]);
+    return monthSlots.filter((s) => {
+      if (isoToChicagoDateStr(s.startAt) !== selectedDate || s.status !== "open") return false;
+      if (selectedExperience?.pricingType === "ticketed" && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) return false;
+      return true;
+    });
+  }, [selectedDate, monthSlots, selectedExperience?.pricingType]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
   const [ticketCounts, setTicketCounts] = useState<{ total: number; sold: number; onHold: number; available: number } | null>(null);

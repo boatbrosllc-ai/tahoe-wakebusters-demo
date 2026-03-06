@@ -223,7 +223,7 @@ export async function POST(request: NextRequest) {
         amount: chargeCents,
         currency: "usd",
         customer: customerId,
-        automatic_payment_methods: { enabled: true },
+        payment_method_types: ["card"],
         setup_future_usage: "off_session",
         metadata,
       },

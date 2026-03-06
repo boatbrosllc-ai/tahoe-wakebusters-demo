@@ -56,6 +56,9 @@ export type ExperienceFormData = {
   seasonalEnabled: boolean;
   seasonalStartMonth: number;
   seasonalEndMonth: number;
+  /** Optional specific date range (YYYY-MM-DD). When both set, overrides month range. */
+  seasonalStartDate: string;
+  seasonalEndDate: string;
   active: boolean;
   timezone: string;
   rates: RateRow[];
@@ -105,6 +108,8 @@ function getDefaultFormData(): ExperienceFormData {
     seasonalEnabled: false,
     seasonalStartMonth: 1,
     seasonalEndMonth: 12,
+    seasonalStartDate: "",
+    seasonalEndDate: "",
     active: true,
     timezone: "America/Chicago",
     rates: [],
@@ -168,6 +173,8 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     seasonalEnabled: sea.enabled === true,
     seasonalStartMonth: typeof sea.startMonth === "number" ? sea.startMonth : 1,
     seasonalEndMonth: typeof sea.endMonth === "number" ? sea.endMonth : 12,
+    seasonalStartDate: typeof (sea as { startDate?: string }).startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test((sea as { startDate: string }).startDate) ? (sea as { startDate: string }).startDate : "",
+    seasonalEndDate: typeof (sea as { endDate?: string }).endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test((sea as { endDate: string }).endDate) ? (sea as { endDate: string }).endDate : "",
     active: api.active === true,
     timezone: typeof api.timezone === "string" ? api.timezone : "America/Chicago",
     rates: rates.map((r) => ({
@@ -258,6 +265,7 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
       enabled: d.seasonalEnabled,
       startMonth: d.seasonalStartMonth,
       endMonth: d.seasonalEndMonth,
+      ...(d.seasonalStartDate && d.seasonalEndDate && /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalStartDate) && /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalEndDate) && { startDate: d.seasonalStartDate, endDate: d.seasonalEndDate }),
     },
     active: d.active,
     timezone: d.timezone || undefined,
@@ -734,35 +742,68 @@ export function ExperienceForm({
 
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-brand-dark">Seasonal &amp; status</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-brand-dark">Availability &amp; status</h2>
+            <p className="text-sm text-brand-muted mt-0.5">Control when this experience can be booked and whether it appears on the site.</p>
+          </div>
           <button type="button" onClick={() => toggleSection("seasonal")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("seasonal")}>
             {collapsedSections.has("seasonal") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
-        {!collapsedSections.has("seasonal") && <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <input type="checkbox" id="seasonal" checked={data.seasonalEnabled} onChange={(e) => update("seasonalEnabled", e.target.checked)} />
-          <label htmlFor="seasonal" className="text-sm font-medium text-brand-dark">Seasonal (limit to months)</label>
-        </div>
-        {data.seasonalEnabled && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {!collapsedSections.has("seasonal") && <div className="space-y-6">
+        {/* Booking window: year-round vs specific date range */}
+        <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/30 p-4 space-y-4">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-season-start">Start month (1–12)</label>
-              <input id="exp-season-start" type="number" min={1} max={12} className={inputClass} value={data.seasonalStartMonth} onChange={(e) => update("seasonalStartMonth", parseInt(e.target.value, 10) || 1)} aria-label="Seasonal start month" />
+              <span className="text-sm font-medium text-brand-dark">Booking window</span>
+              <p className="text-xs text-brand-muted mt-0.5">Year-round = book any date. Otherwise choose a start and end date.</p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-season-end">End month (1–12)</label>
-              <input id="exp-season-end" type="number" min={1} max={12} className={inputClass} value={data.seasonalEndMonth} onChange={(e) => update("seasonalEndMonth", parseInt(e.target.value, 10) || 12)} aria-label="Seasonal end month" />
-            </div>
+            <label className="flex items-center gap-2 shrink-0 cursor-pointer">
+              <input type="checkbox" id="seasonal" checked={!data.seasonalEnabled} onChange={(e) => update("seasonalEnabled", !e.target.checked)} className="rounded border-brand-dark/30" />
+              <span className="text-sm font-medium text-brand-dark">Year-round</span>
+            </label>
           </div>
-        )}
+
+          {data.seasonalEnabled && (
+            <div className="pt-2 space-y-3">
+              <p className="text-sm font-medium text-brand-dark">Only allow booking between these dates</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-brand-muted mb-1" htmlFor="exp-season-start-date">From date</label>
+                  <input
+                    id="exp-season-start-date"
+                    type="date"
+                    className={inputClass}
+                    value={data.seasonalStartDate}
+                    onChange={(e) => update("seasonalStartDate", e.target.value)}
+                    aria-label="First date of booking season"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-brand-muted mb-1" htmlFor="exp-season-end-date">To date</label>
+                  <input
+                    id="exp-season-end-date"
+                    type="date"
+                    className={inputClass}
+                    value={data.seasonalEndDate}
+                    onChange={(e) => update("seasonalEndDate", e.target.value)}
+                    aria-label="Last date of booking season"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-brand-muted">Dates outside this range won’t show on the calendar.</p>
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-2">
-          <input type="checkbox" id="active" checked={data.active} onChange={(e) => update("active", e.target.checked)} aria-label="Active (visible on site)" />
-          <label htmlFor="active" className="text-sm font-medium text-brand-dark">Active (visible on site)</label>
+          <input type="checkbox" id="active" checked={data.active} onChange={(e) => update("active", e.target.checked)} className="rounded border-brand-dark/30" aria-label="Listed on site" />
+          <label htmlFor="active" className="text-sm font-medium text-brand-dark">Listed on site — experience is visible and bookable</label>
         </div>
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
-          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Chicago" aria-label="Timezone" />
+          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Chicago" aria-label="Timezone for times and dates" />
+          <p className="text-xs text-brand-muted mt-1">Used for departure times and calendar dates (e.g. America/Chicago).</p>
         </div>
         </div>}
       </section>

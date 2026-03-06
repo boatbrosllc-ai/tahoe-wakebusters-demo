@@ -79,6 +79,12 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
 
 function isSeasonalAllowed(exp: Experience, slotStart: Date): boolean {
   if (!exp.seasonal?.enabled) return true;
+  const startDate = typeof exp.seasonal.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(exp.seasonal.startDate) ? exp.seasonal.startDate : null;
+  const endDate = typeof exp.seasonal.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(exp.seasonal.endDate) ? exp.seasonal.endDate : null;
+  if (startDate && endDate) {
+    const slotDateStr = slotStart.toISOString().slice(0, 10);
+    return slotDateStr >= startDate && slotDateStr <= endDate;
+  }
   const startMonth = exp.seasonal.startMonth ?? 1;
   const endMonth = exp.seasonal.endMonth ?? 12;
   const month = slotStart.getMonth() + 1; // 1-12

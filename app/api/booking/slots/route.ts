@@ -34,6 +34,26 @@ const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_BOOKING_FALLBACK === "1";
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
 
+/** Returns true if the slot date is within the experience's seasonal window (specific dates or month range). Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used. */
+function isSeasonalAllowed(
+  seasonal: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string } | undefined,
+  slotStart: Date,
+  slotDateStr?: string
+): boolean {
+  if (!seasonal?.enabled) return true;
+  const startDate = typeof seasonal.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(seasonal.startDate) ? seasonal.startDate : null;
+  const endDate = typeof seasonal.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(seasonal.endDate) ? seasonal.endDate : null;
+  if (startDate && endDate) {
+    const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
+    return dateStr >= startDate && dateStr <= endDate;
+  }
+  const startMonth = seasonal.startMonth ?? 1;
+  const endMonth = seasonal.endMonth ?? 12;
+  const month = slotStart.getMonth() + 1; // 1–12
+  if (startMonth <= endMonth) return month >= startMonth && month <= endMonth;
+  return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
+}
+
 export async function GET(request: NextRequest) {
   try {
     if (!safeHasFirebaseConfig()) {
@@ -130,6 +150,7 @@ export async function GET(request: NextRequest) {
         tripDurationHours?: number;
         showSpotsRemaining?: boolean;
         defaultRateId?: string;
+        seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string };
       };
       const expDataFull = expData as ExpDataFull | undefined;
       const isTicketedBySlug = (effectiveSlug === "sunset" || effectiveSlug === "holiday") && expDataFull?.pricingType !== "charter";
@@ -367,6 +388,7 @@ export async function GET(request: NextRequest) {
         for (const { dateStr, startHour, startMinute, durationHours: dur } of ticketedGrid) {
           const slotId = buildSlotId(dateStr, startHour, dur, startMinute);
           const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, dur, startMinute);
+          if (!isSeasonalAllowed(expDataFull?.seasonal, slotStart, dateStr)) continue;
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
           const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
@@ -822,10 +844,15 @@ export async function GET(request: NextRequest) {
         });
       }
 
+      const seasonalCharter = (expData as { seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string } })?.seasonal;
+      const slotsToReturn = seasonalCharter?.enabled
+        ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt)))
+        : slots;
+
       const debugByDate = request.nextUrl.searchParams.get("debug") === "1" || request.nextUrl.searchParams.get("byDate") === "1"
         ? (() => {
             const byDate: Record<string, { open: number; held: number; booked: number; blocked: number }> = {};
-            for (const s of slots) {
+            for (const s of slotsToReturn) {
               const day = s.startAt.slice(0, 10);
               if (!byDate[day]) byDate[day] = { open: 0, held: 0, booked: 0, blocked: 0 };
               if (s.status === "open") byDate[day].open++;
@@ -841,7 +868,7 @@ export async function GET(request: NextRequest) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
       }
       return NextResponse.json(
-        debugByDate != null ? { slots, byDate: debugByDate } : { slots },
+        debugByDate != null ? { slots: slotsToReturn, byDate: debugByDate } : { slots: slotsToReturn },
         { headers: responseHeaders }
       );
     }

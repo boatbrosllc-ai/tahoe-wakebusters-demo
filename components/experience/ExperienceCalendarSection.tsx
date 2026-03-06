@@ -588,7 +588,7 @@ export function ExperienceCalendarSection({
     }
   }, [inlineStepIndex, inlineBoats.length, inlineBoatsLoading, onOpenInModal, goToInlineStep]);
 
-  /** Single-pass derivation of slotsByDate (counts) and openSlotsByDate (open slot arrays). */
+  /** Single-pass derivation of slotsByDate (counts) and openSlotsByDate (open slot arrays). Ticketed: only count/list slots with spotsRemaining > 0 so sold-out times (7am, 1pm) don't appear as available. */
   const { slotsByDate, openSlotsByDate } = useMemo(() => {
     const counts = new Map<string, { open: number; held: number; booked: number; blocked: number }>();
     const openMap = new Map<string, SlotDto[]>();
@@ -597,16 +597,19 @@ export function ExperienceCalendarSection({
       if (!counts.has(day)) counts.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
       const entry = counts.get(day)!;
       if (s.status === "open") {
-        entry.open++;
-        if (!openMap.has(day)) openMap.set(day, []);
-        openMap.get(day)!.push(s);
+        const soldOut = isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0;
+        if (!soldOut) {
+          entry.open++;
+          if (!openMap.has(day)) openMap.set(day, []);
+          openMap.get(day)!.push(s);
+        }
       } else if (s.status === "held") entry.held++;
       else if (s.status === "booked") entry.booked++;
       else entry.blocked++;
     }
     openMap.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return { slotsByDate: counts, openSlotsByDate: openMap };
-  }, [slots]);
+  }, [slots, isTicketed]);
 
   const slotDataByDate = useMemo(() => {
     if (!isTicketed) return new Map<string, { spotsRemaining: number | null; spotsBooked: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>();

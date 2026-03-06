@@ -99,8 +99,12 @@ export interface ExperienceCancellationPolicy {
 
 export interface ExperienceSeasonal {
   enabled: boolean;
+  /** Month-based window (e.g. Nov–Jan). Ignored when startDate/endDate are set. */
   startMonth?: number; // 1-12
   endMonth?: number;
+  /** Optional specific date range (YYYY-MM-DD). When both set, only slots on dates in [startDate, endDate] are allowed. */
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface ExperienceTestimonial {

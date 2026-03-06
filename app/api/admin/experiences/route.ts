@@ -54,6 +54,8 @@ function parseBody(
     enabled: sea.enabled === true,
     startMonth: typeof sea.startMonth === "number" ? sea.startMonth : undefined,
     endMonth: typeof sea.endMonth === "number" ? sea.endMonth : undefined,
+    startDate: typeof sea.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.startDate) ? sea.startDate : undefined,
+    endDate: typeof sea.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.endDate) ? sea.endDate : undefined,
   };
   const active = b.active === true;
   const timezone = typeof b.timezone === "string" ? b.timezone.trim() || undefined : undefined;
