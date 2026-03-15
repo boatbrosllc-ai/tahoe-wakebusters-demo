@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, toDateStrOnly, isSeasonalAllowed } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, parseSlotIdRelaxed, isAllowedSlotTime, toDateStrOnly, isSeasonalAllowed } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
+import { getTicketedDepartureAndDuration, validateTicketedSlotParsed } from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
@@ -18,6 +19,57 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, generateIncidentCode } from "@/lib/booking/debug";
 
 const HOLD_EXPIRY_MINUTES = 10;
+
+type ExperienceForTicketed = import("@/lib/booking/ticketed-slot-utils").ExperienceForTicketed;
+
+function validateTicketedSlotId(
+  parsedForValidation: NonNullable<ReturnType<typeof parseSlotId>>,
+  experience: Experience & ExperienceForTicketed,
+  rate: ExperienceRate,
+  ratesDocs: { id: string; data: () => ExperienceRate }[],
+  slotId: string,
+  experienceId: string
+): NextResponse | null {
+  const expForTicketed: ExperienceForTicketed = {
+    id: experienceId,
+    slug: experience.slug,
+    title: (experience as { title?: string }).title ?? (experience as { name?: string }).name,
+    name: (experience as { name?: string }).name,
+    pricingType: experience.pricingType,
+    departureHour: (experience as { departureHour?: number }).departureHour,
+    departureMinute: (experience as { departureMinute?: number }).departureMinute,
+    tripDurationHours: (experience as { tripDurationHours?: number }).tripDurationHours,
+    defaultRateId: (experience as { defaultRateId?: string }).defaultRateId,
+  };
+  const { deptHour, deptMinute, tripDuration } = getTicketedDepartureAndDuration(expForTicketed, ratesDocs);
+  const rateDuration = typeof (rate as { durationHours?: number }).durationHours === "number" ? (rate as { durationHours: number }).durationHours : undefined;
+  const valid = validateTicketedSlotParsed(parsedForValidation, deptHour, deptMinute, tripDuration, rateDuration);
+  if (valid) return null;
+  bookingWarn("create-hold", "ticketed slot validation failed", {
+    parsedForValidation: {
+      startHour: parsedForValidation.startHour,
+      startMinute: parsedForValidation.startMinute,
+      durationHours: parsedForValidation.durationHours,
+    },
+    expected: { deptHour, deptMinute, tripDuration },
+    rateDuration,
+    experienceTripDurationHours: (experience as { tripDurationHours?: number }).tripDurationHours,
+    experienceId,
+    slotId,
+  });
+  return NextResponse.json(
+    {
+      error: "Slot is not valid for this experience",
+      expected: { departureHour: deptHour, departureMinute: deptMinute, durationHours: tripDuration },
+      actual: {
+        startHour: parsedForValidation.startHour,
+        startMinute: parsedForValidation.startMinute,
+        durationHours: parsedForValidation.durationHours,
+      },
+    },
+    { status: 400 }
+  );
+}
 
 function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | { input: null; hint: string } {
   if (body == null || typeof body !== "object") {
@@ -217,16 +269,17 @@ export async function POST(request: NextRequest) {
     let experienceForPricing: Experience | null = null;
     let slotStartForBlock: Date | null = null;
     let slotEndForBlock: Date | null = null;
-    const expId = input.experienceId!;
+    const expId = input.experienceId ?? "";
 
     if (isListingBoatFlow) {
-      // Experience + listing boat: fetch all in parallel — all IDs known from request body
+      // Experience + listing boat: fetch all in parallel — all IDs known from request body (rates for ticketed duration resolution)
       const boatId = input.boatId!;
-      const [expDoc, boatDoc, rateDoc, addonsSnapPre] = await Promise.all([
+      const [expDoc, boatDoc, rateDoc, addonsSnapPre, ratesSnap] = await Promise.all([
         db.collection("experiences").doc(expId).get(),
         db.collection("boats").doc(boatId).get(),
         db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get(),
         db.collection("experiences").doc(expId).collection("addons").get(),
+        db.collection("experiences").doc(expId).collection("rates").where("active", "==", true).get(),
       ]);
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -271,38 +324,31 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
       {
-        const parsedForValidation = parseSlotId(input.slotId);
+        const parsedForValidation = (isSharedTicketed || isCharterTicketed)
+          ? (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))
+          : parseSlotId(input.slotId);
         if (!parsedForValidation) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          // Align with slots API: same default for departure hour (19 for slug-based ticketed e.g. sunset, 10 otherwise)
-          const expSlug = (typeof (experience as { slug?: string }).slug === "string" ? (experience as { slug: string }).slug.trim() : "").toLowerCase();
-          const inferredSlug = inferSlugFromTitle((experience as { title?: string; name?: string }).title ?? (experience as { name?: string }).name);
-          const effectiveSlug = expSlug || inferredSlug;
-          const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
-          const rawDeptHour = (experience as { departureHour?: number }).departureHour;
-          const rawDeptMinute = (experience as { departureMinute?: number }).departureMinute;
-          const deptHour = typeof rawDeptHour === "number" && Number.isInteger(rawDeptHour) ? rawDeptHour : (isTicketedBySlug ? 19 : 10);
-          const deptMinute = typeof rawDeptMinute === "number" && Number.isInteger(rawDeptMinute) ? rawDeptMinute : 0;
-          const rateDuration = typeof (rate as { durationHours?: number }).durationHours === "number" ? (rate as { durationHours: number }).durationHours : undefined;
-          const tripDuration = (experience as { tripDurationHours?: number }).tripDurationHours ?? rateDuration ?? 1;
-          const durationMatch = parsedForValidation.durationHours === tripDuration || (rateDuration != null && parsedForValidation.durationHours === rateDuration);
-          if (
-            parsedForValidation.startHour !== deptHour ||
-            parsedForValidation.startMinute !== deptMinute ||
-            !durationMatch
-          ) {
-            return NextResponse.json({ error: "Slot is not valid for this experience" }, { status: 400 });
-          }
+          const errResp = validateTicketedSlotId(
+            parsedForValidation,
+            experience,
+            rate,
+            ratesSnap.docs,
+            input.slotId,
+            expId
+          );
+          if (errResp) return errResp;
         } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours, boat.allowedStartTimes)) {
           return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
         }
       }
+      // Ticketed listing-boat uses virtual slot IDs (no doc under boats/{boatId}/slots). slotsRef is set for charter path but that path is guarded below.
       slotsRef = db.collection("boats").doc(boatId).collection("slots");
       let slotStart: Date;
       if (isSharedTicketed) {
-        const parsedShared = parseSlotId(input.slotId);
+        const parsedShared = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
         if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
@@ -315,6 +361,7 @@ export async function POST(request: NextRequest) {
         slotStart = start;
         slotStartForBlock = start;
         slotEndForBlock = end;
+        // Shared ticketed holds use per-departure inventory; no slot doc is written. _noop must never appear in the charter transaction.
         slotRef = db.collection("holds").doc("_noop");
       } else {
         slotRef = slotsRef.doc(input.slotId);
@@ -347,11 +394,12 @@ export async function POST(request: NextRequest) {
       addonsById = new Map();
       addonsSnapPre.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     } else if (isExperienceOnly) {
-      // Fetch experience, rate, and addons in parallel — all IDs known from request body
-      const [expDoc, rateDoc, addonsSnapPre] = await Promise.all([
+      // Fetch experience, rate, addons, and all active rates (for ticketed duration resolution) in parallel
+      const [expDoc, rateDoc, addonsSnapPre, ratesSnapExp] = await Promise.all([
         db.collection("experiences").doc(expId).get(),
         db.collection("experiences").doc(expId).collection("rates").doc(input.rateId).get(),
         db.collection("experiences").doc(expId).collection("addons").get(),
+        db.collection("experiences").doc(expId).collection("rates").where("active", "==", true).get(),
       ]);
       if (!expDoc.exists) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -374,30 +422,22 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
       {
-        const parsedForValidation = parseSlotId(input.slotId);
+        const parsedForValidation = (isSharedTicketed || isCharterTicketed)
+          ? (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))
+          : parseSlotId(input.slotId);
         if (!parsedForValidation) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          // Align with slots API: same default for departure hour (19 for slug-based ticketed e.g. sunset, 10 otherwise)
-          const expSlug = (typeof (experience as { slug?: string }).slug === "string" ? (experience as { slug: string }).slug.trim() : "").toLowerCase();
-          const inferredSlug = inferSlugFromTitle((experience as { title?: string; name?: string }).title ?? (experience as { name?: string }).name);
-          const effectiveSlug = expSlug || inferredSlug;
-          const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
-          const rawDeptHour = (experience as { departureHour?: number }).departureHour;
-          const rawDeptMinute = (experience as { departureMinute?: number }).departureMinute;
-          const deptHour = typeof rawDeptHour === "number" && Number.isInteger(rawDeptHour) ? rawDeptHour : (isTicketedBySlug ? 19 : 10);
-          const deptMinute = typeof rawDeptMinute === "number" && Number.isInteger(rawDeptMinute) ? rawDeptMinute : 0;
-          const rateDuration = typeof (rate as { durationHours?: number }).durationHours === "number" ? (rate as { durationHours: number }).durationHours : undefined;
-          const tripDuration = (experience as { tripDurationHours?: number }).tripDurationHours ?? rateDuration ?? 1;
-          const durationMatch = parsedForValidation.durationHours === tripDuration || (rateDuration != null && parsedForValidation.durationHours === rateDuration);
-          if (
-            parsedForValidation.startHour !== deptHour ||
-            parsedForValidation.startMinute !== deptMinute ||
-            !durationMatch
-          ) {
-            return NextResponse.json({ error: "Slot is not valid for this experience" }, { status: 400 });
-          }
+          const errResp = validateTicketedSlotId(
+            parsedForValidation,
+            experience,
+            rate,
+            ratesSnapExp.docs,
+            input.slotId,
+            expId
+          );
+          if (errResp) return errResp;
         } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours)) {
           return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
         }
@@ -405,7 +445,7 @@ export async function POST(request: NextRequest) {
       slotsRef = db.collection("experiences").doc(expId).collection("slots");
       let slotStartExp: Date;
       if (isSharedTicketed) {
-        const parsedShared = parseSlotId(input.slotId);
+        const parsedShared = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
         if (!parsedShared) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
@@ -418,6 +458,7 @@ export async function POST(request: NextRequest) {
         slotStartExp = start;
         slotStartForBlock = start;
         slotEndForBlock = end;
+        // Shared ticketed holds use per-departure inventory; no slot doc. _noop must never appear in the charter transaction.
         slotRef = db.collection("holds").doc("_noop");
       } else {
         slotRef = slotsRef.doc(input.slotId);
@@ -576,11 +617,15 @@ export async function POST(request: NextRequest) {
     let reusedExpiresAt: Date | null = null;
 
     if (isSharedTicketed) {
-      bookingLog("create-hold", "shared ticketed: reserving capacity and creating hold", { holdId, experienceId: expId, dateStr: parseSlotId(input.slotId)?.dateStr, resumeHoldId: input.resumeHoldId ?? null });
-      const parsedForCapacity = parseSlotId(input.slotId);
+      if (!input.experienceId) {
+        throw new Error("Internal: experienceId required for shared ticketed flow");
+      }
+      const expIdForCapacity = input.experienceId;
+      const parsedForCapacity = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
       if (!parsedForCapacity) {
         return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
       }
+      bookingLog("create-hold", "shared ticketed: reserving capacity and creating hold", { holdId, experienceId: expIdForCapacity, dateStr: parsedForCapacity.dateStr, resumeHoldId: input.resumeHoldId ?? null });
       const dateStr = parsedForCapacity.dateStr;
       // isListingBoatFlow uses experience.maxCapacity when set; isExperienceOnly uses capacityMax directly.
       const sharedCapacityLimit = isListingBoatFlow
@@ -590,14 +635,14 @@ export async function POST(request: NextRequest) {
       const expSlug = experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
         ? ((experienceForPricing as Experience).slug as string).trim()
         : "";
-      const slugVariantsList = getExperienceIdVariants(expId, expSlug);
-      const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+      const slugVariantsList = getExperienceIdVariants(expIdForCapacity, expSlug);
+      const inventoryRef = getDepartureInventoryRef(db, expIdForCapacity, dateStr);
       let effectiveHoldId = holdId;
       let effectiveExpiresAt = expiresAt;
       await db.runTransaction(async (tx) => {
         // Single per-departure inventory doc is read and updated so concurrent requests conflict and retry safely.
         const bookingQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
-          tx.get(db.collection("bookings").where("experienceId", "==", expId).where("startDateStr", "==", dateStr)),
+          tx.get(db.collection("bookings").where("experienceId", "==", expIdForCapacity).where("startDateStr", "==", dateStr)),
           ...slugVariantsList.map(v => tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", dateStr))),
         ];
         const bookSnaps = await Promise.all(bookingQueries);
@@ -623,7 +668,7 @@ export async function POST(request: NextRequest) {
             const exp = existingHold.expiresAt;
             const expiryDate = exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
             const isActive = existingHold.status === "active" && expiryDate > now;
-            const sameExperience = existingHold.experienceId === expId || slugVariantsList.includes(existingHold.experienceId ?? "");
+            const sameExperience = existingHold.experienceId === expIdForCapacity || slugVariantsList.includes(existingHold.experienceId ?? "");
             const sameSlot = existingHold.slotId === input.slotId;
             const sameMode = existingHold.bookingMode === "shared";
             if (isActive && sameExperience && sameSlot && sameMode) {
@@ -711,6 +756,10 @@ export async function POST(request: NextRequest) {
               : ""
           )
         : [];
+
+    if (isSharedTicketed) {
+      throw new Error("Unexpected: charter transaction reached for shared ticketed flow");
+    }
 
     bookingLog("create-hold", "charter/legacy: starting transaction (slot hold + hold doc)");
     await db.runTransaction(async (tx) => {

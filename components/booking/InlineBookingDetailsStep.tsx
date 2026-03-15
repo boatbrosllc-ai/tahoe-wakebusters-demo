@@ -320,10 +320,27 @@ export function InlineBookingDetailsStep({
       });
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
+        const rawError = holdData.error ?? "Failed to create hold";
         const hint = holdData.hint ? ` ${holdData.hint}` : "";
         bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
-        setPaymentError(`${holdData.error ?? "Failed to create hold"}${hint}`);
+        const availabilityErrors = [
+          "Slot is not valid for this experience",
+          "Slot is outside the allowed booking window",
+          "Invalid slot",
+          "Slot no longer available",
+        ];
+        const isAvailabilityError =
+          holdRes.status === 409 ||
+          (typeof rawError === "string" && availabilityErrors.some((e) => rawError.includes(e) || rawError === e));
+        const displayError = isAvailabilityError
+          ? "This time slot is no longer available. Please go back and choose a different date or time."
+          : `${rawError}${hint}`;
+        setPaymentError(displayError);
         setPaymentPhase("form");
+        if (isAvailabilityError) {
+          bookingCache.invalidateBookingCaches(experienceId);
+          setTimeout(() => onBack(), 2500);
+        }
         return;
       }
       const newHoldId = holdData.holdId;

@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotId, buildSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { slugMatches } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
@@ -254,8 +254,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     [experienceRates, ratesSummary]
   );
 
-  /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
-  const isTicketed = selectedExperience?.pricingType === "ticketed";
+  /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. Use initialSelection.pricingType when opening with pre-selection so we don't wait for experience-detail. */
+  const isTicketed = selectedExperience?.pricingType === "ticketed" || (!!open && initialSelection?.pricingType === "ticketed");
   /** Max sellable tickets (ticketed) or max guests (charter). */
   const ticketMax = isTicketed ? (selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36) : (selectedExperience?.maxGuests ?? 14);
   /** Ticketed: cap to live availability so UI and submit stay in sync. */
@@ -394,7 +394,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         (initialSelection.experienceSlug != null && slugMatches(initialSelection.experienceSlug, e.slug ?? ""))
     );
     if (exp) {
-      setSelectedExperience(exp);
+      setSelectedExperience({
+        ...exp,
+        ...(initialSelection.departureHour != null && { departureHour: initialSelection.departureHour }),
+        ...(initialSelection.departureMinute != null && { departureMinute: initialSelection.departureMinute }),
+      });
       if (initialSelection.date) {
         setSelectedDate(initialSelection.date);
         const d = new Date(initialSelection.date + "T12:00:00");
@@ -633,6 +637,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       viewMonthStartStr,
       viewMonthEndStr,
       controller.signal,
+      { ticketed: selectedExperience.pricingType === "ticketed" },
     )
       .then((data) => {
         const slots = (data?.slots ?? []) as SlotDto[];
@@ -655,7 +660,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
         const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
-        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd).catch(() => {});
+        bookingCache.fetchSlots(selectedExperience.id, nextStart, nextEnd, undefined, { ticketed: selectedExperience.pricingType === "ticketed" }).catch(() => {});
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -696,11 +701,29 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!selectedDate) setSelectedSlot(null);
   }, [selectedDate]);
 
-  // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice)
+  // When ticketed/charter mode flips, clear slot so we don't submit a charter slot as ticketed or vice versa
+  useEffect(() => {
+    setSelectedSlot(null);
+  }, [isTicketed]);
+
+  // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice).
+  // Validate that the selected slot's startHour matches experience.departureHour when available; if mismatch, clear and refresh.
   useEffect(() => {
     if (!isTicketed || !selectedDate || openSlotsForDate.length === 0) return;
-    setSelectedSlot(openSlotsForDate[0]);
-  }, [isTicketed, selectedDate, openSlotsForDate]);
+    const first = openSlotsForDate[0];
+    const depHour = selectedExperience?.departureHour;
+    if (depHour != null && typeof depHour === "number") {
+      const parsed = parseSlotId(first.id);
+      if (parsed && parsed.startHour !== depHour) {
+        setSelectedSlot(null);
+        if (selectedExperience?.id) {
+          bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+        }
+        return;
+      }
+    }
+    setSelectedSlot(first);
+  }, [isTicketed, selectedDate, openSlotsForDate, selectedExperience?.departureHour, selectedExperience?.id]);
 
   // Ref holds the latest ticketsAvailableByDate so the effect below can read it without
   // adding it to deps (which would cause a second fetch every time month-level data loads).
@@ -917,15 +940,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   // When opened with initialSelection (slot pre-picked):
   // - Charter + boatId pre-picked → go directly to step 4
-  // - Ticketed (no boat needed) → go directly to step 4
+  // - Ticketed (no boat needed) → go directly to step 4 once departureHour is known (avoid create-hold before experience-detail loads)
   // - Charter without boatId → stay at step 3 so user picks boat
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
     if (!initialSelection?.boatId && !isTicketed) return;
+    if (isTicketed && selectedExperience?.departureHour == null && boatsLoading) return; // wait for experience-detail so slot validation has correct departure
     if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
     setStep(4);
     setPaymentPhase("form");
-  }, [open, initialSelection?.slotId, initialSelection?.boatId, isTicketed, selectedSlot, selectedRateId, paymentPhase]);
+  }, [open, initialSelection?.slotId, initialSelection?.boatId, isTicketed, selectedSlot, selectedRateId, paymentPhase, selectedExperience?.departureHour, boatsLoading]);
 
   // When opened with initialSelection (date but no slot), go to step 2 (pick time)
   useEffect(() => {
@@ -1211,6 +1235,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setPaymentError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
       return;
     }
+    // Ticketed: ensure slot ID matches current experience departure/duration so we don't send a stale slot
+    if (isTicketed && selectedDate && selectedExperience) {
+      const depHour = selectedExperience.departureHour ?? 19;
+      const depMinute = selectedExperience.departureMinute ?? 0;
+      const duration = selectedRate?.durationHours ?? (selectedExperience as { tripDurationHours?: number }).tripDurationHours ?? 1;
+      const expectedSlotId = buildSlotId(selectedDate, depHour, duration, depMinute);
+      if (selectedSlot.id !== expectedSlotId) {
+        setPaymentError("Departure time has changed — please re-select your date.");
+        if (selectedExperience.id) bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+        return;
+      }
+    }
     setPaymentError(null);
     setPaymentPhase("loading");
     const addonList = Object.entries(addonSelections)
@@ -1236,7 +1272,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
           ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
           ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
-          bookingMode: isTicketed ? "shared" : "charter",
+          bookingMode: isTicketed ? (initialSelection?.bookingMode ?? "shared") : "charter",
           ...(lastHoldRef.current?.slotId === selectedSlot.id ? { resumeHoldId: lastHoldRef.current.holdId } : {}),
         }),
       });
@@ -1255,7 +1291,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           bookingCache.invalidate(`slots|${selectedExperience.id}`);
           // Refetch slots for current month so calendar and boat list stay visible and up to date
           bookingCache
-            .fetchSlots(selectedExperience.id, viewMonthStartStr, viewMonthEndStr)
+            .fetchSlots(selectedExperience.id, viewMonthStartStr, viewMonthEndStr, undefined, { ticketed: isTicketed })
             .then((data) => {
               const nextSlots = (data?.slots ?? []) as SlotDto[];
               setMonthDataRangeStart(viewMonthStartStr);
@@ -1522,6 +1558,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 )}
                 {step === 2 && initialSelection && !selectedExperience && loading && (
                   <p className="text-sm text-brand-muted py-3">Loading experience…</p>
+                )}
+                {step === 2 && isTicketed && boatsLoading && selectedExperience && (
+                  <div className="flex items-center justify-center gap-2 py-4">
+                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                    <span className="text-sm text-brand-muted">Loading departure times…</span>
+                  </div>
                 )}
                 {ratesLoadError && (
                   <p className="text-sm text-amber-700 py-2">{ratesLoadError} Try again or contact us.</p>

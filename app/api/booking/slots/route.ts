@@ -16,6 +16,7 @@ import {
   isSeasonalAllowed,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -160,22 +161,18 @@ export async function GET(request: NextRequest) {
           console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
           return NextResponse.json({ slots: [] });
         }
-        let tDurationHours: number;
-        // Prefer the explicit tripDurationHours on the experience doc; fall back to rate's durationHours.
-        const tripHours = expDataFull?.tripDurationHours;
-        if (typeof tripHours === "number" && tripHours > 0) {
-          tDurationHours = tripHours;
-        } else if (expDataFull?.defaultRateId) {
-          const defaultRate = tRatesSnap.docs.find((d) => d.id === expDataFull?.defaultRateId);
-          tDurationHours = defaultRate
-            ? (defaultRate.data() as ExperienceRate).durationHours
-            : (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
-        } else {
-          tDurationHours = (tRatesSnap.docs[0].data() as ExperienceRate).durationHours;
-        }
-
-        const tDepartureHour = expDataFull?.departureHour ?? (isTicketedBySlug ? 19 : 10);
-        const tDepartureMinute = expDataFull?.departureMinute ?? 0;
+        // Use shared ticketed-slot-utils so slot generation matches create-hold validation (same dept + duration).
+        const expForTicketed = {
+          ...expDataFull,
+          id: experienceId,
+          slug: expDataFull?.slug,
+          title: expData?.title ?? expData?.name,
+          name: expData?.name,
+        };
+        const { deptHour: tDepartureHour, deptMinute: tDepartureMinute, tripDuration: tDurationHours } = getTicketedDepartureAndDuration(
+          expForTicketed,
+          tRatesSnap.docs
+        );
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
 

@@ -76,6 +76,8 @@ function getApiBaseUrl(): string {
 const STALE_MS = {
   experiences: 60_000,
   slots: 15_000,
+  /** Shorter TTL for ticketed experiences so departure/slot config changes are picked up quickly. */
+  slotsTicketed: 5_000,
   datePrices: 60_000,
   experienceDetail: 60_000,
   experienceBySlug: 60_000,
@@ -305,10 +307,12 @@ export function fetchSlots(
   startDate: string,
   endDate: string,
   signal?: AbortSignal,
+  options?: { ticketed?: boolean },
 ): Promise<{ slots: CachedSlotDto[] }> {
   const key = `slots|${experienceId}|${startDate}|${endDate}`;
   const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}`;
-  return fetchCached(key, url, STALE_MS.slots, signal);
+  const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;
+  return fetchCached(key, url, staleMs, signal);
 }
 
 export function fetchDatePrices(

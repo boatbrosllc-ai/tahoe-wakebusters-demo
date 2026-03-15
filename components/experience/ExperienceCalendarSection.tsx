@@ -81,6 +81,11 @@ export interface ExperienceCalendarOpenModalSelection {
   slotId: string;
   boatId?: string;
   pricingType?: "charter" | "ticketed";
+  /** Pass when calendar auto-switched to charter so modal sends correct bookingMode to create-hold. */
+  bookingMode?: "shared" | "charter";
+  /** From fetched experience so modal can validate slot before hold creation. */
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 interface ExperienceCalendarSectionProps {
@@ -828,6 +833,9 @@ export function ExperienceCalendarSection({
           experienceId: experienceId ?? undefined,
           experienceSlug: experienceSlug ?? undefined,
           pricingType: "ticketed",
+          bookingMode: bookingMode === "charter" ? "charter" : "shared",
+          departureHour: fetchedDepartureHour,
+          departureMinute: fetchedDepartureMinute,
         });
       } else {
         setSoldOutFeedbackDate(dateStr);

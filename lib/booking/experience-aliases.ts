@@ -78,6 +78,11 @@ export function isPontoonSlug(slug: string): boolean {
 /**
  * Returns true if the slug is in the sunset or holiday family (ticketed experiences).
  * Use in slots API so "sunset-cruise" and "sunset" both use the ticketed branch.
+ *
+ * Legacy slug compatibility only: callers should prefer the Firestore `pricingType`
+ * field when available. When pricingType === 'ticketed', use the ticketed
+ * departure-hour default (e.g. 19) regardless of slug; use this function only when
+ * pricingType is not set on the document.
  */
 export function isTicketedExperienceSlug(slug: string): boolean {
   const family = getFamilyVariants(slug);
