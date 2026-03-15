@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     // Ticketed: use content fromPriceCents override when available so the checkout preview
     // matches the listing page and calendar (same override applied in date-prices API).
     if (isTicketed) {
-      const contentExp = getExperienceBySlug(effectiveSlug || exp.slug ?? "");
+      const contentExp = getExperienceBySlug((effectiveSlug || exp.slug) ?? "");
       const priceCents = contentExp?.fromPriceCents ?? rate.priceCents;
       return NextResponse.json({ priceCents });
     }

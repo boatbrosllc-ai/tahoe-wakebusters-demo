@@ -1390,7 +1390,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-1 sm:mb-2" : "mb-4")}>
           <button
             type="button"
-            onClick={step > 1 ? handleBack : () => onOpenChange(false)}
+            onClick={step > 1 ? handleBack : () => handleModalOpenChange(false)}
             className="flex items-center gap-1 rounded-lg p-2 min-h-[44px] min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
             aria-label={step > 1 ? "Back" : "Close"}
           >
@@ -2585,7 +2585,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     </button>
                     <button
                       type="button"
-                      onClick={() => onOpenChange(false)}
+                      onClick={() => handleModalOpenChange(false)}
                       className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
                     >
                       Close
@@ -2846,7 +2846,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
                   <button
                     type="button"
-                    onClick={() => onOpenChange(false)}
+                    onClick={() => handleModalOpenChange(false)}
                     className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
                   >
                     Close

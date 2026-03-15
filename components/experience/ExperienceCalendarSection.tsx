@@ -664,6 +664,9 @@ export function ExperienceCalendarSection({
     return map;
   }, [slots, selectedDurationForModal]);
 
+  /** Seasonal config: from slug fetch or prop (e.g. book page). When set, only allow navigating to and selecting dates within the window. */
+  const seasonalConfig = fetchedSeasonalConfig ?? seasonalConfigProp ?? null;
+
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
     const month = calendarMonth.getMonth();
@@ -683,6 +686,7 @@ export function ExperienceCalendarSection({
       heldCount: number;
       blockedCount: number;
       openSlots: SlotDto[];
+      seasonalAllowed: boolean;
     }[] = [];
     const pushCell = (
       dateStr: string,
@@ -729,8 +733,19 @@ export function ExperienceCalendarSection({
     return cells;
   }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr, isTicketed, slotDataByDate, seasonalConfig]);
 
-  /** Seasonal config: from slug fetch or prop (e.g. book page). When set, only allow navigating to and selecting dates within the window. */
-  const seasonalConfig = fetchedSeasonalConfig ?? seasonalConfigProp ?? null;
+  // When seasonal is enabled and the current calendar month is outside the window, snap to an allowed month so the user doesn't land on an unavailable month.
+  useEffect(() => {
+    if (!seasonalConfig?.enabled) return;
+    const y = calendarMonth.getFullYear();
+    const m1 = calendarMonth.getMonth() + 1;
+    if (isMonthInSeasonalRange(seasonalConfig, y, m1)) return;
+    if (seasonalConfig.startDate && seasonalConfig.endDate) {
+      setCalendarMonth(new Date(seasonalConfig.startDate.slice(0, 7) + "-01"));
+      return;
+    }
+    const startMonth = seasonalConfig.startMonth ?? 1;
+    setCalendarMonth(new Date(y, startMonth - 1, 1));
+  }, [seasonalConfig]);
 
   const canGoPrevMonth = useMemo(() => {
     if (!seasonalConfig?.enabled) return true;

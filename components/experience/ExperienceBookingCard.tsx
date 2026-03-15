@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
+import { isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
@@ -117,6 +118,8 @@ interface ExperienceBookingCardProps {
   /** Pre-select this date when provided (e.g. from calendar section click). */
   initialDate?: string;
   className?: string;
+  /** When set, only allow selecting dates within this seasonal window (e.g. holiday cruise Nov–Jan). */
+  seasonalConfig?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string } | null;
 }
 
 export function ExperienceBookingCard({
@@ -133,6 +136,7 @@ export function ExperienceBookingCard({
   departureMinute,
   initialDate,
   className,
+  seasonalConfig,
 }: ExperienceBookingCardProps) {
   const isTicketed = pricingType === "ticketed";
   const effectiveMax = isTicketed ? (maxCapacity ?? 36) : maxGuests;
@@ -429,48 +433,39 @@ export function ExperienceBookingCard({
     const startPad = first.getDay();
     const daysInMonth = last.getDate();
     const totalCells = Math.ceil((startPad + daysInMonth) / 7) * 7;
-    const cells: { dateStr: string; day: number; isCurrentMonth: boolean; isPast: boolean; isOpen: boolean; openCount: number }[] = [];
+    const cells: { dateStr: string; day: number; isCurrentMonth: boolean; isPast: boolean; isOpen: boolean; openCount: number; seasonalAllowed: boolean }[] = [];
+    const push = (dateStr: string, day: number, isCurrentMonth: boolean, isPast: boolean, openCount: number) => {
+      const seasonalAllowed = !seasonalConfig?.enabled || isSeasonalAllowed(seasonalConfig, new Date(dateStr + "T12:00:00"), dateStr);
+      cells.push({
+        dateStr,
+        day,
+        isCurrentMonth,
+        isPast,
+        isOpen: openCount > 0,
+        openCount,
+        seasonalAllowed,
+      });
+    };
     for (let i = 0; i < startPad; i++) {
       const d = new Date(year, month, 1 - (startPad - i));
       const dateStr = d.toISOString().slice(0, 10);
       const openCount = openSlotsByDate.get(dateStr)?.length ?? 0;
-      cells.push({
-        dateStr,
-        day: d.getDate(),
-        isCurrentMonth: false,
-        isPast: dateStr < todayStr,
-        isOpen: openCount > 0,
-        openCount,
-      });
+      push(dateStr, d.getDate(), false, dateStr < todayStr, openCount);
     }
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       const openCount = openSlotsByDate.get(dateStr)?.length ?? 0;
-      cells.push({
-        dateStr,
-        day,
-        isCurrentMonth: true,
-        isPast: dateStr < todayStr,
-        isOpen: openDays.has(dateStr),
-        openCount,
-      });
+      push(dateStr, day, true, dateStr < todayStr, openCount);
     }
     const remaining = totalCells - cells.length;
     for (let i = 1; i <= remaining; i++) {
       const d = new Date(year, month + 1, i);
       const dateStr = d.toISOString().slice(0, 10);
       const openCount = openSlotsByDate.get(dateStr)?.length ?? 0;
-      cells.push({
-        dateStr,
-        day: d.getDate(),
-        isCurrentMonth: false,
-        isPast: true,
-        isOpen: false,
-        openCount,
-      });
+      push(dateStr, d.getDate(), false, true, openCount);
     }
     return cells;
-  }, [calendarMonth, openDays, openSlotsByDate, todayStr]);
+  }, [calendarMonth, openDays, openSlotsByDate, todayStr, seasonalConfig]);
 
   const quickPickOptions = useMemo(() => {
     const todayDs = getChicagoToday();
@@ -489,19 +484,62 @@ export function ExperienceBookingCard({
     const openToday = (openSlotsByDate.get(todayDs)?.length ?? 0) > 0;
     const openTomorrow = (openSlotsByDate.get(tomorrowDs)?.length ?? 0) > 0;
     const openSat = (openSlotsByDate.get(satDs)?.length ?? 0) > 0;
+    const todaySeasonal = !seasonalConfig?.enabled || isSeasonalAllowed(seasonalConfig, new Date(todayDs + "T12:00:00"), todayDs);
+    const tomorrowSeasonal = !seasonalConfig?.enabled || isSeasonalAllowed(seasonalConfig, new Date(tomorrowDs + "T12:00:00"), tomorrowDs);
+    const satSeasonal = !seasonalConfig?.enabled || isSeasonalAllowed(seasonalConfig, new Date(satDs + "T12:00:00"), satDs);
     return [
-      { label: "Today", dateStr: todayDs, available: openToday },
-      { label: "Tomorrow", dateStr: tomorrowDs, available: openTomorrow },
-      { label: "Saturday", dateStr: satDs, available: openSat },
+      { label: "Today", dateStr: todayDs, available: openToday && todaySeasonal },
+      { label: "Tomorrow", dateStr: tomorrowDs, available: openTomorrow && tomorrowSeasonal },
+      { label: "Saturday", dateStr: satDs, available: openSat && satSeasonal },
     ];
-  }, [openSlotsByDate]);
+  }, [openSlotsByDate, seasonalConfig]);
 
-  const goPrevMonth = useCallback(() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1)), []);
-  const goNextMonth = useCallback(() => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1)), []);
+  useEffect(() => {
+    if (!seasonalConfig?.enabled) return;
+    const y = calendarMonth.getFullYear();
+    const m1 = calendarMonth.getMonth() + 1;
+    if (isMonthInSeasonalRange(seasonalConfig, y, m1)) return;
+    if (seasonalConfig.startDate && seasonalConfig.endDate) {
+      setCalendarMonth(new Date(seasonalConfig.startDate.slice(0, 7) + "-01"));
+      return;
+    }
+    setCalendarMonth(new Date(y, (seasonalConfig.startMonth ?? 1) - 1, 1));
+  }, [seasonalConfig]);
+
+  const canGoPrevMonth = useMemo(() => {
+    if (!seasonalConfig?.enabled) return true;
+    const m = calendarMonth.getMonth();
+    const y = calendarMonth.getFullYear();
+    const prev = m === 0 ? { year: y - 1, month1: 12 } : { year: y, month1: m };
+    return isMonthInSeasonalRange(seasonalConfig, prev.year, prev.month1);
+  }, [seasonalConfig, calendarMonth]);
+  const canGoNextMonth = useMemo(() => {
+    if (!seasonalConfig?.enabled) return true;
+    const m = calendarMonth.getMonth();
+    const y = calendarMonth.getFullYear();
+    const next = m === 11 ? { year: y + 1, month1: 1 } : { year: y, month1: m + 2 };
+    return isMonthInSeasonalRange(seasonalConfig, next.year, next.month1);
+  }, [seasonalConfig, calendarMonth]);
+  const goPrevMonth = useCallback(() => {
+    if (!canGoPrevMonth) return;
+    setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
+  }, [canGoPrevMonth]);
+  const goNextMonth = useCallback(() => {
+    if (!canGoNextMonth) return;
+    setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
+  }, [canGoNextMonth]);
   const goToToday = useCallback(() => {
     const d = new Date();
+    if (seasonalConfig?.enabled && !isMonthInSeasonalRange(seasonalConfig, d.getFullYear(), d.getMonth() + 1)) {
+      if (seasonalConfig.startDate && seasonalConfig.endDate) {
+        setCalendarMonth(new Date(seasonalConfig.startDate.slice(0, 7) + "-01"));
+        return;
+      }
+      setCalendarMonth(new Date(d.getFullYear(), (seasonalConfig.startMonth ?? 1) - 1, 1));
+      return;
+    }
     setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
-  }, []);
+  }, [seasonalConfig]);
 
   if (paymentPhase === "loading") {
     return (
@@ -687,7 +725,8 @@ export function ExperienceBookingCard({
             <button
               type="button"
               onClick={goPrevMonth}
-              className="rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
+              disabled={!canGoPrevMonth}
+              className={cn("rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors", !canGoPrevMonth && "opacity-40 cursor-not-allowed")}
               aria-label="Previous month"
             >
               ←
@@ -695,7 +734,8 @@ export function ExperienceBookingCard({
             <button
               type="button"
               onClick={goNextMonth}
-              className="rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
+              disabled={!canGoNextMonth}
+              className={cn("rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors", !canGoNextMonth && "opacity-40 cursor-not-allowed")}
               aria-label="Next month"
             >
               →
@@ -729,7 +769,7 @@ export function ExperienceBookingCard({
             </div>
             <div className="grid grid-cols-7 gap-0.5">
               {calendarDays.map((cell) => {
-                const canSelect = cell.isCurrentMonth && cell.isOpen && !cell.isPast;
+                const canSelect = cell.isCurrentMonth && cell.isOpen && !cell.isPast && cell.seasonalAllowed;
                 const isToday = cell.dateStr === todayStr;
                 return (
                   <button

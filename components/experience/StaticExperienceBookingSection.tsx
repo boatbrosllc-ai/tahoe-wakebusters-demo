@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import type { Experience } from "@/content/experiences";
 import { STATIC_TO_FIRESTORE_SLUG } from "@/lib/booking/static-slug-map";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import type { CachedSeasonalConfig } from "@/lib/booking/booking-data-cache";
 
 interface ExperienceDetailFromApi {
   id: string;
-  experience: { title: string; slug: string; maxGuests: number; petsMax: number };
+  experience: { title: string; slug: string; maxGuests: number; petsMax: number; seasonal?: CachedSeasonalConfig };
   rates: { id: string; durationHours: number; displayName: string; priceCents: number; active: boolean }[];
   addons: { id: string; name: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
 }
@@ -29,6 +30,7 @@ function mapCacheResultToApiData(
       slug: firestoreSlug,
       maxGuests: exp?.maxGuests ?? 14,
       petsMax: exp?.petsMax ?? 0,
+      seasonal: exp?.seasonal,
     },
     rates: (data.rates ?? []).map((r) => ({
       id: r.id,
@@ -139,6 +141,7 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
         addons={apiData.addons}
         maxGuests={apiData.experience.maxGuests ?? 14}
         petsMax={apiData.experience.petsMax ?? 0}
+        seasonalConfig={apiData.experience.seasonal?.enabled ? apiData.experience.seasonal : undefined}
       />
     );
   }
