@@ -55,7 +55,7 @@ export interface ConvertHoldInputDeposit {
 
 export type ConvertHoldInput = ConvertHoldInputFull | ConvertHoldInputDeposit;
 
-export type ConvertHoldResult = { bookingId: string } | { alreadyConverted: true };
+export type ConvertHoldResult = { bookingId: string; discountLimitExceeded?: boolean } | { alreadyConverted: true };
 
 function isDepositInput(input: ConvertHoldInput): input is ConvertHoldInputDeposit {
   return input.paymentStage === "deposit";
@@ -283,7 +283,11 @@ export async function convertHoldToBooking(
         ),
       };
     }
-    pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
+    // Ticketed (shared) experiences: price is per ticket, so multiply by partySize.
+    const ticketQty = isSharedHold && (experienceForPricing as Experience)?.pricingType === "ticketed"
+      ? Math.max(1, Math.floor(Number(hold.partySize ?? 1)))
+      : 1;
+    pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd", qty: ticketQty });
   }
   const holdTipCents = (hold as { tipCents?: number }).tipCents ?? 0;
   const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
@@ -350,6 +354,7 @@ export async function convertHoldToBooking(
   };
 
   bookingLog("convert-hold", "starting transaction (slot update + booking doc + hold status)", { holdId, bookingId });
+  let discountLimitExceeded = false;
   await db.runTransaction(async (tx) => {
     if (isSharedHold && hold.experienceId && parsedSlot && experienceForPricing) {
       const inventoryRef = getDepartureInventoryRef(db, hold.experienceId, parsedSlot.dateStr);
@@ -398,13 +403,21 @@ export async function convertHoldToBooking(
         const usedCount = discountData.usedCount ?? 0;
         const maxRedemptions = discountData.maxRedemptions;
         if (typeof maxRedemptions === "number" && usedCount >= maxRedemptions) {
-          throw new Error("This code has reached its usage limit");
+          discountLimitExceeded = true;
+          tx.set(db.collection("pendingRefunds").doc(), {
+            holdId,
+            bookingId,
+            reason: "discount_limit_exceeded",
+            status: "pending",
+            createdAt: Timestamp.now(),
+          });
+        } else {
+          const newCount = usedCount + 1;
+          tx.update(discountRef, {
+            usedCount: newCount,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
         }
-        const newCount = usedCount + 1;
-        tx.update(discountRef, {
-          usedCount: newCount,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
       }
     }
   });
@@ -428,6 +441,10 @@ export async function convertHoldToBooking(
     locationText,
     cancellationPolicyText,
     isDeposit: !!isDeposit,
+    finalChargeAt:
+      !!isDeposit && (booking as Booking).finalChargeAt
+        ? ((booking as Booking).finalChargeAt as { toDate(): Date }).toDate().toISOString()
+        : undefined,
     manageLink,
     waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
     waiverGroupSigningUrl: waiverResult?.groupSigningUrl,
@@ -465,5 +482,5 @@ export async function convertHoldToBooking(
   }
 
   bookingLog("convert-hold", "convertHoldToBooking completed", { holdId, bookingId });
-  return { bookingId };
+  return discountLimitExceeded ? { bookingId, discountLimitExceeded: true } : { bookingId };
 }

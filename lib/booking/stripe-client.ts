@@ -11,7 +11,11 @@ let stripe: Stripe | null = null;
 
 export function getStripe(): Stripe {
   if (!stripe) {
-    stripe = new Stripe(bookingEnv.stripeSecretKey, { apiVersion: "2023-10-16" });
+    // Use the stable API version shipped with this SDK; see https://docs.stripe.com/api/versioning
+    const version = typeof (Stripe as unknown as { LatestApiVersion?: string }).LatestApiVersion === "string"
+      ? (Stripe as unknown as { LatestApiVersion: string }).LatestApiVersion
+      : "2024-09-30.acacia";
+    stripe = new Stripe(bookingEnv.stripeSecretKey, { apiVersion: version as Stripe.LatestApiVersion });
   }
   return stripe;
 }

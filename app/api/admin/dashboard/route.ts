@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking } from "@/lib/booking/types";
@@ -16,6 +17,8 @@ function formatTimeLabel(dateStr: string, startHour: number, durationHours: numb
   return formatBookingTime(start);
 }
 
+const AGG_PAGE_SIZE = 100;
+
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -27,24 +30,23 @@ export async function GET(request: NextRequest) {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-    // Use business timezone (America/Chicago) so "next 7 days" matches what admins expect
     const todayStr = getDateStrInSlotTimezone(now);
     const in7Days = new Date(now);
     in7Days.setDate(in7Days.getDate() + 6);
     const in7DaysStr = getDateStrInSlotTimezone(in7Days);
 
-    const SLOT_TAKEN_FOR_UPCOMING = ["paid", "final_paid", "deposit_paid", "final_due", "final_processing"];
-    const [bookingsSnap, upcomingSnap, experiencesSnap] = await Promise.all([
-      db.collection("bookings").orderBy("createdAt", "desc").limit(500).get(),
+    const REVENUE_STATUSES = ["paid", "deposit_paid", "final_due", "final_processing", "final_paid"] as const;
+    const [upcomingSnap, experiencesSnap, recentBookingsSnap] = await Promise.all([
       db
         .collection("bookings")
-        .where("status", "in", SLOT_TAKEN_FOR_UPCOMING)
+        .where("status", "in", REVENUE_STATUSES)
         .where("startDateStr", ">=", todayStr)
         .where("startDateStr", "<=", in7DaysStr)
         .orderBy("startDateStr", "desc")
         .limit(500)
         .get(),
       db.collection("experiences").get(),
+      db.collection("bookings").orderBy("createdAt", "desc").limit(10).get(),
     ]);
 
     const experienceNames = new Map<string, string>();
@@ -64,16 +66,32 @@ export async function GET(request: NextRequest) {
     const recentBookings: RecentRow[] = [];
     const upcomingBookings: UpcomingRow[] = [];
 
-    bookingsSnap.docs.forEach((d) => {
+    let aggCursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    while (true) {
+      let aggQuery = db.collection("bookings").orderBy("createdAt", "desc").limit(AGG_PAGE_SIZE);
+      if (aggCursor) aggQuery = aggQuery.startAfter(aggCursor);
+      const aggSnap = await aggQuery.get();
+      if (aggSnap.empty) break;
+      aggSnap.docs.forEach((d) => {
+        const b = d.data() as Booking;
+        bookingCount += 1;
+        if (b.customer?.email) byEmail.add(b.customer.email.trim());
+        if (REVENUE_STATUSES.includes(b.status as (typeof REVENUE_STATUSES)[number])) {
+          const revenueCents = b.stripe?.totalAmountCents ?? b.pricing?.totalCents ?? 0;
+          if (revenueCents > 0) {
+            totalRevenueCents += revenueCents;
+            const createdAt = toDate(b.createdAt as { seconds?: number; toDate?: () => Date });
+            if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += revenueCents;
+            if (createdAt && createdAt >= startOfLastMonth && createdAt <= endOfLastMonth) revenueLastMonthCents += revenueCents;
+          }
+        }
+      });
+      if (aggSnap.size < AGG_PAGE_SIZE) break;
+      aggCursor = aggSnap.docs[aggSnap.docs.length - 1];
+    }
+
+    recentBookingsSnap.docs.forEach((d) => {
       const b = d.data() as Booking;
-      bookingCount += 1;
-      if (b.customer?.email) byEmail.add(b.customer.email.trim());
-      if (b.status === "paid" && b.pricing?.totalCents) {
-        totalRevenueCents += b.pricing.totalCents;
-        const createdAt = toDate(b.createdAt as { seconds?: number; toDate?: () => Date });
-        if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += b.pricing.totalCents;
-        if (createdAt && createdAt >= startOfLastMonth && createdAt <= endOfLastMonth) revenueLastMonthCents += b.pricing.totalCents;
-      }
       const createdAt = toDate(b.createdAt as { seconds?: number; toDate?: () => Date });
       const expName = b.experienceId ? experienceNames.get(b.experienceId) ?? "—" : "—";
       recentBookings.push({
@@ -81,13 +99,13 @@ export async function GET(request: NextRequest) {
         createdAt: createdAt?.toISOString() ?? "",
         customerEmail: b.customer?.email ?? "",
         customerName: b.customer?.name ?? "",
-        totalCents: b.pricing?.totalCents ?? 0,
+        totalCents: (b.stripe?.totalAmountCents ?? b.pricing?.totalCents) ?? 0,
         status: b.status ?? "",
         experienceName: expName,
       });
-
-      // Upcoming is now filled from upcomingSnap below
     });
+
+    recentBookings.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
     upcomingSnap.docs.forEach((d) => {
       const b = d.data() as Booking;
@@ -102,7 +120,7 @@ export async function GET(request: NextRequest) {
         experienceName: expName,
         customerName: b.customer?.name ?? "",
         customerEmail: b.customer?.email ?? "",
-        totalCents: b.pricing?.totalCents ?? 0,
+        totalCents: (b.stripe?.totalAmountCents ?? b.pricing?.totalCents) ?? 0,
       });
     });
 
@@ -119,7 +137,7 @@ export async function GET(request: NextRequest) {
       bookingCount,
       customerCount: byEmail.size,
       listingCount: experiencesSnap.size,
-      recentBookings: recentBookings.slice(0, 10),
+      recentBookings,
       upcomingBookings: upcomingBookings.slice(0, 14),
     });
   } catch (err) {

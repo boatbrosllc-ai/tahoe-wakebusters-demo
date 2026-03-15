@@ -270,6 +270,102 @@ export async function createRequestForGroupSigner(
   return requestId;
 }
 
+const PENDING_SLOT_EXPIRY_HOURS = 1;
+
+/**
+ * Atomically allocate a signer slot for a group token: in one transaction, read the group doc,
+ * count active signers (signed + non-expired pending), and create a new request only if under capacity.
+ * New pending requests get pendingExpiresAt so stale ones can be excluded from capacity and cleaned up.
+ * Returns the new request if allocated; null if invalid/expired group or at capacity.
+ */
+export async function allocateGroupSignerSlot(groupToken: string): Promise<{
+  requestId: string;
+  request: WaiverRequest & { id: string };
+} | null> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const groupRef = db.collection(COLL.groupTokens).doc(groupToken);
+  const now = Timestamp.now();
+  const nowMs = Date.now();
+  const expiresAtPending = new Date(nowMs + PENDING_SLOT_EXPIRY_HOURS * 60 * 60 * 1000);
+
+  let result: { requestId: string; request: WaiverRequest & { id: string } } | null = null;
+  await db.runTransaction(async (tx) => {
+    const groupSnap = await tx.get(groupRef);
+    if (!groupSnap.exists) return;
+    const groupData = groupSnap.data() as WaiverGroupTokenDoc;
+    const expAt = groupData.expiresAt as { seconds?: number; toDate?: () => Date };
+    const expDate = typeof expAt?.toDate === "function" ? expAt.toDate() : new Date((expAt?.seconds ?? 0) * 1000);
+    if (expDate.getTime() <= nowMs) return;
+
+    const requestsSnap = await tx.get(
+      db.collection(COLL.requests).where("bookingId", "==", groupData.bookingId)
+    );
+    const activeCount = requestsSnap.docs.filter((d) => {
+      const data = d.data() as WaiverRequest & { pendingExpiresAt?: { toDate?: () => Date; seconds?: number } };
+      if (data.status === "signed") return true;
+      if (data.status !== "pending") return false;
+      const pe = data.pendingExpiresAt;
+      if (pe == null) return true;
+      const peDate = typeof pe?.toDate === "function" ? pe.toDate() : new Date((pe?.seconds ?? 0) * 1000);
+      return peDate.getTime() > nowMs;
+    }).length;
+
+    if (activeCount >= groupData.partySize) return;
+
+    const requestId = db.collection(COLL.requests).doc().id;
+    const request: Omit<WaiverRequest, "createdAt"> & {
+      createdAt: import("firebase-admin").firestore.Timestamp;
+      pendingExpiresAt: import("firebase-admin").firestore.Timestamp;
+    } = {
+      bookingId: groupData.bookingId,
+      templateId: groupData.templateId,
+      templateVersion: groupData.templateVersion,
+      status: "pending",
+      signingTokenId: "",
+      signingUrl: "",
+      sent: { initialSentAt: null, lastSentAt: null, reminder1SentAt: null },
+      createdAt: now,
+      pendingExpiresAt: Timestamp.fromDate(expiresAtPending),
+    };
+    tx.set(db.collection(COLL.requests).doc(requestId), request);
+    result = { requestId, request: { id: requestId, ...request } };
+  });
+  return result;
+}
+
+/**
+ * Mark pending requests that have passed their pendingExpiresAt as expired so capacity is not permanently consumed.
+ * Call from a cron or periodically; optionally limit to one booking.
+ */
+export async function expireStalePendingRequests(bookingId?: string): Promise<number> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const now = Timestamp.now();
+  const nowMs = now.toMillis();
+  let query: import("firebase-admin").firestore.Query = db
+    .collection(COLL.requests)
+    .where("status", "==", "pending");
+  if (bookingId) {
+    query = query.where("bookingId", "==", bookingId);
+  }
+  const snap = await query.get();
+  let expired = 0;
+  const batch = db.batch();
+  for (const doc of snap.docs) {
+    const data = doc.data() as WaiverRequest & { pendingExpiresAt?: { toDate?: () => Date; seconds?: number } };
+    const pe = data.pendingExpiresAt;
+    if (pe == null) continue;
+    const peDate = typeof pe?.toDate === "function" ? pe.toDate() : new Date((pe?.seconds ?? 0) * 1000);
+    if (peDate.getTime() <= nowMs) {
+      batch.update(doc.ref, { status: "expired" });
+      expired += 1;
+    }
+  }
+  if (expired > 0) await batch.commit();
+  return expired;
+}
+
 export async function listRequestsByBookingId(
   bookingId: string
 ): Promise<(WaiverRequest & { id: string })[]> {
@@ -315,9 +411,13 @@ export async function updateRequestSigned(
 ): Promise<void> {
   const db = getDb();
   const ref = db.collection(COLL.requests).doc(requestId);
+  // signedPayload may include optional signatureDataUrl; we do not persist it to avoid document size limit
+  const { signedPayload, ...rest } = signed;
+  const payloadForFirestore = { ...signedPayload };
+  delete (payloadForFirestore as Record<string, unknown>).signatureDataUrl;
   await ref.update({
     status: "signed",
-    signed,
+    signed: { ...rest, signedPayload: payloadForFirestore },
     signerName: signed.signedPayload.signerName,
     signerEmail: signed.signedPayload.signerEmail,
     signerPhone: signed.signedPayload.signerPhone,
@@ -399,6 +499,41 @@ export async function markTokenUsed(tokenId: string): Promise<void> {
   await db.collection(COLL.tokens).doc(tokenId).update({ usedAt: Timestamp.now() });
 }
 
+/**
+ * Atomically validate and consume a single-use signing token in one transaction.
+ * Reads the token and linked request, verifies unexpired/unused and pending state,
+ * and writes usedAt in the same transaction so concurrent replays cannot double-use.
+ * Returns the request data if consumed; null if invalid, expired, already used, or not pending.
+ */
+export async function consumeTokenIfValid(tokenId: string): Promise<{
+  requestId: string;
+  request: WaiverRequest & { id: string };
+} | null> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const tokenRef = db.collection(COLL.tokens).doc(tokenId);
+  let result: { requestId: string; request: WaiverRequest & { id: string } } | null = null;
+  await db.runTransaction(async (tx) => {
+    const tokenSnap = await tx.get(tokenRef);
+    if (!tokenSnap.exists) return;
+    const tokenData = tokenSnap.data() as WaiverSigningToken;
+    if (tokenData.usedAt != null) return;
+    const expiresAt = tokenData.expiresAt as { seconds?: number; toDate?: () => Date };
+    const expDate = typeof expiresAt?.toDate === "function" ? expiresAt.toDate() : new Date((expiresAt?.seconds ?? 0) * 1000);
+    if (expDate.getTime() <= Date.now()) return;
+    const requestId = tokenData.waiverRequestId;
+    if (!requestId) return;
+    const requestRef = db.collection(COLL.requests).doc(requestId);
+    const requestSnap = await tx.get(requestRef);
+    if (!requestSnap.exists) return;
+    const requestData = requestSnap.data() as WaiverRequest;
+    if (requestData.status !== "pending") return;
+    tx.update(tokenRef, { usedAt: Timestamp.now() });
+    result = { requestId, request: { id: requestSnap.id, ...requestData } };
+  });
+  return result;
+}
+
 export function isTokenValid(
   tokenDoc: (WaiverSigningToken & { id: string }) | null
 ): boolean {
@@ -442,7 +577,13 @@ export async function setBookingWaiverPointer(
 ): Promise<void> {
   const db = getDb();
   const { FieldValue } = getFirestoreExports();
-  await db.collection(COLL.bookings).doc(bookingId).update({ waiver: pointer, updatedAt: FieldValue.serverTimestamp() });
+  // Never overwrite the primary requestId: it is set once by createWaiverForBooking. Group signers use a separate request; keep the first.
+  const existing = await getBookingWaiverPointer(bookingId);
+  const requestId = existing?.requestId ?? pointer.requestId;
+  await db.collection(COLL.bookings).doc(bookingId).update({
+    waiver: { ...pointer, requestId },
+    updatedAt: FieldValue.serverTimestamp(),
+  });
 }
 
 export async function getRequestByBookingId(

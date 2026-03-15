@@ -49,7 +49,10 @@ export function getMonthRangeWithAdjacent(year: number, month: number): { start:
   return { start: toDateStr(start), end: toDateStr(end) };
 }
 
-/** Day options for a calendar month grid. month is 0-indexed. */
+/**
+ * Day options for a calendar month grid.
+ * @param month - 0-indexed: January = 0, December = 11
+ */
 export function getDaysInMonth(
   year: number,
   month: number

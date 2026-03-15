@@ -9,7 +9,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
-import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib } from "@/lib/booking/booking-date-range";
+import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib, getChicagoToday } from "@/lib/booking/booking-date-range";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
 
@@ -136,7 +136,7 @@ export function ExperienceCalendarSection({
   /** When loading by firestoreSlug, full experience + addons from API (for inline details step when onOpenInModal). */
   const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number } | null>(null);
   const [fetchedAddons, setFetchedAddons] = useState<{ id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[]>([]);
-  const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | undefined>(pricingTypeProp ?? undefined);
+  const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | "shared" | undefined>(pricingTypeProp ?? undefined);
   const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(departureHourProp ?? undefined);
   const [fetchedDepartureMinute, setFetchedDepartureMinute] = useState<number | undefined>(departureMinuteProp ?? undefined);
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
@@ -175,12 +175,14 @@ export function ExperienceCalendarSection({
   const [monthFetchErrors, setMonthFetchErrors] = useState<Record<string, boolean>>({});
   /** Incremented on retry to re-run the slot fetch effect for the current month. */
   const [retryCount, setRetryCount] = useState(0);
+  /** Incremented when user selects a date so we refetch slots and show fresh availability for time/boat list. */
+  const [slotRefetchTrigger, setSlotRefetchTrigger] = useState(0);
   /** Month keys we've already auto-retried once (first response was 0 slots); avoid infinite retry loop. */
   const autoRetriedMonthKeysRef = useRef<Set<string>>(new Set());
   /** Month keys we've already retried once after AbortError (e.g. Strict Mode); avoid infinite loop. */
   const abortRetriedMonthKeysRef = useRef<Set<string>>(new Set());
   /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
-  const [inlineStepIndex, setInlineStepIndex] = useState(() => pricingTypeProp === "ticketed" ? 1 : 0);
+  const [inlineStepIndex, setInlineStepIndex] = useState(() => (pricingTypeProp === "ticketed" ? 1 : 0));
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
   const [inlineBoatsLoading, setInlineBoatsLoading] = useState(false);
   const [selectedBoatInline, setSelectedBoatInline] = useState<BoatOption | null>(null);
@@ -193,6 +195,8 @@ export function ExperienceCalendarSection({
   );
   const [autoSwitchBanner, setAutoSwitchBanner] = useState(false);
   const [fetchedShowSpotsRemaining, setFetchedShowSpotsRemaining] = useState(false);
+  /** When set, show explicit "sold out" feedback for this date (ticketed modal flow, no open slots). */
+  const [soldOutFeedbackDate, setSoldOutFeedbackDate] = useState<string | null>(null);
 
   // On listing page (onOpenInModal): charter-only experiences get bookingMode "charter" so the details step shows deposit vs full. Ticketed get "shared".
   useEffect(() => {
@@ -286,7 +290,7 @@ export function ExperienceCalendarSection({
     return () => controller.abort();
   }, [experienceId]);
 
-  const isTicketed = fetchedPricingType === "ticketed";
+  const isTicketed = fetchedPricingType === "ticketed" || fetchedPricingType === "shared";
 
   const departureTimeLabel = useMemo(() => {
     if (!isTicketed || fetchedDepartureHour == null) return null;
@@ -356,7 +360,7 @@ export function ExperienceCalendarSection({
         if (currentCalendarMonthKeyRef.current === monthKey) setLoading(false);
       });
     return () => controller.abort();
-  }, [experienceId, calendarMonth, retryCount]);
+  }, [experienceId, calendarMonth, retryCount, slotRefetchTrigger]);
 
   // After the visible month loads, prefetch the previous and next months in the background so
   // navigating feels instant. Uses requestIdleCallback when available (Safari 16.4+, Chrome/Firefox),
@@ -582,21 +586,31 @@ export function ExperienceCalendarSection({
     return selectedDateOpenSlots.filter((s) => parseSlotId(s.id)?.durationHours === selectedDurationForModal);
   }, [selectedDateOpenSlots, selectedDurationForModal]);
 
-  /** Unique start times for selected duration (for step-3 style time list). */
+  /** Unique start times for selected duration (step-3 style time list). Only show a time if slots still has at least one open slot for that start/end and duration — avoids showing 7am/1pm when all boats are actually booked (stale open slot removed by merge). */
   const timeOptionsForModal = useMemo(() => {
     const seen = new Set<string>();
     const out: { timeLabel: string; slot: SlotDto }[] = [];
     for (const s of slotsForModalDuration) {
       const t = formatTime(s.startAt);
       if (seen.has(t)) continue;
+      const startMs = new Date(s.startAt).getTime();
+      const endMs = s.endAt ? new Date(s.endAt).getTime() : null;
+      const openCount = slots.filter(
+        (x) =>
+          x.status === "open" &&
+          (selectedDurationForModal == null || parseSlotId(x.id)?.durationHours === selectedDurationForModal) &&
+          new Date(x.startAt).getTime() === startMs &&
+          (endMs === null || new Date(x.endAt).getTime() === endMs)
+      ).length;
+      if (openCount === 0) continue;
       seen.add(t);
       out.push({ timeLabel: t, slot: s });
     }
     out.sort((a, b) => a.slot.startAt.localeCompare(b.slot.startAt));
     return out;
-  }, [slotsForModalDuration]);
+  }, [slotsForModalDuration, slots, selectedDurationForModal]);
 
-  const todayStr = useMemo(() => toDateStr(new Date()), []);
+  const todayStr = getChicagoToday();
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const currentMonthKey = experienceId
@@ -709,12 +723,23 @@ export function ExperienceCalendarSection({
   };
 
   const handleDayClick = (dateStr: string) => {
+    setSoldOutFeedbackDate(null);
     setSelectedDate(dateStr);
+    // Refetch slots for current month so time list and boat list show fresh availability (avoids stale cache showing times that are no longer open).
+    if (experienceId) {
+      bookingCache.invalidateBookingCaches(experienceId);
+      const monthKey = `${experienceId}:${toDateStr(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)).slice(0, 7)}`;
+      fetchedMonthKeysRef.current.delete(monthKey);
+      setSlotRefetchTrigger((t) => t + 1);
+    }
     // Ticketed: fixed departure time — skip time/boat steps and open modal directly
     if (isTicketed && onOpenInModal) {
       const slotData = slotDataByDate.get(dateStr);
       if (bookingMode === "shared" && slotData?.spotsRemaining === 0) {
-        if (slotData.isCharterLocked) return; // fully blocked — do nothing
+        if (slotData.isCharterLocked) {
+          setSoldOutFeedbackDate(dateStr);
+          return; // fully blocked — explicit feedback, no silent no-op
+        }
         // Auto-switch to charter
         setBookingMode("charter");
         setAutoSwitchBanner(true);
@@ -729,6 +754,8 @@ export function ExperienceCalendarSection({
           experienceSlug: experienceSlug ?? undefined,
           pricingType: "ticketed",
         });
+      } else {
+        setSoldOutFeedbackDate(dateStr);
       }
       return;
     }
@@ -868,6 +895,7 @@ export function ExperienceCalendarSection({
     setDirectCheckoutError,
     bookHref,
     isTicketed,
+    pricingType: fetchedPricingType,
     departureTimeLabel,
     ticketsAvailableByDate,
     bookingMode,
@@ -876,6 +904,8 @@ export function ExperienceCalendarSection({
     setAutoSwitchBanner,
     showSpotsRemaining: fetchedShowSpotsRemaining,
     slotDataByDate,
+    soldOutFeedbackDate,
+    setSoldOutFeedbackDate,
   };
   return React.createElement(ExperienceCalendarSectionView, viewProps);
 }

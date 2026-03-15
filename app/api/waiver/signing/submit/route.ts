@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { getStorageBucket, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { submitWaiverSigningSchema } from "@/lib/waiver/schema";
 import {
-  getTokenById,
-  getRequestById,
   getTemplateById,
-  getGroupTokenById,
-  isTokenValid,
-  createRequestForGroupSigner,
+  allocateGroupSignerSlot,
+  consumeTokenIfValid,
   updateRequestSigned,
-  markTokenUsed,
   getBookingWaiverPointer,
   setBookingWaiverPointer,
 } from "@/lib/waiver/firestore";
@@ -18,7 +15,18 @@ import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
 import type { WaiverSignedPayload, WaiverSigned } from "@/lib/waiver/types";
 
+const MAX_SIGNATURE_PAYLOAD_LENGTH = 500_000; // ~500KB for data URL
+
 export async function POST(request: NextRequest) {
+  const rl = await checkRateLimit(getClientKey(request));
+  if (!rl.allowed) {
+    const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -35,39 +43,43 @@ export async function POST(request: NextRequest) {
 
   const { token, groupToken, signer, initials, signatureDataUrl, typedName } = parsed.data;
 
+  const allowedImagePrefixes = ["image/png", "image/jpeg", "image/webp"];
+  const dataUrlPrefix = signatureDataUrl.slice(0, signatureDataUrl.indexOf(";"));
+  const mime = dataUrlPrefix.startsWith("data:") ? dataUrlPrefix.slice(5) : "";
+  if (!allowedImagePrefixes.includes(mime)) {
+    return NextResponse.json(
+      { error: "Signature must be a PNG, JPEG, or WebP image" },
+      { status: 400 }
+    );
+  }
+
+  if (signatureDataUrl.length > MAX_SIGNATURE_PAYLOAD_LENGTH) {
+    return NextResponse.json(
+      { error: "Signature payload too large" },
+      { status: 400 }
+    );
+  }
+
   try {
     let req: (Awaited<ReturnType<typeof getRequestById>>) & { id: string };
     let isGroupSign = false;
 
     if (groupToken) {
-      const groupDoc = await getGroupTokenById(groupToken);
-      if (!groupDoc) {
-        return NextResponse.json({ error: "This group link is invalid or has expired." }, { status: 400 });
+      const allocated = await allocateGroupSignerSlot(groupToken);
+      if (!allocated) {
+        return NextResponse.json(
+          { error: "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached." },
+          { status: 400 }
+        );
       }
-      const requestId = await createRequestForGroupSigner(
-        groupDoc.bookingId,
-        groupDoc.templateId,
-        groupDoc.templateVersion
-      );
-      const created = await getRequestById(requestId);
-      if (!created) {
-        return NextResponse.json({ error: "Failed to create waiver request" }, { status: 500 });
-      }
-      req = created;
+      req = allocated.request;
       isGroupSign = true;
     } else if (token) {
-      const tokenDoc = await getTokenById(token);
-      if (!tokenDoc) {
-        return NextResponse.json({ error: "Invalid or expired link" }, { status: 400 });
-      }
-      if (!isTokenValid(tokenDoc)) {
+      const consumed = await consumeTokenIfValid(token);
+      if (!consumed) {
         return NextResponse.json({ error: "This signing link has expired or already been used" }, { status: 400 });
       }
-      const found = await getRequestById(tokenDoc.waiverRequestId);
-      if (!found || found.status !== "pending") {
-        return NextResponse.json({ error: "Waiver request not found or no longer pending" }, { status: 400 });
-      }
-      req = found;
+      req = consumed.request;
     } else {
       return NextResponse.json({ error: "Token or group link is required" }, { status: 400 });
     }
@@ -127,6 +139,9 @@ export async function POST(request: NextRequest) {
       console.warn("[waiver/submit] PDF generation skipped (waiver still marked signed)", msg);
     }
 
+    const signedPayloadForFirestore: WaiverSignedPayload = { ...signedPayload };
+    delete signedPayloadForFirestore.signatureDataUrl;
+
     const signed: WaiverSigned = {
       signedAt: now,
       ip,
@@ -134,11 +149,11 @@ export async function POST(request: NextRequest) {
       ...(pdfUrl != null && { pdfUrl }),
       ...(pdfStoragePath != null && { pdfStoragePath }),
       contentHash,
-      signedPayload,
+      signedPayload: signedPayloadForFirestore,
     };
 
     await updateRequestSigned(req.id, signed);
-    if (token) await markTokenUsed(token);
+    // Token was already consumed atomically in consumeTokenIfValid when using single-use token path
     // Update booking.waiver.status to "signed" for both primary link and group signers (so admin/customer see signed)
     const existing = await getBookingWaiverPointer(req.bookingId);
     await setBookingWaiverPointer(req.bookingId, {

@@ -1,0 +1,39 @@
+/**
+ * Shared block-overlap check for create-hold and create-checkout-session-direct.
+ * Returns true if any block exists for the experience that overlaps [slotStart, slotEnd],
+ * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
+ */
+export async function hasOverlappingBlock(opts: {
+  db: any;
+  Timestamp: any;
+  experienceId: string;
+  boatId?: string;
+  slotStart: Date;
+  slotEnd: Date;
+  get?: (q: any) => Promise<any>;
+}): Promise<boolean> {
+  const { db, Timestamp, experienceId, slotStart, slotEnd, get } = opts;
+  const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
+  const slotStartMs = slotStart.getTime();
+  const slotEndMs = slotEnd.getTime();
+  if (!Number.isFinite(slotStartMs) || !Number.isFinite(slotEndMs) || slotEndMs <= slotStartMs) return false;
+
+  const query = db
+    .collection("blocks")
+    .where("experienceId", "==", experienceId)
+    .where("startAt", "<", Timestamp.fromDate(slotEnd));
+
+  const getSnap = get ?? ((q: any) => q.get());
+  const snap = await getSnap(query);
+  for (const doc of snap.docs) {
+    const b = doc.data() as { boatId?: string | null; endAt?: { toDate?: () => Date } };
+    const blockBoatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
+    const blockBoatId = blockBoatIdRaw ? blockBoatIdRaw : null;
+    const matchesBoat = boatId ? blockBoatId === boatId || blockBoatId == null : blockBoatId == null;
+    if (!matchesBoat) continue;
+    const endAt = b.endAt?.toDate?.();
+    if (!endAt) continue;
+    if (endAt.getTime() > slotStartMs) return true;
+  }
+  return false;
+}

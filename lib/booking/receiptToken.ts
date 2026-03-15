@@ -9,7 +9,8 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 const ALG = "sha256";
 const SEP = ".";
-const INNER_SEP = "|";
+// Null byte: prohibited in email local parts (RFC 5321) and Firestore doc IDs; avoids | breaking HMAC parsing.
+const INNER_SEP = "\x00";
 const PREFIX = "r"; // receipt, distinct from manage token
 
 function getSecret(): string {

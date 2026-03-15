@@ -1,26 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Booking } from "@/lib/booking/types";
-
-/** Relaxed slotId parse (e.g. "2026-2-20-17-3") so pontoon/legacy bookings still show. */
-function parseSlotIdRelaxed(slotId: string): ReturnType<typeof parseSlotId> {
-  const parsed = parseSlotId(slotId);
-  if (parsed) return parsed;
-  const cleaned = slotId.replace(/\s/g, "");
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
-    return parseSlotId(normalized);
-  }
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
-    return parseSlotId(normalized);
-  }
-  return null;
-}
 
 /** GET: unified calendar events (bookings + blocks) for admin week/timeline view.
  * Query: experienceId, from (YYYY-MM-DD), to (YYYY-MM-DD), boatId (optional).
@@ -49,24 +32,62 @@ export async function GET(request: NextRequest) {
     const fromStr = fromParam.slice(0, 10);
     const toStr = toParam.slice(0, 10);
 
-    // Build experienceId list: doc id + slug variants (bookings may store experienceId as slug, e.g. pontoon / lake-austin-pontoon)
-    const experienceIdsToQuery: string[] = [experienceId];
+    // Variant list for bounded queries (mirrors slots API).
     const expSnap = await db.collection("experiences").doc(experienceId).get();
-    if (expSnap.exists) {
-      const expData = expSnap.data() as { slug?: string } | undefined;
-      const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
-      if (experienceSlug && experienceSlug !== experienceId) experienceIdsToQuery.push(experienceSlug);
-      if (experienceSlug === "pontoon" || experienceSlug === "lake-austin-pontoon") {
-        if (!experienceIdsToQuery.includes("pontoon")) experienceIdsToQuery.push("pontoon");
-        if (!experienceIdsToQuery.includes("lake-austin-pontoon")) experienceIdsToQuery.push("lake-austin-pontoon");
+    const experienceSlug = expSnap.exists && typeof (expSnap.data() as { slug?: string })?.slug === "string"
+      ? (expSnap.data() as { slug: string }).slug.trim()
+      : "";
+    const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
+
+    const SLOT_TAKEN_STATUSES = new Set(["paid", "deposit_paid", "final_due", "final_paid", "final_processing"]);
+
+    // Bounded per-variant queries with startDateStr range (mirrors slots API).
+    const bookingSnaps = await Promise.all(
+      variantIds.map((variantId) =>
+        db
+          .collection("bookings")
+          .where("experienceId", "==", variantId)
+          .where("startDateStr", ">=", fromStr)
+          .where("startDateStr", "<=", toStr)
+          .get()
+      )
+    );
+    const seenBookingIds = new Set<string>();
+    const bookingDocs: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+    for (const snap of bookingSnaps) {
+      for (const doc of snap.docs) {
+        if (seenBookingIds.has(doc.id)) continue;
+        seenBookingIds.add(doc.id);
+        bookingDocs.push(doc);
       }
     }
-    const SLOT_TAKEN_STATUSES = new Set(["paid", "deposit_paid", "final_due", "final_paid", "final_processing"]);
-    // Single "in" query — filter status in memory to avoid composite index requirement
-    const bookingsSnap = await db
-      .collection("bookings")
-      .where("experienceId", "in", experienceIdsToQuery.slice(0, 10))
-      .get();
+
+    // Legacy fallback: bookings that still lack startDateStr (gated by DISABLE_LEGACY_BOOKING_FALLBACK).
+    const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
+    if (legacyFallbackEnabled && variantIds.length > 0) {
+      const legacySnaps = await Promise.all(
+        variantIds.map((variantId) =>
+          db
+            .collection("bookings")
+            .where("experienceId", "==", variantId)
+            .limit(100)
+            .get()
+        )
+      );
+      for (const snap of legacySnaps) {
+        for (const doc of snap.docs) {
+          if (seenBookingIds.has(doc.id)) continue;
+          const d = doc.data() as { startDateStr?: string };
+          if (d.startDateStr) continue; // already covered by bounded query
+          const parsed = parseSlotIdRelaxed((d as { slotId?: string }).slotId ?? "");
+          const dateStr = parsed?.dateStr ?? (d.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(d.startDateStr) ? d.startDateStr : null);
+          if (!dateStr || dateStr < fromStr || dateStr > toStr) continue;
+          seenBookingIds.add(doc.id);
+          bookingDocs.push(doc);
+        }
+      }
+    }
+
     const blocksSnap = await db
       .collection("blocks")
       .where("experienceId", "==", experienceId)
@@ -75,7 +96,7 @@ export async function GET(request: NextRequest) {
       .get();
 
     const boatIds = new Set<string>();
-    bookingsSnap.docs.forEach((d) => {
+    bookingDocs.forEach((d) => {
       const b = d.data() as Booking;
       if (b.boatId) boatIds.add(b.boatId);
     });
@@ -106,12 +127,12 @@ export async function GET(request: NextRequest) {
     };
     const events: CalendarEvent[] = [];
 
-    bookingsSnap.docs.forEach((doc) => {
+    bookingDocs.forEach((doc) => {
       const b = doc.data() as Booking & { startDateStr?: string };
       if (!SLOT_TAKEN_STATUSES.has(b.status as string)) return;
       const parsed = parseSlotIdRelaxed(b.slotId ?? "");
       const dateStr = parsed?.dateStr ?? (b.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(b.startDateStr) ? b.startDateStr : null);
-      if (!dateStr || dateStr < fromStr || dateStr > toStr) return;
+      if (!dateStr) return;
       if (boatIdParam && b.boatId !== boatIdParam) return;
       let start: Date;
       let end: Date;

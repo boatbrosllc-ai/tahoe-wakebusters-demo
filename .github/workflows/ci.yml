@@ -27,3 +27,24 @@ jobs:
 
       - name: Booking tests
         run: npm run test:booking
+
+      - name: Build
+        run: npm run build
+
+      - name: Check env (required variable names)
+        run: node scripts/check-production-env.js
+        env:
+          NODE_ENV: production
+          STRIPE_SECRET_KEY: sk_test_placeholder
+          STRIPE_WEBHOOK_SECRET: whsec_placeholder
+          BREVO_API_KEY: placeholder
+          APP_BASE_URL: https://placeholder.example.com
+          NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_placeholder
+          FIREBASE_PROJECT_ID: placeholder
+          FIREBASE_CLIENT_EMAIL: placeholder@placeholder.iam.gserviceaccount.com
+          FIREBASE_PRIVATE_KEY: placeholder
+          DISABLE_LEGACY_BOOKING_FALLBACK: "true"
+          DISABLE_LEGACY_HOLDS_FALLBACK: "true"
+          RATE_LIMIT_REDIS_REST_URL: https://placeholder.upstash.io
+          RATE_LIMIT_REDIS_REST_TOKEN: placeholder
+          ADMIN_EDGE_SECRET: placeholder

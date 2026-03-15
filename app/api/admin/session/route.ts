@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSessionCookie, getAllowedAdminEmails, getAdminSessionCookieName, verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
+import { createEdgeSessionCookie } from "@/lib/admin-edge-session-create";
+import { ADMIN_EDGE_COOKIE_NAME } from "@/lib/admin-edge-session-verify";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 
 const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
@@ -63,6 +65,17 @@ export async function POST(request: NextRequest) {
       maxAge: COOKIE_MAX_AGE,
       path: "/",
     });
+    const edgeSecret = process.env.ADMIN_EDGE_SECRET?.trim();
+    if (edgeSecret) {
+      const edgeValue = createEdgeSessionCookie(email, edgeSecret, COOKIE_MAX_AGE);
+      res.cookies.set(ADMIN_EDGE_COOKIE_NAME, edgeValue, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: COOKIE_MAX_AGE,
+        path: "/",
+      });
+    }
     return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -77,8 +90,9 @@ export async function POST(request: NextRequest) {
     } else if (lower.includes("expired") || lower.includes("invalid")) {
       hint = "Token rejected. Ensure FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match in Netlify, then redeploy and try again.";
     } else {
-      hint = "Check Netlify function logs for [admin/session] 401 cause to see the exact error.";
+      hint = "Check your deployment logs (e.g. Netlify Functions) for [admin/session] to see the exact error.";
     }
+    console.error("[admin/session] 401:", message, "\nHint:", hint);
     return NextResponse.json({ error: "Invalid or expired token", hint }, { status: 401 });
   }
 }

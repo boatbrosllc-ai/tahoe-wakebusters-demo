@@ -1,13 +1,24 @@
 /**
  * POST /api/booking/manage/attach-payment-method
  * Body: { token, paymentMethodId }. Attach PM to customer, set as default, update booking card display.
+ * Token may be sent in body or Authorization: Bearer header.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { verifyManageToken } from "@/lib/booking/manageToken";
+import { checkRateLimit, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
 import type { Booking } from "@/lib/booking/types";
+
+function getTokenFromRequest(request: NextRequest): string | null {
+  const auth = request.headers.get("authorization");
+  if (auth?.startsWith("Bearer ")) {
+    const t = auth.slice(7).trim();
+    return t || null;
+  }
+  return null;
+}
 
 function parseBody(body: unknown): { token: string; paymentMethodId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -20,17 +31,45 @@ function parseBody(body: unknown): { token: string; paymentMethodId: string } | 
 
 export async function POST(request: NextRequest) {
   try {
+    const rl = await checkRateLimit(getClientKey(request));
+    if (!rl.allowed) {
+      if (rl.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
+      );
+    }
+    let token = getTokenFromRequest(request);
     const body = await request.json().catch(() => null);
     const input = parseBody(body);
-    if (!input) {
+    if (!token && input) token = input.token;
+    if (!token || !input?.paymentMethodId) {
       return NextResponse.json({ error: "Missing token or paymentMethodId" }, { status: 400 });
     }
-    const payload = verifyManageToken(input.token);
+    const payload = verifyManageToken(token);
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
+    const rlManage = await checkRateLimit(getManageRateLimitKey(payload.bookingId));
+    if (!rlManage.allowed) {
+      if (rlManage.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429, headers: rlManage.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rlManage.retryAfterMs / 1000)) } : undefined }
+      );
+    }
     const db = getDb();
-    const { Timestamp } = getFirestoreExports();
+    const { Timestamp, FieldValue } = getFirestoreExports();
     const bookingSnap = await db.collection("bookings").doc(payload.bookingId).get();
     if (!bookingSnap.exists) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
@@ -73,6 +112,8 @@ export async function POST(request: NextRequest) {
     await db.collection("bookings").doc(payload.bookingId).update({
       "stripe.paymentMethodId": input.paymentMethodId,
       ...(cardDisplay && { card: cardDisplay }),
+      updatedAt: FieldValue.serverTimestamp(),
+      "stripe.cardUpdatedAt": FieldValue.serverTimestamp(),
     });
     return NextResponse.json({ ok: true, card: cardDisplay });
   } catch (err) {

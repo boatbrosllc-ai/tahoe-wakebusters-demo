@@ -11,11 +11,12 @@ import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firesto
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getCleanupHoldSlotAction } from "@/lib/booking/cleanup-holds-logic";
 
 const PAGE_SIZE = 100;
 const BATCH_SIZE = 10;
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
@@ -57,12 +58,20 @@ export async function GET(request: NextRequest) {
             return;
           }
           const slot = slotSnap.data();
-          if (slot?.holdId !== doc.id) return;
-          tx.update(slotRef, {
-            status: "open",
-            holdId: FieldValue.delete(),
-            updatedAt: FieldValue.serverTimestamp(),
-          });
+          const action = getCleanupHoldSlotAction(slot?.holdId, doc.id);
+          if (action === "release_slot_and_expire") {
+            tx.update(slotRef, {
+              status: "open",
+              holdId: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          } else {
+            // expire_only: slot was reassigned to another hold; still expire this hold and release shared capacity.
+            if (isSharedHold && experienceId && dateStr) {
+              const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+              await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+            }
+          }
           tx.update(doc.ref, { status: "expired" });
           didUpdate = true;
         });

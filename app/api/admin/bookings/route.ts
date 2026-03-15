@@ -2,38 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import type { Booking, AddonSelection, Slot } from "@/lib/booking/types";
+import type { Booking, AddonSelection, Slot, Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
-import { parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
   if (typeof ts.seconds === "number") return new Date(ts.seconds * 1000).toISOString();
-  return null;
-}
-
-/** Parse slotId (handles "2026-2-27-11-6" and "2026-02-27-11-6") for trip date and times. */
-function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; startMinute: number; durationHours: number } | null {
-  if (!slotId || typeof slotId !== "string") return null;
-  const trimmed = slotId.trim();
-  if (!trimmed) return null;
-  let parsed = parseSlotId(trimmed);
-  if (parsed) return parsed;
-  const cleaned = trimmed.replace(/\s/g, "");
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
-    return parseSlotId(normalized);
-  }
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
-    return parseSlotId(normalized);
-  }
   return null;
 }
 
@@ -92,16 +72,30 @@ export async function GET(request: NextRequest) {
       if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
     }
 
-    if (statusFilter) query = query.where("status", "==", statusFilter);
-    if (experienceIdParam) query = query.where("experienceId", "==", experienceIdParam);
+    // Do not add status or experienceId to Firestore query (would require composite indexes).
+    // Apply them in JS after fetch; max 200 docs is acceptable for admin.
+    // When experienceId filter is set, use variant set (doc id + slug) so legacy slug variants are included.
+    let variantSet: Set<string> | null = null;
+    if (experienceIdParam) {
+      const expSnapForFilter = await db.collection("experiences").doc(experienceIdParam).get();
+      const slug = (expSnapForFilter.exists && (expSnapForFilter.data() as { slug?: string })?.slug)
+        ? String((expSnapForFilter.data() as { slug: string }).slug).trim()
+        : "";
+      variantSet = new Set(getExperienceIdVariants(experienceIdParam, slug));
+    }
 
     if (cursorParam) {
       const cursorDoc = await db.collection("bookings").doc(cursorParam).get();
       if (cursorDoc.exists) query = query.startAfter(cursorDoc);
     }
 
-    const snap = await query.limit(limit + 1).get();
+    // Fetch more than limit so that after JS filtering we may still have enough for one page.
+    const fetchSize = Math.min(limit * 5, 500);
+    const snap = await query.limit(fetchSize).get();
     let docs = snap.docs;
+
+    if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
+    if (variantSet) docs = docs.filter((d) => variantSet!.has((d.data() as Booking).experienceId ?? ""));
 
     let nextCursor: string | null = null;
     if (docs.length > limit) {
@@ -152,7 +146,7 @@ export async function GET(request: NextRequest) {
     let list = docs.map((d) => {
       const b = d.data() as Booking & { startDateStr?: string };
       const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-      const parsed = parseSlotIdForDisplay(b.slotId);
+      const parsed = parseSlotIdRelaxed(b.slotId ?? "");
       const rawTripDate = b.startDateStr ?? parsed?.dateStr ?? null;
       const startDate = normalizeTripDateStr(rawTripDate);
       let startTime: string | null = null;
@@ -281,7 +275,7 @@ export async function POST(request: NextRequest) {
 
     const expSnap = await db.collection("experiences").doc(experienceId).get();
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
-    const exp = expSnap.data() as { pricingType?: string; slug?: string; maxCapacity?: number };
+    const exp = expSnap.data() as Experience;
 
     if (boatId) {
       const boatSnap = await db.collection("boats").doc(boatId).get();
@@ -291,36 +285,9 @@ export async function POST(request: NextRequest) {
     }
 
     const partySizeNum = Number.isInteger(partySize) && partySize > 0 ? partySize : 1;
+    let inventoryRef: ReturnType<typeof getDepartureInventoryRef> | null = null;
     if (exp.pricingType === "ticketed") {
-      const slugVariants = getExperienceIdVariants(experienceId, exp.slug ?? "");
-      const soldSnaps = await Promise.all(
-        slugVariants.map((v) =>
-          db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate).get()
-        )
-      );
-      const seen = new Set<string>();
-      let sold = 0;
-      for (const snap of soldSnaps) {
-        for (const doc of snap.docs) {
-          if (seen.has(doc.id)) continue;
-          seen.add(doc.id);
-          const b = doc.data() as { partySize?: number; status?: string };
-          if (typeof b.partySize !== "number") continue;
-          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-          sold += b.partySize;
-        }
-      }
-      const inventoryRef = getDepartureInventoryRef(db, experienceId, tripDate);
-      const invSnap = await inventoryRef.get();
-      const reservedSeats = invSnap.exists ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
-      const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
-      const available = Math.max(0, capacity - sold - reservedSeats);
-      if (partySizeNum > available) {
-        return NextResponse.json(
-          { error: available === 0 ? "This date is sold out." : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.` },
-          { status: 409 }
-        );
-      }
+      inventoryRef = getDepartureInventoryRef(db, experienceId, tripDate);
     }
 
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
@@ -354,6 +321,7 @@ export async function POST(request: NextRequest) {
       pricing,
       status: "paid",
       stripe: {},
+      ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "shared" as const }),
       ...(hasBilling && billingAddress && { billingAddress }),
       ...(hasCard && cardDisplay && { card: cardDisplay }),
       createdAt: Timestamp.now(),
@@ -372,6 +340,32 @@ export async function POST(request: NextRequest) {
     const now = new Date();
 
     await db.runTransaction(async (tx) => {
+      // Ticketed capacity check inside transaction to prevent over-selling under concurrency.
+      if (exp.pricingType === "ticketed" && inventoryRef !== null) {
+        const slugVariants = getExperienceIdVariants(experienceId, exp.slug ?? "");
+        const soldSnaps = await Promise.all(
+          slugVariants.map((v) =>
+            tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate))
+          )
+        );
+        const seen = new Set<string>();
+        let sold = 0;
+        for (const snap of soldSnaps) {
+          for (const doc of snap.docs) {
+            if (seen.has(doc.id)) continue;
+            seen.add(doc.id);
+            const b = doc.data() as { partySize?: number; status?: string };
+            if (typeof b.partySize !== "number") continue;
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            sold += b.partySize;
+          }
+        }
+        const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
+        await reserveCapacity(tx, inventoryRef, capacity, partySizeNum, sold);
+        // For direct manual booking the new booking is "sold", not a hold; release the seats we just claimed so reservedSeats stays correct.
+        await releaseCapacity(tx, inventoryRef, partySizeNum);
+      }
+
       const slotsRef = boatId
         ? db.collection("boats").doc(boatId).collection("slots")
         : db.collection("experiences").doc(experienceId).collection("slots");
@@ -448,6 +442,7 @@ export async function POST(request: NextRequest) {
         endAt: Timestamp.fromDate(slotEnd),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
+      // Do not increment reservedSeats for ticketed: the new booking is already counted in sold queries from the bookings collection.
     });
     try {
       const { createWaiverForBooking, sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
@@ -461,6 +456,31 @@ export async function POST(request: NextRequest) {
       }
     } catch (waiverErr) {
       console.error("[admin/bookings] waiver creation failed", waiverErr);
+    }
+    try {
+      const { sendBookingConfirmationEmail, sendBookingConfirmationCopyToBusiness } = await import("@/lib/booking/brevo");
+      const { formatSlotDateTime } = await import("@/lib/booking/format-booking-datetime");
+      const locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
+      const cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
+      const experienceName = exp.title ?? experienceId;
+      const emailContext = {
+        boatName: experienceName,
+        startAt: formatSlotDateTime({ toDate: () => slotStart }),
+        endAt: formatSlotDateTime({ toDate: () => slotEnd }),
+        durationHours: durationFromRate,
+        locationText,
+        cancellationPolicyText,
+        isDeposit: false,
+        manageLink: undefined,
+        waiverSigningUrl: undefined,
+        waiverGroupSigningUrl: undefined,
+        pricingType: exp.pricingType,
+      };
+      const bookingForEmail = { ...booking, id: bookingId } as Booking;
+      await sendBookingConfirmationEmail(bookingForEmail, emailContext);
+      await sendBookingConfirmationCopyToBusiness(bookingForEmail, emailContext);
+    } catch (emailErr) {
+      console.error("[admin/bookings] confirmation email failed", emailErr);
     }
     return NextResponse.json({ id: bookingId });
   } catch (err) {

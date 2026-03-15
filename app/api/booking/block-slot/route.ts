@@ -2,7 +2,7 @@
  * Block a single slot (admin). Creates a block doc (Google Calendar–style); slots API respects blocks.
  * POST body: { experienceId, slotId, boatId?: string }
  * When boatId is provided (required for listing experiences), block applies to that boat only.
- * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
+ * Auth: Bearer BLOCK_SECRET, or valid admin session cookie.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,7 +11,7 @@ import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
-  const secret = process.env.BLOCK_SECRET ?? process.env.SEED_SECRET;
+  const secret = process.env.BLOCK_SECRET;
   if (secret && request.headers.get("authorization") === `Bearer ${secret}`) return true;
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   return unauthorized === null;

@@ -10,6 +10,34 @@ import { cn } from "@/lib/utils";
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
 
+const MANAGE_RETURN_PATH = "/booking/manage";
+const MANAGE_BOOKING_TOKEN_KEY = "manage-booking-token";
+
+function getStoredManageToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return sessionStorage.getItem(MANAGE_BOOKING_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredManageToken(token: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (token == null) sessionStorage.removeItem(MANAGE_BOOKING_TOKEN_KEY);
+    else sessionStorage.setItem(MANAGE_BOOKING_TOKEN_KEY, token);
+  } catch {
+    /* ignore */
+  }
+}
+
+function getManageReturnUrl(token?: string): string {
+  if (typeof window === "undefined") return "";
+  const base = `${window.location.origin}${MANAGE_RETURN_PATH}`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+}
+
 type ManageData = {
   bookingId: string;
   customerName: string;
@@ -46,10 +74,11 @@ function UpdateCardForm({
     setError(null);
     setLoading(true);
     try {
+      setStoredManageToken(token);
       const result = (await stripe.confirmSetup({
         elements,
         clientSecret,
-        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        confirmParams: { return_url: getManageReturnUrl() },
       })) as { error?: { message?: string }; setupIntent?: { payment_method?: string | { id?: string } } };
       if (result.error) {
         setError(result.error.message ?? "Setup failed");
@@ -134,10 +163,11 @@ function PayRemainingForm({
     setError(null);
     setLoading(true);
     try {
+      setStoredManageToken(token);
       const { error: confirmError } = await stripe.confirmPayment({
         elements,
         clientSecret,
-        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        confirmParams: { return_url: getManageReturnUrl() },
       });
       if (confirmError) {
         setError(confirmError.message ?? "Payment failed");
@@ -182,9 +212,9 @@ function PayRemainingForm({
 
 export function ManageBookingClient() {
   const searchParams = useSearchParams();
-  const token = searchParams.get("token");
+  const [token, setToken] = useState<string | null>(null);
   const [data, setData] = useState<ManageData | null>(null);
-  const [loading, setLoading] = useState(!!token);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null);
   const [payClientSecret, setPayClientSecret] = useState<string | null>(null);
@@ -192,12 +222,37 @@ export function ManageBookingClient() {
   const [payLoading, setPayLoading] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
+  const [payProcessingMessage, setPayProcessingMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const urlToken = searchParams.get("token");
+    if (urlToken) {
+      setToken(urlToken);
+      setStoredManageToken(urlToken);
+      if (typeof window !== "undefined") {
+        window.history.replaceState({}, "", MANAGE_RETURN_PATH);
+      }
+      setLoading(true);
+      return;
+    }
+    const stored = getStoredManageToken();
+    if (stored) {
+      setToken(stored);
+      setLoading(true);
+      return;
+    }
+    if (!token) setLoading(false);
+  }, [searchParams]);
 
   const fetchBooking = useCallback(() => {
     if (!token) return;
     setLoading(true);
     setError(null);
-    fetch(`/api/booking/manage/get?token=${encodeURIComponent(token)}`)
+    fetch("/api/booking/manage/get", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
       .then(async (res) => {
         let body: Record<string, unknown> = {};
         try {
@@ -206,12 +261,14 @@ export function ManageBookingClient() {
         if (!res.ok) {
           setError((body.error as string) ?? `Server error ${res.status}`);
           setData(null);
+          setStoredManageToken(null);
           return;
         }
         const d = body as { error?: string } & ManageData;
         if (d.error) {
           setError(d.error);
           setData(null);
+          setStoredManageToken(null);
         } else {
           setData(d as ManageData);
         }
@@ -219,13 +276,14 @@ export function ManageBookingClient() {
       .catch(() => {
         setError("Failed to load booking");
         setData(null);
+        setStoredManageToken(null);
       })
       .finally(() => setLoading(false));
   }, [token]);
 
   useEffect(() => {
-    fetchBooking();
-  }, [fetchBooking]);
+    if (token) fetchBooking();
+  }, [token, fetchBooking]);
 
   if (!token) {
     return (
@@ -233,7 +291,7 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Invalid link</h1>
           <p className="text-brand-muted mb-6">This manage-booking link is missing or invalid.</p>
-          <Link href="/booking" className="text-brand-primary font-medium hover:underline">
+          <Link href="/booking" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
             Back to booking
           </Link>
         </div>
@@ -255,7 +313,7 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Unable to load booking</h1>
           <p className="text-brand-muted mb-6">{error ?? "Invalid or expired link."}</p>
-          <Link href="/booking" className="text-brand-primary font-medium hover:underline">
+          <Link href="/booking" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
             Back to booking
           </Link>
         </div>
@@ -364,23 +422,28 @@ export function ManageBookingClient() {
                   type="button"
                   onClick={async () => {
                     setPayError(null);
+                    setPayProcessingMessage(null);
                     setPayLoading(true);
                     try {
-                    const res = await fetch("/api/booking/manage/pay-remaining", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ token }),
-                    });
-                    if (!res.ok) {
-                      let errBody: Record<string, unknown> = {};
-                      try {
-                        errBody = await res.json();
-                      } catch {}
-                      setPayError((errBody.error as string) ?? `Server error ${res.status}`);
-                      return;
-                    }
-                    const d = await res.json();
-                    setPayClientSecret((d as { clientSecret: string }).clientSecret);
+                      const res = await fetch("/api/booking/manage/pay-remaining", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token }),
+                      });
+                      const d = await res.json().catch(() => ({})) as { clientSecret?: string; status?: string; error?: string; message?: string };
+                      if (!res.ok) {
+                        setPayError(d.error ?? `Server error ${res.status}`);
+                        return;
+                      }
+                      if (d.status === "processing") {
+                        setPayProcessingMessage(d.message ?? "Your payment is still processing. Please wait a moment and refresh the page to check status.");
+                        return;
+                      }
+                      if (d.clientSecret) {
+                        setPayClientSecret(d.clientSecret);
+                      } else {
+                        setPayError(d.error ?? "No payment form available");
+                      }
                     } catch (e) {
                       setPayError(e instanceof Error ? e.message : "Failed");
                     } finally {
@@ -395,6 +458,18 @@ export function ManageBookingClient() {
                 >
                   {payLoading ? "Loading…" : `Pay remaining $${(data.finalCents / 100).toFixed(2)}`}
                 </button>
+                {payProcessingMessage && (
+                  <p className="mt-2 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
+                    {payProcessingMessage}
+                    <button
+                      type="button"
+                      onClick={() => { setPayProcessingMessage(null); fetchBooking(); }}
+                      className="ml-2 font-medium text-amber-800 hover:underline"
+                    >
+                      Refresh status
+                    </button>
+                  </p>
+                )}
                 {payError && <p className="mt-2 text-sm text-red-600">{payError}</p>}
               </div>
             )}
@@ -402,7 +477,7 @@ export function ManageBookingClient() {
         )}
 
         <p className="mt-8 text-center">
-          <Link href="/" className="text-brand-primary font-medium hover:underline">
+          <Link href="/" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
             Back to home
           </Link>
         </p>

@@ -2,15 +2,16 @@
  * Block or unblock a full day (admin). Uses blocks collection (Google Calendar–style).
  * POST body: { experienceId, date: "YYYY-MM-DD", action?: "block" | "unblock", boatIds?: string[] }
  * Block: creates one block doc per boat for that day (00:00–23:59:59). Unblock: deletes those blocks.
- * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
+ * Auth: Bearer BLOCK_SECRET, or valid admin session cookie.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
-  const secret = process.env.BLOCK_SECRET ?? process.env.SEED_SECRET;
+  const secret = process.env.BLOCK_SECRET;
   if (secret && request.headers.get("authorization") === `Bearer ${secret}`) return true;
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   return unauthorized === null;
@@ -59,8 +60,9 @@ export async function POST(request: NextRequest) {
       ? bodyBoatIds.filter((id) => allBoatIds.includes(id))
       : allBoatIds;
 
-    const dayStart = new Date(dateStr + "T00:00:00");
-    const dayEnd = new Date(dateStr + "T23:59:59.999");
+    // Central-timezone-aware day boundaries so 7 AM–7 PM Central slots on dateStr are inside the block.
+    const { start: dayStart } = getSlotStartEnd(dateStr, 0, 0, 0);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     if (action === "unblock") {
       const blocksSnap = await db
@@ -85,8 +87,10 @@ export async function POST(request: NextRequest) {
     }
 
     let created = 0;
+    const batch = db.batch();
     for (const boatId of boatIds) {
-      await db.collection("blocks").add({
+      const blockRef = db.collection("blocks").doc();
+      batch.set(blockRef, {
         experienceId,
         boatId,
         startAt: Timestamp.fromDate(dayStart),
@@ -98,6 +102,7 @@ export async function POST(request: NextRequest) {
       });
       created++;
     }
+    await batch.commit();
     return NextResponse.json({ ok: true, date: dateStr, blocksCreated: created });
   } catch (err) {
     console.error("[block-date]", err);

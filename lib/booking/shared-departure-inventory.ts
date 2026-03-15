@@ -63,6 +63,51 @@ export async function releaseCapacity(
 }
 
 /**
+ * Apply a net change to reserved seats using pre-read state (read-before-write).
+ * Use this when resizing a hold: read reservedSeats once, then apply delta in a single write.
+ * For delta > 0 validates that sold + currentReserved + delta <= capacity.
+ * For delta < 0 newReserved = max(0, currentReserved + delta).
+ */
+export function applyNetCapacityChange(
+  tx: Transaction,
+  inventoryRef: DocumentReference,
+  capacity: number,
+  sold: number,
+  currentReserved: number,
+  delta: number
+): void {
+  const { FieldValue } = getFirestoreExports();
+  const newReserved = Math.max(0, currentReserved + delta);
+  if (delta > 0 && sold + newReserved > capacity) {
+    const available = Math.max(0, capacity - sold - currentReserved);
+    throw new Error(
+      available === 0
+        ? "This date is sold out."
+        : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
+    );
+  }
+  tx.set(
+    inventoryRef,
+    {
+      reservedSeats: newReserved,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+/**
+ * Read current reserved seats from inventory (use inside transaction before applyNetCapacityChange).
+ */
+export async function getReservedSeats(
+  tx: Transaction,
+  inventoryRef: DocumentReference
+): Promise<number> {
+  const snap = await tx.get(inventoryRef);
+  return snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
+}
+
+/**
  * Re-validate capacity before finalizing a shared booking: ensure sold + reservedSeats <= capacity
  * and reservedSeats >= holdPartySize, then decrement reservedSeats by holdPartySize.
  * Caller must compute sold from bookings in the same transaction.

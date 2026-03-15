@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { convertHoldToBooking, type ConvertHoldInput, type ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 import type { BookingCardDisplay } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
@@ -23,6 +24,19 @@ function parseBody(body: unknown): { holdId: string; paymentIntentId: string } |
 
 export async function POST(request: NextRequest) {
   try {
+    const rl = await checkRateLimit(getClientKey(request));
+    if (!rl.allowed) {
+      if (rl.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
+      );
+    }
     bookingLog("complete-after-payment", "request started");
     const body = await request.json();
     const input = parseBody(body);
@@ -131,7 +145,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, alreadyConverted: true });
     }
     bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId: input.holdId });
-    return NextResponse.json({ success: true, bookingId: result.bookingId });
+    return NextResponse.json({
+      success: true,
+      bookingId: result.bookingId,
+      ...(result.discountLimitExceeded && { discountLimitExceeded: true }),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
     if (message === "Hold has expired") {
@@ -139,6 +157,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Your booking hold has expired. Please start a new booking." },
         { status: 409 }
+      );
+    }
+    if (message.startsWith("DISCOUNT_LIMIT_REACHED:")) {
+      const userMessage = message.slice("DISCOUNT_LIMIT_REACHED:".length).trim();
+      return NextResponse.json(
+        { error: userMessage },
+        { status: 400 }
       );
     }
     bookingError("complete-after-payment", "complete after payment failed", err, { message });

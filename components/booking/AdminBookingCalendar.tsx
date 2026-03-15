@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { getChicagoToday } from "@/lib/booking/booking-date-range";
 
 export type AdminBookingCalendarItem = {
   id: string;
@@ -24,8 +26,9 @@ const MONTH_NAMES = [
 
 const DAY_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/** Date key in America/Chicago so calendar cells and booking grouping match the business timezone. */
+function toDateStrCentral(d: Date): string {
+  return isoToChicagoDateStr(d.toISOString());
 }
 
 export function AdminBookingCalendar({
@@ -48,12 +51,12 @@ export function AdminBookingCalendar({
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  const todayStr = useMemo(() => toDateStr(new Date()), []);
+  const todayStr = useMemo(() => getChicagoToday(), []);
 
   const bookingsByDate = useMemo(() => {
     const map = new Map<string, AdminBookingCalendarItem[]>();
     for (const b of bookings) {
-      const dateStr = b.startDate ?? (b.createdAt ? b.createdAt.slice(0, 10) : null);
+      const dateStr = b.startDate ?? (b.createdAt ? isoToChicagoDateStr(b.createdAt) : null);
       if (!dateStr) continue;
       if (!map.has(dateStr)) map.set(dateStr, []);
       map.get(dateStr)!.push(b);
@@ -92,10 +95,10 @@ export function AdminBookingCalendar({
     for (let i = 0; i < firstDay; i++) {
       const d = new Date(year, month, 1 - (firstDay - i));
       cells.push({
-        dateStr: toDateStr(d),
+        dateStr: toDateStrCentral(d),
         day: d.getDate(),
         isCurrentMonth: false,
-        isToday: toDateStr(d) === todayStr,
+        isToday: toDateStrCentral(d) === todayStr,
       });
     }
     for (let day = 1; day <= daysInMonth; day++) {
@@ -111,10 +114,10 @@ export function AdminBookingCalendar({
     for (let i = 1; i <= remaining; i++) {
       const d = new Date(year, month + 1, i);
       cells.push({
-        dateStr: toDateStr(d),
+        dateStr: toDateStrCentral(d),
         day: d.getDate(),
         isCurrentMonth: false,
-        isToday: toDateStr(d) === todayStr,
+        isToday: toDateStrCentral(d) === todayStr,
       });
     }
     return cells;

@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId, isAllowedSlotTime } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, toDateStrOnly, isSeasonalAllowed } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience } from "@/lib/booking/experience-aliases";
-import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
+import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
+import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
-import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
+import { bookingLog, bookingWarn, bookingError, generateIncidentCode } from "@/lib/booking/debug";
 
 const HOLD_EXPIRY_MINUTES = 10;
 
@@ -25,16 +27,27 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   const experienceId = typeof o.experienceId === "string" ? o.experienceId : null;
   const slotId = typeof o.slotId === "string" ? o.slotId : null;
   const rateId = typeof o.rateId === "string" ? o.rateId : null;
-  const partySize = typeof o.partySize === "number" ? o.partySize : null;
-  const petsCount = typeof o.petsCount === "number" ? o.petsCount : null;
+  const partySizeRaw = o.partySize;
+  const petsCountRaw = o.petsCount;
+  const partySize =
+    typeof partySizeRaw === "number" && Number.isInteger(partySizeRaw) && partySizeRaw >= 1 ? partySizeRaw : null;
+  let petsCount: number = 0;
+  if (petsCountRaw !== undefined && petsCountRaw !== null) {
+    if (typeof petsCountRaw === "number" && Number.isInteger(petsCountRaw) && petsCountRaw >= 0) {
+      petsCount = petsCountRaw;
+    } else {
+      petsCount = NaN; // mark invalid
+    }
+  }
   const marketingOptIn = typeof o.marketingOptIn === "boolean" ? o.marketingOptIn : false;
-  const tipCents = typeof o.tipCents === "number" && o.tipCents >= 0 ? o.tipCents : undefined;
+  const tipCents = typeof o.tipCents === "number" && Number.isInteger(o.tipCents) && o.tipCents >= 0 ? o.tipCents : undefined;
   const discountCode = typeof o.discountCode === "string" ? o.discountCode.trim().toUpperCase() : undefined;
   const missing: string[] = [];
   if (!boatId && !experienceId) missing.push("experienceId or boatId");
   if (!slotId) missing.push("slotId");
   if (!rateId) missing.push("rateId");
-  if (partySize == null) missing.push("partySize (number)");
+  if (partySize == null) missing.push("partySize (positive integer)");
+  if (Number.isNaN(petsCount)) missing.push("petsCount (non-negative integer when provided)");
   const customerDraft = o.customerDraft as { name?: string; email?: string; phone?: string } | undefined;
   if (!customerDraft || typeof customerDraft !== "object") {
     missing.push("customerDraft (object with name, email, phone)");
@@ -51,11 +64,14 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   if (missing.length) {
     return { input: null, hint: `Missing or invalid: ${missing.join(", ")}.` };
   }
-  const addonSelections = Array.isArray(o.addonSelections)
-    ? (o.addonSelections as { addonId: string; qty: number }[]).filter(
-        (s) => typeof s.addonId === "string" && typeof s.qty === "number"
-      )
-    : [];
+  const addonSelectionsRaw = Array.isArray(o.addonSelections) ? o.addonSelections as { addonId: string; qty: unknown }[] : [];
+  const addonSelections: { addonId: string; qty: number }[] = [];
+  for (const s of addonSelectionsRaw) {
+    if (typeof s.addonId !== "string" || s.addonId.trim() === "") continue;
+    const q = s.qty;
+    if (typeof q !== "number" || !Number.isInteger(q) || q < 0) continue;
+    addonSelections.push({ addonId: s.addonId.trim(), qty: q });
+  }
   const answers = o.answers != null && typeof o.answers === "object" ? (o.answers as Record<string, string>) : {};
   const bookingMode: "shared" | "charter" = o.bookingMode === "shared" ? "shared" : "charter";
   const resumeHoldId = typeof o.resumeHoldId === "string" && o.resumeHoldId.trim() ? o.resumeHoldId.trim() : undefined;
@@ -67,7 +83,7 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       rateId: rateId!,
       addonSelections,
       partySize: partySize!,
-      petsCount: petsCount ?? 0,
+      petsCount,
       answers,
       customerDraft: {
         name: (customerDraft!.name as string).trim(),
@@ -83,74 +99,22 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
   };
 }
 
-function toDateStrOnly(v: unknown): string | null {
-  if (v == null) return null;
-  const s = typeof v === "string" ? v.trim() : null;
-  if (!s || s.length < 10) return null;
-  const sliced = s.slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(sliced) ? sliced : null;
-}
-
-function isSeasonalAllowed(exp: Experience, slotStart: Date, slotDateStr?: string): boolean {
-  if (!exp.seasonal?.enabled) return true;
-  const startDate = toDateStrOnly(exp.seasonal.startDate);
-  const endDate = toDateStrOnly(exp.seasonal.endDate);
-  if (startDate && endDate) {
-    const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
-    return dateStr >= startDate && dateStr <= endDate;
-  }
-  const startMonth = exp.seasonal.startMonth ?? 1;
-  const endMonth = exp.seasonal.endMonth ?? 12;
-  const month = slotDateStr && /^\d{4}-\d{2}-\d{2}$/.test(slotDateStr)
-    ? parseInt(slotDateStr.slice(5, 7), 10) || slotStart.getMonth() + 1
-    : slotStart.getMonth() + 1;
-  if (startMonth <= endMonth) return month >= startMonth && month <= endMonth;
-  return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
-}
-
-async function hasOverlappingBlock(opts: {
-  db: ReturnType<typeof getDb>;
-  Timestamp: ReturnType<typeof getFirestoreExports>["Timestamp"];
-  experienceId: string;
-  boatId?: string;
-  slotStart: Date;
-  slotEnd: Date;
-  get?: (q: import("firebase-admin").firestore.Query) => Promise<import("firebase-admin").firestore.QuerySnapshot>;
-}): Promise<boolean> {
-  const { db, Timestamp, experienceId, slotStart, slotEnd, get } = opts;
-  const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
-  const slotStartMs = slotStart.getTime();
-  const slotEndMs = slotEnd.getTime();
-  if (!Number.isFinite(slotStartMs) || !Number.isFinite(slotEndMs) || slotEndMs <= slotStartMs) return false;
-
-  const query = db
-    .collection("blocks")
-    .where("experienceId", "==", experienceId)
-    .where("startAt", "<", Timestamp.fromDate(slotEnd));
-
-  const getSnap = get ?? ((q: import("firebase-admin").firestore.Query) => q.get());
-  const snap = await getSnap(query);
-  for (const doc of snap.docs) {
-    const b = doc.data() as { boatId?: string | null; endAt?: { toDate?: () => Date } };
-    const blockBoatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
-    const blockBoatId = blockBoatIdRaw ? blockBoatIdRaw : null;
-    const matchesBoat = boatId ? blockBoatId === boatId || blockBoatId == null : blockBoatId == null;
-    if (!matchesBoat) continue;
-    const endAt = b.endAt?.toDate?.();
-    if (!endAt) continue;
-    if (endAt.getTime() > slotStartMs) return true;
-  }
-  return false;
-}
-
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-hold", "request started");
     const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
       if (rl.serverError) {
+        const incidentCode = generateIncidentCode();
+        bookingWarn("create-hold", "rate limit service unavailable (503)", {
+          incidentCode,
+          reason: "Redis unavailable or timeout; RATE_LIMIT_FAIL_CLOSED=1",
+        });
         return NextResponse.json(
-          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          {
+            error: "Service temporarily unavailable. Please try again shortly.",
+            incidentCode,
+          },
           { status: 503 }
         );
       }
@@ -160,6 +124,9 @@ export async function POST(request: NextRequest) {
         { error: "Too many requests. Please try again in a moment." },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
+    }
+    if (rl.degraded) {
+      bookingLog("create-hold", "rate limit degraded, request allowed", {});
     }
     const body = await request.json().catch(() => null);
     const parsed = parseBody(body);
@@ -186,14 +153,16 @@ export async function POST(request: NextRequest) {
     } catch (configErr) {
       const msg = configErr instanceof Error ? configErr.message : String(configErr);
       const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(msg);
-      bookingWarn("create-hold", "config error", { message: msg });
+      const incidentCode = generateIncidentCode();
+      bookingWarn("create-hold", "config error (503)", {
+        incidentCode,
+        message: msg,
+        hint: isConfig
+          ? "Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in deployment."
+          : "Service config missing or invalid.",
+      });
       return NextResponse.json(
-        {
-          error: isConfig ? "Booking is not configured." : "Service temporarily unavailable.",
-          hint: isConfig
-            ? "Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment."
-            : undefined,
-        },
+        { error: "Service temporarily unavailable. Please try again shortly.", incidentCode },
         { status: 503 }
       );
     }
@@ -357,7 +326,7 @@ export async function POST(request: NextRequest) {
         }
       }
       const slotDateStrForSeasonal = parseSlotId(input.slotId)?.dateStr;
-      if (!isSeasonalAllowed(experience, slotStart, slotDateStrForSeasonal)) {
+      if (!isSeasonalAllowed(experience.seasonal, slotStart, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
       slotStartForPricing = slotStart;
@@ -455,7 +424,7 @@ export async function POST(request: NextRequest) {
         }
       }
       const slotDateStrForSeasonal = parseSlotId(input.slotId)?.dateStr;
-      if (!isSeasonalAllowed(experience, slotStartExp, slotDateStrForSeasonal)) {
+      if (!isSeasonalAllowed(experience.seasonal, slotStartExp, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
       slotStartForPricing = slotStartExp;
@@ -494,6 +463,17 @@ export async function POST(request: NextRequest) {
       slotRef = slotsRef.doc(input.slotId);
     }
 
+    for (const s of input.addonSelections) {
+      const addon = addonsById.get(s.addonId);
+      if (!addon) continue;
+      const maxQty = "maxQty" in addon && typeof (addon as { maxQty?: number }).maxQty === "number" ? (addon as { maxQty: number }).maxQty : undefined;
+      if (maxQty != null && s.qty > maxQty) {
+        return NextResponse.json(
+          { error: `Addon quantity exceeds maximum of ${maxQty} for this add-on`, hint: `addonId: ${s.addonId}` },
+          { status: 400 }
+        );
+      }
+    }
     const addonsForPricing = buildAddonSelectionsForPricing(input.addonSelections, addonsById);
     let rateForPricing: typeof rate & { priceCents: number } = rate as typeof rate & { priceCents: number };
     if (experienceForPricing && slotStartForPricing && "priceCents" in rate) {
@@ -515,6 +495,7 @@ export async function POST(request: NextRequest) {
     const tipCents = input.tipCents ?? 0;
     let discountCents = 0;
     let discountCodeApplied: string | undefined;
+    let discountRef: import("firebase-admin").firestore.DocumentReference | null = null;
     if (input.discountCode) {
       const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
       const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
@@ -524,6 +505,7 @@ export async function POST(request: NextRequest) {
       }
       discountCents = result.discountCents;
       discountCodeApplied = result.discount.code;
+      if (!discountSnap.empty) discountRef = discountSnap.docs[0].ref;
     }
     const totalCentsWithTip = Math.max(0, pricing.totalCents + tipCents - discountCents);
     bookingLog("create-hold", "pricing computed", {
@@ -621,6 +603,20 @@ export async function POST(request: NextRequest) {
             if (isActive && sameExperience && sameSlot && sameMode) {
               const oldPartySize = typeof existingHold.partySize === "number" ? existingHold.partySize : 0;
               const delta = input.partySize - oldPartySize;
+              // Explicitly clear discount fields when no discount applies (mirror charter reuse path)
+              // so resuming a previously discounted hold without a discount does not retain stale discount amounts.
+              const discountUpdate =
+                sharedHoldResumeHasActiveDiscount(discountCodeApplied, discountCents)
+                  ? { discountCode: discountCodeApplied, discountCents, stripeCouponId: FieldValue.delete() }
+                  : {
+                      discountCode: FieldValue.delete(),
+                      discountCents: FieldValue.delete(),
+                      stripeCouponId: FieldValue.delete(),
+                    };
+              const tipUpdate =
+                typeof tipCents === "number" && Number.isInteger(tipCents) && tipCents >= 0
+                  ? { tipCents }
+                  : { tipCents: FieldValue.delete() };
               const holdUpdatePayload = {
                 addonSelections: input.addonSelections,
                 partySize: input.partySize,
@@ -629,24 +625,20 @@ export async function POST(request: NextRequest) {
                 customerDraft: input.customerDraft,
                 marketingOptIn: input.marketingOptIn,
                 expiresAt: Timestamp.fromDate(expiresAt),
-                tipCents: tipCents,
+                ...tipUpdate,
                 ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
                 ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
-                ...(discountCodeApplied && discountCents > 0 ? { discountCode: discountCodeApplied, discountCents } : {}),
+                ...discountUpdate,
                 depositPaymentIntentId: FieldValue.delete(),
                 fullPaymentIntentId: FieldValue.delete(),
               };
               if (delta === 0) {
                 // No capacity change: just refresh hold (expiry, pricing, etc.).
                 tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
-              } else if (delta < 0) {
-                // Decrease: release seats by |delta|, then update hold.
-                await releaseCapacity(tx, inventoryRef, -delta);
-                tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
               } else {
-                // Increase: release old seats then reserve new total (capacity check for increase).
-                await releaseCapacity(tx, inventoryRef, oldPartySize);
-                await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
+                // Read inventory once, then apply net change in a single write (read-before-write).
+                const currentReserved = await getReservedSeats(tx, inventoryRef);
+                applyNetCapacityChange(tx, inventoryRef, sharedCapacityLimit, sold, currentReserved, delta);
                 tx.update(db.collection("holds").doc(input.resumeHoldId.trim()), holdUpdatePayload);
               }
               effectiveHoldId = input.resumeHoldId.trim();
@@ -657,6 +649,18 @@ export async function POST(request: NextRequest) {
         }
 
         // No valid reusable hold: create new hold and reserve full party size.
+        // Validate discount inside transaction to avoid race where concurrent requests exceed maxRedemptions.
+        if (discountRef) {
+          const discountSnapTx = await tx.get(discountRef);
+          if (discountSnapTx.exists) {
+            const d = discountSnapTx.data() as { usedCount?: number; maxRedemptions?: number };
+            const used = d.usedCount ?? 0;
+            const max = d.maxRedemptions;
+            if (typeof max === "number" && used >= max) {
+              throw new Error("This code has reached its usage limit");
+            }
+          }
+        }
         await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
         tx.set(db.collection("holds").doc(holdId), holdPayload);
       });
@@ -724,6 +728,10 @@ export async function POST(request: NextRequest) {
                         discountCents: FieldValue.delete(),
                         stripeCouponId: FieldValue.delete(),
                       };
+                const tipUpdate =
+                  typeof tipCents === "number" && Number.isInteger(tipCents) && tipCents >= 0
+                    ? { tipCents }
+                    : { tipCents: FieldValue.delete() };
                 tx.update(db.collection("holds").doc(slot.holdId), {
                   addonSelections: input.addonSelections,
                   partySize: input.partySize,
@@ -732,7 +740,7 @@ export async function POST(request: NextRequest) {
                   customerDraft: input.customerDraft,
                   marketingOptIn: input.marketingOptIn,
                   expiresAt: Timestamp.fromDate(newExpiresAt),
-                  tipCents: tipCents,
+                  ...tipUpdate,
                   ...(holdPayload.pricing ? { pricing: holdPayload.pricing } : {}),
                   ...(holdPayload.effectiveRateCents != null ? { effectiveRateCents: holdPayload.effectiveRateCents } : {}),
                   ...discountUpdate,
@@ -758,40 +766,34 @@ export async function POST(request: NextRequest) {
           }
         }
         // Defense in depth: ensure no paid booking already exists for this boat/experience and time.
-        // Queries are date-bounded via startDateStr; boatId/status are filtered in code on the small result set.
-        // Index used: bookings(experienceId, startDateStr).
+        // Use experienceId variants (doc id + slug) so we see bookings stored under slug or doc id (matches slots API).
+        // Any overlapping booking with no boatId blocks all boats; same boatId blocks that boat.
         const slotStartMs = slotStartDate.getTime();
         const slotEndMs = slotEndDate.getTime();
         const parsedForCheck = parseSlotId(input.slotId);
-        if (parsedForCheck && isListingBoatFlow && input.boatId) {
-          const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsedForCheck.dateStr)
+        if (parsedForCheck && (isListingBoatFlow || isExperienceOnly) && input.experienceId) {
+          const expSlugCharter = experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
+            ? ((experienceForPricing as Experience).slug as string).trim()
+            : "";
+          const charterVariants = getExperienceIdVariants(input.experienceId, expSlugCharter);
+          const paidSnaps = await Promise.all(
+            charterVariants.map((v) => tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", parsedForCheck.dateStr)))
           );
-          for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
-            if (b.boatId !== input.boatId) continue;
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        } else if (parsedForCheck && isExperienceOnly && input.experienceId) {
-          const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsedForCheck.dateStr)
-          );
-          for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
+          const seenIds = new Set<string>();
+          for (const snap of paidSnaps) {
+            for (const doc of snap.docs) {
+              if (seenIds.has(doc.id)) continue;
+              seenIds.add(doc.id);
+              const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
+              if (isListingBoatFlow && input.boatId && b.boatId && b.boatId !== input.boatId) continue;
+              const p = b.slotId ? parseSlotId(b.slotId) : null;
+              if (!p) continue;
+              const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+              if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+                throw new Error("Slot no longer available");
+              }
             }
           }
         }
@@ -884,37 +886,30 @@ export async function POST(request: NextRequest) {
           await checkSameDaySlotsForOverlap(sameDaySnap.docs);
         }
         // Also reject if a paid booking already exists for this boat/experience and time (slot doc may be missing).
-        // Queries are date-bounded via startDateStr; boatId/status are filtered in code on the small result set.
-        // Index used: bookings(experienceId, startDateStr).
-        if (isListingBoatFlow && input.boatId) {
-          const paidForBoat = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsed.dateStr)
+        // Use experienceId variants and treat any overlapping booking (including no boatId) as blocking.
+        if ((isListingBoatFlow && input.boatId) || (isExperienceOnly && input.experienceId)) {
+          const expSlugCharter2 = experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
+            ? ((experienceForPricing as Experience).slug as string).trim()
+            : "";
+          const charterVariants2 = getExperienceIdVariants(input.experienceId!, expSlugCharter2);
+          const paidSnaps2 = await Promise.all(
+            charterVariants2.map((v) => tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", parsed.dateStr)))
           );
-          for (const doc of paidForBoat.docs) {
-            const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
-            if (b.boatId !== input.boatId) continue;
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        } else if (isExperienceOnly && input.experienceId) {
-          const paidForExp = await tx.get(
-            db.collection("bookings").where("experienceId", "==", input.experienceId).where("startDateStr", "==", parsed.dateStr)
-          );
-          for (const doc of paidForExp.docs) {
-            const b = doc.data() as { slotId?: string; status?: string; bookingMode?: string };
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
+          const seenIds2 = new Set<string>();
+          for (const snap of paidSnaps2) {
+            for (const doc of snap.docs) {
+              if (seenIds2.has(doc.id)) continue;
+              seenIds2.add(doc.id);
+              const b = doc.data() as { slotId?: string; boatId?: string; status?: string; bookingMode?: string };
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              if (isCharterTicketed && b.bookingMode === "shared") throw new Error("Shared tickets have already been sold for this departure");
+              if (isListingBoatFlow && input.boatId && b.boatId && b.boatId !== input.boatId) continue;
+              const p = b.slotId ? parseSlotId(b.slotId) : null;
+              if (!p) continue;
+              const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+              if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+                throw new Error("Slot no longer available");
+              }
             }
           }
         }
@@ -927,6 +922,18 @@ export async function POST(request: NextRequest) {
           bookingId: null,
           updatedAt: FieldValue.serverTimestamp(),
         });
+      }
+      // Validate discount inside transaction to avoid race where concurrent requests exceed maxRedemptions.
+      if (discountRef) {
+        const discountSnapTx = await tx.get(discountRef);
+        if (discountSnapTx.exists) {
+          const d = discountSnapTx.data() as { usedCount?: number; maxRedemptions?: number };
+          const used = d.usedCount ?? 0;
+          const max = d.maxRedemptions;
+          if (typeof max === "number" && used >= max) {
+            throw new Error("This code has reached its usage limit");
+          }
+        }
       }
       tx.set(db.collection("holds").doc(holdId), holdPayload);
     });
@@ -968,20 +975,26 @@ export async function POST(request: NextRequest) {
       message === "This slot is blocked" ||
       message === "This departure is reserved as a private charter" ||
       message === "Shared tickets have already been sold for this departure" ||
+      message === "This code has reached its usage limit" ||
       message === "This date is sold out." ||
       message.startsWith("Only ")
     ) {
       bookingLog("create-hold", "conflict (409)", { message });
       return NextResponse.json({ error: message }, { status: 409 });
     }
-    bookingError("create-hold", "create hold failed", err, { message });
+    const incidentCode = generateIncidentCode();
+    bookingError("create-hold", "create hold failed", err, {
+      message,
+      incidentCode,
+      hint: /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(message)
+        ? "Set Firebase and Stripe env vars in deployment (see docs/BOOKING_SETUP.md)."
+        : undefined,
+    });
     const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(message);
     return NextResponse.json(
       {
-        error: isConfig ? "Booking is not configured." : message || "Create hold failed",
-        hint: isConfig
-          ? "Set Firebase and Stripe env vars in your deployment (see docs/BOOKING_SETUP.md)."
-          : undefined,
+        error: isConfig ? "Service temporarily unavailable. Please try again shortly." : (message || "Something went wrong. Please try again."),
+        incidentCode,
       },
       { status: isConfig ? 503 : 500 }
     );

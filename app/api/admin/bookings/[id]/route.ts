@@ -2,32 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
-import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
   if (typeof ts.seconds === "number") return new Date(ts.seconds * 1000).toISOString();
-  return null;
-}
-
-function parseSlotIdForDisplay(slotId: string | null | undefined): { dateStr: string; startHour: number; startMinute: number; durationHours: number } | null {
-  if (!slotId || typeof slotId !== "string") return null;
-  const trimmed = slotId.trim();
-  if (!trimmed) return null;
-  let parsed = parseSlotId(trimmed);
-  if (parsed) return parsed;
-  const cleaned = trimmed.replace(/\s/g, "");
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
-    return parseSlotId(normalized);
-  }
-  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
-    const parts = cleaned.split("-");
-    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
-    return parseSlotId(normalized);
-  }
   return null;
 }
 
@@ -76,7 +56,7 @@ export async function GET(
     let startTime: string | null = null;
     let endTime: string | null = null;
     let durationHours: number | null = null;
-    const parsed = parseSlotIdForDisplay(b.slotId);
+    const parsed = parseSlotIdRelaxed(b.slotId ?? "");
     if (parsed) {
       if (!startDate) startDate = parsed.dateStr;
       durationHours = parsed.durationHours;

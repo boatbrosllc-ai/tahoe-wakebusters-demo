@@ -75,7 +75,7 @@ function getApiBaseUrl(): string {
 
 const STALE_MS = {
   experiences: 60_000,
-  slots: 30_000,
+  slots: 15_000,
   datePrices: 60_000,
   experienceDetail: 60_000,
   experienceBySlug: 60_000,
@@ -316,37 +316,49 @@ export function fetchDatePrices(
 
 const PREFETCH_CONCURRENCY = 2;
 
+/** Single-rate prefetch task for the global queue. */
+interface PrefetchTask {
+  experienceId: string;
+  startDate: string;
+  days: number;
+  rateId: string;
+  signal?: AbortSignal;
+}
+
+const prefetchQueue: PrefetchTask[] = [];
+let prefetchRunning = 0;
+
+function drainPrefetchQueue(): void {
+  while (prefetchRunning < PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
+    const task = prefetchQueue.shift()!;
+    if (task.signal?.aborted) continue;
+    const key = `date-prices|${task.experienceId}|${task.startDate}|${task.days}|${task.rateId}`;
+    if (dataCache.get(key)) continue;
+    prefetchRunning++;
+    const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(task.experienceId)}&startDate=${task.startDate}&days=${task.days}&rateId=${encodeURIComponent(task.rateId)}`;
+    fetchCached(key, url, STALE_MS.datePrices, task.signal)
+      .catch(() => {})
+      .finally(() => {
+        prefetchRunning--;
+        drainPrefetchQueue();
+      });
+  }
+}
+
 export function prefetchDatePrices(
   experienceId: string,
   startDate: string,
   days: number,
   rateIds: string[],
   signal?: AbortSignal,
-  concurrency: number = PREFETCH_CONCURRENCY,
 ): void {
   const list = rateIds.filter((id) => id != null && id !== "");
   if (list.length === 0 || signal?.aborted) return;
 
-  let idx = 0;
-  let running = 0;
-  const next = () => {
-    if (signal?.aborted || idx >= list.length) return;
-    const rateId = list[idx++];
-    const key = `date-prices|${experienceId}|${startDate}|${days}|${rateId}`;
-    if (dataCache.get(key)) {
-      next();
-      return;
-    }
-    running++;
-    const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&days=${days}&rateId=${encodeURIComponent(rateId)}`;
-    fetchCached(key, url, STALE_MS.datePrices, signal)
-      .catch(() => {}) // Swallow AbortError and other rejections so prefetch never causes uncaught promise rejection
-      .finally(() => {
-      running--;
-      if (running < concurrency) next();
-    });
-  };
-  for (let i = 0; i < concurrency; i++) next();
+  for (const rateId of list) {
+    prefetchQueue.push({ experienceId, startDate, days, rateId, signal });
+  }
+  drainPrefetchQueue();
 }
 
 export function fetchExperienceDetail(

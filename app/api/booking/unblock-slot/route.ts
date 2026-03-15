@@ -2,7 +2,7 @@
  * Unblock a single slot (admin). Deletes the block doc that was created for this slot.
  * POST body: { experienceId, slotId, boatId?: string }
  * Finds block where experienceId, boatId, slotId match and deletes it.
- * Auth: Bearer BLOCK_SECRET/SEED_SECRET, or valid admin session cookie.
+ * Auth: Bearer BLOCK_SECRET, or valid admin session cookie.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,7 +11,7 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
-  const secret = process.env.BLOCK_SECRET ?? process.env.SEED_SECRET;
+  const secret = process.env.BLOCK_SECRET;
   if (secret && request.headers.get("authorization") === `Bearer ${secret}`) return true;
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   return unauthorized === null;

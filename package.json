@@ -7,9 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/rate-limit.test.ts",
-    "test:booking": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/rate-limit.test.ts",
+    "test": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/cleanup-holds.test.ts lib/booking/__tests__/rate-limit.test.ts tests/admin-session.integration.test.ts tests/admin-session-cookie.test.ts tests/run-final-charges.integration.test.ts tests/create-hold-discount-resume.integration.test.ts",
+    "test:booking": "node --import tsx --test lib/booking/__tests__/experience-aliases.test.ts lib/booking/__tests__/experience-slots.test.ts lib/booking/__tests__/cleanup-holds.test.ts lib/booking/__tests__/rate-limit.test.ts tests/admin-session.integration.test.ts tests/admin-session-cookie.test.ts tests/run-final-charges.integration.test.ts tests/create-hold-discount-resume.integration.test.ts",
     "test:ci": "npm run lint && npm run test:booking",
+    "production-ready": "npm run lint && npm run test:booking && npm run build && npm run check-env",
+    "check-env": "node scripts/check-production-env.js",
     "seed": "node scripts/seed-firestore.js",
     "postinstall": "node scripts/postinstall-next.js",
     "prepare": "husky"
@@ -31,7 +33,7 @@
     "next": "^14.2.18",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "stripe": "^14.0.0",
+    "stripe": "^17.0.0",
     "tailwind-merge": "^2.2.0",
     "zod": "^3.25.76"
   },

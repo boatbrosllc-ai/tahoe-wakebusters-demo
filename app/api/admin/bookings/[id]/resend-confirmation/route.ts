@@ -91,6 +91,10 @@ export async function POST(
       locationText,
       cancellationPolicyText,
       isDeposit,
+      finalChargeAt:
+        isDeposit && booking.finalChargeAt
+          ? (booking.finalChargeAt as { toDate(): Date }).toDate().toISOString()
+          : undefined,
       manageLink: undefined as string | undefined,
       waiverSigningUrl: undefined as string | undefined,
       waiverGroupSigningUrl: undefined as string | undefined,

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { FieldPath } from "firebase-admin/firestore";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -6,6 +7,31 @@ import type { Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
+
+const LEGACY_HOLDS_PAGE_SIZE = 100;
+
+/** Cursor-based pagination over legacy holds (no startDateStr) until exhaustion. */
+async function fetchAllLegacyHolds(
+  db: ReturnType<typeof getDb>,
+  experienceId: string
+): Promise<import("firebase-admin").firestore.QuerySnapshot> {
+  const allDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+  let lastDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
+  for (;;) {
+    let query = db
+      .collection("holds")
+      .where("experienceId", "==", experienceId)
+      .where("status", "==", "active")
+      .orderBy(FieldPath.documentId())
+      .limit(LEGACY_HOLDS_PAGE_SIZE);
+    if (lastDoc) query = query.startAfter(lastDoc) as typeof query;
+    const snap = await query.get();
+    allDocs.push(...snap.docs);
+    if (snap.empty || snap.docs.length < LEGACY_HOLDS_PAGE_SIZE) break;
+    lastDoc = snap.docs[snap.docs.length - 1];
+  }
+  return { docs: allDocs, empty: allDocs.length === 0, size: allDocs.length } as import("firebase-admin").firestore.QuerySnapshot;
+}
 
 export interface TicketAvailabilityResponse {
   total: number;
@@ -30,9 +56,9 @@ export async function GET(request: NextRequest) {
     // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
     const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
 
-    type DocSnapshot = import("firebase-admin").firestore.DocumentSnapshot;
     type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
-    const promises: [Promise<DocSnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>, Promise<QuerySnapshot>] = [
+
+    const [expDoc, bookingsSnap, holdsSnap, legacyHoldsSnap] = await Promise.all([
       db.collection("experiences").doc(experienceId).get(),
       db.collection("bookings")
         .where("experienceId", "==", experienceId)
@@ -43,15 +69,8 @@ export async function GET(request: NextRequest) {
         .where("status", "==", "active")
         .where("startDateStr", "==", date)
         .get(),
-      legacyFallbackEnabled
-        ? db.collection("holds")
-            .where("experienceId", "==", experienceId)
-            .where("status", "==", "active")
-            .limit(100)
-            .get()
-        : Promise.resolve({ docs: [], empty: true, size: 0 } as unknown as QuerySnapshot),
-    ];
-    const [expDoc, bookingsSnap, holdsSnap, legacyHoldsSnap] = await Promise.all(promises);
+      legacyFallbackEnabled ? fetchAllLegacyHolds(db, experienceId) : Promise.resolve({ docs: [], empty: true, size: 0 } as unknown as QuerySnapshot),
+    ]);
 
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found." }, { status: 404 });

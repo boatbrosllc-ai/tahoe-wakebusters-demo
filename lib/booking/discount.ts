@@ -1,6 +1,12 @@
 /**
  * Discount code validation and application.
  * Used at checkout to validate a code and compute discount amount.
+ *
+ * Note: usedCount vs maxRedemptions is also checked inside the Firestore transaction
+ * that creates the hold (create-hold) and at conversion time (convert-hold-to-booking).
+ * A race remains possible (concurrent holds can both pass validation; one will fail at
+ * conversion). convert-hold-to-booking surfaces a user-friendly error with a path to
+ * rebook without the discount.
  */
 
 import type { Discount } from "./types";

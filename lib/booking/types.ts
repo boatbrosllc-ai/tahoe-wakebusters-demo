@@ -365,6 +365,8 @@ export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<B
   "final_due",
   "final_paid",
   "final_processing",
+  "final_requires_action",
+  "final_failed",
 ]);
 
 /** Display-only card info (never store raw card data). */

@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
 
 const COLLECTION = "pricingCalendar";
 
@@ -20,6 +21,9 @@ export async function GET(request: NextRequest) {
   const end = request.nextUrl.searchParams.get("end");
   if (!boatType?.trim() || !start || !end) {
     return NextResponse.json({ error: "boatType, start, end required (YYYY-MM-DD)" }, { status: 400 });
+  }
+  if (!ALLOWED_BOAT_TYPES.has(boatType.trim())) {
+    return NextResponse.json({ error: "Invalid boatType; allowed: pontoon, wake, tritoon" }, { status: 400 });
   }
 
   try {
@@ -60,6 +64,9 @@ export async function POST(request: NextRequest) {
 
   if (!boatType || dates.length === 0) {
     return NextResponse.json({ error: "boatType and dates[] required" }, { status: 400 });
+  }
+  if (!ALLOWED_BOAT_TYPES.has(boatType)) {
+    return NextResponse.json({ error: "Invalid boatType; allowed: pontoon, wake, tritoon" }, { status: 400 });
   }
 
   try {

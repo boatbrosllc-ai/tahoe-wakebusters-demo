@@ -4,12 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
 
 const BOAT_TYPES = [
   { value: "pontoon", label: "Pontoon" },
   { value: "wake", label: "Wake boat" },
   { value: "tritoon", label: "Tritoon" },
 ] as const;
+// Keep UI in sync with API allowlist
+const BOAT_TYPES_FILTERED = BOAT_TYPES.filter((t) => ALLOWED_BOAT_TYPES.has(t.value));
 
 const PRESETS = [
   { label: "Weekday", dollarsPerHour: 150 },
@@ -195,7 +198,7 @@ export default function PricingCalendarPage() {
             className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark min-w-[160px]"
             aria-label="Boat type"
           >
-            {BOAT_TYPES.map((t) => (
+            {BOAT_TYPES_FILTERED.map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </select>

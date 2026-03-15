@@ -6,6 +6,7 @@
 
 import type { Rate, Addon, AddonSelection, BookingPricing, ExperienceHolidayDate, BoatPriceOverride } from "./types";
 import type { ExperienceAddon } from "./types";
+import { getDateStrInSlotTimezone } from "./experience-slots";
 
 const TAX_RATE = 0.0825; // 8.25% example; adjust per jurisdiction
 const FEE_CENTS = 0; // optional booking fee
@@ -108,7 +109,7 @@ export function getEffectiveRatePriceCents(
   weekendDays?: number[],
   friSunDays?: number[]
 ): number {
-  const iso = toISODate(date);
+  const iso = getDateStrInSlotTimezone(date);
   if (holidayDates?.length) {
     for (const h of holidayDates) {
       if (!isDateInHolidayRange(iso, h.start, h.end, h.recurring)) continue;
@@ -122,7 +123,7 @@ export function getEffectiveRatePriceCents(
   // Default US holidays (July 4, Memorial Day, Labor Day, Thanksgiving, Christmas, New Year) use holiday price when set
   if (rate.priceHolidayCents != null && isDefaultUSHoliday(iso)) return rate.priceHolidayCents;
 
-  const day = date.getDay();
+  const day = new Date(iso + "T12:00:00Z").getUTCDay();
   const weekend = weekendDays && weekendDays.length > 0 ? weekendDays : DEFAULT_WEEKEND_DAYS;
   if (weekend.includes(day) && rate.priceWeekendCents != null) return rate.priceWeekendCents;
   if (friSunDays?.length && friSunDays.includes(day) && rate.priceFriSunCents != null) return rate.priceFriSunCents;
@@ -155,7 +156,7 @@ export function getEffectiveBoatRatePriceCents(
   weekendDays?: number[],
   friSunDays?: number[]
 ): number {
-  const iso = toISODate(date);
+  const iso = getDateStrInSlotTimezone(date);
   const calendarPrice = getCalendarOverridePriceCents(iso, rate.durationHours, calendarRates);
   if (calendarPrice != null) return calendarPrice;
   if (Array.isArray(priceOverrides) && priceOverrides.length > 0) {
@@ -176,12 +177,13 @@ export function computePricing(params: {
   qty?: number;
 }): BookingPricing {
   const { rate, addons, currency = "usd" } = params;
-  const ticketQty = params.qty != null && params.qty > 0 ? params.qty : 1;
+  const ticketQty = Math.max(1, Math.floor(Number(params.qty ?? 1)));
   const unitCents = "basePriceCents" in rate && rate.basePriceCents != null ? rate.basePriceCents : (rate as RateLike).priceCents ?? 0;
   const baseCents = unitCents * ticketQty;
   let subtotalCents = baseCents;
   for (const { addon, qty } of addons) {
-    subtotalCents += addon.priceCents * qty;
+    const safeQty = Math.max(0, Math.floor(Number(qty)));
+    subtotalCents += addon.priceCents * safeQty;
   }
   const taxCents = Math.round(subtotalCents * TAX_RATE);
   const feesCents = FEE_CENTS;
@@ -200,6 +202,7 @@ export function buildAddonSelectionsForPricing(
   addonsById: Map<string, Addon | ExperienceAddon>
 ): { addon: AddonLike; qty: number }[] {
   return addonSelections
+    .map((s) => ({ ...s, qty: Math.max(0, Math.floor(Number(s.qty))) }))
     .filter((s) => s.qty > 0)
     .map((s) => {
       const addon = addonsById.get(s.addonId);

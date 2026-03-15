@@ -67,13 +67,13 @@ export async function POST(request: NextRequest) {
       return { runHandler: true, alreadyCompleted: false };
     });
 
-    bookingLog("stripe-webhook", "event received", { eventId: eventId.slice(0, 24) + "...", eventType: event.type });
+    bookingLog("stripe-webhook", "event received", { eventIdPrefix: eventId.slice(0, 8), eventType: event.type });
     if (claimResult.alreadyCompleted) {
-      bookingLog("stripe-webhook", "event already completed, skipping", { eventId: eventId.slice(0, 24) + "..." });
+      bookingLog("stripe-webhook", "event already completed, skipping", { eventIdPrefix: eventId.slice(0, 8) });
       return NextResponse.json({ received: true });
     }
     if (!claimResult.runHandler) {
-      bookingLog("stripe-webhook", "event processing in progress or lease held", { eventId: eventId.slice(0, 24) + "..." });
+      bookingLog("stripe-webhook", "event processing in progress or lease held", { eventIdPrefix: eventId.slice(0, 8) });
       return NextResponse.json({ received: true });
     }
 
@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
       }
       const holdExpiresAt = (hold.expiresAt as { toDate(): Date });
       if (holdExpiresAt.toDate() < new Date()) {
-        bookingLog("stripe-webhook", "checkout.session.completed hold expired (idempotent success)", { holdId, sessionId });
+        bookingLog("stripe-webhook", "checkout.session.completed hold expired (idempotent success)", { holdId, sessionIdPrefix: sessionId.slice(0, 8) });
         await writeEventResult(eventId, {
           status: "completed",
           processedAt: Timestamp.now(),
@@ -175,8 +175,11 @@ export async function POST(request: NextRequest) {
       try {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("alreadyConverted" in result) {
-          bookingLog("stripe-webhook", "checkout.session.completed hold already converted", { holdId, paymentIntentId });
+          bookingLog("stripe-webhook", "checkout.session.completed hold already converted", { holdId, paymentIntentIdPrefix: paymentIntentId.slice(0, 8) });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "already_converted", holdId, sessionId, paymentIntentId, amountTotal, currency });
+        } else if (result.discountLimitExceeded) {
+          bookingLog("stripe-webhook", "checkout.session.completed booking created, discount limit exceeded", { bookingId: result.bookingId, holdId });
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "discount_exceeded_booking_created", bookingId: result.bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
         } else {
           bookingLog("stripe-webhook", "checkout.session.completed booking created", { bookingId: result.bookingId, holdId });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
@@ -197,11 +200,10 @@ export async function POST(request: NextRequest) {
       const paymentStage = piRaw.metadata?.payment_stage;
       const holdIdFromMeta = piRaw.metadata?.holdId;
       bookingLog("stripe-webhook", "payment_intent.succeeded", {
-        eventId: eventId.slice(0, 24) + "...",
+        eventIdPrefix: eventId.slice(0, 8),
         paymentStage: paymentStage ?? null,
-        paymentIntentIdPrefix: piId.slice(0, 24) + "...",
+        paymentIntentIdPrefix: piId.slice(0, 8),
         holdId: holdIdFromMeta ?? null,
-        amount: piAmountTotal,
       });
 
       if (paymentStage === "final") {
@@ -259,7 +261,7 @@ export async function POST(request: NextRequest) {
         await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
-      bookingLog("stripe-webhook", "payment_intent.succeeded resolving PI and calling convertHoldToBooking", { holdId, paymentIntentIdPrefix: piId.slice(0, 24) + "..." });
+      bookingLog("stripe-webhook", "payment_intent.succeeded resolving PI and calling convertHoldToBooking", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
 
       const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
       const pm = pi.payment_method as Stripe.PaymentMethod | null;
@@ -311,12 +313,16 @@ export async function POST(request: NextRequest) {
       try {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("alreadyConverted" in result) {
-          bookingLog("stripe-webhook", "payment_intent.succeeded hold already converted", { holdId, paymentIntentId: piId });
+          bookingLog("stripe-webhook", "payment_intent.succeeded hold already converted", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "already_converted", holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        } else if (result.discountLimitExceeded) {
+          bookingLog("stripe-webhook", "payment_intent.succeeded booking created, discount limit exceeded", { bookingId: result.bookingId, holdId });
+          await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "discount_exceeded_booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         } else {
           bookingLog("stripe-webhook", "payment_intent.succeeded booking created", { bookingId: result.bookingId, holdId });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
         }
+        return NextResponse.json({ received: true });
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
         if (errMsg === "Hold has expired") {
@@ -372,7 +378,11 @@ export async function POST(request: NextRequest) {
               let manageLink: string | undefined;
               if (bookingEnv.manageBookingSecret) {
                 try {
-                  const token = signManageToken({ bookingId, customerEmail: b.customer?.email });
+                  const token = signManageToken({
+                  bookingId,
+                  customerEmail: b.customer?.email,
+                  tripDateStr: b.startDateStr,
+                });
                   manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
                 } catch (_) {
                   // MANAGE_BOOKING_SECRET not set
@@ -398,7 +408,7 @@ export async function POST(request: NextRequest) {
       try {
         const db = getDb();
         const { Timestamp } = getFirestoreExports();
-        const obj = ev?.data?.object as Record<string, unknown> | undefined;
+        const obj = ev?.data?.object as unknown as Record<string, unknown> | undefined;
         const payload: Record<string, unknown> = {
           status: "failed_retryable",
           processedAt: Timestamp.now(),

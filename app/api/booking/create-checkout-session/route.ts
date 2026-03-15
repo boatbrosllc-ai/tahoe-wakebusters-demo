@@ -1,11 +1,16 @@
 /**
- * @deprecated Use POST /api/booking/create-payment-intent with Payment Element (modal checkout) instead.
- * This route remains for backwards compatibility with redirect/hosted Checkout only.
+ * Creates a Stripe Checkout Session for a hold (embedded or redirect).
+ * Supports two modes:
+ * (a) Embedded (ui_mode: "custom"): returns clientSecret for the Payment Element modal; return_url points to success page.
+ * (b) Redirect/hosted: returns url for redirect to Stripe Hosted Checkout; success_url/cancel_url with release token.
+ * For flows that need fine-grained deposit vs. full-payment control, prefer POST /api/booking/create-payment-intent.
  */
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { generateIncidentCode } from "@/lib/booking/debug";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
@@ -28,6 +33,22 @@ function formatStripeError(e: unknown): Record<string, unknown> {
   };
 }
 
+/** Map known Stripe codes to safe user-facing messages; otherwise return generic message. */
+function stripeErrorToUserMessage(details: Record<string, unknown>): string {
+  const code = details.code;
+  if (typeof code === "string") {
+    const known: Record<string, string> = {
+      card_declined: "Your card was declined. Please try another card or payment method.",
+      expired_card: "Your card has expired. Please use a different card.",
+      incorrect_cvc: "The security code is incorrect. Please check and try again.",
+      insufficient_funds: "Insufficient funds. Please try another card.",
+      processing_error: "Payment processing failed. Please try again.",
+    };
+    if (known[code]) return known[code];
+  }
+  return "Checkout is temporarily unavailable. Please try again.";
+}
+
 function parseBody(body: unknown): { holdId: string; embedded?: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
@@ -39,13 +60,28 @@ function parseBody(body: unknown): { holdId: string; embedded?: boolean } | null
 
 export async function POST(request: NextRequest) {
   try {
+    const rl = await checkRateLimit(getClientKey(request));
+    if (!rl.allowed) {
+      if (rl.serverError) {
+        const incidentCode = generateIncidentCode();
+        console.warn("[create-checkout-session] rate limit service unavailable (503)", { incidentCode });
+        return NextResponse.json(
+          { error: "Service temporarily unavailable. Please try again shortly.", incidentCode },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
+      );
+    }
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
     const db = getDb();
-    const { Timestamp } = getFirestoreExports();
+    const { Timestamp, FieldValue } = getFirestoreExports();
     const holdRef = db.collection("holds").doc(input.holdId);
     const holdSnap = await holdRef.get();
     if (!holdSnap.exists) {
@@ -149,25 +185,21 @@ export async function POST(request: NextRequest) {
     });
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
-    const baseUrl = bookingEnv.appBaseUrl;
-    let stripeCouponId: string | undefined;
-    // Reuse a previously created coupon for this hold; create with an idempotency key if new.
     const holdStripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
-    if (holdStripeCouponId) {
-      stripeCouponId = holdStripeCouponId;
-    } else if (holdDiscountCode && holdDiscountCents > 0) {
+    let stripeCouponId: string | undefined = holdStripeCouponId;
+    if (holdDiscountCents > 0 && !stripeCouponId) {
       const coupon = await stripe.coupons.create(
         {
           amount_off: holdDiscountCents,
-          currency: pricing.currency,
-          name: `Discount (${holdDiscountCode})`,
+          currency: pricing.currency ?? "usd",
+          name: `Discount${holdDiscountCode ? ` (${holdDiscountCode})` : ""}`,
           duration: "once",
         },
-        { idempotencyKey: `coupon-${input.holdId}` }
+        { idempotencyKey: `coupon-cs-${input.holdId}` }
       );
       stripeCouponId = coupon.id;
-      await holdRef.update({ stripeCouponId: coupon.id });
     }
+    const baseUrl = bookingEnv.appBaseUrl;
     const metadata: Record<string, string> = {
       holdId: input.holdId,
       slotId: hold.slotId,
@@ -184,16 +216,15 @@ export async function POST(request: NextRequest) {
     };
     if (input.embedded) {
       (sessionParams as { ui_mode?: string }).ui_mode = "custom";
-      sessionParams.return_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
+      sessionParams.return_url = baseUrl + "/booking/success?session_id={CHECKOUT_SESSION_ID}";
     } else {
       const holdExpiresAt = (hold.expiresAt as { toDate(): Date }).toDate();
       const releaseToken = signReleaseToken(input.holdId, Math.floor(holdExpiresAt.getTime() / 1000));
-      sessionParams.success_url = `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`;
+      sessionParams.success_url = baseUrl + "/booking/success?session_id={CHECKOUT_SESSION_ID}";
       sessionParams.cancel_url = releaseToken
-        ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}&release_token=${encodeURIComponent(releaseToken)}`
-        : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}`;
+        ? baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId) + "&release_token=" + encodeURIComponent(releaseToken)
+        : baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId);
       sessionParams.phone_number_collection = { enabled: true };
-      if (!stripeCouponId) sessionParams.allow_promotion_codes = true;
       sessionParams.custom_fields = [
         { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
       ];
@@ -203,16 +234,38 @@ export async function POST(request: NextRequest) {
     }
     let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
     try {
-      session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey: `cs-${input.holdId}` });
+      session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey: "cs-" + input.holdId });
     } catch (e) {
       const details = formatStripeError(e);
-      const stripeMessage = typeof details.message === "string" ? details.message : null;
-      console.error("❌ Stripe create session failed:", details);
+      console.error("[create-checkout-session] Stripe create session failed:", details);
+      if (stripeCouponId && !holdStripeCouponId) {
+        try {
+          await stripe.coupons.del(stripeCouponId);
+        } catch (delErr) {
+          console.error("[create-checkout-session] Failed to delete orphaned coupon", stripeCouponId, delErr);
+        }
+      }
+      // Rollback: release slot and expire hold so the slot is available again (match create-checkout-session-direct).
+      try {
+        const slotRefForRollback = hold.boatId
+          ? db.collection("boats").doc(hold.boatId).collection("slots").doc(hold.slotId)
+          : db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+        await db.runTransaction(async (tx) => {
+          const slotSnap = await tx.get(slotRefForRollback);
+          if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === input.holdId) {
+            tx.update(slotRefForRollback, {
+              status: "open",
+              holdId: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+          tx.update(holdRef, { status: "expired" });
+        });
+      } catch (rollbackErr) {
+        console.error("[create-checkout-session] rollback on Stripe failure", rollbackErr);
+      }
       return NextResponse.json(
-        {
-          error: stripeMessage ?? "Stripe create session failed",
-          details,
-        },
+        { error: stripeErrorToUserMessage(details) },
         { status: 500 }
       );
     }
@@ -225,11 +278,9 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ error: "Failed to create checkout session" }, { status: 500 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Checkout session failed";
     console.error("[create-checkout-session]", err);
-    // Surface error in response so modal can show it (and so we can fix .env or code)
     return NextResponse.json(
-      { error: message },
+      { error: "Checkout session failed" },
       { status: 500 }
     );
   }

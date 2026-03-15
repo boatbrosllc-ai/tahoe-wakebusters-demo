@@ -4,9 +4,10 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
 import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
-import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
+import { bookingLog, bookingWarn, bookingError, redactEmail, generateIncidentCode } from "@/lib/booking/debug";
 
 function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | null {
   if (body == null || typeof body !== "object") return null;
@@ -18,7 +19,18 @@ function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | 
   return { holdId, payFullAmount };
 }
 
-/** Ensure Stripe Customer exists; use stripeCustomerIndex by email (no Stripe list by email). */
+/** Ensure Stripe Customer exists; use stripeCustomerIndex by email (no Stripe list by email).
+ * Uses Firestore document create() as compare-and-set so exactly one stripe.customers.create() runs per email under concurrency.
+ * Self-healing: pending records use a lease/expiry; stale or recoverable-error entries are cleared so retries can proceed.
+ * PENDING_LOCK_LEASE_SEC is short (15–20s) so lock takeover completes within a single request; polling uses more iterations
+ * with shorter delays and ~3s max so the loop is more likely to see the lock expire and take over instead of surfacing 503. */
+const PENDING_LOCK_LEASE_SEC = 18;
+const POLL_MAX_ITERATIONS = 6;
+const POLL_BASE_DELAY_MS = 200;
+const POLL_MAX_ELAPSED_MS = 3000;
+
+type TakeoverResult = { action: "done"; customerId: string } | { action: "tookOver" } | { action: "retry" };
+
 async function getOrCreateStripeCustomer(
   db: Firestore,
   stripe: import("stripe").Stripe,
@@ -29,28 +41,136 @@ async function getOrCreateStripeCustomer(
   const { FieldValue, Timestamp } = getFirestoreExports();
   const emailLower = email.trim().toLowerCase();
   const indexRef = db.collection("stripeCustomerIndex").doc(emailLower);
-  const indexSnap = await indexRef.get();
-  if (indexSnap.exists) {
-    const data = indexSnap.data() as { customerId: string };
-    if (data.customerId) return data.customerId;
+  const now = new Date();
+  const leaseEnd = new Date(now.getTime() + PENDING_LOCK_LEASE_SEC * 1000);
+
+  const releaseLockOnError = async (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    await indexRef.update({
+      pending: false,
+      recoverableError: {
+        message: message.slice(0, 500),
+        at: Timestamp.now(),
+      },
+      updatedAt: FieldValue.serverTimestamp(),
+    }).catch((updateErr) => {
+      bookingWarn("create-payment-intent", "failed to release stripe customer index lock", { emailRedacted: redactEmail(emailLower), updateErr });
+    });
+  };
+
+  try {
+    await indexRef.create({
+      customerId: null,
+      pending: true,
+      pendingLockExpiresAt: Timestamp.fromDate(leaseEnd),
+      createdAt: Timestamp.now(),
+    });
+  } catch (createErr: unknown) {
+    const err = createErr as { code?: number | string };
+    const isAlreadyExists = err?.code === 6 || err?.code === "already-exists";
+    if (!isAlreadyExists) throw createErr;
+
+    const pollStart = Date.now();
+    let tookOver = false;
+    for (let i = 0; i < POLL_MAX_ITERATIONS; i++) {
+      if (Date.now() - pollStart > POLL_MAX_ELAPSED_MS) {
+        const retriable = new Error("Stripe customer index poll timeout") as Error & { retriable?: boolean };
+        retriable.retriable = true;
+        throw retriable;
+      }
+      const result = await db.runTransaction(async (tx): Promise<TakeoverResult> => {
+        const snap = await tx.get(indexRef);
+        const data = snap.exists
+          ? (snap.data() as {
+              customerId?: string | null;
+              pending?: boolean;
+              pendingLockExpiresAt?: { toDate(): Date };
+              recoverableError?: { message?: string; at?: unknown };
+            })
+          : null;
+        if (data?.customerId) return { action: "done", customerId: data.customerId };
+        const expiresAt = data?.pendingLockExpiresAt;
+        const lockExpired =
+          !expiresAt || (typeof expiresAt.toDate === "function" && expiresAt.toDate() < new Date());
+        const hasRecoverableError = !!data?.recoverableError;
+        const canTakeOver = !data?.pending || lockExpired || hasRecoverableError;
+        if (!canTakeOver) return { action: "retry" };
+        tx.update(indexRef, {
+          pending: true,
+          pendingLockExpiresAt: Timestamp.fromDate(
+            new Date(Date.now() + PENDING_LOCK_LEASE_SEC * 1000)
+          ),
+          recoverableError: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return { action: "tookOver" };
+      });
+      if (result.action === "done") return result.customerId;
+      if (result.action === "tookOver") {
+        console.warn("[booking:create-payment-intent] stripe customer index lock takeover", {
+          emailRedacted: emailLower.slice(0, 2) + "***",
+        });
+        tookOver = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, POLL_BASE_DELAY_MS * (i + 1)));
+    }
+
+    if (!tookOver) {
+      const snap = await indexRef.get();
+      const data = snap.exists ? (snap.data() as { customerId?: string | null }) : null;
+      if (data?.customerId) return data.customerId;
+      const retriable = new Error("Stripe customer index race: customerId not set in time") as Error & {
+        retriable?: boolean;
+      };
+      retriable.retriable = true;
+      throw retriable;
+    }
   }
-  const customer = await stripe.customers.create({
-    email: email.trim(),
-    name: name.trim() || undefined,
-    phone: phone.trim() || undefined,
-    metadata: { emailLower },
-  });
-  await indexRef.set({
-    customerId: customer.id,
-    createdAt: Timestamp.now(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-  return customer.id;
+
+  try {
+    const customer = await stripe.customers.create({
+      email: email.trim(),
+      name: name.trim() || undefined,
+      phone: phone.trim() || undefined,
+      metadata: { emailLower },
+    });
+    await indexRef.update({
+      customerId: customer.id,
+      pending: false,
+      pendingLockExpiresAt: FieldValue.delete(),
+      recoverableError: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return customer.id;
+  } catch (stripeErr) {
+    await releaseLockOnError(stripeErr);
+    throw stripeErr;
+  }
 }
 
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-payment-intent", "request started");
+    const rl = await checkRateLimit(getClientKey(request));
+    if (!rl.allowed) {
+      if (rl.serverError) {
+        const incidentCode = generateIncidentCode();
+        bookingWarn("create-payment-intent", "rate limit service unavailable (503)", {
+          incidentCode,
+          reason: "Redis unavailable or timeout; RATE_LIMIT_FAIL_CLOSED=1",
+        });
+        return NextResponse.json(
+          { error: "Service temporarily unavailable. Please try again shortly.", incidentCode },
+          { status: 503 }
+        );
+      }
+      const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+      return NextResponse.json(
+        { error: "Too many requests. Please try again in a moment." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
@@ -64,13 +184,14 @@ export async function POST(request: NextRequest) {
     } catch (configErr) {
       const msg = configErr instanceof Error ? configErr.message : String(configErr);
       const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env/i.test(msg);
+      const incidentCode = generateIncidentCode();
+      bookingWarn("create-payment-intent", "config error (503)", {
+        incidentCode,
+        message: msg,
+        hint: isConfig ? "Set FIREBASE_* and STRIPE_SECRET_KEY in deployment (see docs/BOOKING_SETUP.md)." : "Service config missing or invalid.",
+      });
       return NextResponse.json(
-        {
-          error: isConfig ? "Booking is not configured." : "Service temporarily unavailable.",
-          hint: isConfig
-            ? "Set FIREBASE_* and STRIPE_SECRET_KEY in your deployment environment (see docs/BOOKING_SETUP.md)."
-            : undefined,
-        },
+        { error: "Service temporarily unavailable. Please try again shortly.", incidentCode },
         { status: 503 }
       );
     }
@@ -127,7 +248,12 @@ export async function POST(request: NextRequest) {
           }
         }
       }
-      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
+      // Ticketed (shared) experiences: price is per ticket, so multiply by partySize.
+      const ticketQty =
+        (hold as { bookingMode?: string }).bookingMode === "shared"
+          ? Math.max(1, Math.floor(Number(hold.partySize ?? 1)))
+          : 1;
+      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd", qty: ticketQty });
     }
     const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
     const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
@@ -141,11 +267,7 @@ export async function POST(request: NextRequest) {
     const chargeCents = payFullAmount ? totalCents : depositCents;
     bookingLog("create-payment-intent", "pricing", {
       holdId: input.holdId,
-      totalCents,
-      depositCents,
-      finalCents,
       payFullAmount,
-      chargeCents,
     });
 
     const stripe = getStripe();
@@ -162,12 +284,12 @@ export async function POST(request: NextRequest) {
     const existingPiId = payFullAmount ? hold.fullPaymentIntentId : hold.depositPaymentIntentId;
     if (existingPiId) {
       try {
-        bookingLog("create-payment-intent", "checking existing PI", { holdId: input.holdId, existingPiId: existingPiId.slice(0, 24) + "...", payFullAmount });
+        bookingLog("create-payment-intent", "checking existing PI", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8), payFullAmount });
         const existing = await stripe.paymentIntents.retrieve(existingPiId);
         if (existing.status !== "canceled" && existing.status !== "succeeded") {
           const existingAmount = existing.amount;
           if (existingAmount === chargeCents && existing.client_secret) {
-            bookingLog("create-payment-intent", "reusing existing PI", { holdId: input.holdId, paymentIntentId: existing.id });
+            bookingLog("create-payment-intent", "reusing existing PI", { holdId: input.holdId, paymentIntentIdPrefix: existing.id.slice(0, 8) });
             return NextResponse.json({
               clientSecret: existing.client_secret,
               paymentIntentId: existing.id,
@@ -180,8 +302,6 @@ export async function POST(request: NextRequest) {
           // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
           bookingLog("create-payment-intent", "existing PI stale (amount mismatch or no secret), creating new", {
             holdId: input.holdId,
-            existingAmount,
-            chargeCents,
             status: existing.status,
           });
           if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
@@ -193,7 +313,7 @@ export async function POST(request: NextRequest) {
           );
         }
       } catch (piErr) {
-        bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", { holdId: input.holdId, existingPiId });
+        bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8) });
       }
     }
 
@@ -214,9 +334,7 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}-${chargeCents}`;
     bookingLog("create-payment-intent", "creating new PaymentIntent", {
       holdId: input.holdId,
-      chargeCents,
       payFullAmount,
-      idempotencyKey: idempotencyKey.slice(0, 50) + "...",
     });
     const paymentIntent = await stripe.paymentIntents.create(
       {
@@ -230,7 +348,7 @@ export async function POST(request: NextRequest) {
       { idempotencyKey }
     );
     if (!paymentIntent.client_secret) {
-      bookingError("create-payment-intent", "PaymentIntent missing client secret", null, { paymentIntentId: paymentIntent.id });
+      bookingError("create-payment-intent", "PaymentIntent missing client secret", null, { paymentIntentIdPrefix: paymentIntent.id.slice(0, 8) });
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }
     // Persist the PI id on the hold so retries can reuse it instead of creating a new charge.
@@ -239,7 +357,7 @@ export async function POST(request: NextRequest) {
     );
     bookingLog("create-payment-intent", "PaymentIntent created and persisted", {
       holdId: input.holdId,
-      paymentIntentId: paymentIntent.id,
+      paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
       payFullAmount,
     });
     return NextResponse.json({
@@ -252,12 +370,24 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";
-    bookingError("create-payment-intent", "create payment intent failed", err, { message });
     const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env|STRIPE_SECRET_KEY/i.test(message);
+    const isRetriable = err instanceof Error && (err as { retriable?: boolean }).retriable === true;
+    const incidentCode = generateIncidentCode();
+    bookingError("create-payment-intent", "create payment intent failed", err, {
+      message,
+      incidentCode,
+      hint: isConfig ? "Set Firebase and Stripe env vars in deployment (see docs/BOOKING_SETUP.md)." : undefined,
+    });
+    if (isRetriable) {
+      return NextResponse.json(
+        { error: "Payment is temporarily unavailable. Please try again in a moment.", incidentCode },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       {
-        error: isConfig ? "Booking is not configured." : message,
-        hint: isConfig ? "Set Firebase and Stripe env vars in your deployment (see docs/BOOKING_SETUP.md)." : undefined,
+        error: isConfig ? "Service temporarily unavailable. Please try again shortly." : "Payment is temporarily unavailable. Please try again.",
+        incidentCode,
       },
       { status: isConfig ? 503 : 500 }
     );

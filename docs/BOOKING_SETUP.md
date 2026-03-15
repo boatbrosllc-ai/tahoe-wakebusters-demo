@@ -35,8 +35,8 @@ Create a `.env.local` (or set in your host) with:
 | `APP_BASE_URL` | Yes | Base URL of the app (e.g. `http://localhost:3000` or `https://boatbrosatx.com`) |
 | `CRON_SECRET` | No | Secret for cleanup-holds and seed (Bearer token) |
 | `SEED_SECRET` | No | Same as CRON_SECRET for seeding |
-| `RATE_LIMIT_REDIS_REST_URL` | Yes (production) | Redis REST URL for rate limiting (e.g. Upstash). Required in production; otherwise all booking requests are rate limited. See [Rate limiting](#rate-limiting). |
-| `RATE_LIMIT_REDIS_REST_TOKEN` | Yes (production) | Redis REST token. Or use `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. |
+| `RATE_LIMIT_REDIS_REST_URL` | Recommended (production) | Redis REST URL for rate limiting (e.g. Upstash). Without it in production we fail open (no rate limiting). See [Rate limiting](#rate-limiting). |
+| `RATE_LIMIT_REDIS_REST_TOKEN` | Recommended (production) | Redis REST token. Or use `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. |
 | `ADMIN_EMAIL` | No | Email of the only user allowed to access admin (e.g. `boatbrosll@gmail.com`). If unset, admin routes stay open (dev only). |
 | `NEXT_PUBLIC_FIREBASE_API_KEY` | Yes** | Firebase Web API key (from Firebase Console → Project settings → Your apps → Web app). Required for admin login when `ADMIN_EMAIL` is set. |
 | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Yes** | Auth domain (e.g. `your-project.firebaseapp.com`). |
@@ -184,7 +184,7 @@ For **Book now** and experiences to work in production, the server must have Fir
 
 **Avoid** using `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` on Netlify unless the file truly exists at runtime (e.g. committed or built into the deploy). If the path is set but the file is missing, Firebase fails and the app returns 503. Using the three variables above is the reliable approach. **Do not set FIREBASE_SERVICE_ACCOUNT_JSON_PATH in Netlify**—the file is not in the deploy.
 
-**Before release:** validate with `GET /api/health` (should not return 503). If health returns 503, the body includes which check failed (e.g. `firebase`, `stripe`, `rateLimit`). When `rateLimit` is `degraded`, configure Redis (see [Rate limiting](#rate-limiting)) or booking endpoints will reject all requests in production. Direct calls to `GET /api/booking/slots?experienceId=...&startDate=...&endDate=...` can confirm calendar month data loads.
+**Before release:** validate with `GET /api/health` (should not return 503). If health returns 503, the body includes which check failed (e.g. `firebase`, `stripe`, `rateLimit`). When `rateLimit` is `degraded`, configure Redis (see [Rate limiting](#rate-limiting)) for proper limiting; with Redis down and `RATE_LIMIT_FAIL_CLOSED=1`, booking mutation endpoints return 503. Direct calls to `GET /api/booking/slots?experienceId=...&startDate=...&endDate=...` can confirm calendar month data loads.
 
 Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), and optionally `ADMIN_EMAIL` and `NEXT_PUBLIC_FIREBASE_*` for admin login. **For admin login in production:** `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` must be the same Firebase project; otherwise the server cannot verify the sign-in token and returns 401. After saving, redeploy so the new env vars are applied.
 
@@ -223,9 +223,9 @@ When the user cancels Stripe Checkout, they are redirected to `/booking/cancel?h
 
 ## Rate limiting
 
-The booking endpoints `POST /api/booking/create-hold`, `POST /api/booking/create-checkout-session-direct`, and `POST /api/booking/validate-discount` are rate-limited in code (see `lib/booking/rate-limit.ts`). **In production, a shared Redis store is required.** If Redis is not configured in production, the rate limiter fails closed: every request is treated as rate limited (429). In development, when Redis is not set, an in-memory store is used (resets on cold start).
+The booking endpoints `POST /api/booking/create-hold`, `POST /api/booking/create-payment-intent`, `POST /api/booking/create-checkout-session`, `POST /api/booking/create-checkout-session-direct`, and `POST /api/booking/validate-discount` are rate-limited in code (see `lib/booking/rate-limit.ts`). **In production, a shared Redis store is recommended.** When Redis is not configured in production, the rate limiter **fails open** (requests are allowed) so the site keeps working; set Redis for proper rate limiting. When Redis is configured but unavailable (error or timeout), policy is controlled by env: default is fail-open; set `RATE_LIMIT_FAIL_CLOSED=1` to reject requests with **503** (not 429) so Redis outages do not silently bypass limits. In development, when Redis is not set, an in-memory store is used (resets on cold start).
 
-### Production: Redis required
+### Production: Redis recommended
 
 Set **one** of the following in your production environment:
 
@@ -237,9 +237,9 @@ Set **one** of the following in your production environment:
 | `UPSTASH_REDIS_REST_URL` | Same as above (alternative names) |
 | `UPSTASH_REDIS_REST_TOKEN` | Same as above |
 
-Without these, in production **all** requests to the rate-limited booking endpoints will receive 429. The health endpoint reports this: `GET /api/health` returns 503 with `rateLimit: "degraded"` and `rateLimitDetail` when Redis is missing in production. **Before release, ensure `/api/health` returns 200**; if it returns 503 due to `rateLimit: degraded`, configure Redis or deployment checks should block release.
+Without these, in production the rate limiter **fails open** (no 429); booking works but rate limiting is disabled. When Redis is configured but **unavailable** and `RATE_LIMIT_FAIL_CLOSED=1`, rate-limited booking endpoints return **503** with a generic message and an `incidentCode` for support correlation; see SECURITY.md for runbook. The health endpoint reports status: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is missing or unhealthy in production; use a privileged health request (see docs) for `rateLimitDetail`. **Before release, ensure `/api/health` returns 200**; if it returns 503 due to `rateLimit: degraded`, configure Redis or deployment checks should block release.
 
-For a quick setup, use [Upstash Redis](https://upstash.com/) (REST API), create a database, and set `RATE_LIMIT_REDIS_REST_URL` and `RATE_LIMIT_REDIS_REST_TOKEN` (or the `UPSTASH_REDIS_*` equivalents) in your host’s environment variables.
+For a quick setup, use [Upstash Redis](https://upstash.com/) (REST API), create a database, and set `RATE_LIMIT_REDIS_REST_URL` and `RATE_LIMIT_REDIS_REST_TOKEN` (or the `UPSTASH_REDIS_*` equivalents) in your host's environment variables.
 
 As a short-term improvement, you can also enable IP-based rate limiting at the edge (e.g. Netlify rate limiting in `netlify.toml`, or Vercel's built-in DDoS protection) in addition to the app-level limiter.
 

@@ -103,7 +103,10 @@ export interface ExperienceCalendarSectionViewProps {
   directCheckoutError: string | null;
   setDirectCheckoutError: (v: string | null) => void;
   bookHref?: string | null;
+  /** When true, full hold/booking flow is required; direct checkout must not be used. */
   isTicketed?: boolean;
+  /** Experience pricing type; both "ticketed" and "shared" require full flow (mirrors API guard). */
+  pricingType?: "charter" | "ticketed" | "shared";
   departureTimeLabel?: string | null;
   ticketsAvailableByDate?: Record<string, number>;
   bookingMode?: "shared" | "charter";
@@ -112,6 +115,8 @@ export interface ExperienceCalendarSectionViewProps {
   setAutoSwitchBanner?: (v: boolean) => void;
   showSpotsRemaining?: boolean;
   slotDataByDate?: Map<string, { spotsRemaining: number | null; spotsBooked: number | null; isCharterLocked: boolean; showSpotsRemaining: boolean }>;
+  soldOutFeedbackDate?: string | null;
+  setSoldOutFeedbackDate?: (v: string | null) => void;
 }
 
 export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionViewProps) {
@@ -188,6 +193,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     setDirectCheckoutError,
     bookHref,
     isTicketed = false,
+    pricingType,
     departureTimeLabel,
     ticketsAvailableByDate = {},
     bookingMode = "charter",
@@ -196,6 +202,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     setAutoSwitchBanner,
     showSpotsRemaining = false,
     slotDataByDate = new Map(),
+    soldOutFeedbackDate = null,
+    setSoldOutFeedbackDate,
   } = props;
 
   return (
@@ -262,6 +270,16 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         </div>
                       </div>
                     </div>
+                    {soldOutFeedbackDate && (
+                      <div className={cn("mt-2 rounded-lg border px-3 py-2 text-sm", darkCard ? "bg-amber-500/20 border-amber-400/40 text-amber-200" : "bg-amber-50 border-amber-300 text-amber-800")}>
+                        <span className="font-medium">This date is sold out.</span>
+                        {setSoldOutFeedbackDate && (
+                          <button type="button" onClick={() => setSoldOutFeedbackDate(null)} className="ml-2 underline hover:no-underline" aria-label="Dismiss">
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 mt-2 min-w-0 w-full shrink-0">
                       {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
                       {step2CompactGrid.map((cell, idx) => {
@@ -278,10 +296,12 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const spotsLeft = slotData ? (slotData.spotsRemaining ?? null) : null;
                         const spotsBookedFirst = slotData?.spotsBooked ?? null;
                         const isTicketedCell = slotData != null;
-                        const isFullyBooked = !isPast && (isTicketedCell ? spotsLeft === 0 : (takenCount > 0 && openForDate === 0));
+                        const ticketsAvail = ticketsAvailableByDate?.[dateStr];
+                        const isFullyBooked = !isPast && (isTicketedCell ? (spotsLeft === 0 || ticketsAvail === 0) : (entry != null && openForDate === 0) || (typeof ticketsAvail === "number" && ticketsAvail === 0));
                         const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                         const isFullyUnavailable = isCharterLocked;
                         const isAvailable = !isPast && (isTicketedCell ? (openForDate > 0 && spotsLeft !== 0) : (openForDate > 0 && !isFullyUnavailable));
+                        const soldOutNoSlots = onOpenInModal && isTicketed && openForDate === 0;
                         const hasBookingsUrgency = !isPast && (isTicketedCell ? (spotsBookedFirst ?? 0) > 0 && spotsLeft !== 0 : (isAvailable && !isSoldOutShared && bookedCount > 0));
                         const hasBookingsOnDateFirst = isTicketedCell && !isPast && (spotsBookedFirst ?? 0) > 0;
                         const displayBookedFirst = isTicketedCell ? (spotsBookedFirst ?? 0) : bookedCount;
@@ -291,8 +311,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                           <button
                             key={dateStr}
                             type="button"
-                            disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable}
-                            onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
+                            disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable || soldOutNoSlots}
+                            onClick={() => ((onOpenInModal && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
                             title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedFirst} already booked this day` : undefined}
                             className={cn(
                               "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] md:min-h-[64px] touch-manipulation",
@@ -501,6 +521,14 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               </div>
                             </div>
                           </div>
+                          {soldOutFeedbackDate && (
+                            <div className={cn("mt-2 rounded-lg border px-3 py-2 text-sm", darkCard ? "bg-amber-500/20 border-amber-400/40 text-amber-200" : "bg-amber-50 border-amber-300 text-amber-800")}>
+                              <span className="font-medium">This date is sold out.</span>
+                              {setSoldOutFeedbackDate && (
+                                <button type="button" onClick={() => setSoldOutFeedbackDate(null)} className="ml-2 underline hover:no-underline" aria-label="Dismiss">Dismiss</button>
+                              )}
+                            </div>
+                          )}
                           <div className="mt-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
                             <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 mt-2 min-w-0 w-full">
                               {WEEKDAY_LABELS.map((d) => <div key={d} className={cn("py-1 text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide", darkCard ? "text-white/80" : "text-brand-muted")}>{d}</div>)}
@@ -525,9 +553,11 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const spotsBooked = slotData?.spotsBooked ?? null;
                                 const isSoldOutShared = isTicketed && bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                                 const isFullyUnavailable = isTicketed && isCharterLocked;
-                                const isFullyBookedTicketed = isTicketed && !isPast && spotsLeft === 0 && slotData != null;
-                                const isFullyBookedCharter = !isTicketed && !isPast && takenCount > 0 && openForDuration === 0;
+                                const ticketsAvail2 = ticketsAvailableByDate?.[dateStr];
+                                const isFullyBookedTicketed = isTicketed && !isPast && (spotsLeft === 0 && slotData != null || (typeof ticketsAvail2 === "number" && ticketsAvail2 === 0));
+                                const isFullyBookedCharter = !isTicketed && !isPast && entry != null && openForDuration === 0;
                                 const isFullyBooked = isFullyBookedTicketed || isFullyBookedCharter;
+                                const soldOutNoSlots2 = onOpenInModal && isTicketed && (slotsByDate.get(dateStr)?.open ?? 0) === 0;
                                 const hasBookingsUrgencyTicketed = isTicketed && !isPast && (spotsBooked ?? 0) > 0 && spotsLeft !== 0;
                                 const hasBookingsUrgencyCharter = !isTicketed && !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasBookingsUrgency = hasBookingsUrgencyTicketed || hasBookingsUrgencyCharter;
@@ -537,8 +567,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   <button
                                     key={dateStr}
                                     type="button"
-                                    disabled={isPast || !isAvailable || isFullyUnavailable}
-                                    onClick={() => (isAvailable || isSoldOutShared) && handleDayClick(dateStr)}
+                                    disabled={isPast || !isAvailable || isFullyUnavailable || soldOutNoSlots2}
+                                    onClick={() => ((onOpenInModal && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency || hasBookingsOnDate) ? `${displayBookedCount} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] touch-manipulation",
@@ -643,7 +673,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                       {selectedDate && (
                         <>
                           <div className="mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
-                            {timeOptionsForModal.length === 0 ? (
+                            {loading ? (
+                              <div className={cn("flex flex-col items-center justify-center py-8 gap-3", darkCard ? "text-white/90" : "text-brand-muted")}>
+                                <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                                <p className="text-sm font-medium">Checking availability…</p>
+                                <p className="text-xs">Please wait — we’re fetching the latest slots.</p>
+                              </div>
+                            ) : timeOptionsForModal.length === 0 ? (
                               <p className={cn("text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>
                                 No open slots for this duration on this day.
                               </p>
@@ -676,7 +712,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                           </div>
                           <div className="mt-3 flex gap-2 shrink-0">
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(1)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
-                            <button type="button" disabled={!selectedSlotInline} onClick={() => selectedSlotInline && goToInlineStep?.(3)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 text-sm">Continue to choose your boat</button>
+                            <button type="button" disabled={loading || !selectedSlotInline} onClick={() => selectedSlotInline && goToInlineStep?.(3)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 text-sm">Continue to choose your boat</button>
                           </div>
                         </>
                       )}
@@ -696,6 +732,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="text-xs font-medium text-white/80 hover:text-white">Change time</button>}
                           </div>
                           <p className={cn("text-xs mb-3", darkCard ? "text-white/70" : "text-brand-muted")}>{selectedDate} · {formatTime(selectedSlotInline.startAt)}</p>
+                          {!inlineBoatsLoading && inlineBoats.length > 0 && availableBoatIdsForInlineSlot.size === 0 ? (
+                            <div className={cn("rounded-lg border p-4 mb-3", darkCard ? "bg-amber-500/20 border-amber-400/50 text-amber-100" : "bg-amber-50 border-amber-200 text-amber-900")}>
+                              <p className="text-sm font-medium">This time is no longer available.</p>
+                              <p className="text-xs mt-1 opacity-90">It may have just been booked. Please choose another time.</p>
+                              {goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className={cn("mt-3 w-full rounded-lg font-semibold py-2.5 px-3 text-sm", darkCard ? "bg-amber-500/30 hover:bg-amber-500/40 text-white border border-amber-400/50" : "bg-amber-200 hover:bg-amber-300 text-amber-900 border border-amber-300")}>Choose another time</button>}
+                            </div>
+                          ) : null}
                           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 overscroll-contain">
                             {inlineBoatsLoading ? <div className="py-4 flex justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" /></div> : inlineBoats.length === 0 ? <p className={cn("text-xs py-2", darkCard ? "text-white/70" : "text-brand-muted")}>No boats assigned — continue to details.</p> : (
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
@@ -848,6 +891,14 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 </div>
                               </div>
                             </div>
+                            {soldOutFeedbackDate && (
+                              <div className={cn("mt-2 rounded-lg border px-3 py-2 text-sm", darkCard ? "bg-amber-500/20 border-amber-400/40 text-amber-200" : "bg-amber-50 border-amber-300 text-amber-800")}>
+                                <span className="font-medium">This date is sold out.</span>
+                                {setSoldOutFeedbackDate && (
+                                  <button type="button" onClick={() => setSoldOutFeedbackDate(null)} className="ml-2 underline hover:no-underline" aria-label="Dismiss">Dismiss</button>
+                                )}
+                              </div>
+                            )}
                             <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2 min-w-0 w-full">
                               {WEEKDAY_LABELS.map((d) => (
                                 <div key={d} className={cn("py-0.5 text-center text-[9px] sm:text-[10px] font-semibold uppercase", darkCard ? "text-white/70" : "text-brand-muted")}>
@@ -875,7 +926,10 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const spotsBooked3 = slotData3?.spotsBooked ?? null;
                                 const isSoldOutShared3 = isTicketed && bookingMode === "shared" && spotsLeft3 === 0 && !isCharterLocked3;
                                 const isFullyUnavailable3 = isTicketed && isCharterLocked3;
-                                const isFullyBooked3 = !isPast && (isTicketed ? (spotsLeft3 === 0 && slotData3 != null) : (takenCount > 0 && openForDuration === 0));
+                                const ticketsAvail3 = ticketsAvailableByDate?.[dateStr];
+                                const isFullyBooked3 = !isPast && (isTicketed ? (spotsLeft3 === 0 && slotData3 != null || (typeof ticketsAvail3 === "number" && ticketsAvail3 === 0)) : (entry != null && openForDuration === 0));
+                                const openForDate3 = entry?.open ?? 0;
+                                const soldOutNoSlots3 = onOpenInModal && isTicketed && openForDate3 === 0;
                                 const hasBookingsUrgency3 = !isPast && (isTicketed ? (spotsBooked3 ?? 0) > 0 && spotsLeft3 !== 0 : (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay3)) && bookedCount3 > 0 && !isFullyBooked3);
                                 const hasBookingsOnDate3 = isTicketed && !isPast && (spotsBooked3 ?? 0) > 0;
                                 const displayBookedCount3 = isTicketed ? (spotsBooked3 ?? 0) : bookedCount3;
@@ -883,8 +937,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   <button
                                     key={dateStr}
                                     type="button"
-                                    disabled={isPast || !isAvailable3 || isFullyUnavailable3}
-                                    onClick={() => (isAvailable3 || isSoldOutShared3) && handleDayClick(dateStr)}
+                                    disabled={isPast || !isAvailable3 || isFullyUnavailable3 || soldOutNoSlots3}
+                                    onClick={() => ((onOpenInModal && isTicketed ? isAvailable3 : (isAvailable3 || isSoldOutShared3)) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency3 || hasBookingsOnDate3) ? `${displayBookedCount3} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 min-h-[44px] min-w-[44px] sm:min-h-[58px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full touch-manipulation",
@@ -951,7 +1005,12 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             {selectedDate && (
                               <div className="pt-3 border-t border-brand-dark/10">
                                 <p className={cn("text-sm font-semibold mb-2", darkCard ? "text-white/90" : "text-brand-dark")}>Time</p>
-                                {timeOptionsForModal.length === 0 ? (
+                                {loading ? (
+                                  <div className={cn("flex items-center gap-2 py-3", darkCard ? "text-white/80" : "text-brand-muted")}>
+                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                                    <span className="text-xs">Checking availability…</span>
+                                  </div>
+                                ) : timeOptionsForModal.length === 0 ? (
                                   <p className={cn("text-xs", darkCard ? "text-white/70" : "text-brand-muted")}>No open slots this day for the selected duration.</p>
                                 ) : (
                                   <div className="flex flex-wrap gap-2">
@@ -984,7 +1043,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             <div className="mt-4 pt-4 border-t border-brand-dark/10">
                               <button
                                 type="button"
-                                disabled={!selectedDate || !selectedSlotInline}
+                                disabled={loading || !selectedDate || !selectedSlotInline}
                                 onClick={() => {
                                   if (!selectedDate || !selectedSlotInline) return;
                                   setShowInlineBoatStep(true);
@@ -1041,6 +1100,12 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         <p className={cn("text-[10px] sm:text-[11px] mb-1.5 shrink-0", darkCard ? "text-white/70" : "text-brand-muted")}>
                           {selectedDate} · {formatTime(selectedSlotInline.startAt)}
                         </p>
+                        {!inlineBoatsLoading && inlineBoats.length > 0 && availableBoatIdsForInlineSlot.size === 0 ? (
+                          <div className={cn("rounded-lg border p-3 mb-2 shrink-0", darkCard ? "bg-amber-500/20 border-amber-400/50 text-amber-100" : "bg-amber-50 border-amber-200 text-amber-900")}>
+                            <p className="text-xs font-medium">This time is no longer available.</p>
+                            <p className="text-[10px] mt-0.5 opacity-90">It may have just been booked. Use &quot;Change date or time&quot; above to pick another slot.</p>
+                          </div>
+                        ) : null}
                         <div className="min-h-0 flex-1 overflow-y-auto">
                           {inlineBoatsLoading ? (
                             <div className="py-4 flex justify-center">
@@ -1259,7 +1324,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const hasBooked = cell.bookedCount > 0;
                         const isPast = cell.isPast;
                         const isHoliday = holidayDateStrings.has(cell.dateStr);
-                        const isClickable = cell.isCurrentMonth && (hasOpen || hasBooked) && !isPast;
+                        const isClickable = cell.isCurrentMonth && !isPast && (onOpenInModal && isTicketed ? hasOpen : (hasOpen || hasBooked));
                         return (
                           <button
                             key={cell.dateStr + cell.day}
@@ -1405,7 +1470,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                     const rate = rates.find((r) => r.durationHours === selectedDurationForModal);
                     const priceLabel = rate ? formatPrice(rate.priceCents) : null;
                     const useOpenInModal = !!onOpenInModal && !!selectedDate;
-                    const useDirectCheckout = !useOpenInModal && directCheckout;
+                    const requiresFullFlow = isTicketed || pricingType === "shared";
+                    const useDirectCheckout = !useOpenInModal && directCheckout && !requiresFullFlow;
                     const checkoutHref =
                       !useOpenInModal && !useDirectCheckout && bookHref && selectedDate
                         ? `${bookHref}?date=${encodeURIComponent(selectedDate)}&slotId=${encodeURIComponent(slot.id)}`
@@ -1462,6 +1528,22 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 }),
                               });
                               const data = await res.json().catch(() => ({}));
+                              if (data?.ticketedFlowRequired && data?.bookingUrl) {
+                                setSlotModalOpen(false);
+                                if (onOpenInModal) {
+                                  const openModal = onOpenInModal as OnOpenInModalFn;
+                                  openModal({
+                                    experienceId: experienceId ?? undefined,
+                                    experienceSlug: experienceSlug ?? undefined,
+                                    date: selectedDate ?? "",
+                                    slotId: slot.id,
+                                    boatId: (slot as { boatId?: string }).boatId,
+                                  });
+                                } else {
+                                  window.location.href = data.bookingUrl;
+                                }
+                                return;
+                              }
                               if (res.ok && data?.url) {
                                 setSlotModalOpen(false);
                                 window.location.href = data.url;

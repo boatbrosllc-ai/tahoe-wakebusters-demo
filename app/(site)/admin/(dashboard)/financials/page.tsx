@@ -17,6 +17,7 @@ type FinancialsData = {
   revenueThisMonthCents: number;
   revenueInRangeCents?: number;
   paidBookingCount?: number;
+  activeBookingCount?: number;
   totalBookingCount?: number;
   recent: { id: string; createdAt: string; customerEmail: string; totalCents: number; status: string; experienceName?: string }[];
   byExperience: { experienceId: string; experienceName: string; revenueCents: number; bookingCount: number }[];
@@ -145,7 +146,7 @@ export default function AdminFinancialsPage() {
           <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Financials</h1>
           <p className="mt-1 text-sm text-brand-muted">
             Revenue and recent transactions from paid bookings in Firestore.
-            {totalRevenueCents === 0 && (data.paidBookingCount ?? 0) === 0 && (
+            {totalRevenueCents === 0 && (data.activeBookingCount ?? data.paidBookingCount ?? 0) === 0 && (
               <span className="block mt-2 text-amber-700">
                 Showing $0 because there are no paid bookings yet. Complete a test payment (or ensure{" "}
                 <Link href="/admin/bookings" className="text-brand-primary hover:underline">Admin → Bookings</Link>

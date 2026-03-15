@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
   if (typeof ts.seconds === "number") return new Date(ts.seconds * 1000);
   return null;
 }
+
+const PAGE_SIZE = 100;
 
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -32,80 +36,95 @@ export async function GET(request: NextRequest) {
       return end;
     };
 
-    let query = db.collection("bookings").orderBy("createdAt", "desc");
-
+    let baseQuery = db.collection("bookings").orderBy("createdAt", "desc");
     if (fromDateVal || toDateVal) {
-      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
-      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
+      if (fromDateVal) baseQuery = baseQuery.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+      if (toDateVal) baseQuery = baseQuery.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
     }
-
-    const PAGE_SIZE = 500;
-    const snap = await query.limit(PAGE_SIZE).get();
-
-    const experienceIds = new Set<string>();
-    snap.docs.forEach((d) => {
-      const b = d.data() as Booking;
-      if (b.experienceId) experienceIds.add(b.experienceId);
-    });
-    const experienceNames = new Map<string, string>();
-    await Promise.all(
-      Array.from(experienceIds).map(async (id) => {
-        const exp = await db.collection("experiences").doc(id).get();
-        if (exp.exists) experienceNames.set(id, (exp.data() as { title?: string }).title ?? id);
-      })
-    );
 
     let totalRevenueCents = 0;
     let revenueInRangeCents = 0;
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     let revenueThisMonthCents = 0;
-    let paidBookingCount = 0;
+    let activeBookingCount = 0;
+    let totalBookingCount = 0;
     const recent: { id: string; createdAt: string; customerEmail: string; totalCents: number; status: string; experienceName: string }[] = [];
     const byExperienceMap = new Map<string, { revenueCents: number; bookingCount: number }>();
+    const experienceIds = new Set<string>();
 
-    snap.docs.forEach((d) => {
-      const b = d.data() as Booking;
-      const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-      const totalCents = b.pricing?.totalCents ?? 0;
-      const eid = b.experienceId ?? "";
-      const inRange =
-        (!fromDateVal || (createdAt && createdAt >= fromDateVal)) &&
-        (!toDateVal || (createdAt && createdAt <= toDateEndOfDay(toDateVal)));
-      const matchesExperience = !experienceIdFilter || b.experienceId === experienceIdFilter;
-      const include = inRange && matchesExperience;
+    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    while (true) {
+      let query = baseQuery.limit(PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const snap = await query.get();
+      if (snap.empty) break;
 
-      if (b.status === "paid") {
-        paidBookingCount += 1;
-        totalRevenueCents += totalCents;
-        if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += totalCents;
+      totalBookingCount += snap.size;
+      snap.docs.forEach((d) => {
+        const b = d.data() as Booking;
+        if (b.experienceId) experienceIds.add(b.experienceId);
+      });
+
+      snap.docs.forEach((d) => {
+        const b = d.data() as Booking;
+        const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
+        const totalCents = b.pricing?.totalCents ?? 0;
+        const eid = b.experienceId ?? "";
+        const inRange =
+          (!fromDateVal || (createdAt && createdAt >= fromDateVal)) &&
+          (!toDateVal || (createdAt && createdAt <= toDateEndOfDay(toDateVal)));
+        const matchesExperience = !experienceIdFilter || b.experienceId === experienceIdFilter;
+        const include = inRange && matchesExperience;
+
+        if (BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
+          const totalCentsForRevenue = b.pricing?.totalCents ?? 0;
+          activeBookingCount += 1;
+          totalRevenueCents += totalCentsForRevenue;
+          if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += totalCentsForRevenue;
+          if (include) {
+            revenueInRangeCents += totalCentsForRevenue;
+            const prev = byExperienceMap.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
+            byExperienceMap.set(eid, {
+              revenueCents: prev.revenueCents + totalCentsForRevenue,
+              bookingCount: prev.bookingCount + 1,
+            });
+          }
+        }
         if (include) {
-          revenueInRangeCents += totalCents;
-          const prev = byExperienceMap.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
-          byExperienceMap.set(eid, {
-            revenueCents: prev.revenueCents + totalCents,
-            bookingCount: prev.bookingCount + 1,
+          recent.push({
+            id: d.id,
+            createdAt: createdAt?.toISOString() ?? "",
+            customerEmail: b.customer?.email ?? "",
+            totalCents,
+            status: b.status ?? "",
+            experienceName: eid || "—",
           });
         }
-      }
-      if (include) {
-        recent.push({
-          id: d.id,
-          createdAt: createdAt?.toISOString() ?? "",
-          customerEmail: b.customer?.email ?? "",
-          totalCents,
-          status: b.status ?? "",
-          experienceName: eid ? experienceNames.get(eid) ?? eid : "—",
-        });
-      }
-    });
+      });
+
+      if (snap.size < PAGE_SIZE) break;
+      cursor = snap.docs[snap.docs.length - 1];
+    }
 
     recent.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const recentSlice = recent.slice(0, 20);
 
+    const experienceNamesFinal = new Map<string, string>();
+    await Promise.all(
+      Array.from(experienceIds).map(async (id) => {
+        const exp = await db.collection("experiences").doc(id).get();
+        if (exp.exists) experienceNamesFinal.set(id, (exp.data() as { title?: string }).title ?? id);
+      })
+    );
+    recentSlice.forEach((row) => {
+      if (row.experienceName && row.experienceName !== "—") {
+        row.experienceName = experienceNamesFinal.get(row.experienceName) ?? row.experienceName;
+      }
+    });
     const byExperience = Array.from(byExperienceMap.entries()).map(([experienceId, { revenueCents, bookingCount }]) => ({
       experienceId,
-      experienceName: experienceNames.get(experienceId) ?? experienceId,
+      experienceName: experienceNamesFinal.get(experienceId) ?? experienceId,
       revenueCents,
       bookingCount,
     }));
@@ -158,8 +177,8 @@ export async function GET(request: NextRequest) {
       totalRevenueCents,
       revenueThisMonthCents,
       revenueInRangeCents: fromDateVal || toDateVal ? revenueInRangeCents : undefined,
-      paidBookingCount,
-      totalBookingCount: snap.docs.length,
+      activeBookingCount,
+      totalBookingCount,
       recent: recentSlice,
       byExperience,
       stripe: stripeData,

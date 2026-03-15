@@ -62,7 +62,7 @@ export function buildWaiverHtml(input: BuildWaiverHtmlInput): string {
   const signatureSection = `
   <section style="margin-top:24px;">
     <h3 style="font-size:14px;margin-bottom:8px;">Signature</h3>
-    ${payload.signatureDataUrl.startsWith("data:") ? `<img src="${payload.signatureDataUrl}" alt="Signature" style="max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px;" />` : ""}
+    ${payload.signatureDataUrl && payload.signatureDataUrl.startsWith("data:") ? `<img src="${payload.signatureDataUrl}" alt="Signature" style="max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px;" />` : ""}
     ${payload.typedName ? `<p style="margin-top:8px;"><strong>Printed name:</strong> ${escapeHtml(payload.typedName)}</p>` : ""}
   </section>`;
 

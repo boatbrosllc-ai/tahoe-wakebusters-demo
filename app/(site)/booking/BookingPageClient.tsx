@@ -216,7 +216,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     const available = new Set<string>();
     for (const slot of allSlots) {
       if (slot.status !== "open") continue;
-      // When a boat is selected, restrict to that boat's slots only.
+      if (typeof (slot as { spotsRemaining?: number }).spotsRemaining === "number" && (slot as { spotsRemaining: number }).spotsRemaining === 0) continue;
       if (selectedBoat && slot.boatId !== selectedBoat.id) continue;
       const dateStr: string = slot.dateStr ?? (slot.startAt ? isoToChicagoDateStr(slot.startAt) : "");
       if (dateStr) available.add(dateStr);

@@ -131,6 +131,40 @@ export async function POST(
       }
     }
 
+    try {
+      const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
+      const expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
+      const experienceName = expSnapForName?.exists ? (expSnapForName.data() as { title?: string })?.title ?? "Your trip" : "Your trip";
+      const tripDateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
+      let refundAmount: string | undefined;
+      const successfulRefunds = refunds.filter((r) => r.status === "succeeded" || !r.error);
+      if (successfulRefunds.length > 0) {
+        const stripe = getStripe();
+        let totalCents = 0;
+        for (const r of successfulRefunds) {
+          try {
+            const pi = await stripe.paymentIntents.retrieve(r.paymentIntentId);
+            if (pi.amount != null) totalCents += pi.amount;
+          } catch {
+            // skip
+          }
+        }
+        if (totalCents > 0) {
+          const { formatMoney } = await import("@/lib/booking/format-money");
+          refundAmount = formatMoney(totalCents);
+        }
+      }
+      await sendBookingCancellationEmail({
+        to: booking.customer?.email ?? "",
+        customerName: booking.customer?.name ?? "Guest",
+        experienceName,
+        tripDate: tripDateStr ?? undefined,
+        refundAmount,
+      });
+    } catch (emailErr) {
+      console.error("[admin/cancel] Cancellation email failed", bookingId, emailErr);
+    }
+
     let cancellationPolicyWarning: string | undefined;
     const expId = booking.experienceId;
     if (expId) {

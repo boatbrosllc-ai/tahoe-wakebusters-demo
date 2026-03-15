@@ -26,6 +26,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Allowed types: JPEG, PNG, WebP, GIF" }, { status: 400 });
   }
 
+  const MAX_SIZE_BYTES = 15 * 1024 * 1024; // 15MB
+  if (file.size > MAX_SIZE_BYTES) {
+    return NextResponse.json({ error: "File too large (max 15MB)" }, { status: 413 });
+  }
+
   const rawPrefix = (formData.get("prefix") as string) || "boats/";
   const prefix = rawPrefix.replace(/[^a-zA-Z0-9/_-]/g, "").replace(/\/+/g, "/") || "boats/";
   const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 80);
@@ -34,6 +39,40 @@ export async function POST(request: NextRequest) {
   try {
     const bucket = getStorageBucket();
     const buffer = Buffer.from(await file.arrayBuffer());
+    // Validate magic bytes match declared MIME to avoid trusting client-supplied type.
+    const bytes = new Uint8Array(buffer);
+    const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const png =
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a;
+    const webp =
+      bytes.length >= 12 &&
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50;
+    const gif87a = bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 && bytes[4] === 0x37 && bytes[5] === 0x61;
+    const gif89a = bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 && bytes[4] === 0x39 && bytes[5] === 0x61;
+    const gif = gif87a || gif89a;
+    const typeMatches =
+      (file.type === "image/jpeg" && jpeg) ||
+      (file.type === "image/png" && png) ||
+      (file.type === "image/webp" && webp) ||
+      (file.type === "image/gif" && gif);
+    if (!typeMatches) {
+      return NextResponse.json({ error: "File content does not match declared type" }, { status: 400 });
+    }
     const dest = bucket.file(path);
     await dest.save(buffer, {
       metadata: {

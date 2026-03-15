@@ -1,15 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendContactFormEmail } from "@/lib/booking/brevo";
+import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+
+const MAX_NAME_LENGTH = 500;
+const MAX_MESSAGE_LENGTH = 10_000;
 
 /**
  * Contact form. Sends submission to business email (boatbrosllc@gmail.com or CONTACT_EMAIL) via Brevo.
+ * Rate-limited and input size capped to prevent abuse.
  */
 export async function POST(request: NextRequest) {
   try {
+    const rl = await checkRateLimit(getClientKey(request));
+    if (!rl.allowed) {
+      const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
     const body = await request.json();
-    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    const name = typeof body?.name === "string" ? body.name.trim().slice(0, MAX_NAME_LENGTH) : "";
     const email = typeof body?.email === "string" ? body.email.trim() : "";
-    const message = typeof body?.message === "string" ? body.message.trim() : "";
+    const message = typeof body?.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
 
     if (!name || !email || !message) {
       return NextResponse.json(

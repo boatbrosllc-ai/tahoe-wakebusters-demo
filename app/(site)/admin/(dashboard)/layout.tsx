@@ -11,7 +11,18 @@ export default async function AdminDashboardLayout({ children }: { children: Rea
     if (!valid) {
       redirect("/admin/login");
     }
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    const isFirebaseConfig =
+      lower.includes("firebase_private_key") ||
+      lower.includes("config missing") ||
+      lower.includes("firebase admin") ||
+      lower.includes("firebase config") ||
+      /credential|private key|truncated|secretorprivatekey/i.test(message);
+    if (isFirebaseConfig) {
+      redirect("/admin/login?error=config");
+    }
     redirect("/admin/login");
   }
   return <AdminShell>{children}</AdminShell>;

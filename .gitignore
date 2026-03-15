@@ -36,3 +36,6 @@ next-env.d.ts
 
 # Vercel
 .vercel
+
+# Standalone server (do not commit; use next build → .next/standalone/server.js if needed)
+server.js

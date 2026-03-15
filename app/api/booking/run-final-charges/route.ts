@@ -2,9 +2,11 @@
  * Cron: attempt off-session final charge for bookings with finalChargeAt <= now.
  * Call with Authorization: Bearer CRON_SECRET.
  * Uses finalChargeLockAt to prevent double charging; webhook payment_intent.succeeded marks final_paid.
+ * Reconciles bookings stuck in final_processing by inspecting existing final PaymentIntent status
+ * and writing final_paid + stripe.finalChargedAt when Stripe reports succeeded (idempotent).
  *
  * Pagination: iterates all eligible documents using cursor-based pages until no
- * results remain. Per-run metrics: matched, processed, attempted, skipped, failed.
+ * results remain. Per-run metrics: matched, processed (success + skipped + failed), attempted, successCount, skipped, failed.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -14,12 +16,13 @@ import { getStripe } from "@/lib/booking/stripe-client";
 import { sendFinalChargeFailedEmail } from "@/lib/booking/brevo";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { bookingEnv } from "@/lib/booking/env";
+import { getFinalChargeIdempotencyKey, isFinalChargeLockRecent } from "@/lib/booking/final-charge-idempotency";
+import { existingFinalPiAction } from "@/lib/booking/run-final-charges-action";
 import type { Booking } from "@/lib/booking/types";
 
-const LOCK_SKIP_MS = 10 * 60 * 1000; // 10 min
 const PAGE_SIZE = 100;
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
@@ -33,10 +36,43 @@ export async function GET(request: NextRequest) {
 
     let matched = 0;
     let attempted = 0;
+    let successCount = 0;
     let skipped = 0;
     let failed = 0;
     const errors: string[] = [];
     const stripe = getStripe();
+
+    // Phase 1: Reconcile final_processing — inspect existing final PaymentIntent; if Stripe reports succeeded, write final_paid immediately (idempotent).
+    let reconcileCursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    while (true) {
+      let reconcileQ = db
+        .collection("bookings")
+        .where("status", "==", "final_processing")
+        .limit(PAGE_SIZE);
+      if (reconcileCursor) reconcileQ = reconcileQ.startAfter(reconcileCursor);
+      const reconcileSnap = await reconcileQ.get();
+      if (reconcileSnap.empty) break;
+      for (const doc of reconcileSnap.docs) {
+        const booking = doc.data() as Booking;
+        const bookingId = doc.id;
+        const existingFinalPiId = booking.stripe?.finalPaymentIntentId;
+        if (!existingFinalPiId) continue;
+        try {
+          const existingPi = await stripe.paymentIntents.retrieve(existingFinalPiId);
+          if (existingPi.status !== "succeeded") continue;
+          await db.collection("bookings").doc(bookingId).update({
+            status: "final_paid",
+            "stripe.finalChargedAt": Timestamp.now(),
+            updatedAt: Timestamp.now(),
+          });
+          console.log("[run-final-charges] reconciled final_processing → final_paid", { bookingId, piId: existingFinalPiId });
+        } catch {
+          // retrieve failed; skip this booking this run
+        }
+      }
+      if (reconcileSnap.size < PAGE_SIZE) break;
+      reconcileCursor = reconcileSnap.docs[reconcileSnap.docs.length - 1];
+    }
 
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
 
@@ -58,13 +94,9 @@ export async function GET(request: NextRequest) {
       for (const doc of snap.docs) {
         const booking = doc.data() as Booking;
         const bookingId = doc.id;
-        const lockAt = booking.stripe?.finalChargeLockAt;
-        if (lockAt) {
-          const lockDate = typeof lockAt.toDate === "function" ? lockAt.toDate() : new Date((lockAt as { seconds: number }).seconds * 1000);
-          if (now.getTime() - lockDate.getTime() < LOCK_SKIP_MS) {
-            skipped++;
-            continue;
-          }
+        if (isFinalChargeLockRecent(booking.stripe?.finalChargeLockAt, now)) {
+          skipped++;
+          continue;
         }
         const customerId = booking.stripe?.customerId;
         const paymentMethodId = booking.stripe?.paymentMethodId;
@@ -73,8 +105,17 @@ export async function GET(request: NextRequest) {
         if (existingFinalPiId) {
           try {
             const existingPi = await stripe.paymentIntents.retrieve(existingFinalPiId);
-            const terminal = ["succeeded", "canceled", "refunded"].includes(existingPi.status);
-            if (!terminal) {
+            const action = existingFinalPiAction(existingPi.status);
+            if (action === "reconcile") {
+              await db.collection("bookings").doc(bookingId).update({
+                status: "final_paid",
+                "stripe.finalChargedAt": Timestamp.now(),
+                updatedAt: Timestamp.now(),
+              });
+              skipped++;
+              continue;
+            }
+            if (action === "skip") {
               skipped++;
               continue;
             }
@@ -111,20 +152,23 @@ export async function GET(request: NextRequest) {
               confirm: true,
               metadata: { bookingId, payment_stage: "final" },
             },
-            { idempotencyKey: `final_charge_cron_${bookingId}` }
+            { idempotencyKey: getFinalChargeIdempotencyKey(bookingId) }
           );
-          // Persist finalPaymentIntentId before status so pay-remaining can find it on idempotency mismatch
           const bookingRef = db.collection("bookings").doc(bookingId);
+          const isSucceeded = pi.status === "succeeded";
           await bookingRef.update({
             "stripe.finalPaymentIntentId": pi.id,
+            ...(isSucceeded ? { "stripe.finalChargedAt": Timestamp.now() } : {}),
+            status: isSucceeded ? "final_paid" : "final_processing",
             updatedAt: Timestamp.now(),
           });
-          await bookingRef.update({
-            status: "final_processing",
-            updatedAt: Timestamp.now(),
-          });
-          console.log("[run-final-charges] PaymentIntent created (webhook will set final_paid)", { bookingId, piId: pi.id });
+          if (isSucceeded) {
+            console.log("[run-final-charges] PaymentIntent succeeded immediately (final_paid persisted)", { bookingId, piId: pi.id });
+          } else {
+            console.log("[run-final-charges] PaymentIntent created (webhook will set final_paid)", { bookingId, piId: pi.id });
+          }
           attempted++;
+          successCount++;
         } catch (stripeErr: unknown) {
           const err = stripeErr as { code?: string; type?: string; message?: string };
           const code = err.code ?? err.type;
@@ -144,7 +188,7 @@ export async function GET(request: NextRequest) {
           try {
             let manageLink: string | undefined;
             if (bookingEnv.manageBookingSecret) {
-              manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId, customerEmail: booking.customer.email }))}`;
+              manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId, customerEmail: booking.customer.email, tripDateStr: booking.startDateStr }))}`;
             }
             await sendFinalChargeFailedEmail(booking.customer.email, booking.customer.name, manageLink, requiresAction);
           } catch (emailErr) {
@@ -157,7 +201,9 @@ export async function GET(request: NextRequest) {
       cursor = snap.docs[snap.docs.length - 1];
     }
 
-    return NextResponse.json({ ok: true, matched, processed: attempted + skipped + failed, attempted, skipped, failed, errors });
+    // processed = mutually exclusive outcomes: success + skipped + failed (no double-count)
+    const processed = successCount + skipped + failed;
+    return NextResponse.json({ ok: true, matched, processed, attempted, successCount, skipped, failed, errors });
   } catch (err) {
     console.error("[run-final-charges]", err);
     return NextResponse.json({ error: "Final charge run failed" }, { status: 500 });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { generateIncidentCode } from "@/lib/booking/debug";
 import type { Discount } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +17,10 @@ export async function POST(request: NextRequest) {
   const rl = await checkRateLimit(getClientKey(request));
   if (!rl.allowed) {
     if (rl.serverError) {
+      const incidentCode = generateIncidentCode();
+      console.warn("[booking:validate-discount] rate limit service unavailable (503)", { incidentCode });
       return NextResponse.json(
-        { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+        { error: "Service temporarily unavailable. Please try again shortly.", incidentCode },
         { status: 503 }
       );
     }
@@ -44,7 +47,7 @@ export async function POST(request: NextRequest) {
     const result = validateAndApplyDiscount(discountDoc, totalCents);
 
     if (!result.valid) {
-      return NextResponse.json({ valid: false, error: result.error }, { status: 200 });
+      return NextResponse.json({ valid: false, error: result.error }, { status: 422 });
     }
 
     return NextResponse.json({

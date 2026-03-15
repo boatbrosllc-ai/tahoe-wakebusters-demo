@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendFinalPaymentRequestEmail } from "@/lib/booking/brevo";
+import { formatMoney } from "@/lib/booking/format-money";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { bookingEnv } from "@/lib/booking/env";
@@ -157,7 +158,7 @@ export async function POST(request: NextRequest) {
         timeZone: "America/Chicago",
       });
 
-      const payLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId: doc.id, customerEmail: toEmail }))}`;
+      const payLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId: doc.id, customerEmail: toEmail, tripDateStr: booking.startDateStr }))}`;
 
       try {
         await sendFinalPaymentRequestEmail({
@@ -166,7 +167,7 @@ export async function POST(request: NextRequest) {
           experienceName,
           tripDate: tripDateStr,
           startTime: startTimeStr,
-          amountFormatted: `$${(finalCents / 100).toFixed(2)}`,
+          amountFormatted: formatMoney(finalCents),
           payLink,
         });
         await doc.ref.update({ finalPaymentRequestSentAt: Timestamp.now() });

@@ -33,7 +33,7 @@ export function Header() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
-  const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection } = useBookingModal();
+  const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection, selectionKey } = useBookingModal();
   // Only mount the modal after it has been opened at least once — avoids mounting a
   // 2300-line component on every page load even when the modal is never opened.
   const [hasOpenedBookingModal, setHasOpenedBookingModal] = useState(false);
@@ -247,6 +247,7 @@ export function Header() {
               open={bookingModalOpen}
               onOpenChange={setBookingModalOpen}
               initialSelection={initialSelection}
+              selectionKey={selectionKey}
             />
           )}
         </div>

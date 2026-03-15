@@ -17,6 +17,14 @@ interface ReceiptData {
   pricing: { totalCents: number; currency: string };
   status: string;
   receiptToken?: string;
+  paymentSummary?: {
+    mode: "event_deposit" | "event_full" | "state_fallback" | "state_fallback_deposit";
+    paidNowCents: number;
+    depositAmountCents?: number;
+    finalAmountCents?: number;
+    finalChargeAt?: string;
+    totalAmountCents: number;
+  };
 }
 
 function formatDate(iso: string | null) {
@@ -28,6 +36,16 @@ function formatDate(iso: string | null) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/Chicago",
+  });
+}
+
+function formatDateShort(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
     timeZone: "America/Chicago",
   });
 }
@@ -117,6 +135,16 @@ function BookingSuccessContent() {
 
   const totalFormatted = (data.pricing.totalCents / 100).toFixed(2);
   const currency = data.pricing.currency.toUpperCase();
+  const ps = data.paymentSummary;
+  const isDepositMode = ps?.mode === "event_deposit" || ps?.mode === "state_fallback_deposit";
+  // Use API paidNowCents so deposit fallback shows deposit amount, not full total.
+  const paidNowFormatted = ((ps?.paidNowCents ?? 0) / 100).toFixed(2);
+  const remainingCents =
+    isDepositMode && ps
+      ? (ps.finalAmountCents ?? Math.max(0, (ps.totalAmountCents ?? 0) - (ps.paidNowCents ?? 0)))
+      : 0;
+  const remainingFormatted = (remainingCents / 100).toFixed(2);
+  const totalValueFormatted = ps ? (ps.totalAmountCents / 100).toFixed(2) : totalFormatted;
 
   return (
     <div className="section-padding bg-brand-bg/30">
@@ -153,11 +181,33 @@ function BookingSuccessContent() {
               <dt className="text-sm font-medium text-brand-muted">Guest</dt>
               <dd>{data.customer ? `${data.customer.name} · ${data.customer.phone}` : "—"}</dd>
             </div>
-            <div>
-              <dt className="text-sm font-medium text-brand-muted">Total paid</dt>
-              <dd className="font-semibold">{currency} ${totalFormatted}</dd>
-            </div>
+            {isDepositMode ? (
+              <>
+                <div>
+                  <dt className="text-sm font-medium text-brand-muted">Deposit paid today</dt>
+                  <dd className="font-semibold">{currency} ${paidNowFormatted}</dd>
+                </div>
+                <div>
+                  <dt className="text-sm font-medium text-brand-muted">Remaining balance</dt>
+                  <dd className="font-semibold">{currency} ${remainingFormatted}</dd>
+                </div>
+                <div>
+                  <dt className="text-sm font-medium text-brand-muted">Total booking value</dt>
+                  <dd className="font-semibold">{currency} ${totalValueFormatted}</dd>
+                </div>
+              </>
+            ) : (
+              <div>
+                <dt className="text-sm font-medium text-brand-muted">Total paid</dt>
+                <dd className="font-semibold">{currency} ${paidNowFormatted}</dd>
+              </div>
+            )}
           </dl>
+          {isDepositMode && ps?.finalChargeAt && (
+            <p className="mt-4 p-3 rounded-lg border border-brand-dark/10 bg-brand-bg/50 text-sm text-brand-muted">
+              Your remaining balance will be charged automatically on {formatDateShort(ps.finalChargeAt)}. No action needed.
+            </p>
+          )}
           <p className="mt-6 text-sm text-brand-muted">
             Booking ID: {data.bookingId}
           </p>

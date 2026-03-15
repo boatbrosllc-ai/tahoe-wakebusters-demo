@@ -66,3 +66,23 @@
   window_limit = 30
   window_size = 60
   aggregate_by = ["ip", "domain"]
+
+[[redirects]]
+  from = "/api/booking/create-payment-intent"
+  to = "/api/booking/create-payment-intent"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 30
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+# Security headers (CSP is set only in middleware.ts — do not duplicate here).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"

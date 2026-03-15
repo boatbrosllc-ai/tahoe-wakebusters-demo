@@ -15,6 +15,7 @@ import {
   setBookingWaiverPointer,
   updateRequest,
 } from "./firestore";
+import { sendWaiverTemplateMissingAlert } from "@/lib/booking/brevo";
 import { waiverEmailBrevo } from "./email-brevo";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 
@@ -49,7 +50,21 @@ export async function createWaiverForBooking(
   try {
     const templates = await listTemplates();
     const active = templates.find((t) => t.isActive);
-    if (!active) return null;
+    if (!active) {
+      const db = getDb();
+      const snap = await db.collection("bookings").doc(input.bookingId).get();
+      const tripDate = (snap.data() as { startDateStr?: string } | undefined)?.startDateStr ?? "";
+      const phone = (snap.data() as { customer?: { phone?: string } } | undefined)?.customer?.phone;
+      const customer = {
+        name: input.customerName ?? "Guest",
+        email: input.customerEmail,
+        ...(phone != null && phone !== "" && { phone }),
+      };
+      sendWaiverTemplateMissingAlert(input.bookingId, customer, tripDate).catch((err) => {
+        console.error("[waiver] sendWaiverTemplateMissingAlert failed", input.bookingId, err);
+      });
+      return null;
+    }
 
     const { requestId, signingUrl } = await createRequest({
       bookingId: input.bookingId,

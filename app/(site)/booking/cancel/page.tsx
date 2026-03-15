@@ -23,8 +23,11 @@ function CancelContent() {
     }
     setApiError(false);
     try {
-      const params = new URLSearchParams({ holdId: id, release_token: token });
-      const res = await fetch(`/api/booking/release-hold?${params.toString()}`);
+      const res = await fetch("/api/booking/release-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId: id, release_token: token }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setApiError(true);
@@ -57,7 +60,7 @@ function CancelContent() {
         ? "This link is invalid or expired. If you had a held slot, it may already be released."
         : holdId && loading
           ? "Releasing your held slot…"
-          : "No charge was made. Your held slot has been released so others can book it.";
+          : "No charge was made.";
 
   return (
     <div className="section-padding bg-brand-bg/30">

@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { parseSlotId, buildSlotId, getSlotStartEnd } from "../experience-slots";
+import { parseSlotId, buildSlotId, getSlotStartEnd, toDateStrOnly, isSeasonalAllowed } from "../experience-slots";
 
 describe("parseSlotId", () => {
   it("parses 5-part slot id (hour start, no minute)", () => {
@@ -67,5 +67,53 @@ describe("getSlotStartEnd", () => {
     assert.strictEqual(rebuilt, slotId);
     const { start, end } = getSlotStartEnd(parsed!.dateStr, parsed!.startHour, parsed!.durationHours, parsed!.startMinute);
     assert.ok(start.getTime() < end.getTime());
+  });
+});
+
+describe("toDateStrOnly", () => {
+  it("returns YYYY-MM-DD for valid date string", () => {
+    assert.strictEqual(toDateStrOnly("2025-11-01"), "2025-11-01");
+    assert.strictEqual(toDateStrOnly("2026-01-15"), "2026-01-15");
+    assert.strictEqual(toDateStrOnly("2025-11-01T00:00:00.000Z"), "2025-11-01");
+  });
+
+  it("returns null for invalid or short input", () => {
+    assert.strictEqual(toDateStrOnly(null), null);
+    assert.strictEqual(toDateStrOnly(undefined), null);
+    assert.strictEqual(toDateStrOnly(""), null);
+    assert.strictEqual(toDateStrOnly("2025-11"), null);
+    assert.strictEqual(toDateStrOnly("not-a-date"), null);
+  });
+});
+
+describe("isSeasonalAllowed", () => {
+  it("returns true when seasonal is disabled or undefined", () => {
+    assert.strictEqual(isSeasonalAllowed(undefined, new Date("2025-06-15")), true);
+    assert.strictEqual(isSeasonalAllowed({ enabled: false }, new Date("2025-06-15")), true);
+  });
+
+  it("allows slot when within date range (startDate/endDate)", () => {
+    const seasonal = { enabled: true, startDate: "2025-06-01", endDate: "2025-08-31" };
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-06-15T12:00:00Z"), "2025-06-15"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-08-01T12:00:00Z"), "2025-08-01"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-05-31T12:00:00Z"), "2025-05-31"), false);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-09-01T12:00:00Z"), "2025-09-01"), false);
+  });
+
+  it("allows slot when within month range (startMonth/endMonth, no wrap)", () => {
+    const seasonal = { enabled: true, startMonth: 6, endMonth: 8 };
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-06-15T12:00:00Z"), "2025-06-15"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-08-01T12:00:00Z"), "2025-08-01"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-05-31T12:00:00Z"), "2025-05-31"), false);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-09-01T12:00:00Z"), "2025-09-01"), false);
+  });
+
+  it("allows slot when within wrap-around month range (e.g. November through January)", () => {
+    const seasonal = { enabled: true, startMonth: 11, endMonth: 1 };
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-11-15T12:00:00Z"), "2025-11-15"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-12-01T12:00:00Z"), "2025-12-01"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2026-01-10T12:00:00Z"), "2026-01-10"), true);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-10-31T12:00:00Z"), "2025-10-31"), false);
+    assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2026-02-01T12:00:00Z"), "2026-02-01"), false);
   });
 });

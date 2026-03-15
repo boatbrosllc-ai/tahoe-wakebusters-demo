@@ -39,9 +39,78 @@ export function parseSlotId(slotId: string): ParsedSlotId | null {
   return { dateStr, startHour, startMinute: parts.length === 6 ? startMinute : 0, durationHours };
 }
 
+/**
+ * Relaxed slotId parse: strips whitespace, zero-pads month/day, then retries parseSlotId.
+ * Handles legacy formats like "2026-2-20-17-3" so admin and slots can display them.
+ */
+export function parseSlotIdRelaxed(slotId: string): ParsedSlotId | null {
+  let parsed = parseSlotId(slotId.trim());
+  if (parsed) return parsed;
+  const cleaned = slotId.replace(/\s/g, "");
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
+    return parseSlotId(normalized);
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
+    const parts = cleaned.split("-");
+    const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
+    return parseSlotId(normalized);
+  }
+  return null;
+}
+
 export function buildSlotId(dateStr: string, startHour: number, durationHours: number, startMinute?: number): string {
   if (startMinute === 30) return `${dateStr}-${startHour}-30-${durationHours}`;
   return `${dateStr}-${startHour}-${durationHours}`;
+}
+
+/**
+ * Normalize to YYYY-MM-DD or null. Handles Firestore/API returning ISO strings or partial dates.
+ * Used for seasonal date-range and slot date comparison.
+ */
+export function toDateStrOnly(v: unknown): string | null {
+  if (v == null) return null;
+  const s = typeof v === "string" ? v.trim() : null;
+  if (!s || s.length < 10) return null;
+  const sliced = s.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(sliced) ? sliced : null;
+}
+
+/** Seasonal config shape used by isSeasonalAllowed (from Experience.seasonal). */
+export interface SeasonalConfig {
+  enabled?: boolean;
+  startMonth?: number;
+  endMonth?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+/**
+ * Returns true if the slot date is within the experience's seasonal window (specific dates or month range).
+ * Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used.
+ * Handles wrap-around month range (e.g. November through January: startMonth 11, endMonth 1).
+ */
+export function isSeasonalAllowed(
+  seasonal: SeasonalConfig | undefined,
+  slotStart: Date,
+  slotDateStr?: string
+): boolean {
+  if (!seasonal?.enabled) return true;
+  const startDate = toDateStrOnly(seasonal.startDate);
+  const endDate = toDateStrOnly(seasonal.endDate);
+  if (startDate && endDate) {
+    const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
+    return dateStr >= startDate && dateStr <= endDate;
+  }
+  const startMonth = seasonal.startMonth ?? 1;
+  const endMonth = seasonal.endMonth ?? 12;
+  const month =
+    slotDateStr && /^\d{4}-\d{2}-\d{2}$/.test(slotDateStr)
+      ? parseInt(slotDateStr.slice(5, 7), 10) || slotStart.getMonth() + 1
+      : slotStart.getMonth() + 1;
+  if (startMonth <= endMonth) return month >= startMonth && month <= endMonth;
+  return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
 }
 
 /** Cached DST boundaries (2nd Sunday March, 1st Sunday November) keyed by year. */

@@ -32,7 +32,7 @@ npm run build
 npm start
 ```
 
-**Note:** If `npm run build` fails with `TypeError: generate is not a function` (Next.js `generateBuildId`), it can be due to the project path (e.g. spaces like "Boat Bros"). Workarounds: run the build from a path without spaces, or use `npm run dev` for local development. You can also set `BUILD_ID` in the environment and ensure `generateBuildId` in `next.config.js` is a function that returns a string.
+**Note:** Build ID is set in `next.config.js` via `generateBuildId` (uses `BUILD_ID` env var if set, otherwise a timestamp). Set `BUILD_ID` in CI for reproducible cache keys (e.g. `${{ github.sha }}`).
 
 ## Configuration (single place)
 
@@ -84,7 +84,7 @@ Edit **`content/brand.ts`** for:
 
 ## APIs
 
-- **`POST /api/lead`** – Body: `{ email, source }`. Logs to console; TODO: DB/CRM.
+- **`POST /api/lead`** – Body: `{ email, source }`. Persists to Firestore `leads` when configured and/or sends to business email via Brevo.
 - **`POST /api/contact`** – Body: `{ name, email, message }`. Logs to console; TODO: DB/email/CRM.
 - **Custom booking engine** – See **Environment variables** below and **`docs/BOOKING_SETUP.md`**. Routes: `/api/booking/*`, `/api/experiences`, `/api/experiences/[slug]`, `/api/stripe/webhook`. Frontend: `/booking`, `/booking/success`, `/booking/cancel`, `/experiences/pontoon`, etc.
 

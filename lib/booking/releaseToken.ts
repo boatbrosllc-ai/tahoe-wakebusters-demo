@@ -9,7 +9,8 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 const ALG = "sha256";
 const SEP = ".";
-const INNER_SEP = "|";
+// Null byte: prohibited in email/local parts and Firestore doc IDs; avoids | breaking token parsing.
+const INNER_SEP = "\x00";
 const PREFIX = "rel"; // release
 
 /** Optional secret for release tokens. Falls back to MANAGE_BOOKING_SECRET for backward compat when RELEASE_TOKEN_SECRET is unset. */

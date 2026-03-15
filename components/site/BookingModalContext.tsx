@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useRef, useState } from "react";
 
 export interface BookingModalInitialSelection {
   experienceId?: string;
@@ -15,6 +15,8 @@ type BookingModalContextValue = {
   open: boolean;
   setOpen: (open: boolean) => void;
   initialSelection: BookingModalInitialSelection | null;
+  /** Incremented each time openWithSelection is called so modal can reset form when selection changes while already open. */
+  selectionKey: number;
   openWithSelection: (selection: BookingModalInitialSelection) => void;
   clearInitialSelection: () => void;
 };
@@ -24,8 +26,12 @@ const BookingModalContext = createContext<BookingModalContextValue | null>(null)
 export function BookingModalProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [initialSelection, setInitialSelection] = useState<BookingModalInitialSelection | null>(null);
+  const selectionKeyRef = useRef(0);
+  const [selectionKey, setSelectionKey] = useState(0);
 
   const openWithSelection = useCallback((selection: BookingModalInitialSelection) => {
+    selectionKeyRef.current += 1;
+    setSelectionKey(selectionKeyRef.current);
     setInitialSelection(selection);
     setOpen(true);
   }, []);
@@ -48,6 +54,7 @@ export function BookingModalProvider({ children }: { children: React.ReactNode }
         open,
         setOpen: handleSetOpen,
         initialSelection,
+        selectionKey,
         openWithSelection,
         clearInitialSelection,
       }}

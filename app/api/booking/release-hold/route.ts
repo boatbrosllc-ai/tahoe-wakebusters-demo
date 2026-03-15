@@ -2,7 +2,7 @@
  * Release a hold so the slot goes back to open. Used when the user cancels
  * checkout. Requires either (1) a signed release token (bound to holdId and expiry),
  * or (2) admin auth (Bearer BLOCK_SECRET/SEED_SECRET or admin session) when no token.
- * POST body: { holdId: string, release_token?: string } or GET ?holdId=...&release_token=...
+ * POST body: { holdId: string, release_token?: string }. GET is not supported (use POST to avoid token in URL/logs).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -92,18 +92,16 @@ async function releaseHold(
   return { released: true };
 }
 
-/** Parse holdId and release_token from POST (body or query) or GET (query only). */
+/** Parse holdId and release_token from POST body. */
 function parseHoldParams(request: NextRequest): Promise<{ holdId: string | null; releaseToken: string | null }> {
-  const holdIdFromQuery = request.nextUrl.searchParams.get("holdId");
-  const releaseTokenFromQuery = request.nextUrl.searchParams.get("release_token");
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     return request.json().catch(() => ({})).then((body: { holdId?: string; release_token?: string }) => ({
-      holdId: typeof body.holdId === "string" ? body.holdId : holdIdFromQuery,
-      releaseToken: typeof body.release_token === "string" ? body.release_token : releaseTokenFromQuery,
+      holdId: typeof body.holdId === "string" ? body.holdId : null,
+      releaseToken: typeof body.release_token === "string" ? body.release_token : null,
     }));
   }
-  return Promise.resolve({ holdId: holdIdFromQuery, releaseToken: releaseTokenFromQuery });
+  return Promise.resolve({ holdId: null, releaseToken: null });
 }
 
 export async function POST(request: NextRequest) {
@@ -125,34 +123,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const db = getDb();
-    const result = await releaseHold(db, holdId);
-    return NextResponse.json(result);
-  } catch (err) {
-    if (err instanceof Error && err.message === "Invalid hold") {
-      return NextResponse.json({ error: "Invalid hold" }, { status: 400 });
-    }
-    console.error("[release-hold]", err);
-    return NextResponse.json({ error: "Failed to release hold" }, { status: 500 });
-  }
-}
-
-/** GET so cancel page can call /api/booking/release-hold?holdId=...&release_token=... without CORS preflight */
-export async function GET(request: NextRequest) {
-  const holdId = request.nextUrl.searchParams.get("holdId");
-  const releaseToken = request.nextUrl.searchParams.get("release_token");
-  if (!holdId || holdId.length < 10) {
-    return NextResponse.json({ error: "holdId required" }, { status: 400 });
-  }
-  if (!releaseToken) {
-    return NextResponse.json({ error: "release_token required" }, { status: 400 });
-  }
-  const payload = verifyReleaseToken(releaseToken);
-  if (!payload || payload.holdId !== holdId) {
-    return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
-  }
-
-  try {
     const db = getDb();
     const result = await releaseHold(db, holdId);
     return NextResponse.json(result);

@@ -81,7 +81,13 @@ export const submitWaiverSigningSchema = z
     groupToken: z.string().optional(),
     signer: signerSchema,
     initials: z.record(z.string(), z.string()).default({}),
-    signatureDataUrl: z.string().min(1, "Signature is required"), // data:image/png;base64,...
+    signatureDataUrl: z
+      .string()
+      .min(1, "Signature is required")
+      .refine(
+        (v) => v.startsWith("data:image/") && v.includes(";base64,"),
+        { message: "Signature must be a valid image data URL (data:image/...;base64,...)" }
+      ),
     typedName: z.string().optional(),
   })
   .refine((data) => (data.token?.length ?? 0) > 0 || (data.groupToken?.length ?? 0) > 0, {

@@ -5,12 +5,54 @@ import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime"
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 
+const CHICAGO = "America/Chicago";
 const HOUR_START = 7;
 const HOUR_END = 21; // 9 pm
 const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i);
 const CELL_H = 56; // px per hour
 const TOTAL_GRID_H = HOURS.length * CELL_H;
+
+/** Minutes since HOUR_START (7am) in America/Chicago for an ISO string. */
+function minutesSinceHourStartChicago(iso: string): number {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO,
+    hour: "numeric",
+    hour12: false,
+    minute: "2-digit",
+  }).formatToParts(d);
+  const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const minute = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return hour * 60 + minute - HOUR_START * 60;
+}
+
+/** Format a Date in America/Chicago as YYYY-MM-DDTHH:MM for datetime-local input. */
+function toCentralDatetimeLocal(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHICAGO,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/** Parse YYYY-MM-DDTHH:MM as America/Chicago and return a Date (for form submit). */
+function parseCentralDatetimeLocal(s: string): Date {
+  const [datePart, timePart] = s.split("T");
+  if (!datePart || !timePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return new Date(s);
+  const [h, m] = timePart.split(":").map(Number);
+  const hour = Number.isNaN(h) ? 0 : h;
+  const minute = Number.isNaN(m) ? 0 : m;
+  const { start } = getSlotStartEnd(datePart, hour, 0, minute);
+  return start;
+}
 
 type CalendarEvent = {
   id: string;
@@ -88,6 +130,7 @@ interface AdminCalendarWeekViewProps {
   boatColorByIndex?: Record<number, string>;
   onPrevWeek: () => void;
   onNextWeek: () => void;
+  onGoToToday?: () => void;
   onBookingClick: (bookingId: string) => void;
   onRefresh: () => void;
 }
@@ -101,6 +144,7 @@ export function AdminCalendarWeekView({
   boatColorByIndex = {},
   onPrevWeek,
   onNextWeek,
+  onGoToToday,
   onBookingClick,
   onRefresh,
 }: AdminCalendarWeekViewProps) {
@@ -172,12 +216,10 @@ export function AdminCalendarWeekView({
     return d;
   });
 
-  /** Convert an ISO time to top-offset px and height px within the grid */
+  /** Convert an ISO time to top-offset px and height px within the grid (America/Chicago). */
   function eventPx(startIso: string, endIso: string): { top: number; height: number } {
-    const s = new Date(startIso);
-    const e = new Date(endIso);
-    const startMin = s.getHours() * 60 + s.getMinutes() - HOUR_START * 60;
-    const endMin = e.getHours() * 60 + e.getMinutes() - HOUR_START * 60;
+    const startMin = minutesSinceHourStartChicago(startIso);
+    const endMin = minutesSinceHourStartChicago(endIso);
     const top = Math.max(0, (startMin / 60) * CELL_H);
     const height = Math.max(22, ((endMin - startMin) / 60) * CELL_H);
     return { top, height };
@@ -202,11 +244,13 @@ export function AdminCalendarWeekView({
   const handleCellClick = (dayIndex: number, hour: number) => {
     const d = new Date(weekStart);
     d.setDate(d.getDate() + dayIndex);
-    d.setHours(hour, 0, 0, 0);
-    const end = new Date(d);
-    end.setHours(end.getHours() + 1);
-    setNewBlockStart(d.toISOString().slice(0, 16));
-    setNewBlockEnd(end.toISOString().slice(0, 16));
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const dateStr = `${year}-${month}-${day}`;
+    const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, hour, 1, 0);
+    setNewBlockStart(toCentralDatetimeLocal(slotStart));
+    setNewBlockEnd(toCentralDatetimeLocal(slotEnd));
     setNewBlockBoatId(boatList[0]?.id ?? "");
     setNewBlockNote("");
     setNewBlockOpen(true);
@@ -214,7 +258,9 @@ export function AdminCalendarWeekView({
 
   const createBlock = async () => {
     if (!newBlockStart || !newBlockEnd) return;
-    if (new Date(newBlockStart) >= new Date(newBlockEnd)) return;
+    const startDate = parseCentralDatetimeLocal(newBlockStart);
+    const endDate = parseCentralDatetimeLocal(newBlockEnd);
+    if (startDate >= endDate) return;
     setNewBlockSaving(true);
     try {
       const res = await fetch("/api/admin/blocks", {
@@ -223,8 +269,8 @@ export function AdminCalendarWeekView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           experienceId,
-          startAt: new Date(newBlockStart).toISOString(),
-          endAt: new Date(newBlockEnd).toISOString(),
+          startAt: startDate.toISOString(),
+          endAt: endDate.toISOString(),
           boatId: newBlockBoatId || undefined,
           note: newBlockNote.trim() || undefined,
         }),
@@ -311,27 +357,11 @@ export function AdminCalendarWeekView({
           <Button variant="outline" size="sm" onClick={onNextWeek} aria-label="Next week">
             →
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              /* jump back to current week — parent handles this via props */
-              const d = new Date();
-              const ws = getWeekStart(d);
-              // We can't directly call setWeekStart since it's owned by the parent,
-              // but we can reset by navigating: calculate delta in weeks
-              const delta =
-                Math.round(
-                  (ws.getTime() - weekStart.getTime()) / (7 * 24 * 60 * 60 * 1000)
-                );
-              for (let i = 0; i < Math.abs(delta); i++) {
-                delta > 0 ? onNextWeek() : onPrevWeek();
-              }
-            }}
-            className="text-xs"
-          >
-            Today
-          </Button>
+          {onGoToToday && (
+            <Button variant="outline" size="sm" onClick={onGoToToday} className="text-xs" aria-label="Go to today">
+              Today
+            </Button>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {boatList.length > 1 && Object.keys(boatColorByIndex).length > 0 && (

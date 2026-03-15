@@ -6,6 +6,7 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
@@ -156,7 +157,7 @@ export function ExperienceBookingCard({
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [pricing, setPricing] = useState<{ totalCents: number; currency: string } | null>(null);
   const [payFullAmount, setPayFullAmount] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -412,7 +413,7 @@ export function ExperienceBookingCard({
 
   const openDays = useMemo(() => new Set(openSlotsByDate.keys()), [openSlotsByDate]);
   const selectedDaySlots = selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : [];
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayStr = useMemo(() => getChicagoToday(), []);
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const calendarDays = useMemo(() => {
@@ -514,6 +515,22 @@ export function ExperienceBookingCard({
     );
   }
 
+  if (paymentPhase === "successWithWarning") {
+    return (
+      <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-4 min-h-[200px] text-center", className)}>
+        <div className="h-12 w-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
+          <svg className="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <p className="text-base font-semibold text-brand-dark">Payment received</p>
+        <p className="text-sm text-amber-800">
+          {error ?? "Your payment was successful, but we couldn't complete the booking confirmation. Please contact us with your email so we can confirm your reservation."}
+        </p>
+      </div>
+    );
+  }
+
   if (paymentPhase === "success") {
     return (
       <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-3 min-h-[200px] text-center", className)}>
@@ -524,7 +541,6 @@ export function ExperienceBookingCard({
         </div>
         <p className="text-base font-semibold text-brand-dark">Booking confirmed!</p>
         <p className="text-sm text-brand-muted">Check your email for your booking details.</p>
-        {error && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">{error}</p>}
       </div>
     );
   }
@@ -565,7 +581,7 @@ export function ExperienceBookingCard({
               if (!holdId || !paymentIntentId) {
                 bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
                 setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
-                setPaymentPhase("success");
+                setPaymentPhase("successWithWarning");
                 return;
               }
               try {
@@ -579,14 +595,23 @@ export function ExperienceBookingCard({
                 if (!res.ok) {
                   bookingLog("client", "ExperienceBookingCard complete-after-payment failed", { status: res.status, error: (data as { error?: string }).error });
                   setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
-                } else {
+                  setPaymentPhase("successWithWarning");
+                  return;
+                }
+                const success = (data as { success?: boolean }).success;
+                if (success) {
                   bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: (data as { bookingId?: string }).bookingId });
+                  setPaymentPhase("success");
+                } else {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment not successful", { holdId, data });
+                  setError((data as { error?: string }).error ?? "Booking confirmation is pending. Contact us if you don't receive an email.");
+                  setPaymentPhase("successWithWarning");
                 }
               } catch (e) {
                 bookingError("client", "ExperienceBookingCard complete-after-payment request failed", e, { holdId });
                 setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
+                setPaymentPhase("successWithWarning");
               }
-              setPaymentPhase("success");
             }}
             onError={(msg) => setError(msg)}
           />
@@ -926,7 +951,7 @@ export function ExperienceBookingCard({
             >
               <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
               <span className="block mt-0.5 text-brand-muted font-normal text-xs">
-                ${(Math.round(orderSummaryTotalCents * 0.5) / 100).toFixed(2)} now — remaining 50% charged 48 hours before your trip
+                ${(Math.round(orderSummaryTotalCents * 0.5) / 100).toFixed(2)} now (estimate) — remaining 50% charged 48 hours before your trip
               </span>
             </button>
             <button
@@ -961,7 +986,7 @@ export function ExperienceBookingCard({
         </div>
         {!isTicketed && (
           <div className="flex justify-between text-sm font-semibold text-brand-dark">
-            <span>{payFullAmount ? "Total due now" : "Deposit due now"}</span>
+            <span>{payFullAmount ? "Total due now" : "Deposit due now (estimate)"}</span>
             <span className="text-brand-primary">
               ${((isTicketed || payFullAmount ? orderSummaryTotalCents : Math.round(orderSummaryTotalCents * 0.5)) / 100).toFixed(2)}
             </span>

@@ -6,6 +6,7 @@
  */
 
 import "server-only";
+import { extractAdminSessionCookieValue } from "./admin-cookie-parse";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin"; // same app used for Firestore
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 
@@ -32,13 +33,16 @@ export async function createAdminSessionCookie(idToken: string): Promise<string>
   return app.auth().createSessionCookie(idToken, { expiresIn: SESSION_EXPIRES_MS });
 }
 
+/** Extract the admin_session cookie value from a Cookie header.
+ * Uses a regex that requires the name at start or after "; " so "xadmin_session=..." is not matched.
+ * Exported for unit tests. */
+export { extractAdminSessionCookieValue } from "./admin-cookie-parse";
+
 /** Verify the admin session cookie and that the user is an allowed admin email. Returns true if valid. */
 export async function verifyAdminSessionCookie(cookieHeader: string | null): Promise<boolean> {
   const allowed = getAllowedAdminEmails();
   if (allowed.length === 0) return false;
-  if (!cookieHeader) return false;
-  const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`, "i"));
-  const sessionCookie = match?.[1]?.trim();
+  const sessionCookie = extractAdminSessionCookieValue(cookieHeader);
   if (!sessionCookie) return false;
   try {
     const app = getFirebaseApp();

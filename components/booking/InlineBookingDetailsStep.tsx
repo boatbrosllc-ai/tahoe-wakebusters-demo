@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -9,6 +9,7 @@ import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
+import { siteConfig } from "@/config/site";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -157,11 +158,16 @@ export function InlineBookingDetailsStep({
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [holdId, setHoldId] = useState<string | null>(null);
+  const [releaseToken, setReleaseToken] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  /** Server-computed deposit amount (from create-payment-intent) so display matches Stripe charge when discounts/tips apply. */
+  const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  /** When complete-after-payment fails: error message for successWithWarning view. */
+  const [completeAfterPaymentError, setCompleteAfterPaymentError] = useState<string | null>(null);
 
   // Derived: no state or effect needed — shared bookings always pay full upfront
   const [charterPayFull, setCharterPayFull] = useState(false);
@@ -191,6 +197,27 @@ export function InlineBookingDetailsStep({
       .finally(() => setPriceLoading(false));
     return () => controller.abort();
   }, [experienceId, rateId, selectedDate]);
+
+  /** Best-effort release of current hold; used when leaving Stripe step (onBack) or when create-payment-intent fails. */
+  const releaseCreatedHold = useCallback(
+    async (overrideHoldId?: string | null, overrideReleaseToken?: string | null) => {
+      const id = overrideHoldId ?? holdId;
+      const token = overrideReleaseToken ?? releaseToken;
+      if (!id) return;
+      try {
+        await fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: id, ...(token && { release_token: token }) }),
+        });
+      } catch {
+        // best-effort
+      }
+      setHoldId(null);
+      setReleaseToken(null);
+    },
+    [holdId, releaseToken]
+  );
 
   const priceSummary = useMemo(() => {
     const rateCents = effectiveRateCents ?? 0;
@@ -245,24 +272,6 @@ export function InlineBookingDetailsStep({
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     let createdHoldId: string | null = null;
     let createdReleaseToken: string | null = null;
-    const releaseCreatedHold = async () => {
-      if (!createdHoldId) return;
-      try {
-        await fetch("/api/booking/release-hold", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            holdId: createdHoldId,
-            ...(createdReleaseToken && { release_token: createdReleaseToken }),
-          }),
-        });
-      } catch {
-        // best-effort
-      }
-      createdHoldId = null;
-      createdReleaseToken = null;
-      setHoldId(null);
-    };
     try {
       bookingLog("client", "InlineBookingDetailsStep create-hold request", { experienceId, boatId: boatId ?? undefined, slotId: slot.id, rateId, partySize });
       const holdRes = await fetch("/api/booking/create-hold", {
@@ -296,6 +305,7 @@ export function InlineBookingDetailsStep({
       createdHoldId = newHoldId;
       createdReleaseToken = holdData.releaseToken ?? null;
       setHoldId(newHoldId);
+      setReleaseToken(createdReleaseToken);
       bookingLog("client", "InlineBookingDetailsStep create-hold success, create-payment-intent request", { holdId: newHoldId, payFullAmount });
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
@@ -305,31 +315,37 @@ export function InlineBookingDetailsStep({
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
         bookingLog("client", "InlineBookingDetailsStep create-payment-intent failed", { status: intentRes.status, error: intentData.error });
-        await releaseCreatedHold();
+        await releaseCreatedHold(createdHoldId, createdReleaseToken);
         setPaymentError(intentData.error ?? "Failed to start payment");
         setPaymentPhase("form");
         return;
       }
       if (!intentData.clientSecret) {
         bookingError("client", "InlineBookingDetailsStep create-payment-intent missing clientSecret", null, { holdId: newHoldId });
-        await releaseCreatedHold();
+        await releaseCreatedHold(createdHoldId, createdReleaseToken);
         setPaymentError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
       }
       bookingLog("client", "InlineBookingDetailsStep create-payment-intent success", { holdId: newHoldId });
       if (!STRIPE_PUBLISHABLE_KEY) {
-        await releaseCreatedHold();
+        await releaseCreatedHold(createdHoldId, createdReleaseToken);
         setPaymentError("Stripe not configured.");
         setPaymentPhase("form");
         return;
       }
       setClientSecret(intentData.clientSecret);
       setPaymentIntentId(intentData.paymentIntentId ?? null);
+      if (typeof intentData.depositCents === "number") setDepositCentsFromServer(intentData.depositCents);
+      if (!payFullAmount && typeof intentData.depositCents !== "number") {
+        setPaymentError("Could not get deposit amount. Please try again.");
+        setPaymentPhase("form");
+        return;
+      }
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "InlineBookingDetailsStep create-hold or create-payment-intent threw", err, {});
-      await releaseCreatedHold();
+      await releaseCreatedHold(createdHoldId, createdReleaseToken);
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }
@@ -337,6 +353,7 @@ export function InlineBookingDetailsStep({
 
   const handlePaymentSuccess = async () => {
     setPaymentPhase("completing");
+    setCompleteAfterPaymentError(null);
     bookingCache.invalidateBookingCaches(experienceId);
     if (!holdId || !paymentIntentId) {
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
@@ -352,11 +369,39 @@ export function InlineBookingDetailsStep({
       });
       const data = await res.json().catch(() => ({}));
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment response", { status: res.status, ok: res.ok, success: data?.success, bookingId: data?.bookingId });
+      if (!res.ok) {
+        const message = (data?.error as string) || "Confirmation failed";
+        setCompleteAfterPaymentError(message);
+        setPaymentPhase("successWithWarning");
+        return;
+      }
+      setPaymentPhase("success");
     } catch (e) {
       bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId });
-      // still show success
+      setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
+      setPaymentPhase("successWithWarning");
     }
-    setPaymentPhase("success");
+  };
+
+  const handleRetryCompleteAfterPayment = async () => {
+    if (!holdId || !paymentIntentId) return;
+    setCompleteAfterPaymentError(null);
+    setPaymentPhase("completing");
+    try {
+      const res = await fetch("/api/booking/complete-after-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId, paymentIntentId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setPaymentPhase("success");
+      } else {
+        setCompleteAfterPaymentError((data?.error as string) || "Confirmation failed");
+      }
+    } catch (e) {
+      setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
+    }
   };
 
   if (paymentPhase === "success") {
@@ -384,6 +429,39 @@ export function InlineBookingDetailsStep({
     );
   }
 
+  if (paymentPhase === "successWithWarning") {
+    return (
+      <div className="py-6 flex flex-col items-center gap-4 text-center">
+        <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+          <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-bold text-brand-dark">Payment received — confirmation pending</h3>
+        <p className="text-sm text-brand-muted">
+          Your payment was captured successfully, but we couldn&apos;t complete the booking confirmation. Please try again below, or contact us at {siteConfig.phone} if it keeps failing.
+        </p>
+        {completeAfterPaymentError && <p className="text-xs text-red-600">{completeAfterPaymentError}</p>}
+        <div className="flex flex-wrap gap-2 justify-center">
+          <button
+            type="button"
+            onClick={handleRetryCompleteAfterPayment}
+            className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
+          >
+            Try again
+          </button>
+          <button
+            type="button"
+            onClick={onSuccess}
+            className="rounded-xl border-2 border-brand-dark/20 text-brand-dark font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-dark/5"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (paymentPhase === "loading" || paymentPhase === "completing") {
     return (
       <div className="py-12 flex flex-col items-center gap-3">
@@ -399,7 +477,14 @@ export function InlineBookingDetailsStep({
     return (
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-2">
-          <button type="button" onClick={onBack} className="text-sm font-medium min-h-[44px] min-w-[44px] flex items-center touch-manipulation text-brand-muted hover:text-brand-primary">
+          <button
+            type="button"
+            onClick={() => {
+              if (holdId) releaseCreatedHold();
+              onBack();
+            }}
+            className="text-sm font-medium min-h-[44px] min-w-[44px] flex items-center touch-manipulation text-brand-muted hover:text-brand-primary"
+          >
             ← Back
           </button>
         </div>
@@ -409,7 +494,14 @@ export function InlineBookingDetailsStep({
             {new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · {formatTime(slot.startAt)} · {rateDisplayName}
           </p>
           <p className="text-xl font-bold text-brand-primary mt-2">
-            ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+            {payFullAmount
+              ? `$${(priceSummary.totalCents / 100).toFixed(2)}`
+              : depositCentsFromServer != null
+                ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                : null}
+            {!payFullAmount && depositCentsFromServer == null && (
+              <span className="inline-block h-7 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
+            )}
           </p>
         </div>
         <div className="min-h-[200px]">
@@ -488,7 +580,11 @@ export function InlineBookingDetailsStep({
               <>
                 <div className="flex justify-between text-brand-dark">
                   <span className="text-xs font-semibold">Deposit due now</span>
-                  <span className="text-lg font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                  {depositCentsFromServer != null ? (
+                    <span className="text-lg font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
+                  ) : (
+                    <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                  )}
                 </div>
                 <p className="text-xs text-brand-muted">Remaining 50% charged 48h before trip</p>
               </>
@@ -566,8 +662,7 @@ export function InlineBookingDetailsStep({
             <div className="mt-2 space-y-1">
               {displayAddons.map((addon) => {
                 const qty = addonSelections[addon.id] ?? 0;
-                const name = addon.name.toLowerCase();
-                const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                const effectiveMax = addon.maxQty ?? 10;
                 return (
                   <div
                     key={addon.id}
@@ -660,7 +755,7 @@ export function InlineBookingDetailsStep({
                 )}
               >
                 <span className="font-semibold">Pay 50% deposit</span>
-                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now</span>
+                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now (estimate)</span>
               </button>
               <button
                 type="button"
@@ -775,9 +870,15 @@ export function InlineBookingDetailsStep({
         <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold text-brand-dark">{payFullAmount ? "Total due" : "Deposit due"}</p>
-            <p className="text-xl font-bold text-brand-primary">
-              ${((payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
-            </p>
+            {payFullAmount ? (
+              <p className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
+            ) : depositCentsFromServer != null ? (
+              <p className="text-xl font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</p>
+            ) : (
+              <p className="text-xl font-bold text-brand-primary">
+                <span className="inline-block h-7 w-24 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+              </p>
+            )}
           </div>
           <button
             type="button"

@@ -74,9 +74,6 @@ export function BookingPreviewCard({
           max={BOOKING_PREVIEW.maxGuests}
           value={guests}
           onChange={(e) => setGuests(Number(e.target.value))}
-          aria-valuemin={BOOKING_PREVIEW.minGuests}
-          aria-valuemax={BOOKING_PREVIEW.maxGuests}
-          aria-valuenow={guests}
           className="flex-1 h-2 rounded-full appearance-none bg-white/20 accent-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary"
         />
         <span className="text-white font-medium w-8 text-right" aria-hidden="true">{guests}</span>

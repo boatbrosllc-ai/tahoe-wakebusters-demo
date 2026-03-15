@@ -1,21 +1,26 @@
 /**
  * One-time: set the admin (Firebase Auth) password.
- * Run from project root: node scripts/set-admin-password.js
- * Requires .env.local with FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY.
+ * Run from project root. Requires .env.local with FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY.
  *
- * Usage: node scripts/set-admin-password.js [newPassword]
- * Default password if omitted: Anewwave2025!
+ * Usage: node scripts/set-admin-password.js <adminEmail> <newPassword>
+ * Both arguments are required. Never use default credentials.
  */
 
 const fs = require("fs");
 const path = require("path");
 
-const ADMIN_EMAIL = "boatbrosllc@gmail.com";
-const DEFAULT_PASSWORD = "Anewwave2025!";
-
 const envPath = path.join(process.cwd(), ".env.local");
 if (!fs.existsSync(envPath)) {
   console.error(".env.local not found. Create it with FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY.");
+  process.exit(1);
+}
+
+const adminEmail = process.argv[2]?.trim();
+const password = process.argv[3];
+
+if (!adminEmail || !password) {
+  console.error("Usage: node scripts/set-admin-password.js <adminEmail> <newPassword>");
+  console.error("Both admin email and new password are required. Do not use default credentials.");
   process.exit(1);
 }
 
@@ -41,8 +46,6 @@ if (!projectId || !clientEmail || !privateKey) {
   process.exit(1);
 }
 
-const password = process.argv[2] || DEFAULT_PASSWORD;
-
 async function main() {
   const admin = require("firebase-admin");
   if (!admin.apps.length) {
@@ -57,17 +60,17 @@ async function main() {
   const auth = admin.auth();
 
   try {
-    const user = await auth.getUserByEmail(ADMIN_EMAIL);
+    const user = await auth.getUserByEmail(adminEmail);
     await auth.updateUser(user.uid, { password });
-    console.log("Password updated for", ADMIN_EMAIL);
+    console.log("Password updated for", adminEmail);
   } catch (err) {
     if (err.code === "auth/user-not-found") {
       await auth.createUser({
-        email: ADMIN_EMAIL,
+        email: adminEmail,
         password,
         emailVerified: true,
       });
-      console.log("User created and password set for", ADMIN_EMAIL);
+      console.log("User created and password set for", adminEmail);
     } else {
       throw err;
     }

@@ -6,8 +6,31 @@
 import { brand } from "@/content/brand";
 import { bookingEnv } from "./env";
 import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
-import type { Booking } from "./types";
+import { formatMoney } from "./format-money";
+import type { Booking, BookingStripe } from "./types";
 import type { BookingEmailContext } from "./brevo";
+import type { BookingStatus } from "./types";
+
+/** Statuses that indicate deposit flow (deposit paid or final balance due/paid). */
+const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
+  "deposit_paid",
+  "final_due",
+  "final_processing",
+  "final_paid",
+  "final_requires_action",
+  "final_failed",
+]);
+
+/**
+ * Derive deposit/full-pay mode from booking.stripe (and status). Used to select payment rows
+ * so email reflects persisted payment truth. Exported for use by Brevo template params so template
+ * and HTML paths stay consistent.
+ */
+export function isDepositFromBookingStripe(booking: Booking): boolean {
+  const stripe = booking.stripe;
+  if (stripe?.depositAmountCents == null) return false;
+  return DEPOSIT_STATUSES.has(booking.status);
+}
 
 /** Absolute URL for the Boat Bros email logo (Lockup Pink – used in all transactional emails). */
 function getEmailLogoUrl(): string {
@@ -88,7 +111,7 @@ const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COL
  * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, isDeposit, waiverSigningUrl, waiverGroupSigningUrl, pricingType } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType } = context;
   const isTicketed = pricingType === "ticketed";
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const ticketCount = booking.partySize ?? 1;
@@ -96,13 +119,32 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
     booking.addonSelections.length > 0
       ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
       : "None";
-  const depositPaidCents = (booking.stripe as { depositAmountCents?: number }).depositAmountCents ?? booking.pricing.totalCents;
-  const totalPaid = (depositPaidCents / 100).toFixed(2);
-  const totalLabel = isDeposit ? "Deposit paid" : "Total paid";
+  // Single source of truth: Stripe reflects actual charges; fallback to booking.pricing (all in cents).
+  const stripe = booking.stripe as BookingStripe | undefined;
+  const isDeposit = isDepositFromBookingStripe(booking);
+  const depositPaidCents = stripe?.depositAmountCents ?? booking.pricing.totalCents;
+  const remainingCents =
+    stripe?.finalAmountCents != null
+      ? stripe.finalAmountCents
+      : Math.max(0, booking.pricing.totalCents - depositPaidCents);
+  const totalAmountCents = stripe?.totalAmountCents ?? booking.pricing.totalCents;
+  const depositPaidFormatted = formatMoney(depositPaidCents);
+  const remainingFormatted = formatMoney(remainingCents);
+  const totalFormatted = formatMoney(totalAmountCents);
+  const finalChargeAtFormatted =
+    finalChargeAt && !Number.isNaN(new Date(finalChargeAt).getTime())
+      ? new Date(finalChargeAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : null;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  const depositCopy = isDeposit
-    ? "50% deposit received. Remaining balance will be charged 48 hours before your trip."
-    : "";
+  const depositCopy = "";
+
+  const paymentRows = isDeposit
+    ? `
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Paid today (50%)</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${depositPaidFormatted}</td></tr>
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "before your trip"})</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${remainingFormatted}</td></tr>
+                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total booking value</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`
+    : `
+                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total paid</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`;
 
   return `
 <!DOCTYPE html>
@@ -139,7 +181,7 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">${isTicketed ? "Departure" : "Date & time"}</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${isTicketed ? escapeHtml(startAt) : `${escapeHtml(startAt)} – ${escapeHtml(endAt)}`}</td></tr>
                       ${!isTicketed ? `<tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Duration</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${duration}</td></tr>` : ""}
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Add-ons</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${escapeHtml(addonsSummary)}</td></tr>
-                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">${totalLabel}</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">$${totalPaid}</td></tr>
+                      ${paymentRows}
                     </table>
                   </td>
                 </tr>
@@ -188,7 +230,7 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Sample booking + context for admin HTML preview. */
+/** Sample booking + context for admin HTML preview. Uses realistic cents (e.g. $320 total). */
 export function getBookingConfirmationPreviewHtml(): string {
   const sampleBooking: Booking = {
     experienceId: "exp-sample",
@@ -201,7 +243,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     customer: { name: "Jordan Smith", email: "jordan@example.com", phone: "(512) 957-6197" },
     pricing: { subtotalCents: 29500, taxCents: 2500, feesCents: 0, totalCents: 32000, currency: "usd" },
     status: "paid",
-    stripe: { paymentIntentId: "pi_preview" },
+    stripe: { paymentIntentId: "pi_preview", totalAmountCents: 32000 },
     createdAt: { toDate: () => new Date() } as any,
   };
   const sampleContext: BookingEmailContext = {

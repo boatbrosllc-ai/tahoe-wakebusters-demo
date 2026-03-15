@@ -13,17 +13,14 @@ export const maxDuration = 26;
 
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
-/** YYYY-MM-DD from date parts. Use UTC so keys are deterministic across server timezones. */
-function toISODateUTC(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+/** YYYY-MM-DD in America/Chicago for consistent calendar and checkout pricing. */
+function toDateStrCentral(d: Date): string {
+  return getDateStrInSlotTimezone(d);
 }
 
 export async function GET(request: NextRequest) {
@@ -97,7 +94,7 @@ export async function GET(request: NextRequest) {
     const dateStrs: string[] = [];
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
-      const dateStr = toISODateUTC(d);
+      const dateStr = toDateStrCentral(d);
       dateStrs.push(dateStr);
       prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
       // Only mark holiday highlights for charter experiences

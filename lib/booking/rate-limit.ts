@@ -4,13 +4,22 @@
  *   x-nf-client-connection-ip). Does not use x-forwarded-for to avoid spoofing.
  * - Store: when RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN (or
  *   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN) are set, uses Redis so
- *   limits persist across instances and cold starts. In production, a shared
- *   store is required; if Redis is not configured in production we fail closed
- *   (reject with rate limit) so in-memory fallback is not used cluster-wide.
+ *   limits persist across instances and cold starts.
+ * - Degraded mode (production-safe): When Redis is unavailable (error or timeout),
+ *   policy is controlled by env. Default is fail-open (allow requests) so Redis
+ *   outages do not hard-stop checkout. Set RATE_LIMIT_FAIL_CLOSED=1 to reject
+ *   with 503 when Redis is down. Optional RATE_LIMIT_DEGRADED_USE_MEMORY=1 uses
+ *   in-memory fallback with stricter limit (see MAX_REQUESTS_MEMORY_FALLBACK).
+ * - When Redis is not configured in production, we fail open and log once; set
+ *   Upstash vars in Netlify for proper rate limiting.
  */
 
 const WINDOW_MS = 60 * 1000; // 1 minute
-const MAX_REQUESTS = 30; // per window per key
+const MAX_REQUESTS = 30; // per window per key (Redis)
+/** Stricter limit when using in-memory fallback during Redis outage (RATE_LIMIT_DEGRADED_USE_MEMORY=1). */
+const MAX_REQUESTS_MEMORY_FALLBACK = 10;
+/** Timeout for Redis REST request; timeout is treated as Redis failure and flows through degraded policy. */
+const REDIS_REQUEST_TIMEOUT_MS = 4000;
 
 const memoryStore = new Map<string, { count: number; resetAt: number }>();
 
@@ -33,6 +42,14 @@ export function getClientKey(request: Request): string {
   return `booking:${ip}`;
 }
 
+/**
+ * Token-aware rate limit key for manage-booking routes. Use after token verification.
+ * Keys by bookingId so one abusive source cannot starve legitimate users sharing IP.
+ */
+export function getManageRateLimitKey(bookingId: string): string {
+  return `manage:token:${bookingId}`;
+}
+
 function getRedisConfig(): { url: string; token: string } | null {
   const url =
     process.env.RATE_LIMIT_REDIS_REST_URL?.trim() ||
@@ -46,7 +63,7 @@ function getRedisConfig(): { url: string; token: string } | null {
 
 /**
  * True when rate limiting is ready for production: either not in production (dev uses in-memory)
- * or Redis is configured (production requires Redis; otherwise we fail closed).
+ * or Redis is configured. When Redis is missing in production we fail open so booking still works.
  */
 export function isRateLimitReadyForProduction(): boolean {
   const redis = getRedisConfig();
@@ -55,49 +72,119 @@ export function isRateLimitReadyForProduction(): boolean {
   return redis !== null;
 }
 
+type RedisFailureReason = "timeout" | "error";
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("REDIS_TIMEOUT")), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId!));
+}
+
 async function redisIncr(
   config: { url: string; token: string },
   key: string,
   ttlSeconds: number
 ): Promise<number> {
-  const res = await fetch(config.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(["INCR", key]),
-  });
-  if (!res.ok) throw new Error("Redis INCR failed");
-  const data = (await res.json()) as { result?: number };
-  const count = typeof data.result === "number" ? data.result : 0;
-  if (count === 1) {
-    const ttlRes = await fetch(config.url, {
+  const baseUrl = config.url.replace(/\/$/, "");
+  const pipelineUrl = `${baseUrl}/pipeline`;
+  const headers = {
+    Authorization: `Bearer ${config.token}`,
+    "Content-Type": "application/json",
+  };
+
+  const run = async (): Promise<number> => {
+    // Try pipeline first (single round-trip)
+    const pipelineRes = await fetch(pipelineUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(["EXPIRE", key, ttlSeconds]),
+      headers,
+      body: JSON.stringify([
+        ["INCR", key],
+        ["EXPIRE", key, ttlSeconds, "NX"],
+      ]),
     });
-    if (!ttlRes.ok) {
-      // best-effort; key will eventually expire
+
+    if (pipelineRes.ok) {
+      const data = (await pipelineRes.json()) as Array<{ result?: number; error?: string }>;
+      const incrResult = data[0];
+      const count = typeof incrResult?.result === "number" ? incrResult.result : 0;
+      return count;
     }
+
+    const errBody = await pipelineRes.text();
+    console.error("[rate-limit] Redis pipeline failed", {
+      redisFailureReason: "error" as RedisFailureReason,
+      status: pipelineRes.status,
+      statusText: pipelineRes.statusText,
+      body: errBody.slice(0, 300),
+      urlHint: baseUrl.slice(0, 50),
+    });
+
+    // Fallback: two separate commands (some setups reject pipeline or EXPIRE NX)
+    const incrRes = await fetch(baseUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(["INCR", key]),
+    });
+    if (!incrRes.ok) {
+      const incrErr = await incrRes.text();
+      console.error("[rate-limit] Redis INCR failed", {
+        redisFailureReason: "error" as RedisFailureReason,
+        status: incrRes.status,
+        body: incrErr.slice(0, 200),
+      });
+      throw new Error(`Redis failed: ${incrRes.status}`);
+    }
+    const incrData = (await incrRes.json()) as { result?: number };
+    const count = typeof incrData.result === "number" ? incrData.result : 0;
+    if (count === 1) {
+      await fetch(baseUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(["EXPIRE", key, ttlSeconds]),
+      }).catch((e) => console.warn("[rate-limit] EXPIRE fallback failed", e));
+    }
+    return count;
+  };
+
+  try {
+    return await withTimeout(run(), REDIS_REQUEST_TIMEOUT_MS);
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.message === "REDIS_TIMEOUT";
+    const reason: RedisFailureReason = isTimeout ? "timeout" : "error";
+    console.error("[rate-limit] Redis request failed", {
+      redisFailureReason: reason,
+      key: key.slice(0, 60),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    const e = new Error(isTimeout ? "Redis request timeout" : "Redis unavailable");
+    (e as Error & { redisFailureReason: RedisFailureReason }).redisFailureReason = reason;
+    throw e;
   }
-  return count;
 }
 
-export type RateLimitResult = { allowed: boolean; retryAfterMs?: number; serverError?: boolean };
+export type RateLimitResult = {
+  allowed: boolean;
+  retryAfterMs?: number;
+  serverError?: boolean;
+  /** True when request was allowed or limited using a fallback path (Redis down or not configured). Use for operational logging/alerting. */
+  degraded?: boolean;
+};
 
 /**
- * Check rate limit. When Redis config is set, uses Redis (async). In production
- * (NODE_ENV === "production") Redis is required; if not configured we fail closed
- * and treat as rate limited. In development, falls back to in-memory store when
- * Redis is not set.
+ * Check rate limit. When Redis config is set, uses Redis (async). Default policy:
+ * - Redis configured and healthy: allow/deny by count; no degraded.
+ * - Redis error or timeout: fail-open (allow) unless RATE_LIMIT_FAIL_CLOSED=1 (then 503).
+ *   Optional RATE_LIMIT_DEGRADED_USE_MEMORY=1 uses in-memory fallback with stricter limit.
+ * - Redis not configured in production: fail-open, degraded.
  */
+let productionNoRedisWarned = false;
+
 export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   const redis = getRedisConfig();
   const isProduction = process.env.NODE_ENV === "production";
+  const useMemoryFallback = process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
   const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
   const redisKey = redis ? `rl:${key}:${windowStart}` : null;
 
@@ -108,19 +195,55 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
       const resetAt = windowStart + WINDOW_MS;
       return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
     } catch (err) {
-      const errMessage = err instanceof Error ? err.message : String(err);
-      console.error("[rate-limit] Redis unavailable:", errMessage);
+      const reason = (err as Error & { redisFailureReason?: RedisFailureReason }).redisFailureReason ?? "error";
+      console.error("[rate-limit] Redis unavailable — applying degraded policy", {
+        redisFailureReason: reason,
+        urlHint: redis.url.slice(0, 40),
+      });
       if (isProduction) {
-        const failOpen = process.env.RATE_LIMIT_FAIL_OPEN === "1";
-        if (failOpen) return { allowed: true };
-        return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true };
+        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1";
+        if (failClosed) {
+          return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true, degraded: true };
+        }
+        if (useMemoryFallback) {
+          // Bounded local fallback with stricter threshold
+          const now = Date.now();
+          if (memoryStore.size > 10000) pruneMemory();
+          let entry = memoryStore.get(key);
+          if (!entry) {
+            memoryStore.set(key, { count: 1, resetAt: now + WINDOW_MS });
+            console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50) });
+            return { allowed: true, degraded: true };
+          }
+          if (entry.resetAt <= now) {
+            entry = { count: 1, resetAt: now + WINDOW_MS };
+            memoryStore.set(key, entry);
+            console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50) });
+            return { allowed: true, degraded: true };
+          }
+          entry.count++;
+          if (entry.count <= MAX_REQUESTS_MEMORY_FALLBACK) {
+            console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50), count: entry.count });
+            return { allowed: true, degraded: true };
+          }
+          console.warn("[rate-limit] DEGRADED_LIMIT memory_fallback exceeded", { key: key.slice(0, 50), count: entry.count });
+          return { allowed: false, retryAfterMs: Math.max(0, entry.resetAt - now), degraded: true };
+        }
+        console.warn("[rate-limit] DEGRADED_ALLOW fail_open", { key: key.slice(0, 50) });
+        return { allowed: true, degraded: true };
       }
-      return { allowed: true }; // fail open in dev if Redis unavailable
+      console.warn("[rate-limit] DEGRADED_ALLOW fail_open (non-production)", { key: key.slice(0, 50) });
+      return { allowed: true, degraded: true };
     }
   }
 
+  // Production with no Redis: allow requests so site works; log once
   if (isProduction) {
-    return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true };
+    if (!productionNoRedisWarned) {
+      productionNoRedisWarned = true;
+      console.warn("[rate-limit] Redis not configured in production — rate limiting disabled. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Netlify to enable.");
+    }
+    return { allowed: true, degraded: true };
   }
 
   const now = Date.now();

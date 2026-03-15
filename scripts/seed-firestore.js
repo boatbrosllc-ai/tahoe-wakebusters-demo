@@ -1,6 +1,10 @@
 /**
  * Seed Firestore with 4 experiences, rates, and add-ons.
- * Run from project root: node scripts/seed-firestore.js
+ * Run from project root: node scripts/seed-firestore.js [SEED_SECRET]
+ *
+ * When the seed endpoint is protected (SEED_SECRET set on the server), pass the secret:
+ *   node scripts/seed-firestore.js your-secret
+ * Or set SEED_SECRET in .env.local; the script will read it from there if not passed as an argument.
  *
  * Requires the dev server to be running first: npm run dev
  * Then in another terminal: node scripts/seed-firestore.js
@@ -22,18 +26,25 @@ function getEnv(name, raw) {
 
 const envPath = path.join(process.cwd(), ".env.local");
 let baseUrl = "http://localhost:3000";
+let rawEnv = "";
 if (fs.existsSync(envPath)) {
-  const raw = fs.readFileSync(envPath, "utf8");
-  const appBase = getEnv("APP_BASE_URL", raw);
+  rawEnv = fs.readFileSync(envPath, "utf8");
+  const appBase = getEnv("APP_BASE_URL", rawEnv);
   if (appBase) baseUrl = appBase.replace(/\/$/, "");
 }
+
+const seedSecret = process.argv[2]?.trim() || (rawEnv ? getEnv("SEED_SECRET", rawEnv) : undefined);
 
 const url = baseUrl + "/api/booking/seed-experiences";
 
 async function main() {
   console.log("Seeding Firestore via", url, "...");
+  const headers = { "Content-Type": "application/json" };
+  if (seedSecret) {
+    headers["Authorization"] = "Bearer " + seedSecret;
+  }
   try {
-    const res = await fetch(url, { method: "POST" });
+    const res = await fetch(url, { method: "POST", headers });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.ok) {
       console.log("Done. " + (data.experienceIds?.length ?? 0) + " experience(s) set up.");
@@ -41,6 +52,14 @@ async function main() {
       process.exit(0);
     }
     const msg = data.detail || data.error || res.statusText;
+    if (res.status === 401 && !seedSecret) {
+      console.error("Seed failed: endpoint returned 401 Unauthorized.");
+      console.error("");
+      console.error("The seed endpoint requires SEED_SECRET when the server has it set.");
+      console.error("Pass the secret as an argument: node scripts/seed-firestore.js <SEED_SECRET>");
+      console.error("Or set SEED_SECRET in .env.local and run again.");
+      process.exit(1);
+    }
     console.error("Seed failed:", msg);
     if (/quota exceeded|RESOURCE_EXHAUSTED|code.*8/i.test(String(msg))) {
       console.error("");

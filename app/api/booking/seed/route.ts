@@ -1,6 +1,6 @@
 /**
  * Seed Firestore with boats (Long Pontoon, Wake Board, Lake Austin Pontoon), rates (3–8h), addons, and open slots for the next 14 days.
- * Call with POST and Authorization: Bearer <SEED_SECRET> or CRON_SECRET.
+ * Call with POST and Authorization: Bearer <SEED_SECRET>. In production, SEED_SECRET must be set; cron endpoints use CRON_SECRET only.
  * Idempotent: creates each boat only if none exist (by name), then rates/addons/slots.
  */
 
@@ -68,14 +68,21 @@ const ADDONS = [
 
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const secret = process.env.SEED_SECRET ?? process.env.CRON_SECRET;
-    if (process.env.NODE_ENV === "production") {
-      if (!secret || authHeader !== `Bearer ${secret}`) {
+    const seedSecret = process.env.SEED_SECRET;
+    const openDev =
+      process.env.SEED_OPEN_DEV === "1" &&
+      process.env.NODE_ENV === "development" &&
+      !process.env.VERCEL &&
+      !process.env.NETLIFY;
+
+    if (!openDev) {
+      if (!seedSecret) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
-    } else if (secret && authHeader !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      const authHeader = request.headers.get("authorization");
+      if (authHeader !== `Bearer ${seedSecret}`) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -17,7 +16,8 @@ import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
-import { getMonthRange, toMonthKey } from "@/lib/booking/booking-date-range";
+import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth } from "@/lib/booking/booking-date-range";
+import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -81,58 +81,11 @@ const TEXAS_SALES_TAX_RATE = 0.0825;
 /** Stable empty array for ratesForSelection when no rates loaded yet (avoids new [] reference every render). */
 const EMPTY_RATES_FOR_SELECTION: CachedRateOption[] = [];
 
-function getNextDays(days: number): { dateStr: string; label: string; weekday: string }[] {
-  const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() + i);
-    out.push({
-      dateStr: toLocalDateStr(d),
-      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
-    });
-  }
-  return out;
-}
-
-/** Local YYYY-MM-DD (avoids timezone skew from toISOString). */
-function toLocalDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 /** Weekday labels: always Sunday first so headers match the calendar grid (getDay() 0 = Sunday). */
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-/** Day key YYYY-MM-DD from (year, month 1-based, day). Deterministic, no Date keys. */
-function toDayKey(year: number, month: number, day: number): string {
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-/** All days in a given calendar month. month is 1-based. dateStr is always YYYY-MM-DD (no Date/toISOString). */
-function getDaysInMonth(year: number, month: number): { dateStr: string; label: string; weekday: string }[] {
-  const out: { dateStr: string; label: string; weekday: string }[] = [];
-  const lastDay = new Date(year, month, 0).getDate();
-  for (let day = 1; day <= lastDay; day++) {
-    const d = new Date(year, month - 1, day);
-    out.push({
-      dateStr: toDayKey(year, month, day),
-      label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
-    });
-  }
-  return out;
-}
-
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
-}
-
-/** Sort key: time of day in minutes (0 = midnight, 420 = 7 AM, 1080 = 6 PM). Use for morning→night order. */
-function timeOfDayMinutes(iso: string): number {
-  const d = new Date(iso);
-  return d.getHours() * 60 + d.getMinutes();
 }
 
 function BookingPaymentForm({
@@ -183,11 +136,12 @@ type BookingModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialSelection?: BookingModalInitialSelection | null;
+  /** From context: increment when openWithSelection is called so form resets when selection changes while modal is open. */
+  selectionKey?: number;
 };
 
 
-export function BookingModal({ open, onOpenChange, initialSelection }: BookingModalProps) {
-  const router = useRouter();
+export function BookingModal({ open, onOpenChange, initialSelection, selectionKey }: BookingModalProps) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [experiences, setExperiences] = useState<ExperienceItem[] | null>(null);
   const [experiencesLoadError, setExperiencesLoadError] = useState<string | null>(null);
@@ -212,6 +166,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const inFlightKeyRef = useRef<string | null>(null);
+  /** Current view month for prefetch when rates load (avoids date-prices waterfall). */
+  const viewMonthForPrefetchRef = useRef<{ viewMonthStartStr: string; daysInViewMonth: number } | null>(null);
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   /** When this matches viewMonthStartStr, grid uses monthSlots/datePrices for the visible month. State (not ref) so grid re-renders when data arrives. */
   const [monthDataRangeStart, setMonthDataRangeStart] = useState<string | null>(null);
@@ -263,6 +219,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [payFullAmount, setPayFullAmount] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
+  const [releaseToken, setReleaseToken] = useState<string | null>(null);
   // Persists the last successfully-created holdId per slot across back-navigation so
   // subsequent create-hold calls for the same slot can include resumeHoldId.
   const lastHoldRef = useRef<{ slotId: string; holdId: string } | null>(null);
@@ -318,17 +275,19 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
   const dateOptions = useMemo(
-    () => getDaysInMonth(viewMonthYear, viewMonthMonth),
+    () => getDaysInMonth(viewMonthYear, viewMonthMonth - 1),
     [viewMonthYear, viewMonthMonth]
   );
+  /** Today's date in America/Chicago for past-date comparison in calendar (stable per mount). */
+  const chicagoTodayStr = useMemo(() => getChicagoToday(), []);
   /** Month key YYYY-MM for deterministic indexing (no Date keys). */
   const viewMonthKey = useMemo(() => toMonthKey(viewMonthYear, viewMonthMonth), [viewMonthYear, viewMonthMonth]);
-  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when slots/prices change so cells see fresh data. */
+  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when view month or date options change; calendarRenderKey forces remount when slot/price data changes. */
   const step3CalendarGrid = useMemo(() => {
     const first = new Date(viewMonthYear, viewMonthMonth - 1, 1);
     const leadingBlanks = first.getDay();
     return [...Array(leadingBlanks).fill(null), ...dateOptions];
-  }, [viewMonthYear, viewMonthMonth, dateOptions, monthSlots, datePrices]);
+  }, [viewMonthYear, viewMonthMonth, dateOptions]);
   const viewMonthLabel = useMemo(
     () => new Date(viewMonthYear, viewMonthMonth - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }),
     [viewMonthYear, viewMonthMonth]
@@ -385,6 +344,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     setPaymentPhase("form");
     setPayFullAmount(false);
     setHoldId(null);
+    setReleaseToken(null);
     setPaymentIntentId(null);
     setClientSecret(null);
     setPaymentError(null);
@@ -407,8 +367,8 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when modal open state changes
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
+  }, [open, selectionKey]);
 
   // When opened with initialSelection, apply it once experiences (and boats/slots) are ready
   useEffect(() => {
@@ -515,6 +475,17 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setRatesSummary(list);
         setSelectedRateIdForCalendar((prev) => prev ?? list[0]?.id ?? null);
         setRatesLoadError(null);
+        const viewMonth = viewMonthForPrefetchRef.current;
+        if (viewMonth && list.length > 0) {
+          const allRateIds = list.map((r) => r.id);
+          bookingCache.prefetchDatePrices(
+            selectedExperience.id,
+            viewMonth.viewMonthStartStr,
+            viewMonth.daysInViewMonth,
+            allRateIds,
+            controller.signal
+          );
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -535,6 +506,10 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => new Date(viewMonthYear, viewMonthMonth, 0).getDate(),
     [viewMonthYear, viewMonthMonth]
   );
+  useEffect(() => {
+    viewMonthForPrefetchRef.current = { viewMonthStartStr, daysInViewMonth };
+  }, [viewMonthStartStr, daysInViewMonth]);
+
   useEffect(() => {
     if (!selectedExperience?.id || !selectedRateIdForCalendar) {
       setDatePrices({});
@@ -568,6 +543,36 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setDatePrices({ ...prices });
         setHolidayDateStrings(new Set(holidays));
         setTicketsAvailableByDate({ ...ticketsAvailable });
+
+        // Background prefetch — fire-and-forget, capped at 2 concurrent by shared semaphore
+        const otherRateIds = ratesForSelection
+          .map((r) => r.id)
+          .filter((id) => id !== selectedRateIdForCalendar);
+
+        // Same month, other durations
+        bookingCache.prefetchDatePrices(
+          selectedExperience.id,
+          viewMonthStartStr,
+          daysInViewMonth,
+          otherRateIds,
+          controller.signal
+        );
+
+        // Adjacent month: warm all rate IDs (reuse otherRateIds + selected) so duration switch after month nav uses warmed cache
+        const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
+        const nextMonth0 = viewMonthMonth === 12 ? 0 : viewMonthMonth;
+        const { start: nextStart } = getMonthRange(nextYear, nextMonth0);
+        const daysInNextMonth = new Date(nextYear, nextMonth0 + 1, 0).getDate();
+        const allRateIdsForAdjacentMonth = otherRateIds.length
+          ? [...otherRateIds, selectedRateIdForCalendar]
+          : [selectedRateIdForCalendar];
+        bookingCache.prefetchDatePrices(
+          selectedExperience.id,
+          nextStart,
+          daysInNextMonth,
+          allRateIdsForAdjacentMonth,
+          controller.signal
+        );
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -724,25 +729,33 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
-  /** Single-pass derivation of all three boat-availability sets for the selected time slot. */
+  /** Single-pass derivation of all three boat-availability sets for the selected time slot.
+   * Only considers slots with the SAME duration as selectedSlot so we don't show boats that have
+   * a different duration open (e.g. 2hr open but 3hr held). Matches the duration-filtered time list. */
   const { availableBoatIdsForSelectedSlot, unavailableBoatIdsForSelectedSlot, bookedBoatIdsForSelectedSlot } = useMemo(() => {
     const empty = new Set<string>();
     if (!selectedSlot?.startAt) return { availableBoatIdsForSelectedSlot: empty, unavailableBoatIdsForSelectedSlot: empty, bookedBoatIdsForSelectedSlot: empty };
     const selectedStartMs = new Date(selectedSlot.startAt).getTime();
+    const selectedDurationHours = parseSlotId(selectedSlot.id)?.durationHours ?? null;
     const available = new Set<string>();
     const unavailable = new Set<string>();
     const booked = new Set<string>();
     for (const s of monthSlots) {
       if (!s.boatId) continue;
       if (new Date(s.startAt).getTime() !== selectedStartMs) continue;
+      // Only count slots with the same duration as the selected slot (e.g. 3hr with 3hr).
+      const slotDuration = parseSlotId(s.id)?.durationHours ?? null;
+      if (slotDuration !== selectedDurationHours) continue;
       if (s.status === "open") available.add(s.boatId);
       else {
         unavailable.add(s.boatId);
         booked.add(s.boatId);
       }
     }
+    // If no boats found (e.g. refetch made the selected slot stale), still treat the selected slot's boat as available so the user can try (create-hold will 409 if really taken).
+    if (available.size === 0 && selectedSlot.boatId) available.add(selectedSlot.boatId);
     return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };
-  }, [selectedSlot?.startAt, monthSlots]);
+  }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots]);
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -832,6 +845,11 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   const displayAddons = useMemo(
     () => addons.filter((a) => !/sunscreen/i.test(a.name)),
     [addons]
+  );
+
+  const emailValid = useMemo(
+    () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()),
+    [customerEmail]
   );
 
   // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
@@ -961,6 +979,27 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
   /** Calendar-first flow: date + slot chosen on listing, so modal only shows boat → details (no step 1 or 3). */
   const isCalendarFirstFlow = !!initialSelection?.slotId;
 
+  /** Best-effort release of current hold; used when leaving Stripe step (handleBack) or when create-payment-intent fails. */
+  const releaseCreatedHold = useCallback(
+    async (overrideHoldId?: string | null, overrideReleaseToken?: string | null) => {
+      const id = overrideHoldId ?? holdId;
+      const token = overrideReleaseToken ?? releaseToken;
+      if (!id) return;
+      try {
+        await fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: id, ...(token && { release_token: token }) }),
+        });
+      } catch {
+        // best-effort
+      }
+      setHoldId(null);
+      setReleaseToken(null);
+    },
+    [holdId, releaseToken]
+  );
+
   const handleBack = () => {
     if (step === 2) setStep(1);
     else if (step === 3) {
@@ -970,6 +1009,9 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
         setStep(2);
       }
     } else if (step === 4) {
+      if (paymentPhase === "stripe" && holdId) {
+        releaseCreatedHold();
+      }
       if (isTicketed) {
         if (isCalendarFirstFlow) {
           // Ticketed + pre-selected date: close modal to go back to calendar
@@ -1059,6 +1101,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       !customerName.trim() ||
       !customerEmail.trim() ||
       !customerPhone.trim() ||
+      !emailValid ||
       !cancellationAck
     ) {
       setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
@@ -1086,24 +1129,6 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     let createdHoldId: string | null = null;
     let createdReleaseToken: string | null = null;
-    const releaseCreatedHold = async () => {
-      if (!createdHoldId) return;
-      try {
-        await fetch("/api/booking/release-hold", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            holdId: createdHoldId,
-            ...(createdReleaseToken && { release_token: createdReleaseToken }),
-          }),
-        });
-      } catch {
-        // best-effort
-      }
-      createdHoldId = null;
-      createdReleaseToken = null;
-      setHoldId(null);
-    };
     try {
       const holdRes = await fetch("/api/booking/create-hold", {
         method: "POST",
@@ -1174,6 +1199,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       createdHoldId = newHoldId;
       createdReleaseToken = newReleaseToken ?? null;
       setHoldId(newHoldId);
+      setReleaseToken(createdReleaseToken);
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
@@ -1182,7 +1208,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       });
       const intentData = await intentRes.json();
       if (!intentRes.ok) {
-        await releaseCreatedHold();
+        await releaseCreatedHold(createdHoldId, createdReleaseToken);
         const msg = intentData.error ?? "Failed to start payment";
         setPaymentError(intentData.hint ? `${msg}. ${intentData.hint}` : msg);
         setPaymentPhase("form");
@@ -1191,7 +1217,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       const secret = intentData.clientSecret;
       if (!secret) {
         bookingError("client", "create-payment-intent missing clientSecret", null, { holdId: newHoldId });
-        await releaseCreatedHold();
+        await releaseCreatedHold(createdHoldId, createdReleaseToken);
         setPaymentError("Payment intent missing client secret");
         setPaymentPhase("form");
         return;
@@ -1201,7 +1227,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "create-hold or create-payment-intent threw", err, {});
-      await releaseCreatedHold();
+      await releaseCreatedHold(createdHoldId, createdReleaseToken);
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }
@@ -1495,8 +1521,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       }
                       const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
-                      const todayStr = toLocalDateStr(new Date());
-                      const isPast = dateStr < todayStr;
+                      const isPast = dateStr < chicagoTodayStr;
                       const dataMatchesView = monthDataRangeStart === viewMonthStartStr;
                       const entry = dataMatchesView ? slotsByDate.get(dateStr) : undefined;
                       const openForDuration =
@@ -1805,8 +1830,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           <div className="mt-3 space-y-1.5">
                             {displayAddons.map((addon) => {
                               const rawQty = addonSelections[addon.id] ?? 0;
-                              const name = addon.name.toLowerCase();
-                              const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                              const effectiveMax = addon.maxQty ?? 10;
                               const qty = Math.min(rawQty, effectiveMax);
                               return (
                                 <button
@@ -1999,8 +2023,14 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                           onChange={(e) => setCustomerEmail(e.target.value)}
                           required
                           placeholder="you@example.com"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                          className={cn(
+                            "w-full rounded-xl border-2 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors",
+                            customerEmail.length > 0 && !emailValid ? "border-red-500" : "border-brand-dark/15"
+                          )}
                         />
+                        {customerEmail.length > 0 && !emailValid && (
+                          <p className="text-xs text-red-600 mt-1">Please enter a valid email address.</p>
+                        )}
                       </div>
                       <div>
                         <label htmlFor="booking-phone" className="block text-sm font-medium text-brand-dark mb-1">Phone <span className="text-red-500 font-semibold" aria-hidden>*</span></label>
@@ -2059,8 +2089,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                       <div className="mt-3 space-y-1.5">
                         {displayAddons.map((addon) => {
                           const rawQty = addonSelections[addon.id] ?? 0;
-                          const name = addon.name.toLowerCase();
-                          const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addon.maxQty ?? 10);
+                          const effectiveMax = addon.maxQty ?? 10;
                           const qty = Math.min(rawQty, effectiveMax);
                           return (
                             <button
@@ -2107,8 +2136,7 @@ export function BookingModal({ open, onOpenChange, initialSelection }: BookingMo
                     className="max-w-sm"
                   >
                     {addonQtyModalAddon && (() => {
-                      const name = addonQtyModalAddon.name.toLowerCase();
-                      const effectiveMax = name.includes("towel") ? 14 : name.includes("ice") ? 2 : (addonQtyModalAddon.maxQty ?? 10);
+                      const effectiveMax = addonQtyModalAddon.maxQty ?? 10;
                       return (
                       <>
                         <h3 className="text-lg font-bold text-brand-dark mb-1">How many?</h3>

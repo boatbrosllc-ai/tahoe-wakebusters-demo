@@ -81,7 +81,8 @@ export interface WaiverSignedPayload {
   signerPhone: string;
   signerDob: string | null;
   initials: Record<string, string>;
-  signatureDataUrl: string;
+  /** Optional; omitted when persisting to Firestore to avoid document size limit (PDF + contentHash suffice). */
+  signatureDataUrl?: string;
   typedName?: string;
 }
 
@@ -110,6 +111,8 @@ export interface WaiverRequest {
   sent: WaiverSent;
   signed?: WaiverSigned;
   createdAt: FirestoreTimestamp;
+  /** When set, this pending request expires at this time; used for group signer slots so capacity can be reclaimed. */
+  pendingExpiresAt?: FirestoreTimestamp;
 }
 
 // ---------------------------------------------------------------------------
