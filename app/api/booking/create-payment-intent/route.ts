@@ -9,6 +9,9 @@ import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
 import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, redactEmail, generateIncidentCode } from "@/lib/booking/debug";
 
+/** Extend hold by this many minutes when creating payment intent so card-entry/SCA time does not invalidate conversion. */
+const HOLD_EXPIRY_EXTENSION_MINUTES = 10;
+
 function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
@@ -211,6 +214,11 @@ export async function POST(request: NextRequest) {
       bookingLog("create-payment-intent", "hold expired", { holdId: input.holdId, expiresAt: expiresAt.toDate().toISOString() });
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
+    // Extend hold expiry atomically so card-entry/SCA time does not invalidate conversion.
+    const { Timestamp } = getFirestoreExports();
+    const newExpiresAt = new Date(Date.now() + HOLD_EXPIRY_EXTENSION_MINUTES * 60 * 1000);
+    await holdRef.update({ expiresAt: Timestamp.fromDate(newExpiresAt) });
+    bookingLog("create-payment-intent", "hold expiry extended", { holdId: input.holdId, newExpiresAt: newExpiresAt.toISOString() });
     const hasExperience = !!hold.experienceId;
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
@@ -297,6 +305,7 @@ export async function POST(request: NextRequest) {
               finalCents: payFullAmount ? 0 : finalCents,
               totalCents,
               payFullAmount,
+              expiresAt: newExpiresAt.toISOString(),
             });
           }
           // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
@@ -367,6 +376,7 @@ export async function POST(request: NextRequest) {
       finalCents: payFullAmount ? 0 : finalCents,
       totalCents,
       payFullAmount,
+      expiresAt: newExpiresAt.toISOString(),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";

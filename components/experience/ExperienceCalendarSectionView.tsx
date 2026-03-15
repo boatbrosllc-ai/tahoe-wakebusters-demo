@@ -45,6 +45,10 @@ export interface ExperienceCalendarSectionViewProps {
   goToToday: () => void;
   goPrevMonth: () => void;
   goNextMonth: () => void;
+  /** When false, previous month button should be disabled (e.g. seasonal experience, before allowed window). */
+  canGoPrevMonth?: boolean;
+  /** When false, next month button should be disabled (e.g. seasonal experience, after allowed window). */
+  canGoNextMonth?: boolean;
   step2CompactGrid: ({ dateStr: string; label: string; weekday: string } | null)[];
   selectedDate: string | null;
   openCountByDateForDuration: Map<string, number>;
@@ -91,6 +95,8 @@ export interface ExperienceCalendarSectionViewProps {
     openCount: number;
     bookedCount: number;
     openSlots: { id: string; startAt: string; endAt: string }[];
+    /** When false, date is outside seasonal window and not selectable. */
+    seasonalAllowed?: boolean;
   }[];
   slotModalOpen: boolean;
   setSlotModalOpen: (v: boolean) => void;
@@ -143,6 +149,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     goToToday,
     goPrevMonth,
     goNextMonth,
+    canGoPrevMonth = true,
+    canGoNextMonth = true,
     step2CompactGrid,
     selectedDate,
     openCountByDateForDuration,
@@ -235,13 +243,32 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
               </div>
             )}
             {isTicketed && !onOpenInModal && (
-              <BookingTypeSelector
-                bookingMode={bookingMode}
-                onChange={setBookingMode ?? (() => {})}
-                perPersonPrice={rates[0]?.priceCents ?? 0}
-                charterFromPrice={rates[0]?.priceCents ?? 0}
-                spotsAvailable={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined}
-              />
+              rates.length > 0 ? (
+                <BookingTypeSelector
+                  bookingMode={bookingMode}
+                  onChange={setBookingMode ?? (() => {})}
+                  perPersonPrice={rates[0]?.priceCents ?? 0}
+                  charterFromPrice={rates[0]?.priceCents ?? 0}
+                  spotsAvailable={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined}
+                  priceReady={true}
+                />
+              ) : loading ? (
+                <div className="mb-4">
+                  <p className="text-sm font-semibold text-brand-dark mb-3">How would you like to book?</p>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className={cn("flex-1 rounded-2xl border-2 p-4 animate-pulse", darkCard ? "bg-white/10 border-white/20" : "bg-brand-dark/5 border-brand-dark/10")}>
+                      <div className="h-5 w-24 mb-2 rounded bg-brand-dark/10" />
+                      <div className="h-5 w-32 mb-1 rounded bg-brand-dark/10" />
+                      <div className="h-6 w-20 mt-2 rounded bg-brand-dark/10" />
+                    </div>
+                    <div className={cn("flex-1 rounded-2xl border-2 p-4 animate-pulse", darkCard ? "bg-white/10 border-white/20" : "bg-brand-dark/5 border-brand-dark/10")}>
+                      <div className="h-5 w-24 mb-2 rounded bg-brand-dark/10" />
+                      <div className="h-5 w-32 mb-1 rounded bg-brand-dark/10" />
+                      <div className="h-6 w-20 mt-2 rounded bg-brand-dark/10" />
+                    </div>
+                  </div>
+                </div>
+              ) : null
             )}
             {onOpenInModal != null && isTicketed ? (
               /* Ticketed: simple single-column calendar — clicking a date opens the modal directly */
@@ -264,9 +291,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button type="button" onClick={goToToday} className={cn("rounded-lg border px-2.5 py-1.5 text-xs font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg")}>Today</button>
                         <div className={cn("flex rounded-lg border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
-                          <button type="button" onClick={goPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
+                          <button type="button" onClick={goPrevMonth} disabled={!canGoPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoPrevMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
                           <span className={cn("min-w-[6rem] text-center text-xs font-semibold py-1.5 flex items-center justify-center", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
-                          <button type="button" onClick={goNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
+                          <button type="button" onClick={goNextMonth} disabled={!canGoNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoNextMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
                         </div>
                       </div>
                     </div>
@@ -515,9 +542,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <button type="button" onClick={goToToday} className={cn("rounded-lg border px-2.5 py-1.5 text-xs font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/30 bg-white/10 text-white hover:bg-white/20" : "border-brand-dark/15 bg-white text-brand-dark hover:bg-brand-bg")}>Today</button>
                               <div className={cn("flex rounded-lg border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
-                                <button type="button" onClick={goPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
+                                <button type="button" onClick={goPrevMonth} disabled={!canGoPrevMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoPrevMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></button>
                                 <span className={cn("min-w-[6rem] text-center text-xs font-semibold py-1.5 flex items-center justify-center", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
-                                <button type="button" onClick={goNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
+                                <button type="button" onClick={goNextMonth} disabled={!canGoNextMonth} className={cn("rounded p-2 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoNextMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
                               </div>
                             </div>
                           </div>
@@ -881,11 +908,11 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   Today
                                 </button>
                                 <div className={cn("flex rounded-xl border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
-                                  <button type="button" onClick={goPrevMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
+                                  <button type="button" onClick={goPrevMonth} disabled={!canGoPrevMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoPrevMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
                                     <ChevronLeft className="h-5 w-5" />
                                   </button>
                                   <span className={cn("min-w-[8rem] text-center text-sm font-semibold py-2", darkCard ? "text-white" : "text-brand-dark")}>{monthLabel}</span>
-                                  <button type="button" onClick={goNextMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
+                                  <button type="button" onClick={goNextMonth} disabled={!canGoNextMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoNextMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
                                     <ChevronRight className="h-5 w-5" />
                                   </button>
                                 </div>
@@ -1303,10 +1330,10 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                           Today
                         </button>
                         <div className={cn("flex rounded-xl border p-0.5", darkCard ? "border-white/20 bg-white/10" : "border-brand-dark/10 bg-brand-bg/50")}>
-                          <button type="button" onClick={goPrevMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
+                          <button type="button" onClick={goPrevMonth} disabled={!canGoPrevMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoPrevMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Previous month">
                             <ChevronLeft className="h-5 w-5" />
                           </button>
-                          <button type="button" onClick={goNextMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
+                          <button type="button" onClick={goNextMonth} disabled={!canGoNextMonth} className={cn("rounded-lg p-2.5 min-h-[44px] min-w-[44px] flex items-center justify-center touch-manipulation", !canGoNextMonth && "opacity-40 cursor-not-allowed", darkCard ? "text-white/80 hover:bg-white/20" : "text-brand-muted hover:bg-white hover:text-brand-dark")} aria-label="Next month">
                             <ChevronRight className="h-5 w-5" />
                           </button>
                         </div>
@@ -1324,7 +1351,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const hasBooked = cell.bookedCount > 0;
                         const isPast = cell.isPast;
                         const isHoliday = holidayDateStrings.has(cell.dateStr);
-                        const isClickable = cell.isCurrentMonth && !isPast && (onOpenInModal != null && isTicketed ? hasOpen : (hasOpen || hasBooked));
+                        const isClickable = cell.isCurrentMonth && !isPast && (cell.seasonalAllowed !== false) && (onOpenInModal != null && isTicketed ? hasOpen : (hasOpen || hasBooked));
                         return (
                           <button
                             key={cell.dateStr + cell.day}

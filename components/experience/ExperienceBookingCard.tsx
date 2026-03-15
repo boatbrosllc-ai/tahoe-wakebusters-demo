@@ -356,8 +356,9 @@ export function ExperienceBookingCard({
       });
       const holdData = await createHoldRes.json();
       if (!createHoldRes.ok) {
-        bookingLog("client", "ExperienceBookingCard create-hold failed", { status: createHoldRes.status, error: holdData.error });
-        setError(holdData.error ?? "Could not reserve slot");
+        const hint = holdData.hint ? ` ${holdData.hint}` : "";
+        bookingLog("client", "ExperienceBookingCard create-hold failed", { status: createHoldRes.status, error: holdData.error, hint: holdData.hint });
+        setError(`${holdData.error ?? "Could not reserve slot"}${hint}`);
         if (holdData.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
         setPaymentPhase("form");
         return;
@@ -991,14 +992,22 @@ export function ExperienceBookingCard({
         )}
         <div className="flex justify-between text-sm text-brand-dark mb-1">
           <span>Estimated total</span>
-          <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
+          {selectedRate ? (
+            <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
+          ) : (
+            <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+          )}
         </div>
         {!isTicketed && (
           <div className="flex justify-between text-sm font-semibold text-brand-dark">
             <span>{payFullAmount ? "Total due now" : "Deposit due now (estimate)"}</span>
-            <span className="text-brand-primary">
-              ${((isTicketed || payFullAmount ? orderSummaryTotalCents : Math.round(orderSummaryTotalCents * 0.5)) / 100).toFixed(2)}
-            </span>
+            {selectedRate ? (
+              <span className="text-brand-primary">
+                ${((isTicketed || payFullAmount ? orderSummaryTotalCents : Math.round(orderSummaryTotalCents * 0.5)) / 100).toFixed(2)}
+              </span>
+            ) : (
+              <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+            )}
           </div>
         )}
       </div>

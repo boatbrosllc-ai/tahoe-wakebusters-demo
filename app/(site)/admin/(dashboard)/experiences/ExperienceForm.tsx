@@ -437,6 +437,11 @@ export function ExperienceForm({
     e.preventDefault();
     setLoading(true);
     setError(null);
+    if (data.pricingType === "ticketed" && data.rates.some((r) => r.priceCents === 0)) {
+      setError("Ticketed experiences cannot have a rate with $0 price. Set a positive price for each active rate.");
+      setLoading(false);
+      return;
+    }
     try {
       const body = formDataToBody(data);
       const result = await onSubmit(body);

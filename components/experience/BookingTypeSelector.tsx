@@ -8,6 +8,8 @@ interface BookingTypeSelectorProps {
   perPersonPrice: number;
   charterFromPrice: number;
   spotsAvailable?: number;
+  /** When false, show skeleton for price text to avoid $0/person and From $0 before rates load. */
+  priceReady?: boolean;
 }
 
 export function BookingTypeSelector({
@@ -16,6 +18,7 @@ export function BookingTypeSelector({
   perPersonPrice,
   charterFromPrice,
   spotsAvailable,
+  priceReady = true,
 }: BookingTypeSelectorProps) {
   const selectedStyles = "border-brand-primary bg-brand-primary/5 ring-2 ring-brand-primary/30";
   const unselectedStyles = "border-brand-dark/15 bg-white hover:border-brand-primary/40";
@@ -46,9 +49,15 @@ export function BookingTypeSelector({
             )}
           </div>
           <p className="font-bold text-brand-dark text-sm">Join a shared cruise</p>
-          <p className="text-brand-primary font-extrabold text-xl mt-0.5">
-            ${(perPersonPrice / 100).toFixed(0)}<span className="text-sm font-semibold">/person</span>
-          </p>
+          {priceReady ? (
+            <p className="text-brand-primary font-extrabold text-xl mt-0.5">
+              ${(perPersonPrice / 100).toFixed(0)}<span className="text-sm font-semibold">/person</span>
+            </p>
+          ) : (
+            <p className="text-brand-primary font-extrabold text-xl mt-0.5">
+              <span className="inline-block h-6 w-16 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+            </p>
+          )}
           <p className="text-brand-muted text-xs mt-1">Share the boat with other groups. Up to 12 guests total.</p>
         </button>
 
@@ -63,9 +72,15 @@ export function BookingTypeSelector({
         >
           <div className="mb-1.5 h-[22px]" />
           <p className="font-bold text-brand-dark text-sm">Private charter</p>
-          <p className="font-extrabold text-xl mt-0.5 text-brand-dark">
-            From ${(charterFromPrice / 100).toFixed(0)}
-          </p>
+          {priceReady ? (
+            <p className="font-extrabold text-xl mt-0.5 text-brand-dark">
+              From ${(charterFromPrice / 100).toFixed(0)}
+            </p>
+          ) : (
+            <p className="font-extrabold text-xl mt-0.5 text-brand-dark">
+              <span className="inline-block h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+            </p>
+          )}
           <p className="text-brand-muted text-xs mt-1">The whole boat is yours. Exclusive departure.</p>
         </button>
       </div>

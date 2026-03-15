@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
     if (message === "Hold has expired") {
       bookingWarn("complete-after-payment", "hold expired", { holdId: (err as { holdId?: string }).holdId });
       return NextResponse.json(
-        { error: "Your booking hold has expired. Please start a new booking." },
+        { error: "Your booking hold has expired. Please start a new booking.", holdExpired: true },
         { status: 409 }
       );
     }

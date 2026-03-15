@@ -1,12 +1,14 @@
 /**
  * Returns the effective price (cents) for a given experience rate on a given date.
  * Used by the booking modal so step 4 summary matches checkout (weekend/holiday/Fri-Sun pricing).
+ * Slug resolution must stay in parity with date-prices/route.ts so calendar and checkout prices match.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { getExperienceBySlug } from "@/content/experiences";
+import { inferSlugFromTitle } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Rate not found" }, { status: 404 });
     }
 
-    const exp = expSnap.data() as Experience;
+    const exp = expSnap.data() as Experience & { name?: string };
     const isTicketed = exp.pricingType === "ticketed";
     const rate = rateSnap.data() as ExperienceRate & { id: string };
     if (!rate.active) {
@@ -45,10 +47,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }
 
+    // Build effectiveSlug same way as date-prices/route.ts (parity requirement).
+    const experienceSlug = (typeof exp?.slug === "string" ? exp.slug.trim() : "").toLowerCase();
+    const inferredSlugFromTitle = inferSlugFromTitle(exp?.title ?? exp?.name);
+    const effectiveSlug = experienceSlug || inferredSlugFromTitle;
+
     // Ticketed: use content fromPriceCents override when available so the checkout preview
     // matches the listing page and calendar (same override applied in date-prices API).
     if (isTicketed) {
-      const contentExp = getExperienceBySlug(exp.slug ?? "");
+      const contentExp = getExperienceBySlug(effectiveSlug || exp.slug ?? "");
       const priceCents = contentExp?.fromPriceCents ?? rate.priceCents;
       return NextResponse.json({ priceCents });
     }

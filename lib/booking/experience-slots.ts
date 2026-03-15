@@ -113,6 +113,31 @@ export function isSeasonalAllowed(
   return month >= startMonth || month <= endMonth; // e.g. Nov (11) to Jan (1)
 }
 
+/**
+ * Returns true if the given calendar month (1-based) in the given year has at least one day
+ * within the experience's seasonal window. Use for disabling month navigation and hiding
+ * unavailable months. Handles wrap-around (e.g. startMonth 11, endMonth 1).
+ */
+export function isMonthInSeasonalRange(
+  seasonal: SeasonalConfig | undefined,
+  year: number,
+  month1Based: number
+): boolean {
+  if (!seasonal?.enabled) return true;
+  const startDate = toDateStrOnly(seasonal.startDate);
+  const endDate = toDateStrOnly(seasonal.endDate);
+  if (startDate && endDate) {
+    const monthStart = `${year}-${String(month1Based).padStart(2, "0")}-01`;
+    const lastDay = new Date(year, month1Based, 0).getDate();
+    const monthEnd = `${year}-${String(month1Based).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    return monthEnd >= startDate && monthStart <= endDate;
+  }
+  const startMonth = seasonal.startMonth ?? 1;
+  const endMonth = seasonal.endMonth ?? 12;
+  if (startMonth <= endMonth) return month1Based >= startMonth && month1Based <= endMonth;
+  return month1Based >= startMonth || month1Based <= endMonth;
+}
+
 /** Cached DST boundaries (2nd Sunday March, 1st Sunday November) keyed by year. */
 const dstBoundaryCache = new Map<number, { marchDay: number; novDay: number }>();
 

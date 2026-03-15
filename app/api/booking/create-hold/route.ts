@@ -5,7 +5,7 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCe
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getExperienceIdVariants, boatMatchesExperience } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
@@ -276,10 +276,14 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          // Align with slots API: use experience defaults and rate duration when experience.tripDurationHours is missing
-          const deptHour = experience.departureHour ?? 10;
-          const deptMinute = experience.departureMinute ?? 0;
-          const tripDuration = experience.tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
+          // Align with slots API: same default for departure hour (19 for slug-based ticketed e.g. sunset, 10 otherwise)
+          const expSlug = (typeof (experience as { slug?: string }).slug === "string" ? (experience as { slug: string }).slug.trim() : "").toLowerCase();
+          const inferredSlug = inferSlugFromTitle((experience as { title?: string; name?: string }).title ?? (experience as { name?: string }).name);
+          const effectiveSlug = expSlug || inferredSlug;
+          const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
+          const deptHour = (experience as { departureHour?: number }).departureHour ?? (isTicketedBySlug ? 19 : 10);
+          const deptMinute = (experience as { departureMinute?: number }).departureMinute ?? 0;
+          const tripDuration = (experience as { tripDurationHours?: number }).tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
           if (
             tripDuration == null ||
             parsedForValidation.startHour !== deptHour ||
@@ -372,10 +376,14 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
         if (isSharedTicketed || isCharterTicketed) {
-          // Align with slots API: use experience defaults and rate duration when experience.tripDurationHours is missing
-          const deptHour = experience.departureHour ?? 10;
-          const deptMinute = experience.departureMinute ?? 0;
-          const tripDuration = experience.tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
+          // Align with slots API: same default for departure hour (19 for slug-based ticketed e.g. sunset, 10 otherwise)
+          const expSlug = (typeof (experience as { slug?: string }).slug === "string" ? (experience as { slug: string }).slug.trim() : "").toLowerCase();
+          const inferredSlug = inferSlugFromTitle((experience as { title?: string; name?: string }).title ?? (experience as { name?: string }).name);
+          const effectiveSlug = expSlug || inferredSlug;
+          const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
+          const deptHour = (experience as { departureHour?: number }).departureHour ?? (isTicketedBySlug ? 19 : 10);
+          const deptMinute = (experience as { departureMinute?: number }).departureMinute ?? 0;
+          const tripDuration = (experience as { tripDurationHours?: number }).tripDurationHours ?? (rate as { durationHours?: number }).durationHours;
           if (
             tripDuration == null ||
             parsedForValidation.startHour !== deptHour ||
@@ -498,6 +506,12 @@ export async function POST(request: NextRequest) {
       currency: "usd",
       qty: isSharedTicketed ? input.partySize : 1,
     });
+    if (pricing.subtotalCents === 0 && experienceForPricing?.pricingType === "ticketed") {
+      return NextResponse.json(
+        { error: "Rate has a zero or missing price - check the Firestore rate document." },
+        { status: 400 }
+      );
+    }
     const tipCents = input.tipCents ?? 0;
     let discountCents = 0;
     let discountCodeApplied: string | undefined;

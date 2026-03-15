@@ -222,8 +222,9 @@ export function InlineBookingDetailsStep({
     [holdId, releaseToken]
   );
 
+  const isTicketed = bookingMode === "shared";
   const priceSummary = useMemo(() => {
-    const rateCents = effectiveRateCents ?? 0;
+    const rateCents = (effectiveRateCents ?? 0) * (isTicketed ? partySize : 1);
     const addonLines = displayAddons
       .filter((a) => (addonSelections[a.id] ?? 0) > 0)
       .map((a) => ({
@@ -239,8 +240,11 @@ export function InlineBookingDetailsStep({
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
     const discountCents = appliedDiscount?.discountCents ?? 0;
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
+    const rateLabel = isTicketed && (effectiveRateCents ?? 0) > 0
+      ? `${partySize} ticket(s) × $${((effectiveRateCents ?? 0) / 100).toFixed(0)}/ticket`
+      : rateDisplayName;
     return {
-      rateLabel: rateDisplayName,
+      rateLabel,
       rateCents,
       addonLines,
       salesTaxCents,
@@ -248,10 +252,10 @@ export function InlineBookingDetailsStep({
       discountCents,
       totalCents,
     };
-  }, [effectiveRateCents, rateDisplayName, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
+  }, [effectiveRateCents, rateDisplayName, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount, isTicketed, partySize]);
 
   const handleProceedToPayment = async () => {
-    if (effectiveRateCents === null) return;
+    if (effectiveRateCents === null || priceLoading) return;
     if (!customerName.trim()) {
       setPaymentError("Please enter your full name.");
       return;
@@ -316,8 +320,9 @@ export function InlineBookingDetailsStep({
       });
       const holdData = await holdRes.json();
       if (!holdRes.ok) {
-        bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: holdRes.status, error: holdData.error });
-        setPaymentError(holdData.error ?? "Failed to create hold");
+        const hint = holdData.hint ? ` ${holdData.hint}` : "";
+        bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
+        setPaymentError(`${holdData.error ?? "Failed to create hold"}${hint}`);
         setPaymentPhase("form");
         return;
       }
@@ -595,13 +600,19 @@ export function InlineBookingDetailsStep({
             )}
             <div className="flex justify-between font-semibold pt-2 border-t border-brand-dark/10">
               <span>Total</span>
-              <span>${(priceSummary.totalCents / 100).toFixed(2)}</span>
+              {priceLoading ? (
+                <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+              ) : (
+                <span>${(priceSummary.totalCents / 100).toFixed(2)}</span>
+              )}
             </div>
             {!payFullAmount ? (
               <>
                 <div className="flex justify-between text-brand-dark">
                   <span className="text-xs font-semibold">Deposit due now</span>
-                  {depositCentsFromServer != null ? (
+                  {priceLoading ? (
+                    <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                  ) : depositCentsFromServer != null ? (
                     <span className="text-lg font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
                   ) : (
                     <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
@@ -612,7 +623,11 @@ export function InlineBookingDetailsStep({
             ) : (
               <div className="flex justify-between">
                 <span className="text-xs font-semibold">Total due now</span>
-                <span className="text-lg font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                {priceLoading ? (
+                  <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                ) : (
+                  <span className="text-lg font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                )}
               </div>
             )}
           </div>
@@ -899,7 +914,11 @@ export function InlineBookingDetailsStep({
         <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold text-brand-dark">{payFullAmount ? "Total due" : "Deposit due"}</p>
-            {payFullAmount ? (
+            {priceLoading ? (
+              <p className="text-xl font-bold text-brand-primary">
+                <span className="inline-block h-7 w-24 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+              </p>
+            ) : payFullAmount ? (
               <p className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
             ) : depositCentsFromServer != null ? (
               <p className="text-xl font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</p>

@@ -260,6 +260,15 @@ export interface CachedRateOption {
   priceCents: number;
 }
 
+/** Seasonal config from Experience; used to restrict calendar to available months. */
+export interface CachedSeasonalConfig {
+  enabled?: boolean;
+  startMonth?: number;
+  endMonth?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface ExperienceBySlugResult {
   id?: string;
   rates?: CachedRateOption[];
@@ -271,6 +280,7 @@ export interface ExperienceBySlugResult {
     departureHour?: number;
     departureMinute?: number;
     showSpotsRemaining?: boolean;
+    seasonal?: CachedSeasonalConfig;
   };
   addons?: Array<{
     id?: string;

@@ -7,7 +7,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
+import type { SeasonalConfig } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib, getChicagoToday } from "@/lib/booking/booking-date-range";
 import { Dialog } from "@/components/ui/dialog";
@@ -108,6 +109,8 @@ interface ExperienceCalendarSectionProps {
   pricingType?: "charter" | "ticketed";
   departureHour?: number;
   departureMinute?: number;
+  /** When set, calendar only allows selecting dates within this seasonal window (e.g. holiday cruise Nov–Jan). */
+  seasonalConfig?: SeasonalConfig | null;
 }
 
 export function ExperienceCalendarSection({
@@ -127,6 +130,7 @@ export function ExperienceCalendarSection({
   pricingType: pricingTypeProp,
   departureHour: departureHourProp,
   departureMinute: departureMinuteProp,
+  seasonalConfig: seasonalConfigProp,
 }: ExperienceCalendarSectionProps) {
   const darkCard = variant === "dark-card";
   const [experienceId, setExperienceId] = useState<string | null>(experienceIdProp ?? null);
@@ -139,6 +143,8 @@ export function ExperienceCalendarSection({
   const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | "shared" | undefined>(pricingTypeProp ?? undefined);
   const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(departureHourProp ?? undefined);
   const [fetchedDepartureMinute, setFetchedDepartureMinute] = useState<number | undefined>(departureMinuteProp ?? undefined);
+  /** Seasonal window from slug fetch; used to restrict calendar to available months only. */
+  const [fetchedSeasonalConfig, setFetchedSeasonalConfig] = useState<SeasonalConfig | null>(null);
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -240,9 +246,15 @@ export function ExperienceCalendarSection({
             setFetchedDepartureHour(exp.pricingType === "ticketed" && typeof exp.departureHour === "number" ? exp.departureHour : undefined);
             setFetchedDepartureMinute(exp.pricingType === "ticketed" && typeof exp.departureMinute === "number" ? exp.departureMinute : undefined);
             setFetchedShowSpotsRemaining(exp.showSpotsRemaining === true);
+            if (exp.seasonal && typeof exp.seasonal === "object" && exp.seasonal.enabled) {
+              setFetchedSeasonalConfig(exp.seasonal as SeasonalConfig);
+            } else {
+              setFetchedSeasonalConfig(null);
+            }
           } else {
             setFetchedExperience(null);
             setFetchedPricingType(undefined);
+            setFetchedSeasonalConfig(null);
           }
           if (Array.isArray(data.addons)) {
             setFetchedAddons(
@@ -680,6 +692,7 @@ export function ExperienceCalendarSection({
     ) => {
       const entry = slotsByDate.get(dateStr);
       const openCount = entry?.open ?? 0;
+      const dateSeasonalAllowed = !seasonalConfig?.enabled || isSeasonalAllowed(seasonalConfig, new Date(dateStr + "T12:00:00"), dateStr);
       // Ticketed: booked count is in slotDataByDate.spotsBooked; charter uses entry.booked
       const bookedCount = isTicketed
         ? (slotDataByDate.get(dateStr)?.spotsBooked ?? 0)
@@ -691,12 +704,13 @@ export function ExperienceCalendarSection({
         day,
         isCurrentMonth,
         isPast,
-        available: openCount > 0,
+        available: openCount > 0 && dateSeasonalAllowed,
         openCount,
         bookedCount,
         heldCount,
         blockedCount,
-        openSlots: openSlotsByDate.get(dateStr) ?? [],
+        openSlots: dateSeasonalAllowed ? (openSlotsByDate.get(dateStr) ?? []) : [],
+        seasonalAllowed: dateSeasonalAllowed,
       });
     };
     for (let i = 0; i < startPad; i++) {
@@ -713,16 +727,55 @@ export function ExperienceCalendarSection({
       pushCell(toDateStr(d), d.getDate(), false, true);
     }
     return cells;
-  }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr, isTicketed, slotDataByDate]);
+  }, [calendarMonth, slotsByDate, openSlotsByDate, todayStr, isTicketed, slotDataByDate, seasonalConfig]);
 
-  const goPrevMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
-  const goNextMonth = () => setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
+  /** Seasonal config: from slug fetch or prop (e.g. book page). When set, only allow navigating to and selecting dates within the window. */
+  const seasonalConfig = fetchedSeasonalConfig ?? seasonalConfigProp ?? null;
+
+  const canGoPrevMonth = useMemo(() => {
+    if (!seasonalConfig?.enabled) return true;
+    const m = calendarMonth.getMonth();
+    const y = calendarMonth.getFullYear();
+    const prev = m === 0 ? { year: y - 1, month1: 12 } : { year: y, month1: m };
+    return isMonthInSeasonalRange(seasonalConfig, prev.year, prev.month1);
+  }, [seasonalConfig, calendarMonth]);
+
+  const canGoNextMonth = useMemo(() => {
+    if (!seasonalConfig?.enabled) return true;
+    const m = calendarMonth.getMonth();
+    const y = calendarMonth.getFullYear();
+    const next = m === 11 ? { year: y + 1, month1: 1 } : { year: y, month1: m + 2 };
+    return isMonthInSeasonalRange(seasonalConfig, next.year, next.month1);
+  }, [seasonalConfig, calendarMonth]);
+
+  const goPrevMonth = () => {
+    if (!canGoPrevMonth) return;
+    setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
+  };
+  const goNextMonth = () => {
+    if (!canGoNextMonth) return;
+    setCalendarMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1));
+  };
   const goToToday = () => {
     const d = new Date();
-    setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+    const newMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (seasonalConfig?.enabled && !isMonthInSeasonalRange(seasonalConfig, d.getFullYear(), d.getMonth() + 1)) {
+      if (seasonalConfig.startDate && seasonalConfig.endDate) {
+        const start = seasonalConfig.startDate.slice(0, 7);
+        setCalendarMonth(new Date(start + "-01"));
+        return;
+      }
+      const startMonth = seasonalConfig.startMonth ?? 1;
+      setCalendarMonth(new Date(d.getFullYear(), startMonth - 1, 1));
+      return;
+    }
+    setCalendarMonth(newMonth);
   };
 
   const handleDayClick = (dateStr: string) => {
+    if (seasonalConfig?.enabled && !isSeasonalAllowed(seasonalConfig, new Date(dateStr + "T12:00:00"), dateStr)) {
+      return;
+    }
     setSoldOutFeedbackDate(null);
     setSelectedDate(dateStr);
     // Refetch slots for current month so time list and boat list show fresh availability (avoids stale cache showing times that are no longer open).
@@ -845,6 +898,8 @@ export function ExperienceCalendarSection({
     goToToday,
     goPrevMonth,
     goNextMonth,
+    canGoPrevMonth,
+    canGoNextMonth,
     step2CompactGrid,
     selectedDate,
     openCountByDateForDuration,

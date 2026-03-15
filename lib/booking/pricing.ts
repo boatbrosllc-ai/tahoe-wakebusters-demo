@@ -179,6 +179,9 @@ export function computePricing(params: {
   const { rate, addons, currency = "usd" } = params;
   const ticketQty = Math.max(1, Math.floor(Number(params.qty ?? 1)));
   const unitCents = "basePriceCents" in rate && rate.basePriceCents != null ? rate.basePriceCents : (rate as RateLike).priceCents ?? 0;
+  if (typeof process !== "undefined" && process.env.NODE_ENV === "development" && unitCents === 0) {
+    console.warn("[pricing] computePricing: unitCents resolved to 0 — check rate document (priceCents/basePriceCents) for misconfigured or missing price.", { rate: "priceCents" in rate ? { priceCents: (rate as RateLike).priceCents } : "basePriceCents" in rate ? { basePriceCents: rate.basePriceCents } : rate });
+  }
   const baseCents = unitCents * ticketQty;
   let subtotalCents = baseCents;
   for (const { addon, qty } of addons) {

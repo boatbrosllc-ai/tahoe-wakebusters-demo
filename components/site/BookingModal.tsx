@@ -20,6 +20,7 @@ import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth } from "@/li
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
+import { HoldCountdown } from "@/components/booking/HoldCountdown";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
@@ -227,9 +228,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  /** Server-computed deposit/total from create-payment-intent so success view matches actual Stripe charge when discounted. */
+  /** Server-computed deposit/total/final from create-payment-intent so step-4 summary and Stripe recap use server-authoritative values. */
   const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
   const [totalCentsFromServer, setTotalCentsFromServer] = useState<number | null>(null);
+  const [finalCentsFromServer, setFinalCentsFromServer] = useState<number | null>(null);
+  /** Hold expiry (ISO string) from create-hold; shown during payment and used to block progression when expired. */
+  const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
+  /** One-shot ref to prevent duplicate release calls from concurrent close triggers (Dialog overlay + cleanup). */
+  const releaseOnCloseDoneRef = useRef(false);
+  /** Refs for cleanup effect to see current hold/payment state when modal unmounts. */
+  const paymentPhaseRef = useRef(paymentPhase);
+  const holdIdRef = useRef(holdId);
+  paymentPhaseRef.current = paymentPhase;
+  holdIdRef.current = holdId;
 
   // Month-level caching is handled by the shared module-level bookingCache (booking-data-cache.ts)
   // which also deduplicates in-flight requests across all booking entry points.
@@ -845,6 +856,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     [selectedRateId, ratesForSelection]
   );
 
+  // Price ready for step 4: either effective rate from API or selected rate from cache (avoids $0.00 before fetch)
+  const priceReady = effectiveRateCents != null || selectedRate != null;
+
   // Add-ons to show (exclude sunscreen)
   const displayAddons = useMemo(
     () => addons.filter((a) => !/sunscreen/i.test(a.name)),
@@ -892,6 +906,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       totalCents,
     };
   }, [isTicketed, partySize, effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
+
+  // Clear or revalidate applied discount whenever price drivers change so checkout totals don't drift from server repricing.
+  useEffect(() => {
+    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
+    setAppliedDiscount(null);
+    setAppliedDiscountError(null);
+  }, [partySize, addonSelections, tipChoice, tipPercent, selectedRateId, selectedDate, payFullAmount]);
 
   // When opened with initialSelection (slot pre-picked):
   // - Charter + boatId pre-picked → go directly to step 4
@@ -985,7 +1006,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Calendar-first flow: date + slot chosen on listing, so modal only shows boat → details (no step 1 or 3). */
   const isCalendarFirstFlow = !!initialSelection?.slotId;
 
-  /** Best-effort release of current hold; used when leaving Stripe step (handleBack) or when create-payment-intent fails. */
+  /** Best-effort release of current hold; used when leaving Stripe step (handleBack), when create-payment-intent fails, or when closing modal during payment. */
   const releaseCreatedHold = useCallback(
     async (overrideHoldId?: string | null, overrideReleaseToken?: string | null) => {
       const id = overrideHoldId ?? holdId;
@@ -1002,9 +1023,48 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
       setHoldId(null);
       setReleaseToken(null);
+      setHoldExpiresAt(null);
     },
     [holdId, releaseToken]
   );
+
+  /** Guarded close: if an active hold exists during payment phase, release it (best-effort) before applying close. One-shot ref prevents duplicate release. */
+  const handleModalOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        releaseOnCloseDoneRef.current = false;
+        onOpenChange(true);
+        return;
+      }
+      const inPaymentPhase =
+        paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing";
+      if (holdId && inPaymentPhase && !releaseOnCloseDoneRef.current) {
+        releaseOnCloseDoneRef.current = true;
+        releaseCreatedHold().finally(() => onOpenChange(false));
+        return;
+      }
+      onOpenChange(false);
+    },
+    [onOpenChange, holdId, paymentPhase, releaseCreatedHold]
+  );
+
+  /** Defensive cleanup: release any active hold when modal is closed/unmounted from a payment phase (e.g. navigation away). */
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      const h = holdIdRef.current;
+      const p = paymentPhaseRef.current;
+      const inPaymentPhase = p === "stripe" || p === "loading" || p === "completing";
+      if (h && inPaymentPhase && !releaseOnCloseDoneRef.current) {
+        releaseOnCloseDoneRef.current = true;
+        fetch("/api/booking/release-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId: h }),
+        }).catch(() => {});
+      }
+    };
+  }, [open]);
 
   const handleBack = () => {
     if (step === 2) setStep(1);
@@ -1024,24 +1084,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           onOpenChange(false);
         } else {
           // Ticketed + no pre-selection: go back to date picker (skip boat step)
-          lastHoldRef.current = null;
-          setStep(2);
-          setPaymentPhase("form");
-          setClientSecret(null);
-          setHoldId(null);
-          setPaymentIntentId(null);
-          setPaymentError(null);
-          setTipChoice(null);
-          setTipLaterMessageOpen(false);
-          setAppliedDiscount(null);
-          setAppliedDiscountError(null);
-        }
-      } else {
         lastHoldRef.current = null;
-        setStep(boats.length === 1 ? 2 : 3);
+        setStep(2);
         setPaymentPhase("form");
         setClientSecret(null);
         setHoldId(null);
+        setHoldExpiresAt(null);
+        setDepositCentsFromServer(null);
+        setTotalCentsFromServer(null);
+        setFinalCentsFromServer(null);
         setPaymentIntentId(null);
         setPaymentError(null);
         setTipChoice(null);
@@ -1049,8 +1100,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setAppliedDiscount(null);
         setAppliedDiscountError(null);
       }
+    } else {
+      lastHoldRef.current = null;
+      setStep(boats.length === 1 ? 2 : 3);
+      setPaymentPhase("form");
+      setClientSecret(null);
+      setHoldId(null);
+      setHoldExpiresAt(null);
+      setDepositCentsFromServer(null);
+      setTotalCentsFromServer(null);
+      setFinalCentsFromServer(null);
+      setPaymentIntentId(null);
+      setPaymentError(null);
+      setTipChoice(null);
+      setTipLaterMessageOpen(false);
+      setAppliedDiscount(null);
+      setAppliedDiscountError(null);
     }
-  };
+  }
+};
 
   const handleSelectCategory = (exp: ExperienceItem) => {
     setSelectedExperience(exp);
@@ -1216,11 +1284,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         }
         return;
       }
-      const { holdId: newHoldId, releaseToken: newReleaseToken } = holdData;
+      const { holdId: newHoldId, releaseToken: newReleaseToken, expiresAt: newExpiresAt } = holdData;
       createdHoldId = newHoldId;
       createdReleaseToken = newReleaseToken ?? null;
       setHoldId(newHoldId);
       setReleaseToken(createdReleaseToken);
+      if (typeof newExpiresAt === "string") setHoldExpiresAt(newExpiresAt);
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
       const intentRes = await fetch("/api/booking/create-payment-intent", {
         method: "POST",
@@ -1247,6 +1316,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setPaymentIntentId(intentData.paymentIntentId ?? null);
       if (typeof intentData.depositCents === "number") setDepositCentsFromServer(intentData.depositCents);
       if (typeof intentData.totalCents === "number") setTotalCentsFromServer(intentData.totalCents);
+      if (typeof intentData.finalCents === "number") setFinalCentsFromServer(intentData.finalCents);
+      if (typeof intentData.expiresAt === "string") setHoldExpiresAt(intentData.expiresAt);
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "create-hold or create-payment-intent threw", err, {});
@@ -1286,10 +1357,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [isTicketed, effectiveTicketMax, partySize]);
 
+  /** During payment phase, tick every second so we can block progression once hold has expired. */
+  const [paymentTick, setPaymentTick] = useState(0);
+  useEffect(() => {
+    if (paymentPhase !== "stripe" || !holdExpiresAt) return;
+    const t = setInterval(() => setPaymentTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [paymentPhase, holdExpiresAt]);
+  const isHoldExpired = holdExpiresAt ? new Date(holdExpiresAt).getTime() <= Date.now() : false;
+
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleModalOpenChange}
       className={cn(
         "w-[calc(100vw-2rem)] max-w-md max-h-[85dvh]",
         "md:max-w-2xl md:max-h-[85dvh]",
@@ -1926,7 +2006,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <div className="p-4 space-y-2">
                         <div className="flex justify-between items-baseline text-sm">
                           <span className="text-brand-muted">{priceSummary.rateLabel}</span>
-                          <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
+                          {priceReady ? (
+                            <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
+                          ) : (
+                            <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                          )}
                         </div>
                         {displayAddons
                           .filter((a) => (addonSelections[a.id] ?? 0) > 0)
@@ -1997,22 +2081,38 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <div className="border-t border-brand-dark/10 pt-3 mt-3 space-y-1.5">
                           <div className="flex justify-between items-baseline text-sm">
                             <span className="text-brand-muted">Total</span>
-                            <span className="font-medium text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                            {priceReady ? (
+                              <span className="font-medium text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                            ) : (
+                              <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                            )}
                           </div>
                           {(isTicketed || payFullAmount) ? (
                             <div className="flex justify-between items-baseline">
                               <span className="text-sm font-semibold text-brand-dark">Total due now</span>
-                              <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                              {priceReady ? (
+                                <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
+                              ) : (
+                                <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                              )}
                             </div>
                           ) : (
                             <>
                               <div className="flex justify-between items-baseline">
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
-                                <span className="text-xl font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                {priceReady ? (
+                                  <span className="text-xl font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                ) : (
+                                  <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                                )}
                               </div>
                               <div className="flex justify-between items-baseline text-sm">
                                 <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
-                                <span className="font-medium text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                {priceReady ? (
+                                  <span className="font-medium text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                ) : (
+                                  <span className="h-5 w-14 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                                )}
                               </div>
                             </>
                           )}
@@ -2397,9 +2497,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-xs sm:text-sm font-semibold text-brand-dark">
                           {(isTicketed || payFullAmount) ? "Total due" : "Deposit due"}
                         </p>
-                        <p className="text-xl sm:text-2xl font-bold text-brand-primary">
-                          ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
-                        </p>
+                        {priceReady ? (
+                          <p className="text-xl sm:text-2xl font-bold text-brand-primary">
+                            ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          </p>
+                        ) : (
+                          <p className="text-xl sm:text-2xl font-bold text-brand-primary">
+                            <span className="inline-block h-8 w-24 sm:h-9 sm:w-28 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                          </p>
+                        )}
                         {!isTicketed && !payFullAmount && (
                           <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
                             Remaining 50% charged 48 hours before your trip
@@ -2409,7 +2515,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <button
                         type="button"
                         onClick={handleProceedToPayment}
-                        disabled={!isStripeCheckoutReady}
+                        disabled={!isStripeCheckoutReady || !priceReady}
                         className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         Proceed to payment
@@ -2491,6 +2597,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                   <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
                   <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 shrink-0 space-y-3">
+                    {holdExpiresAt && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                        {isHoldExpired ? (
+                          <span className="font-semibold text-amber-700">Your reservation time expired. Please start a new booking.</span>
+                        ) : (
+                          <HoldCountdown
+                            expiresAt={holdExpiresAt}
+                            label="Complete payment in"
+                            compact
+                            expiredLabel="Expired"
+                            className="font-medium text-brand-dark"
+                          />
+                        )}
+                      </div>
+                    )}
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary/90">Paying now</p>
@@ -2505,7 +2626,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold text-brand-primary">
-                          ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          ${((totalCentsFromServer != null
+                            ? (isTicketed || payFullAmount ? totalCentsFromServer : (depositCentsFromServer ?? totalCentsFromServer))
+                            : (isTicketed || payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5))
+                          ) / 100).toFixed(2)}
                         </p>
                         <p className="text-[11px] text-brand-muted">
                           {(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}
@@ -2541,10 +2665,35 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       )}
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
                         <span>{(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}</span>
-                        <span>${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span>
+                        <span>
+                          ${((totalCentsFromServer != null
+                            ? (isTicketed || payFullAmount ? totalCentsFromServer : (depositCentsFromServer ?? totalCentsFromServer))
+                            : (isTicketed || payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5))
+                          ) / 100).toFixed(2)}
+                        </span>
                       </div>
                     </div>
                   </div>
+                  {isHoldExpired ? (
+                    <div className="min-h-[200px] flex flex-col justify-center gap-4 p-4 rounded-xl border-2 border-amber-200 bg-amber-50">
+                      <p className="text-sm font-medium text-amber-900">Your reservation hold has expired. Please start a new booking—your slot has been released.</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          releaseCreatedHold();
+                          setPaymentPhase("form");
+                          setClientSecret(null);
+                          setHoldId(null);
+                          setHoldExpiresAt(null);
+                          setPaymentIntentId(null);
+                          setPaymentError(null);
+                        }}
+                        className="rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      >
+                        Start over
+                      </button>
+                    </div>
+                  ) : (
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingPaymentForm
@@ -2586,6 +2735,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       />
                     </Elements>
                   </div>
+                  )}
                   </div>
                 </div>
               )}
@@ -2687,7 +2837,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         (isTicketed || payFullAmount) ? (
                           <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
                         ) : (
-                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
+                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
                         )
                       ) : (
                         "We&apos;ve received your payment. You&apos;ll get a confirmation email shortly."
