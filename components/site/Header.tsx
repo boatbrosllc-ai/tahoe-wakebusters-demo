@@ -44,8 +44,8 @@ export function Header() {
   const handleCallClick = () => analytics.callClick("header", "global");
 
   const checkSession = () => {
-    fetch("/api/admin/session", { credentials: "include" })
-      .then((res) => res.json().catch(() => ({})))
+    fetch("/api/admin/session", { method: "GET", credentials: "include" })
+      .then((res) => (res.ok ? res.json() : { signedIn: false }))
       .then((data: { signedIn?: boolean }) => setIsAdmin(data.signedIn === true))
       .catch(() => setIsAdmin(false));
   };

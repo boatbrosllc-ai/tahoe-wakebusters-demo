@@ -152,6 +152,13 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
+    // Log full error and stack for debugging (server logs / Netlify)
+    const stack = err instanceof Error ? err.stack : undefined;
+    bookingError("complete-after-payment", "complete after payment failed", err, { message, stack: stack ? stack.slice(0, 500) : undefined });
+    if (process.env.NODE_ENV === "development" && stack) {
+      console.error("[booking:complete-after-payment] stack:", stack);
+    }
+
     if (message === "Hold has expired") {
       bookingWarn("complete-after-payment", "hold expired", { holdId: (err as { holdId?: string }).holdId });
       return NextResponse.json(
@@ -166,7 +173,13 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    bookingError("complete-after-payment", "complete after payment failed", err, { message });
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Don't expose env/config errors to the client; return generic message and log real error
+    const isConfigError =
+      /missing required env|firebase config|FIREBASE_|STRIPE_|BREVO_|config missing/i.test(message) ||
+      (err instanceof Error && (message.includes("private key") || message.includes("PEM")));
+    const clientMessage = isConfigError
+      ? "Server configuration error. Please try again or contact support."
+      : message;
+    return NextResponse.json({ error: clientMessage }, { status: 500 });
   }
 }
