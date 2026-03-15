@@ -8,6 +8,7 @@ import { FINAL_CTA } from "@/lib/experience/lakeAustinPontoon.data";
 export function FinalCTA({
   onCheckAvailability,
   bookingSectionId,
+  onBookNow,
   headline,
   primaryCta,
   secondaryCta,
@@ -15,6 +16,8 @@ export function FinalCTA({
 }: {
   onCheckAvailability?: () => void;
   bookingSectionId?: string;
+  /** When set, primary button opens the booking modal (e.g. with experience pre-selected) instead of scrolling. */
+  onBookNow?: () => void;
   headline?: string;
   primaryCta?: string;
   secondaryCta?: string;
@@ -32,6 +35,8 @@ export function FinalCTA({
     }
     onCheckAvailability?.();
   };
+
+  const handlePrimary = onBookNow ?? scrollToBooking;
 
   return (
     <motion.section
@@ -56,7 +61,7 @@ export function FinalCTA({
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
           <Button
             size="lg"
-            onClick={scrollToBooking}
+            onClick={handlePrimary}
             className="rounded-full h-14 px-10 text-lg font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/95 shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all w-full sm:w-auto focus-visible:ring-brand-primary"
           >
             {primaryCtaText}

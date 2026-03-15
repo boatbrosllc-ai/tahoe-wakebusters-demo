@@ -10,10 +10,13 @@ export function StickyMobileBar({
   price = defaultPrice,
   onCheckAvailability,
   bookingSectionId,
+  onBookNow,
 }: {
   price?: number;
   onCheckAvailability?: () => void;
   bookingSectionId?: string;
+  /** When set, primary button opens the booking modal (e.g. with experience pre-selected) instead of scrolling. */
+  onBookNow?: () => void;
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -23,6 +26,8 @@ export function StickyMobileBar({
     }
     onCheckAvailability?.();
   };
+
+  const handlePrimary = onBookNow ?? scrollToBooking;
 
   return (
     <motion.div
@@ -36,10 +41,10 @@ export function StickyMobileBar({
       </span>
       <Button
         size="lg"
-        onClick={scrollToBooking}
+        onClick={handlePrimary}
         className="rounded-full shrink-0 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 focus-visible:ring-brand-primary min-h-[44px] min-w-[44px] touch-manipulation"
       >
-        Check Availability
+        {onBookNow ? "Book now" : "Check Availability"}
       </Button>
     </motion.div>
   );

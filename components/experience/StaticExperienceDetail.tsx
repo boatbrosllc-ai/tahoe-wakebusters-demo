@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
-import { ExperienceCalendarSection } from "./ExperienceCalendarSection";
 import { STATIC_TO_FIRESTORE_SLUG } from "@/lib/booking/static-slug-map";
 import type { Experience } from "@/content/experiences";
 
@@ -22,11 +21,18 @@ interface StaticExperienceDetailProps {
 }
 
 export function StaticExperienceDetail({ experience }: StaticExperienceDetailProps) {
-  const { openWithSelection } = useBookingModal();
+  const { openWithSelection, setOpen: setBookingModalOpen } = useBookingModal();
   const slug = experience.slug;
-  const bookHref = `/experiences/${slug}/book`;
   /** Firestore slug to resolve experience (map variant → canonical, or use slug itself for canonical e.g. sunset/holiday). */
   const firestoreSlug = (STATIC_TO_FIRESTORE_SLUG[slug] ?? slug) || null;
+
+  const handleBookNow = () => {
+    if (firestoreSlug) {
+      openWithSelection({ experienceSlug: firestoreSlug });
+    } else {
+      setBookingModalOpen(true);
+    }
+  };
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   // Photo 1 = hero/experience section; gallery starts with photo 2 (index 1)
   const gallery = (experience.gallery ?? []).slice(1);
@@ -99,8 +105,8 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
               </span>
             </div>
             <div className="mt-8 flex flex-wrap gap-4">
-              <Button asChild size="lg" className="rounded-xl h-14 px-10 text-base font-bold shadow-premium ring-2 ring-white/30 ring-offset-2 ring-offset-brand-dark hover:ring-brand-primary">
-                <Link href={bookHref}>Book now</Link>
+              <Button size="lg" className="rounded-xl h-14 px-10 text-base font-bold shadow-premium ring-2 ring-white/30 ring-offset-2 ring-offset-brand-dark hover:ring-brand-primary" onClick={handleBookNow}>
+                Book now
               </Button>
               <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 border-2 border-white/60 text-white hover:bg-white/15 hover:border-white font-medium">
                 <Link href="/experiences">All experiences</Link>
@@ -115,19 +121,25 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
         <span className="font-bold text-brand-dark">
           {fromPrice ? `From $${fromPrice}` : "See dates"}
         </span>
-        <Button asChild size="lg" className="rounded-xl shrink-0">
-          <Link href={bookHref}>Reserve your spot</Link>
+        <Button size="lg" className="rounded-xl shrink-0" onClick={handleBookNow}>
+          Reserve your spot
         </Button>
       </div>
 
-      {firestoreSlug && (
-        <ExperienceCalendarSection
-          firestoreSlug={firestoreSlug}
-          experienceSlug={firestoreSlug}
-          bookHref={bookHref}
-          onOpenInModal={(selection) => openWithSelection({ ...selection, experienceSlug: firestoreSlug ?? slug })}
-        />
-      )}
+      {/* Book now section: opens shared navbar booking modal with this experience pre-selected (step 2 = date & time). */}
+      <section className="w-full py-12 sm:py-16 bg-brand-bg border-t border-brand-dark/5" id="book-now" aria-labelledby="book-now-heading">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 id="book-now-heading" className="text-2xl sm:text-3xl font-extrabold text-brand-dark tracking-tight">
+            Ready to book?
+          </h2>
+          <p className="mt-2 text-brand-muted text-base max-w-lg mx-auto">
+            Pick your date and time in the next step — we&apos;ll hold your slot while you checkout.
+          </p>
+          <Button size="lg" className="mt-6 rounded-xl h-14 px-12 text-base font-bold shadow-premium" onClick={handleBookNow}>
+            Book now
+          </Button>
+        </div>
+      </section>
 
       {/* Main content – section rhythm matches listing */}
       <section className="w-full py-20 sm:py-24 lg:py-28 bg-brand-bg">
@@ -268,11 +280,11 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
           <section className="mt-20 lg:mt-24 max-w-4xl rounded-2xl sm:rounded-3xl bg-brand-dark py-12 sm:py-16 px-6 sm:px-10 text-center text-white shadow-premium relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-b from-brand-primary/10 via-transparent to-transparent pointer-events-none" aria-hidden />
             <p className="relative text-base sm:text-lg text-white/90 mb-8 max-w-xl mx-auto">
-              Find your day on the next page — we&apos;ll hold your slot while you checkout.
+              Find your day in the booking flow — we&apos;ll hold your slot while you checkout.
             </p>
             <div className="relative flex flex-wrap justify-center gap-4">
-              <Button asChild size="lg" className="rounded-xl h-14 px-12 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-premium">
-                <Link href={bookHref}>Reserve your spot</Link>
+              <Button size="lg" className="rounded-xl h-14 px-12 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-premium" onClick={handleBookNow}>
+                Reserve your spot
               </Button>
               <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-12 border-2 border-white/50 text-white hover:bg-white/15 font-medium">
                 <Link href="/experiences">All experiences</Link>
