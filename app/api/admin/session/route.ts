@@ -6,14 +6,59 @@ import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 
 const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
 
-/** GET: Check if admin is signed in (for navbar). Returns { signedIn: boolean }. */
+/** GET: Check if admin is signed in (for navbar). Returns { signedIn: boolean }. Optional ?config=1 returns safe config status for login page. */
 export async function GET(request: NextRequest) {
+  const wantConfig = request.nextUrl.searchParams.get("config") === "1";
   try {
     const cookie = request.headers.get("cookie");
     const signedIn = await verifyAdminSessionCookie(cookie);
-    return NextResponse.json({ signedIn: signedIn === true });
+    const payload: { signedIn: boolean; config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } } = {
+      signedIn: signedIn === true,
+    };
+    if (wantConfig) {
+      const allowed = getAllowedAdminEmails();
+      const serverProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
+      const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+      let firebaseConfigured = false;
+      try {
+        getFirebaseApp();
+        firebaseConfigured = true;
+      } catch {
+        // not configured or invalid
+      }
+      payload.config = {
+        adminEmailSet: allowed.length > 0,
+        firebaseConfigured,
+        projectIdsMatch: !serverProjectId || !clientProjectId || serverProjectId === clientProjectId,
+      };
+    }
+    return NextResponse.json(payload);
   } catch {
-    return NextResponse.json({ signedIn: false });
+    const payload: { signedIn: boolean; config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } } = {
+      signedIn: false,
+    };
+    if (wantConfig) {
+      try {
+        const allowed = getAllowedAdminEmails();
+        const serverProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
+        const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+        let firebaseConfigured = false;
+        try {
+          getFirebaseApp();
+          firebaseConfigured = true;
+        } catch {
+          // ignore
+        }
+        payload.config = {
+          adminEmailSet: allowed.length > 0,
+          firebaseConfigured,
+          projectIdsMatch: !serverProjectId || !clientProjectId || serverProjectId === clientProjectId,
+        };
+      } catch {
+        // keep config undefined
+      }
+    }
+    return NextResponse.json(payload);
   }
 }
 
@@ -93,6 +138,8 @@ export async function POST(request: NextRequest) {
       hint = "Check your deployment logs (e.g. Netlify Functions) for [admin/session] to see the exact error.";
     }
     console.error("[admin/session] 401:", message, "\nHint:", hint);
-    return NextResponse.json({ error: "Invalid or expired token", hint }, { status: 401 });
+    const body: { error: string; hint?: string; detail?: string } = { error: "Invalid or expired token", hint };
+    if (process.env.NODE_ENV === "development") body.detail = message;
+    return NextResponse.json(body, { status: 401 });
   }
 }

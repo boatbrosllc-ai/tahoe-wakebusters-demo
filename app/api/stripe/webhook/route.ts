@@ -184,6 +184,12 @@ export async function POST(request: NextRequest) {
           bookingLog("stripe-webhook", "checkout.session.completed booking created", { bookingId: result.bookingId, holdId });
           await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "booking_created", bookingId: result.bookingId, holdId, sessionId, paymentIntentId, amountTotal, currency });
         }
+        const stripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
+        if (stripeCouponId) {
+          stripe.coupons.del(stripeCouponId).catch((delErr) => {
+            console.error("[stripe-webhook] checkout.session.completed failed to delete coupon after conversion", { holdId, stripeCouponId, error: delErr });
+          });
+        }
         return NextResponse.json({ received: true });
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);

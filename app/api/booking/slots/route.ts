@@ -32,7 +32,11 @@ const NO_STORE_HEADERS = {
 
 // Set DISABLE_LEGACY_BOOKING_FALLBACK=true in all environments once startDateStr backfill is complete.
 // When true, legacy fallback queries are never run; when unset or false, legacy fallback runs when index is missing.
+// Legacy queries use .limit(2000); if a query returns 2000 docs, some bookings may be hidden and availability can be overstated.
+// Removal path: (1) Run startDateStr backfill to exhaustion (e.g. api/admin/backfill-booking-boat-ids pattern for startDateStr),
+// (2) set DISABLE_LEGACY_BOOKING_FALLBACK=true in production. Firestore index (experienceId, status) is used for legacy booking fallback.
 const LEGACY_FALLBACK_ENABLED = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
+const LEGACY_QUERY_LIMIT = 2000;
 
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
@@ -213,6 +217,7 @@ export async function GET(request: NextRequest) {
         // Note: `in` + range on a different field is rejected by Firestore, so we use per-ID parallel calls.
         const tSeenBookingIds = new Set<string>();
         let tWindowedIndexReady = true;
+        let legacyQueryHitLimit = false;
         try {
           const tWindowedBookingSnaps = await Promise.all(
             tAllExpIds.map(expId =>
@@ -248,11 +253,15 @@ export async function GET(request: NextRequest) {
                 db.collection("bookings")
                   .where("experienceId", "==", expId)
                   .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-                  .limit(2000) // raised from 200 until backfill complete; in-memory date filter discards out-of-window records
+                  .limit(LEGACY_QUERY_LIMIT)
                   .get()
-              )
+            )
             );
-            tLegacyBookingSnaps.forEach(snap =>
+            tLegacyBookingSnaps.forEach((snap, idx) => {
+              if (snap.size >= LEGACY_QUERY_LIMIT) {
+                legacyQueryHitLimit = true;
+                console.warn("[slots] legacy query hit limit, some bookings may be hidden", { experienceId, variant: tAllExpIds[idx], count: snap.size });
+              }
               snap.docs.forEach(doc => {
                 if (tSeenBookingIds.has(doc.id)) return;
                 const d = doc.data() as { startDateStr?: string };
@@ -260,8 +269,8 @@ export async function GET(request: NextRequest) {
                 if (tWindowedIndexReady && d.startDateStr) return;
                 tSeenBookingIds.add(doc.id);
                 processBookingForCapacity(doc);
-              })
-            );
+              });
+            });
           } catch (tLegacyErr) {
             const tlmsg = tLegacyErr instanceof Error ? tLegacyErr.message : String(tLegacyErr);
             if (/FAILED_PRECONDITION.*index/i.test(tlmsg)) {
@@ -313,19 +322,23 @@ export async function GET(request: NextRequest) {
                 db.collection("holds")
                   .where("experienceId", "==", expId)
                   .where("status", "==", "active")
-                  .limit(2000) // raised from 200 until backfill complete; in-memory expiry filter discards irrelevant holds
+                  .limit(LEGACY_QUERY_LIMIT)
                   .get()
               )
             );
-            tHoldsLegacySnaps.forEach(snap =>
+            tHoldsLegacySnaps.forEach((snap, idx) => {
+              if (snap.size >= LEGACY_QUERY_LIMIT) {
+                legacyQueryHitLimit = true;
+                console.warn("[slots] legacy holds query hit limit, some holds may be hidden", { experienceId, variant: tAllExpIds[idx], count: snap.size });
+              }
               snap.docs.forEach(doc => {
                 if (tSeenHoldIds.has(doc.id)) return;
                 const d = doc.data() as { startDateStr?: string };
                 if (d.startDateStr) return; // already covered by windowed query
                 tSeenHoldIds.add(doc.id);
                 processHoldForCapacity(doc);
-              })
-            );
+              });
+            });
           }
         } catch (tHoldsErr) {
           console.warn("[slots] ticketed holds query failed:", tHoldsErr instanceof Error ? tHoldsErr.message : tHoldsErr);
@@ -391,7 +404,8 @@ export async function GET(request: NextRequest) {
           });
         }
         tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
-        return NextResponse.json({ slots: tSlots }, { headers: NO_STORE_HEADERS });
+        const ticketedHeaders = { ...NO_STORE_HEADERS, ...(legacyQueryHitLimit ? { "X-Slots-Partial-Data": "true" } : {}) };
+        return NextResponse.json({ slots: tSlots }, { headers: ticketedHeaders });
       }
       // --- End ticketed branch ---
 
@@ -535,6 +549,7 @@ export async function GET(request: NextRequest) {
 
       const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
       const seenBookingIds = new Set<string>();
+      let legacyQueryHitLimitCharter = false;
 
       const addBookingDoc = (doc: { id: string; data: () => Record<string, unknown> }) => {
         if (seenBookingIds.has(doc.id)) return;
@@ -579,19 +594,23 @@ export async function GET(request: NextRequest) {
               db.collection("bookings")
                 .where("experienceId", "==", expId)
                 .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-                .limit(2000) // raised from 200 until backfill complete; in-memory date filter discards out-of-window records
+                .limit(LEGACY_QUERY_LIMIT)
                 .get()
             )
           );
-          legacySnaps.forEach(snap =>
+          legacySnaps.forEach((snap, idx) => {
+            if (snap.size >= LEGACY_QUERY_LIMIT) {
+              legacyQueryHitLimitCharter = true;
+              console.warn("[slots] legacy query hit limit, some bookings may be hidden", { experienceId, variant: allExpIds[idx], count: snap.size });
+            }
             snap.docs.forEach(doc => {
               if (seenBookingIds.has(doc.id)) return;
               const d = doc.data() as { startDateStr?: string };
               // Skip docs already covered by the windowed query.
               if (windowedIndexReady && d.startDateStr) return;
               addBookingDoc(doc);
-            })
-          );
+            });
+          });
         } catch (legacyErr) {
           const lmsg = legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
           if (/FAILED_PRECONDITION.*index/i.test(lmsg)) {
@@ -840,6 +859,9 @@ export async function GET(request: NextRequest) {
       const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
       if (unresolvedBookingIds.length > 0) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
+      }
+      if (legacyQueryHitLimitCharter) {
+        responseHeaders["X-Slots-Partial-Data"] = "true";
       }
       return NextResponse.json(
         debugByDate != null ? { slots: slotsToReturn, byDate: debugByDate } : { slots: slotsToReturn },

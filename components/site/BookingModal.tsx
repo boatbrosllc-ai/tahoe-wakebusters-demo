@@ -17,6 +17,7 @@ import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
 import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth } from "@/lib/booking/booking-date-range";
+import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 
@@ -226,6 +227,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  /** Server-computed deposit/total from create-payment-intent so success view matches actual Stripe charge when discounted. */
+  const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
+  const [totalCentsFromServer, setTotalCentsFromServer] = useState<number | null>(null);
 
   // Month-level caching is handled by the shared module-level bookingCache (booking-data-cache.ts)
   // which also deduplicates in-flight requests across all booking entry points.
@@ -851,6 +855,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()),
     [customerEmail]
   );
+  const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
+  const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
 
   // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
   const priceSummary = useMemo(() => {
@@ -1094,27 +1100,42 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   };
 
   const handleProceedToPayment = async () => {
-    if (
-      !selectedExperience ||
-      !selectedSlot ||
-      !selectedRateId ||
-      !customerName.trim() ||
-      !customerEmail.trim() ||
-      !customerPhone.trim() ||
-      !emailValid ||
-      !cancellationAck
-    ) {
-      setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
+    if (!selectedExperience || !selectedSlot || !selectedRateId) {
+      setPaymentError("Missing booking details. Please try again.");
+      return;
+    }
+    if (!customerName.trim()) {
+      setPaymentError("Please enter your full name.");
+      return;
+    }
+    if (!customerEmail.trim()) {
+      setPaymentError("Please enter your email address.");
+      return;
+    }
+    if (!emailValid) {
+      setPaymentError("Please enter a valid email address.");
+      return;
+    }
+    if (!customerPhone.trim()) {
+      setPaymentError("Please enter your phone number.");
+      return;
+    }
+    if (!phoneValid) {
+      setPaymentError("Please enter a valid phone number.");
+      return;
+    }
+    if (tipChoice === null) {
+      setPaymentError("Please choose a tip option: Tip now or Tip later.");
+      return;
+    }
+    if (!cancellationAck) {
+      setPaymentError("Please check the box to acknowledge the cancellation policy.");
       return;
     }
     const maxAllowed = isTicketed ? effectiveTicketMax : ticketMax;
     if (partySize < 1 || partySize > maxAllowed) {
       const label = isTicketed ? "ticket count" : "party size";
       setPaymentError(partySize < 1 ? `A ${label} is required.` : `${isTicketed ? "Ticket count" : "Party size"} must be between 1 and ${maxAllowed}.`);
-      return;
-    }
-    if (tipChoice === null) {
-      setPaymentError("Please choose Tip now or Tip later.");
       return;
     }
     if (!isStripeCheckoutReady) {
@@ -1224,6 +1245,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
       setClientSecret(secret);
       setPaymentIntentId(intentData.paymentIntentId ?? null);
+      if (typeof intentData.depositCents === "number") setDepositCentsFromServer(intentData.depositCents);
+      if (typeof intentData.totalCents === "number") setTotalCentsFromServer(intentData.totalCents);
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "create-hold or create-payment-intent threw", err, {});
@@ -2041,8 +2064,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           onChange={(e) => setCustomerPhone(e.target.value)}
                           required
                           placeholder="(555) 000-0000"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                          className={cn("w-full rounded-xl border-2 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors", customerPhone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
                         />
+                        {customerPhone.length > 0 && phoneError && (
+                          <p className="text-xs text-red-600 mt-1">{phoneError}</p>
+                        )}
                       </div>
                     </div>
                     <label className="mt-2 flex items-center gap-2.5 cursor-pointer">
@@ -2625,7 +2651,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   setTipLaterMessageOpen(open);
                   if (!open && tipLaterIntendedRef.current) {
                     setTipChoice("later");
-                    setTimeout(() => setTipChoice("later"), 0);
                   }
                 }}
                 className="max-w-sm"
@@ -2642,7 +2667,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   onClick={() => {
                     setTipLaterMessageOpen(false);
                     setTipChoice("later");
-                    setTimeout(() => setTipChoice("later"), 0);
                   }}
                   className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                 >
@@ -2659,11 +2683,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="min-w-0">
                     <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
                     <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
-                      {selectedExperience && priceSummary.totalCents > 0 ? (
+                      {selectedExperience && (priceSummary.totalCents > 0 || totalCentsFromServer != null) ? (
                         (isTicketed || payFullAmount) ? (
-                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${(priceSummary.totalCents / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
+                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
                         ) : (
-                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
+                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
                         )
                       ) : (
                         "We&apos;ve received your payment. You&apos;ll get a confirmation email shortly."

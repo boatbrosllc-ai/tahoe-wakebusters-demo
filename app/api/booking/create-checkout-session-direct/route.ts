@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
@@ -453,10 +454,19 @@ export async function POST(request: NextRequest) {
         }
       }
       try {
+        const bookingMode = (holdPayload as { bookingMode?: string }).bookingMode;
+        const isSharedTicketed = bookingMode === "shared" && !!holdPayload.experienceId;
+        const parsedSlot = holdPayload.slotId ? parseSlotId(holdPayload.slotId as string) : null;
+        const inventoryRef = isSharedTicketed && parsedSlot && holdPayload.experienceId
+          ? getDepartureInventoryRef(db, holdPayload.experienceId as string, parsedSlot.dateStr)
+          : null;
         await db.runTransaction(async (tx) => {
           const slotSnap = await tx.get(slotRef);
           if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === holdId) {
             tx.update(slotRef, { status: "open", holdId: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
+          }
+          if (inventoryRef && typeof holdPayload.partySize === "number") {
+            await releaseCapacity(tx, inventoryRef, holdPayload.partySize);
           }
           tx.update(db.collection("holds").doc(holdId), { status: "expired" });
         });
@@ -467,7 +477,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (session.url) {
-      await db.collection("holds").doc(holdId).update({ checkoutSessionId: session.id });
+      const holdUpdate: Record<string, unknown> = { checkoutSessionId: session.id };
+      if (stripeCouponId) holdUpdate.stripeCouponId = stripeCouponId;
+      await db.collection("holds").doc(holdId).update(holdUpdate);
       return NextResponse.json({ url: session.url, sessionId: session.id });
     }
     return NextResponse.json({ error: "Checkout session failed" }, { status: 500 });

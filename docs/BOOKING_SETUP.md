@@ -37,7 +37,7 @@ Create a `.env.local` (or set in your host) with:
 | `SEED_SECRET` | No | Same as CRON_SECRET for seeding |
 | `RATE_LIMIT_REDIS_REST_URL` | Recommended (production) | Redis REST URL for rate limiting (e.g. Upstash). Without it in production we fail open (no rate limiting). See [Rate limiting](#rate-limiting). |
 | `RATE_LIMIT_REDIS_REST_TOKEN` | Recommended (production) | Redis REST token. Or use `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. |
-| `ADMIN_EMAIL` | No | Email of the only user allowed to access admin (e.g. `boatbrosll@gmail.com`). If unset, admin routes stay open (dev only). |
+| `ADMIN_EMAIL` | No | Comma-separated emails allowed to access admin (e.g. `boatbrosllc@gmail.com` or `a@x.com,b@x.com`). If unset, admin routes stay open (dev only). For production checklist see [Admin login in production](./ADMIN_LOGIN_PRODUCTION.md). |
 | `NEXT_PUBLIC_FIREBASE_API_KEY` | Yes** | Firebase Web API key (from Firebase Console → Project settings → Your apps → Web app). Required for admin login when `ADMIN_EMAIL` is set. |
 | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Yes** | Auth domain (e.g. `your-project.firebaseapp.com`). |
 | `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Yes** | Firebase project ID (same as Firestore). |
@@ -154,7 +154,7 @@ To get the full booking flow (including **more than one month** loading in the c
    - **Stripe:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
    - **Brevo:** `BREVO_API_KEY`.
    - **App URL:** `APP_BASE_URL` = your production URL (e.g. `https://yoursite.com`), no trailing slash.
-   - **Public (if using Stripe or Firebase on the client):** `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, and if using admin login: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `ADMIN_EMAIL`.  
+   - **Public (if using Stripe or Firebase on the client):** `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, and if using admin login: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `ADMIN_EMAIL` (comma-separated emails, e.g. `boatbrosllc@gmail.com`). See [Admin login in production](./ADMIN_LOGIN_PRODUCTION.md).  
    Set scope to **All** or **Build** so they’re available at build and runtime. Then **Trigger deploy** (or push a commit) so the new vars are applied.
 
 4. **Stripe webhook**  
@@ -192,7 +192,7 @@ Also set: `STRIPE_*`, `BREVO_*`, `APP_BASE_URL` (e.g. `https://yoursite.com`), a
 
 - **Firebase Console:** Enable **Authentication** → **Sign-in method** → **Email/Password**. Create a user with the email you use for admin (e.g. `boatbrosll@gmail.com`) and set that user’s password. In **Project settings** → **General** → **Your apps**, add a Web app if needed and copy the **API key**, **Auth domain** (`your-project.firebaseapp.com`), and **Project ID** into `.env.local` as `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, and `NEXT_PUBLIC_FIREBASE_PROJECT_ID`.
 - **Login:** Go to **[/admin/login](http://localhost:3000/admin/login)** and sign in with that email and password. The app uses Firebase Auth; on success it exchanges the ID token for a session cookie and redirects to `/admin`.
-- **Protection:** When `ADMIN_EMAIL` is set, all routes under `/admin` (except `/admin/login`) require a valid Firebase session cookie. Only the user with that email can access admin.
+- **Protection:** When `ADMIN_EMAIL` is set, all routes under `/admin` (except `/admin/login`) require a valid Firebase session cookie. Only users whose email is in `ADMIN_EMAIL` (comma-separated) can access admin.
 - **Logout:** Use the **Sign out** button on the admin page, or call `POST /api/admin/logout` (clears the cookie and redirects to `/admin/login`).
 - **Password not working / Forgot password:** Use **Forgot password?** on the login page to send a reset link to your admin email. The email must match `ADMIN_EMAIL` and the user must exist in Firebase Console → Authentication → Users. If you never set a password, add the user in Firebase Console (Authentication → Users → Add user) with the same email as `ADMIN_EMAIL` and set a password. Ensure **Email/Password** is enabled under Authentication → Sign-in method.
 - **"Not authorized for admin":** You signed in with an email that does not match `ADMIN_EMAIL`. Sign in with the exact email configured as `ADMIN_EMAIL` in your environment.

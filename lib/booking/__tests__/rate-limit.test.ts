@@ -65,11 +65,10 @@ describe("checkRateLimit", () => {
     assert.ok(typeof result.retryAfterMs === "number" && result.retryAfterMs >= 0);
   });
 
-  it("fails closed in production when Redis not configured", async () => {
+  it("fails open in production when Redis not configured (booking still works)", async () => {
     process.env.NODE_ENV = "production";
     const key = `test:prod:${Date.now()}`;
     const r = await checkRateLimit(key);
-    assert.strictEqual(r.allowed, false);
-    assert.ok(typeof r.retryAfterMs === "number" && r.retryAfterMs > 0);
+    assert.strictEqual(r.allowed, true, "when Redis is not configured we fail open so booking is not blocked");
   });
 });

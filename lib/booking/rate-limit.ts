@@ -16,6 +16,8 @@
 
 const WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_REQUESTS = 30; // per window per key (Redis)
+/** Stricter limit for validate-discount to reduce discount code enumeration via IP rotation. */
+const MAX_REQUESTS_VALIDATE_DISCOUNT = 5;
 /** Stricter limit when using in-memory fallback during Redis outage (RATE_LIMIT_DEGRADED_USE_MEMORY=1). */
 const MAX_REQUESTS_MEMORY_FALLBACK = 10;
 /** Timeout for Redis REST request; timeout is treated as Redis failure and flows through degraded policy. */
@@ -180,6 +182,87 @@ export type RateLimitResult = {
  * - Redis not configured in production: fail-open, degraded.
  */
 let productionNoRedisWarned = false;
+
+/** Key prefix for validate-discount endpoint so we can apply a stricter limit. */
+export const RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT = "booking:validate-discount:";
+
+/**
+ * Stricter rate limit for validate-discount (5 req/min per IP) to reduce discount code enumeration.
+ * Use the same key as getClientKey(request) but with prefix RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT.
+ */
+export async function checkRateLimitValidateDiscount(key: string): Promise<RateLimitResult> {
+  const redis = getRedisConfig();
+  const isProduction = process.env.NODE_ENV === "production";
+  const useMemoryFallback = process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
+  const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
+  const redisKey = redis ? `rl:${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}:${windowStart}` : null;
+
+  if (redis && redisKey) {
+    try {
+      const count = await redisIncr(redis, redisKey, Math.ceil(WINDOW_MS / 1000) + 60);
+      if (count <= MAX_REQUESTS_VALIDATE_DISCOUNT) return { allowed: true };
+      const resetAt = windowStart + WINDOW_MS;
+      return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
+    } catch (err) {
+      const reason = (err as Error & { redisFailureReason?: RedisFailureReason }).redisFailureReason ?? "error";
+      console.error("[rate-limit] Redis unavailable — applying degraded policy", {
+        redisFailureReason: reason,
+        urlHint: redis.url.slice(0, 40),
+      });
+      if (isProduction) {
+        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1";
+        if (failClosed) {
+          return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true, degraded: true };
+        }
+        if (useMemoryFallback) {
+          const now = Date.now();
+          if (memoryStore.size > 10000) pruneMemory();
+          const memKey = `${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}`;
+          let entry = memoryStore.get(memKey);
+          if (!entry) {
+            memoryStore.set(memKey, { count: 1, resetAt: now + WINDOW_MS });
+            return { allowed: true, degraded: true };
+          }
+          if (entry.resetAt <= now) {
+            entry = { count: 1, resetAt: now + WINDOW_MS };
+            memoryStore.set(memKey, entry);
+            return { allowed: true, degraded: true };
+          }
+          entry.count++;
+          if (entry.count <= MAX_REQUESTS_VALIDATE_DISCOUNT) return { allowed: true, degraded: true };
+          return { allowed: false, retryAfterMs: Math.max(0, entry.resetAt - now), degraded: true };
+        }
+        return { allowed: true, degraded: true };
+      }
+      return { allowed: true, degraded: true };
+    }
+  }
+
+  if (isProduction) {
+    if (!productionNoRedisWarned) {
+      productionNoRedisWarned = true;
+      console.warn("[rate-limit] Redis not configured in production — rate limiting disabled. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Netlify to enable.");
+    }
+    return { allowed: true, degraded: true };
+  }
+
+  const now = Date.now();
+  if (memoryStore.size > 10000) pruneMemory();
+  const memKey = `${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}`;
+  let entry = memoryStore.get(memKey);
+  if (!entry) {
+    memoryStore.set(memKey, { count: 1, resetAt: now + WINDOW_MS });
+    return { allowed: true };
+  }
+  if (entry.resetAt <= now) {
+    entry = { count: 1, resetAt: now + WINDOW_MS };
+    memoryStore.set(memKey, entry);
+    return { allowed: true };
+  }
+  entry.count++;
+  if (entry.count <= MAX_REQUESTS_VALIDATE_DISCOUNT) return { allowed: true };
+  return { allowed: false, retryAfterMs: Math.max(0, entry.resetAt - now) };
+}
 
 export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   const redis = getRedisConfig();

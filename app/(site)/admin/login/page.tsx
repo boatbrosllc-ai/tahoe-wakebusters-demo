@@ -18,6 +18,20 @@ export default function AdminLoginPage() {
   const [resetSent, setResetSent] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const [configStatus, setConfigStatus] = useState<{
+    adminEmailSet: boolean;
+    firebaseConfigured: boolean;
+    projectIdsMatch: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/session?config=1", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data: { config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } }) => {
+        if (data.config) setConfigStatus(data.config);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (configError) {
@@ -50,7 +64,8 @@ export default function AdminLoginPage() {
         } else if ((data as { code?: string }).code === "FIREBASE_PROJECT_MISMATCH") {
           setError(hint ?? "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID.");
         } else if (res.status === 401) {
-          const msg = hint ?? (data as { error?: string }).error ?? "Invalid or expired token";
+          const detail = (data as { detail?: string }).detail;
+          const msg = detail ? `${hint ?? (data as { error?: string }).error ?? "Invalid or expired token"}. Server: ${detail}` : (hint ?? (data as { error?: string }).error ?? "Invalid or expired token");
           setError(msg);
           if (hint) console.error("[admin login] 401 hint:", hint);
         } else {
@@ -111,6 +126,26 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-6 sm:p-8">
         <h1 className="text-xl font-bold text-brand-dark">Admin sign-in</h1>
         <p className="mt-1 text-sm text-brand-muted">Sign in with your admin email and password.</p>
+
+        {configStatus && (
+          <div className="mt-4 rounded-lg border border-brand-dark/15 bg-brand-bg/50 p-3 text-xs">
+            <p className="font-semibold text-brand-dark mb-1.5">Server configuration</p>
+            <ul className="space-y-0.5 text-brand-muted">
+              <li className={configStatus.adminEmailSet ? "text-green-700" : "text-red-600"}>
+                {configStatus.adminEmailSet ? "✓" : "✗"} ADMIN_EMAIL is set
+              </li>
+              <li className={configStatus.firebaseConfigured ? "text-green-700" : "text-red-600"}>
+                {configStatus.firebaseConfigured ? "✓" : "✗"} Firebase server config (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY)
+              </li>
+              <li className={configStatus.projectIdsMatch ? "text-green-700" : "text-red-600"}>
+                {configStatus.projectIdsMatch ? "✓" : "✗"} FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match
+              </li>
+            </ul>
+            {(!configStatus.adminEmailSet || !configStatus.firebaseConfigured || !configStatus.projectIdsMatch) && (
+              <p className="mt-2 text-red-600 font-medium">Fix the items above in .env.local or your deployment env, then restart the dev server or redeploy.</p>
+            )}
+          </div>
+        )}
 
         {!showReset ? (
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">

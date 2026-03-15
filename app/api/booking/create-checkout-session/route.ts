@@ -12,6 +12,7 @@ import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
@@ -245,11 +246,17 @@ export async function POST(request: NextRequest) {
           console.error("[create-checkout-session] Failed to delete orphaned coupon", stripeCouponId, delErr);
         }
       }
-      // Rollback: release slot and expire hold so the slot is available again (match create-checkout-session-direct).
+      // Rollback: release slot (and shared-departure capacity when applicable) and expire hold so the slot/capacity is available again.
       try {
         const slotRefForRollback = hold.boatId
           ? db.collection("boats").doc(hold.boatId).collection("slots").doc(hold.slotId)
           : db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
+        const bookingMode = (hold as { bookingMode?: string }).bookingMode;
+        const isSharedTicketed = bookingMode === "shared" && !!hold.experienceId;
+        const parsedSlot = hold.slotId ? parseSlotId(hold.slotId) : null;
+        const inventoryRef = isSharedTicketed && parsedSlot
+          ? getDepartureInventoryRef(db, hold.experienceId!, parsedSlot.dateStr)
+          : null;
         await db.runTransaction(async (tx) => {
           const slotSnap = await tx.get(slotRefForRollback);
           if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === input.holdId) {
@@ -258,6 +265,9 @@ export async function POST(request: NextRequest) {
               holdId: FieldValue.delete(),
               updatedAt: FieldValue.serverTimestamp(),
             });
+          }
+          if (inventoryRef && hold.partySize != null) {
+            await releaseCapacity(tx, inventoryRef, hold.partySize);
           }
           tx.update(holdRef, { status: "expired" });
         });
@@ -269,7 +279,9 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    await holdRef.update({ checkoutSessionId: session.id });
+    const holdUpdate: Record<string, unknown> = { checkoutSessionId: session.id };
+    if (stripeCouponId && !holdStripeCouponId) holdUpdate.stripeCouponId = stripeCouponId;
+    await holdRef.update(holdUpdate);
     if (input.embedded && session.client_secret) {
       return NextResponse.json({ clientSecret: session.client_secret, sessionId: session.id });
     }

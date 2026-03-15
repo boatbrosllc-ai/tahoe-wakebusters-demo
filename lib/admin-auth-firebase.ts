@@ -49,7 +49,11 @@ export async function verifyAdminSessionCookie(cookieHeader: string | null): Pro
     const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
     const email = decoded.email?.trim().toLowerCase();
     return !!email && allowed.includes(email);
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[admin auth] Session cookie invalid:", msg);
+    }
     return false;
   }
 }
@@ -84,8 +88,12 @@ export async function requireAdminSession(cookieHeader: string | null): Promise<
   }
   const valid = await verifyAdminSessionCookie(cookieHeader);
   if (valid) return null;
-  return new Response(JSON.stringify({ error: "Unauthorized" }), {
-    status: 401,
-    headers: { "Content-Type": "application/json" },
-  });
+  const hasCookie = !!extractAdminSessionCookieValue(cookieHeader);
+  const hint = hasCookie
+    ? "Session expired or invalid. Sign in again at /admin/login. In dev, check the server console for [admin auth]."
+    : "No session cookie. Sign in at /admin/login with the email set in ADMIN_EMAIL.";
+  return new Response(
+    JSON.stringify({ error: "Unauthorized", hint }),
+    { status: 401, headers: { "Content-Type": "application/json" } }
+  );
 }

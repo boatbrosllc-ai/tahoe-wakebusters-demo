@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { checkRateLimitValidateDiscount, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import type { Discount } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/booking/validate-discount
- * Body: { code: string, totalCents: number }
- * Returns: { valid: true, discountCents: number, code: string } | { valid: false, error: string }
- * Used at checkout to preview discount before creating hold (same logic as create-hold).
- */
+/** Minimum code length to reduce enumeration and avoid timing oracles on very short inputs. */
+const MIN_CODE_LENGTH = 4;
+
+/** Constant-time delay (ms) when returning invalid to avoid timing-based oracles. */
+const INVALID_RESPONSE_DELAY_MS = 80;
+
 export async function POST(request: NextRequest) {
-  const rl = await checkRateLimit(getClientKey(request));
+  const clientKey = getClientKey(request);
+  const rl = await checkRateLimitValidateDiscount(clientKey);
   if (!rl.allowed) {
     if (rl.serverError) {
       const incidentCode = generateIncidentCode();
@@ -30,13 +31,15 @@ export async function POST(request: NextRequest) {
       { status: 429, headers: { "Retry-After": String(retryAfter) } }
     );
   }
+  const startTime = Date.now();
   try {
     const body = await request.json().catch(() => ({}));
     const codeRaw = typeof body.code === "string" ? body.code.trim() : "";
     const totalCents = typeof body.totalCents === "number" ? Math.max(0, Math.floor(body.totalCents)) : 0;
     const code = codeRaw.toUpperCase();
 
-    if (!code || code.length < 2) {
+    if (!code || code.length < MIN_CODE_LENGTH) {
+      await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
       return NextResponse.json({ valid: false, error: "Enter a discount code" }, { status: 400 });
     }
 
@@ -47,6 +50,12 @@ export async function POST(request: NextRequest) {
     const result = validateAndApplyDiscount(discountDoc, totalCents);
 
     if (!result.valid) {
+      console.warn("[booking:validate-discount] invalid code attempt", {
+        clientKey: clientKey.slice(0, 30),
+        codeLength: code.length,
+        hasDoc: !!discountDoc,
+      });
+      await new Promise((r) => setTimeout(r, Math.max(0, INVALID_RESPONSE_DELAY_MS - (Date.now() - startTime))));
       return NextResponse.json({ valid: false, error: result.error }, { status: 422 });
     }
 

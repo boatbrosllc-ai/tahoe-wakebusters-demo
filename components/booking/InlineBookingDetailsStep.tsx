@@ -6,6 +6,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { cn } from "@/lib/utils";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
@@ -179,6 +180,8 @@ export function InlineBookingDetailsStep({
 
   const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()), [customerEmail]);
+  const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
+  const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -249,15 +252,32 @@ export function InlineBookingDetailsStep({
 
   const handleProceedToPayment = async () => {
     if (effectiveRateCents === null) return;
-    if (
-      !customerName.trim() ||
-      !customerEmail.trim() ||
-      !customerPhone.trim() ||
-      !emailValid ||
-      !cancellationAck ||
-      tipChoice === null
-    ) {
-      setPaymentError("Please fill required fields and acknowledge the cancellation policy.");
+    if (!customerName.trim()) {
+      setPaymentError("Please enter your full name.");
+      return;
+    }
+    if (!customerEmail.trim()) {
+      setPaymentError("Please enter your email address.");
+      return;
+    }
+    if (!emailValid) {
+      setPaymentError("Please enter a valid email address.");
+      return;
+    }
+    if (!customerPhone.trim()) {
+      setPaymentError("Please enter your phone number.");
+      return;
+    }
+    if (!phoneValid) {
+      setPaymentError(phoneError ?? "Please enter a valid phone number (at least 10 digits).");
+      return;
+    }
+    if (tipChoice === null) {
+      setPaymentError("Please choose a tip option: Tip now or Tip later.");
+      return;
+    }
+    if (!cancellationAck) {
+      setPaymentError("Please check the box to acknowledge the cancellation policy.");
       return;
     }
     if (partySize < 1 || partySize > effectiveMaxGuests) {
@@ -624,8 +644,11 @@ export function InlineBookingDetailsStep({
               value={customerPhone}
               onChange={(e) => setCustomerPhone(e.target.value)}
               placeholder="Phone *"
-              className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
+              className={cn("w-full rounded-lg border px-3 py-2.5 min-h-[44px] text-base touch-manipulation", customerPhone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
             />
+            {customerPhone.length > 0 && phoneError && (
+              <p className="text-xs text-red-600 mt-1">{phoneError}</p>
+            )}
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="rounded border-brand-dark/30 text-brand-primary" />
               <span className="text-xs text-brand-muted">Updates and offers from Boat Bros</span>
@@ -857,12 +880,14 @@ export function InlineBookingDetailsStep({
         <div className="rounded-xl border-2 border-amber-200/60 bg-amber-50/50 p-3">
           <p className="text-xs font-semibold text-brand-dark mb-1">Cancellation policy</p>
           <p className="text-[11px] text-brand-muted leading-relaxed">{DEFAULT_CANCELLATION_POLICY}</p>
-          <label className="mt-2 flex items-start gap-2 cursor-pointer">
+          <label htmlFor="inline-booking-cancellation-ack" className="mt-2 flex items-start gap-2 cursor-pointer">
             <input
+              id="inline-booking-cancellation-ack"
               type="checkbox"
               checked={cancellationAck}
               onChange={(e) => setCancellationAck(e.target.checked)}
               className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary mt-0.5 shrink-0"
+              aria-required
             />
             <span className="text-sm text-brand-dark">I have read and accept the cancellation policy *</span>
           </label>

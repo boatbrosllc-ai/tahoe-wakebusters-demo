@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
+import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
@@ -272,6 +273,8 @@ export function ExperienceBookingCard({
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim()), [customer.email]);
   const showEmailError = customer.email.length > 0 && !emailValid;
+  const phoneValid = useMemo(() => validatePhone(customer.phone.trim()).valid, [customer.phone]);
+  const phoneError = useMemo(() => formatPhoneHint(customer.phone.trim()), [customer.phone]);
   const canProceed = useMemo(
     () =>
       !!selectedSlot &&
@@ -280,10 +283,11 @@ export function ExperienceBookingCard({
       !!customer.email.trim() &&
       !!customer.phone.trim() &&
       emailValid &&
+      phoneValid &&
       cancellationAck &&
       partySize >= 1 &&
       partySize <= effectiveMax,
-    [selectedSlot, selectedRateId, customer.name, customer.email, customer.phone, emailValid, cancellationAck, partySize, effectiveMax]
+    [selectedSlot, selectedRateId, customer.name, customer.email, customer.phone, emailValid, phoneValid, cancellationAck, partySize, effectiveMax]
   );
 
   const addonMap = useMemo(
@@ -468,17 +472,19 @@ export function ExperienceBookingCard({
   }, [calendarMonth, openDays, openSlotsByDate, todayStr]);
 
   const quickPickOptions = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const day = today.getDay();
+    const todayDs = getChicagoToday();
+    const [y, m, d] = todayDs.split("-").map(Number);
+    const tomorrowDs = (() => {
+      const lastDay = new Date(y, m, 0).getDate();
+      if (d < lastDay) return `${y}-${String(m).padStart(2, "0")}-${String(d + 1).padStart(2, "0")}`;
+      if (m < 12) return `${y}-${String(m + 1).padStart(2, "0")}-01`;
+      return `${y + 1}-01-01`;
+    })();
+    const todayDate = new Date(y, m - 1, d);
+    const day = todayDate.getDay();
     const satOffset = day === 0 ? 6 : 6 - day;
-    const nextSat = new Date(today);
-    nextSat.setDate(nextSat.getDate() + satOffset);
-    const todayDs = today.toISOString().slice(0, 10);
-    const tomorrowDs = tomorrow.toISOString().slice(0, 10);
-    const satDs = nextSat.toISOString().slice(0, 10);
+    const satDate = new Date(y, m - 1, d + satOffset);
+    const satDs = `${satDate.getFullYear()}-${String(satDate.getMonth() + 1).padStart(2, "0")}-${String(satDate.getDate()).padStart(2, "0")}`;
     const openToday = (openSlotsByDate.get(todayDs)?.length ?? 0) > 0;
     const openTomorrow = (openSlotsByDate.get(tomorrowDs)?.length ?? 0) > 0;
     const openSat = (openSlotsByDate.get(satDs)?.length ?? 0) > 0;
@@ -897,8 +903,11 @@ export function ExperienceBookingCard({
           placeholder="Phone"
           value={customer.phone}
           onChange={(e) => setCustomer((c) => ({ ...c, phone: e.target.value }))}
-          className="w-full rounded-xl border border-brand-dark/15 px-4 py-3 text-brand-dark placeholder:text-brand-muted/70"
+          className={cn("w-full rounded-xl border px-4 py-3 text-brand-dark placeholder:text-brand-muted/70", customer.phone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
         />
+        {customer.phone.length > 0 && phoneError && (
+          <p className="mt-1 text-sm text-red-600">{phoneError}</p>
+        )}
         <input
           type="text"
           placeholder="Discount code (optional)"

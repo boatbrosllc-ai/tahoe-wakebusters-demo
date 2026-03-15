@@ -19,9 +19,13 @@ export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
 
+  // Set CSP on the request so Next.js can extract the nonce and apply it to all script tags (inline and chunks).
+  const csp = buildCsp(nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+
   if (isAdminPublicPath(pathname)) {
     const res = NextResponse.next({ request: { headers: requestHeaders } });
-    setCspHeader(res, nonce);
+    res.headers.set("Content-Security-Policy", csp);
     return res;
   }
 
@@ -29,13 +33,12 @@ export async function middleware(request: NextRequest) {
   // We do not check auth here because Edge middleware cannot read ADMIN_EDGE_SECRET from .env.
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
-  setCspHeader(res, nonce);
+  res.headers.set("Content-Security-Policy", csp);
   return res;
 }
 
-/** Set Content-Security-Policy with script nonce so inline/trusted scripts are allowed (Next.js hydration + Stripe).
- * This is the single canonical definition of CSP for the app. Do not add Content-Security-Policy in next.config.js or netlify.toml. */
-function setCspHeader(response: NextResponse, nonce: string): void {
+/** Build Content-Security-Policy string. Used on both request (so Next.js can extract nonce) and response (for the browser). */
+function buildCsp(nonce: string): string {
   const isDev = process.env.NODE_ENV !== "production";
   const scriptSrc = [
     "'self'",
@@ -45,7 +48,10 @@ function setCspHeader(response: NextResponse, nonce: string): void {
     "https://*.js.stripe.com",
     "https://www.googletagmanager.com",
     "https://www.google-analytics.com",
-    ...(isDev ? ["'unsafe-eval'", "'unsafe-inline'"] : ["'strict-dynamic'", `'nonce-${nonce}'`]),
+    "https://www.gstatic.com",
+    "https://*.firebaseapp.com",
+    // In production: nonce + strict-dynamic; allow 'unsafe-inline' so Next.js inline scripts run (Next.js may not apply nonce to all emitted scripts).
+    ...(isDev ? ["'unsafe-eval'", "'unsafe-inline'"] : ["'strict-dynamic'", `'nonce-${nonce}'`, "'unsafe-inline'"]),
   ].join(" ");
   // Firebase Auth (admin login) must be in connect-src or sign-in is blocked
   const connectSrc = [
@@ -60,7 +66,7 @@ function setCspHeader(response: NextResponse, nonce: string): void {
     "https://www.google-analytics.com",
     "https://www.googletagmanager.com",
   ].join(" ");
-  const csp = [
+  return [
     "default-src 'self'",
     `script-src ${scriptSrc}`,
     "style-src 'self' 'unsafe-inline'",
@@ -70,7 +76,6 @@ function setCspHeader(response: NextResponse, nonce: string): void {
     "object-src 'none'",
     "base-uri 'self'",
   ].join("; ");
-  response.headers.set("Content-Security-Policy", csp);
 }
 
 export const config = {

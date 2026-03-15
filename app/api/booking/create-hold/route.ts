@@ -13,6 +13,7 @@ import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
+import { validatePhone } from "@/lib/booking/validate-phone";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, generateIncidentCode } from "@/lib/booking/debug";
 
@@ -59,7 +60,12 @@ function parseBody(body: unknown): { input: CreateHoldInput; hint?: string } | {
       if (email.length > 254) missing.push("customerDraft.email (must be at most 254 characters)");
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) missing.push("customerDraft.email (must be a valid email format)");
     }
-    if (typeof customerDraft.phone !== "string") missing.push("customerDraft.phone");
+    if (typeof customerDraft.phone !== "string") {
+      missing.push("customerDraft.phone");
+    } else {
+      const phoneResult = validatePhone((customerDraft.phone as string).trim());
+      if (!phoneResult.valid) missing.push(`customerDraft.phone (${phoneResult.error})`);
+    }
   }
   if (missing.length) {
     return { input: null, hint: `Missing or invalid: ${missing.join(", ")}.` };
