@@ -1,16 +1,21 @@
+import type { Firestore, Query, QuerySnapshot } from "firebase-admin/firestore";
+
+/** Timestamp-like constructor (e.g. firebase-admin/firestore Timestamp) for fromDate. */
+type TimestampConstructor = { fromDate(date: Date): unknown };
+
 /**
  * Shared block-overlap check for create-hold and create-checkout-session-direct.
  * Returns true if any block exists for the experience that overlaps [slotStart, slotEnd],
  * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
  */
 export async function hasOverlappingBlock(opts: {
-  db: any;
-  Timestamp: any;
+  db: Firestore;
+  Timestamp: TimestampConstructor;
   experienceId: string;
   boatId?: string;
   slotStart: Date;
   slotEnd: Date;
-  get?: (q: any) => Promise<any>;
+  get?: (q: Query) => Promise<QuerySnapshot>;
 }): Promise<boolean> {
   const { db, Timestamp, experienceId, slotStart, slotEnd, get } = opts;
   const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
@@ -23,7 +28,7 @@ export async function hasOverlappingBlock(opts: {
     .where("experienceId", "==", experienceId)
     .where("startAt", "<", Timestamp.fromDate(slotEnd));
 
-  const getSnap = get ?? ((q: any) => q.get());
+  const getSnap = get ?? ((q: Query) => q.get());
   const snap = await getSnap(query);
   for (const doc of snap.docs) {
     const b = doc.data() as { boatId?: string | null; endAt?: { toDate?: () => Date } };

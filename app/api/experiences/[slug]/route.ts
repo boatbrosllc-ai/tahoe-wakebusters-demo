@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
 import { getSlugLookupCandidates } from "@/lib/booking/experience-aliases";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { Experience, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 export interface ExperienceDetailResponse {
@@ -42,7 +43,18 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       );
     }
     const doc = expSnap.docs[0];
-    const experience = { ...doc.data(), id: doc.id } as Experience & { id: string };
+    const raw = doc.data() as Experience;
+    const experience = {
+      ...raw,
+      id: doc.id,
+      maxGuests: getMaxGuestsForExperience({
+        slug: raw.slug,
+        title: raw.title,
+        maxGuests: raw.maxGuests,
+        pricingType: raw.pricingType,
+        maxCapacity: raw.maxCapacity,
+      }),
+    } as Experience & { id: string };
     const ratesSnap = await db.collection("experiences").doc(doc.id).collection("rates").where("active", "==", true).get();
     const rates = ratesSnap.docs.map((r) => {
       const d = r.data() as ExperienceRate;
@@ -55,7 +67,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     });
     const response: ExperienceDetailResponse = {
       id: doc.id,
-      experience: { ...experience, id: undefined },
+      experience: { ...experience, id: undefined } as Experience,
       rates,
       addons,
     };

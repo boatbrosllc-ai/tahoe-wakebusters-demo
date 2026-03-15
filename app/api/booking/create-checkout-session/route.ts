@@ -152,8 +152,10 @@ export async function POST(request: NextRequest) {
     }
     const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
     let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
+    const isSharedTicketed = hold.pricingType === "ticketed" && (hold as { bookingMode?: string }).bookingMode === "shared";
+    // For shared ticketed, always recompute pricing as ticket cost × partySize so checkout total is accurate.
     let pricing: import("@/lib/booking/types").BookingPricing;
-    if (hold.pricing && hold.effectiveRateCents != null) {
+    if (hold.pricing && hold.effectiveRateCents != null && !isSharedTicketed) {
       rateForPricing = { ...rate, priceCents: hold.effectiveRateCents } as ExperienceRate & { priceCents: number };
       pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
     } else {
@@ -168,21 +170,20 @@ export async function POST(request: NextRequest) {
           }
         }
       }
-      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd" });
+      const ticketQty = isSharedTicketed ? Math.max(1, Math.floor(Number(hold.partySize ?? 1))) : 1;
+      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd", qty: ticketQty });
     }
+    const ticketQtyForLineItems = isSharedTicketed ? Math.max(1, Math.floor(Number(hold.partySize ?? 1))) : undefined;
+    const unitPriceCentsForLineItems = isSharedTicketed && (hold.effectiveRateCents != null || (rateForPricing as { priceCents?: number }).priceCents != null)
+      ? (hold.effectiveRateCents ?? (rateForPricing as { priceCents: number }).priceCents)
+      : undefined;
     let lineItems = buildLineItems({
       pricing,
       rate: rateForPricing as Rate | ExperienceRate,
       addons: addonsForPricing,
       hold,
-      ticketQty: hold.pricingType === "ticketed" && (hold as { bookingMode?: string }).bookingMode === "shared"
-        ? hold.partySize
-        : undefined,
-      unitPriceCents: hold.pricingType === "ticketed"
-        && (hold as { bookingMode?: string }).bookingMode === "shared"
-        && hold.effectiveRateCents != null
-        ? hold.effectiveRateCents
-        : undefined,
+      ticketQty: ticketQtyForLineItems,
+      unitPriceCents: unitPriceCentsForLineItems,
     });
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;

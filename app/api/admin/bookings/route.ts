@@ -89,13 +89,18 @@ export async function GET(request: NextRequest) {
       if (cursorDoc.exists) query = query.startAfter(cursorDoc);
     }
 
-    // Fetch more than limit so that after JS filtering we may still have enough for one page.
-    const fetchSize = Math.min(limit * 5, 500);
+    // Fetch only `limit` docs so that when JS filters (status/experienceId) are applied,
+    // we don't silently return incomplete results. Surface truncation so the UI can warn.
+    const fetchSize = limit;
     const snap = await query.limit(fetchSize).get();
     let docs = snap.docs;
 
     if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
     if (variantSet) docs = docs.filter((d) => variantSet!.has((d.data() as Booking).experienceId ?? ""));
+
+    const hitLimit = snap.docs.length >= fetchSize;
+    const headers = new Headers();
+    if (hitLimit) headers.set("X-Results-Truncated", "true");
 
     let nextCursor: string | null = null;
     if (docs.length > limit) {
@@ -202,7 +207,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return NextResponse.json({ bookings: list, nextCursor });
+    return NextResponse.json({ bookings: list, nextCursor }, { headers });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

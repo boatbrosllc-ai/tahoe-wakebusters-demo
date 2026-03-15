@@ -121,8 +121,16 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   }, [experienceId]);
 
   // Refetch slots whenever calendarMonth or experience changes. Range includes visible + adjacent months.
+  // Skip fetch when the selected month is in the past to avoid wasted API calls.
+  const isSelectedMonthPast = useMemo(() => {
+    const y = calendarMonth.getFullYear();
+    const m = calendarMonth.getMonth();
+    const [ty, tm] = todayStr.split("-").map(Number);
+    return y < ty || (y === ty && m < tm - 1);
+  }, [calendarMonth, todayStr]);
+
   useEffect(() => {
-    if (!selectedExperience) return;
+    if (!selectedExperience || isSelectedMonthPast) return;
     const controller = new AbortController();
     if (selectedExperience.id) {
       setSlotsLoadError(null);
@@ -158,7 +166,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         if ((err as { name?: string })?.name !== "AbortError") setSlotsLoading(false);
       });
     return () => controller.abort();
-  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end, slotsRetryKey]);
+  }, [selectedExperience?.slug, selectedExperience?.id, dateRange.start, dateRange.end, slotsRetryKey, isSelectedMonthPast]);
 
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
@@ -183,6 +191,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   }, [slots]);
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
+  const [currentYear, currentMonth] = useMemo(() => {
+    const [y, m] = todayStr.split("-").map(Number);
+    return [y, m - 1]; // month 0-indexed
+  }, [todayStr]);
+  const isAtCurrentMonth = calendarMonth.getFullYear() === currentYear && calendarMonth.getMonth() === currentMonth;
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const calendarDays = useMemo(() => {
@@ -280,7 +293,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
             <button
               type="button"
               onClick={goPrevMonth}
-              className="rounded-lg p-2 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
+              disabled={isAtCurrentMonth}
+              className={cn(
+                "rounded-lg p-2 transition-colors",
+                isAtCurrentMonth ? "opacity-40 cursor-not-allowed" : "text-brand-muted hover:bg-brand-bg hover:text-brand-dark"
+              )}
               aria-label="Previous month"
             >
               <ChevronLeft className="h-5 w-5" aria-hidden />

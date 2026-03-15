@@ -685,7 +685,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     return () => controller.abort();
   }, [selectedExperience?.id, viewMonthYear, viewMonthMonth, viewMonthStartStr, viewMonthEndStr, slotsRetryTrigger]);
 
-  // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 8)
+  // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 14)
   useEffect(() => {
     const max = selectedExperience?.maxGuests ?? 14;
     setPartySize((prev) => (prev > max ? max : prev));
@@ -875,8 +875,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
   const priceSummary = useMemo(() => {
     const unitCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
-    // Ticketed: multiply per-ticket price by ticket count; charter: flat rate
-    const rateCents = isTicketed ? unitCents * partySize : unitCents;
+    // Ticketed: total = per-ticket price × number of guests (always use at least 1 so total is never wrong)
+    const ticketCount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
+    const rateCents = isTicketed ? unitCents * ticketCount : unitCents;
     const addonLines = displayAddons
       .filter((a) => (addonSelections[a.id] ?? 0) > 0)
       .map((a) => ({
@@ -894,7 +895,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
     const baseLabel = selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental");
     const rateLabel = isTicketed
-      ? `${partySize} ticket${partySize !== 1 ? "s" : ""} × $${(unitCents / 100).toFixed(0)}/ticket`
+      ? `${ticketCount} ticket${ticketCount !== 1 ? "s" : ""} × $${(unitCents / 100).toFixed(0)}/ticket`
       : baseLabel;
     return {
       rateLabel,
@@ -1084,23 +1085,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           onOpenChange(false);
         } else {
           // Ticketed + no pre-selection: go back to date picker (skip boat step)
-        lastHoldRef.current = null;
-        setStep(2);
-        setPaymentPhase("form");
-        setClientSecret(null);
-        setHoldId(null);
-        setHoldExpiresAt(null);
-        setDepositCentsFromServer(null);
-        setTotalCentsFromServer(null);
-        setFinalCentsFromServer(null);
-        setPaymentIntentId(null);
-        setPaymentError(null);
-        setTipChoice(null);
-        setTipLaterMessageOpen(false);
-        setAppliedDiscount(null);
-        setAppliedDiscountError(null);
-      }
-    } else {
+          lastHoldRef.current = null;
+          setStep(2);
+          setPaymentPhase("form");
+          setClientSecret(null);
+          setHoldId(null);
+          setHoldExpiresAt(null);
+          setDepositCentsFromServer(null);
+          setTotalCentsFromServer(null);
+          setFinalCentsFromServer(null);
+          setPaymentIntentId(null);
+          setPaymentError(null);
+          setTipChoice(null);
+          setTipLaterMessageOpen(false);
+          setAppliedDiscount(null);
+          setAppliedDiscountError(null);
+        }
+      } else {
       lastHoldRef.current = null;
       setStep(boats.length === 1 ? 2 : 3);
       setPaymentPhase("form");

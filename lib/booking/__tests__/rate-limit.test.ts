@@ -21,10 +21,15 @@ describe("getClientKey", () => {
     assert.strictEqual(getClientKey(req), "booking:10.0.0.2");
   });
 
-  it("returns booking:unknown when no trusted headers", () => {
+  it("falls back to x-forwarded-for (leftmost) when trusted headers missing", () => {
     const req = new Request("https://example.com", {
       headers: { "x-forwarded-for": "1.2.3.4" },
     });
+    assert.strictEqual(getClientKey(req), "booking:1.2.3.4");
+  });
+
+  it("returns booking:unknown when no IP headers present", () => {
+    const req = new Request("https://example.com", { headers: {} });
     assert.strictEqual(getClientKey(req), "booking:unknown");
   });
 

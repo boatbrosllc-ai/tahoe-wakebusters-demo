@@ -8,6 +8,7 @@ import {
   getMonthRangeWithAdjacent,
 } from "@/lib/booking/booking-date-range";
 import Image from "next/image";
+import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
@@ -232,6 +233,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   }, [availableDateSet]);
 
   const todayChicago = getChicagoToday();
+  const currentYear = parseInt(todayChicago.slice(0, 4), 10);
+  const currentMonth = parseInt(todayChicago.slice(5, 7), 10) - 1; // 0-indexed
+  const isAtCurrentMonth = displayMonth.year === currentYear && displayMonth.month === currentMonth;
   const useExperiencePicker = experiences != null && experiences.length > 0;
 
   const canContinue =
@@ -270,6 +274,13 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     <div className="section-padding">
       <div className="mx-auto max-w-2xl px-4 sm:px-6 lg:px-8">
         <header className="text-center mb-8 sm:mb-10">
+          <Link
+            href="/experiences"
+            className="inline-flex items-center gap-1 text-sm font-medium text-brand-muted hover:text-brand-primary mb-4 transition-colors"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+            Back to experiences
+          </Link>
           <h1 className="text-3xl sm:text-4xl font-bold text-brand-dark tracking-tight mb-2">
             Book your experience
           </h1>
@@ -399,7 +410,11 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                           : { year: prev.year, month: prev.month - 1 }
                       )
                     }
-                    className="rounded-lg p-2 text-brand-muted hover:bg-brand-dark/5 hover:text-brand-dark transition-colors"
+                    disabled={isAtCurrentMonth}
+                    className={cn(
+                      "rounded-lg p-2 transition-colors",
+                      isAtCurrentMonth ? "opacity-40 cursor-not-allowed" : "text-brand-muted hover:bg-brand-dark/5 hover:text-brand-dark"
+                    )}
                     aria-label="Previous month"
                   >
                     <ChevronLeft className="h-5 w-5" aria-hidden />

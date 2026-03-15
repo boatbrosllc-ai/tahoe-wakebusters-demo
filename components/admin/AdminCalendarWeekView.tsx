@@ -166,6 +166,7 @@ export function AdminCalendarWeekView({
   const [blockDetailOpen, setBlockDetailOpen] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<CalendarEvent | null>(null);
   const [editBlockSaving, setEditBlockSaving] = useState(false);
+  const [blockError, setBlockError] = useState<string | null>(null);
 
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
@@ -258,6 +259,7 @@ export function AdminCalendarWeekView({
 
   const createBlock = async () => {
     if (!newBlockStart || !newBlockEnd) return;
+    setBlockError(null);
     const startDate = parseCentralDatetimeLocal(newBlockStart);
     const endDate = parseCentralDatetimeLocal(newBlockEnd);
     if (startDate >= endDate) return;
@@ -280,7 +282,7 @@ export function AdminCalendarWeekView({
       fetchEvents();
       onRefresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to create block");
+      setBlockError(e instanceof Error ? e.message : "Failed to create block");
     } finally {
       setNewBlockSaving(false);
     }
@@ -292,6 +294,7 @@ export function AdminCalendarWeekView({
     endAt: string,
     note: string
   ) => {
+    setBlockError(null);
     setEditBlockSaving(true);
     try {
       const res = await fetch(`/api/admin/blocks/${blockId}`, {
@@ -306,7 +309,7 @@ export function AdminCalendarWeekView({
       fetchEvents();
       onRefresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update block");
+      setBlockError(e instanceof Error ? e.message : "Failed to update block");
     } finally {
       setEditBlockSaving(false);
     }
@@ -314,6 +317,7 @@ export function AdminCalendarWeekView({
 
   const deleteBlock = async (blockId: string) => {
     if (!confirm("Delete this block?")) return;
+    setBlockError(null);
     try {
       const res = await fetch(`/api/admin/blocks/${blockId}`, {
         method: "DELETE",
@@ -325,7 +329,7 @@ export function AdminCalendarWeekView({
       fetchEvents();
       onRefresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to delete block");
+      setBlockError(e instanceof Error ? e.message : "Failed to delete block");
     }
   };
 
@@ -386,6 +390,12 @@ export function AdminCalendarWeekView({
           </span>
         </div>
       </div>
+
+      {blockError && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-800">
+          {blockError}
+        </div>
+      )}
 
       {/* ── Grid ── */}
       {eventsLoading ? (
@@ -557,7 +567,10 @@ export function AdminCalendarWeekView({
       {/* New block modal */}
       <Dialog
         open={newBlockOpen}
-        onOpenChange={setNewBlockOpen}
+        onOpenChange={(open) => {
+          setNewBlockOpen(open);
+          if (!open) setBlockError(null);
+        }}
         title="New block"
         description="Block this time slot so it's not bookable."
         fullScreenOnMobile
@@ -628,7 +641,10 @@ export function AdminCalendarWeekView({
         open={blockDetailOpen}
         onOpenChange={(open) => {
           setBlockDetailOpen(open);
-          if (!open) setSelectedBlock(null);
+          if (!open) {
+            setSelectedBlock(null);
+            setBlockError(null);
+          }
         }}
         title="Edit block"
         description={selectedBlock?.title ?? ""}
@@ -667,8 +683,8 @@ function BlockEditForm({
   onDelete: () => void;
   saving: boolean;
 }) {
-  const [start, setStart] = useState(startAt.slice(0, 16));
-  const [end, setEnd] = useState(endAt.slice(0, 16));
+  const [start, setStart] = useState(toCentralDatetimeLocal(new Date(startAt)));
+  const [end, setEnd] = useState(toCentralDatetimeLocal(new Date(endAt)));
   const [noteVal, setNoteVal] = useState(note);
   return (
     <div className="space-y-4">
@@ -714,8 +730,8 @@ function BlockEditForm({
           onClick={() =>
             onSave(
               blockId,
-              new Date(start).toISOString(),
-              new Date(end).toISOString(),
+              parseCentralDatetimeLocal(start).toISOString(),
+              parseCentralDatetimeLocal(end).toISOString(),
               noteVal
             )
           }

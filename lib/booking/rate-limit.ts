@@ -16,6 +16,8 @@
 
 const WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_REQUESTS = 30; // per window per key (Redis)
+/** Stricter limit for the shared "unknown" IP bucket (Redis) to reduce blast radius when proxy does not set IP headers. */
+const MAX_REQUESTS_UNKNOWN_BUCKET = 10;
 /** Stricter limit for validate-discount to reduce discount code enumeration via IP rotation. */
 const MAX_REQUESTS_VALIDATE_DISCOUNT = 5;
 /** Stricter limit when using in-memory fallback during Redis outage (RATE_LIMIT_DEGRADED_USE_MEMORY=1). */
@@ -32,15 +34,26 @@ function pruneMemory(): void {
   });
 }
 
+let unknownIpWarned = false;
+
 /**
- * Derive client key from trusted platform metadata only. Does not use
- * x-forwarded-for (spoofable). Prefers x-real-ip (Vercel/Netlify edge) and
- * x-nf-client-connection-ip (Netlify).
+ * Derive client key from trusted platform metadata first, then x-forwarded-for
+ * (leftmost IP, trimmed) as secondary fallback before "unknown", so misconfigured
+ * proxies are diagnosable. When the IP resolves to "unknown", a one-time warning
+ * is logged in production.
  */
 export function getClientKey(request: Request): string {
   const xRealIp = request.headers.get("x-real-ip");
   const nfConnIp = request.headers.get("x-nf-client-connection-ip");
-  const ip = (xRealIp ?? nfConnIp ?? "").trim() || "unknown";
+  let forwarded = request.headers.get("x-forwarded-for");
+  const leftmostForwarded = forwarded != null ? forwarded.trim().split(",")[0]?.trim() ?? "" : "";
+  const ip = (xRealIp ?? nfConnIp ?? leftmostForwarded ?? "").trim() || "unknown";
+  if (ip === "unknown" && process.env.NODE_ENV === "production") {
+    if (!unknownIpWarned) {
+      unknownIpWarned = true;
+      console.warn("[rate-limit] Client IP could not be determined (x-real-ip, x-nf-client-connection-ip, and x-forwarded-for missing or empty). All such clients share the same bucket; consider configuring your proxy to set a trusted IP header.");
+    }
+  }
   return `booking:${ip}`;
 }
 
@@ -200,7 +213,8 @@ export async function checkRateLimitValidateDiscount(key: string): Promise<RateL
   if (redis && redisKey) {
     try {
       const count = await redisIncr(redis, redisKey, Math.ceil(WINDOW_MS / 1000) + 60);
-      if (count <= MAX_REQUESTS_VALIDATE_DISCOUNT) return { allowed: true };
+      const limit = key.endsWith(":unknown") ? Math.min(2, MAX_REQUESTS_VALIDATE_DISCOUNT) : MAX_REQUESTS_VALIDATE_DISCOUNT;
+      if (count <= limit) return { allowed: true };
       const resetAt = windowStart + WINDOW_MS;
       return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
     } catch (err) {
@@ -274,7 +288,8 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   if (redis && redisKey) {
     try {
       const count = await redisIncr(redis, redisKey, Math.ceil(WINDOW_MS / 1000) + 60);
-      if (count <= MAX_REQUESTS) return { allowed: true };
+      const limit = key.endsWith(":unknown") ? MAX_REQUESTS_UNKNOWN_BUCKET : MAX_REQUESTS;
+      if (count <= limit) return { allowed: true };
       const resetAt = windowStart + WINDOW_MS;
       return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
     } catch (err) {

@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
 const EXPERIENCE_DETAIL_FIREBASE_HINT =
@@ -48,6 +49,7 @@ export interface ExperienceDetailResponse {
   rates: ExperienceDetailRate[];
   addons: ExperienceDetailAddon[];
   pricingType?: "charter" | "ticketed";
+  maxGuests?: number;
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
@@ -81,7 +83,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
@@ -183,6 +185,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       rates,
       addons,
       ...(pricingType && { pricingType }),
+      maxGuests: getMaxGuestsForExperience({
+        slug: expData?.slug,
+        title: expData?.title ?? expData?.name,
+        maxGuests: expData?.maxGuests,
+        pricingType: pricingType ?? "charter",
+        maxCapacity: expData?.maxCapacity,
+      }),
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
     };
     return NextResponse.json(payload, {

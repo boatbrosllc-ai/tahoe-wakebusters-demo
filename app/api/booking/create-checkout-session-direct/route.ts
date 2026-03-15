@@ -3,7 +3,7 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
 import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
-import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
@@ -12,7 +12,6 @@ import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat } from "@/lib/booking/types";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
 const HOLD_EXPIRY_MINUTES = 10;
@@ -208,73 +207,22 @@ export async function POST(request: NextRequest) {
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
-        if (slot.status !== "open") throw new Error("Slot no longer available");
+        if (slot.status !== "open") throw new SlotConflictError("Slot no longer available");
         const slotStartDate = (slot.startAt as { toDate(): Date }).toDate();
         const slotEndDate = (slot.endAt as { toDate(): Date }).toDate();
-        const slotStartMs = slotStartDate.getTime();
-        const slotEndMs = slotEndDate.getTime();
-        const blocked = await hasOverlappingBlock({
+        await assertSlotAvailable({
           db,
           Timestamp,
+          get: (q) => tx.get(q),
           experienceId: input.experienceId,
-          boatId: input.boatId,
+          experienceIdVariants,
+          parsed,
           slotStart: slotStartDate,
           slotEnd: slotEndDate,
-          get: (q) => tx.get(q),
+          boatId: input.boatId,
+          useBoatSlots,
+          runSameDaySlotScan: false,
         });
-        if (blocked) throw new Error("This slot is blocked");
-        const paidSnaps = await Promise.all(
-          experienceIdVariants.map((v) =>
-            tx.get(
-              db.collection("bookings")
-                .where("experienceId", "==", v)
-                .where("startDateStr", "==", parsed.dateStr)
-            )
-          )
-        );
-        const seenIds = new Set<string>();
-        for (const paidSnap of paidSnaps) {
-          for (const doc of paidSnap.docs) {
-            if (seenIds.has(doc.id)) continue;
-            seenIds.add(doc.id);
-            const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
-            if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        }
-        if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
-          const legacySnaps = await Promise.all(
-            experienceIdVariants.map((v) =>
-              tx.get(
-                db.collection("bookings")
-                  .where("experienceId", "==", v)
-                  .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-              )
-            )
-          );
-          const legacySeen = new Set<string>();
-          for (const snap of legacySnaps) {
-            for (const doc of snap.docs) {
-              if (legacySeen.has(doc.id)) continue;
-              legacySeen.add(doc.id);
-              const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
-              if (b.startDateStr) continue;
-              if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
-              const p = b.slotId ? parseSlotId(b.slotId) : null;
-              if (!p || p.dateStr !== parsed.dateStr) continue;
-              const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-              if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-                throw new Error("Slot no longer available");
-              }
-            }
-          }
-        }
         tx.update(slotRef, {
           status: "held",
           holdId,
@@ -287,105 +235,19 @@ export async function POST(request: NextRequest) {
           parsed.durationHours,
           parsed.startMinute ?? 0
         );
-        const slotStartMs = slotStartDate.getTime();
-        const slotEndMs = slotEndDate.getTime();
-        const dayStart = new Date(parsed.dateStr + "T00:00:00");
-        const dayEnd = new Date(parsed.dateStr + "T23:59:59.999");
-        if (useBoatSlots && input.boatId) {
-          const boatSlotsRef = db.collection("boats").doc(input.boatId).collection("slots");
-          const sameDaySnap = await tx.get(
-            boatSlotsRef
-              .where("startAt", ">=", Timestamp.fromDate(dayStart))
-              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-          );
-          for (const doc of sameDaySnap.docs) {
-            const data = doc.data() as Slot;
-            if (data.status === "open") continue;
-            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        } else {
-          const expSlotsRef = db.collection("experiences").doc(input.experienceId).collection("slots");
-          const sameDaySnap = await tx.get(
-            expSlotsRef
-              .where("startAt", ">=", Timestamp.fromDate(dayStart))
-              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-          );
-          for (const doc of sameDaySnap.docs) {
-            const data = doc.data() as Slot;
-            if (data.status === "open") continue;
-            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        }
-        const blockedNew = await hasOverlappingBlock({
+        await assertSlotAvailable({
           db,
           Timestamp,
+          get: (q) => tx.get(q),
           experienceId: input.experienceId,
-          boatId: input.boatId,
+          experienceIdVariants,
+          parsed,
           slotStart: slotStartDate,
           slotEnd: slotEndDate,
-          get: (q) => tx.get(q),
+          boatId: input.boatId,
+          useBoatSlots,
+          runSameDaySlotScan: true,
         });
-        if (blockedNew) throw new Error("This slot is blocked");
-        const paidSnaps2 = await Promise.all(
-          experienceIdVariants.map((v) =>
-            tx.get(
-              db.collection("bookings")
-                .where("experienceId", "==", v)
-                .where("startDateStr", "==", parsed.dateStr)
-            )
-          )
-        );
-        const seenIds2 = new Set<string>();
-        for (const paidSnap of paidSnaps2) {
-          for (const doc of paidSnap.docs) {
-            if (seenIds2.has(doc.id)) continue;
-            seenIds2.add(doc.id);
-            const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
-            if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            const p = b.slotId ? parseSlotId(b.slotId) : null;
-            if (!p) continue;
-            const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-            if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        }
-        if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
-          const legacySnaps2 = await Promise.all(
-            experienceIdVariants.map((v) =>
-              tx.get(
-                db.collection("bookings")
-                  .where("experienceId", "==", v)
-                  .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-              )
-            )
-          );
-          const legacySeen2 = new Set<string>();
-          for (const snap of legacySnaps2) {
-            for (const doc of snap.docs) {
-              if (legacySeen2.has(doc.id)) continue;
-              legacySeen2.add(doc.id);
-              const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
-              if (b.startDateStr) continue;
-              if (useBoatSlots && input.boatId && b.boatId !== input.boatId) continue;
-              const p = b.slotId ? parseSlotId(b.slotId) : null;
-              if (!p || p.dateStr !== parsed.dateStr) continue;
-              const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-              if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-                throw new Error("Slot no longer available");
-              }
-            }
-          }
-        }
         tx.set(slotRef, {
           startAt: Timestamp.fromDate(slotStartDate),
           endAt: Timestamp.fromDate(slotEndDate),
@@ -485,7 +347,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Checkout session failed" }, { status: 500 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Direct checkout failed";
-    if (message === "Slot no longer available" || message === "This slot is blocked") {
+    if (err instanceof SlotConflictError || message === "Slot no longer available" || message === "This slot is blocked") {
       return NextResponse.json({ error: message }, { status: 409 });
     }
     console.error("[create-checkout-session-direct]", err);

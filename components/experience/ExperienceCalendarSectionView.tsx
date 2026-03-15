@@ -678,12 +678,10 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               </div>
                             )}
                           </div>
-                          {!isTicketed && (
-                            <div className="mt-3 flex gap-2 shrink-0">
-                              {goToInlineStep && <button type="button" onClick={() => goToInlineStep(0)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
-                              {selectedDate && goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 text-sm">Next: Pick time</button>}
-                            </div>
-                          )}
+                          <div className="mt-3 flex gap-2 shrink-0">
+                            {goToInlineStep && <button type="button" onClick={() => goToInlineStep(0)} className={cn("rounded-xl border-2 px-3 py-2 text-sm font-medium min-h-[44px] touch-manipulation", darkCard ? "border-white/40 text-white hover:bg-white/20" : "border-brand-dark/15 text-brand-dark hover:bg-brand-bg")}>Back</button>}
+                            {selectedDate && goToInlineStep && <button type="button" onClick={() => goToInlineStep(2)} className="flex-1 rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 text-sm">Next: Pick time</button>}
+                          </div>
                         </>
                       )}
                     </div>

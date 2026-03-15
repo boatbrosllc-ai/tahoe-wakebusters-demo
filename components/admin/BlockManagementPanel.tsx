@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Ban, Plus, Trash2, RefreshCw, CalendarDays } from "lucide-react";
+import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 
 interface BlockItem {
   id: string;
@@ -44,8 +45,8 @@ function fmtDate(iso: string) {
 
 function fmtDateTime(iso: string) {
   const d = new Date(iso);
-  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
   return `${date} ${time}`;
 }
 
@@ -125,8 +126,10 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
     setAddLoading(true);
     setAddError(null);
     try {
-      const startAt = new Date(addStartDate + "T00:00:00").toISOString();
-      const endAt = new Date(addEndDate + "T23:59:59.999").toISOString();
+      const startAt = getSlotStartEnd(addStartDate, 0, 0, 0).start.toISOString();
+      const endOfDay = getSlotStartEnd(addEndDate, 23, 0, 59).start;
+      endOfDay.setSeconds(59, 999);
+      const endAt = endOfDay.toISOString();
       const res = await fetch("/api/admin/blocks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,11 +152,17 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
 
   async function handleDelete(id: string) {
     setDeletingId(id);
+    setBlocksError(null);
     try {
-      await fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" });
+      const res = await fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setBlocksError(data?.error ?? "Failed to delete block");
+        return;
+      }
       setBlocks((prev) => prev.filter((b) => b.id !== id));
     } catch {
-      /* ignore */
+      setBlocksError("Failed to delete block");
     } finally {
       setDeletingId(null);
     }

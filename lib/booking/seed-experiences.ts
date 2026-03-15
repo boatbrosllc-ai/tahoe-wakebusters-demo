@@ -131,6 +131,10 @@ export async function runSeedExperiences(): Promise<
       let expId: string;
       if (!expSnap.empty) {
         expId = expSnap.docs[0].id;
+        // Ensure maxGuests is correct (e.g. wake/watersports = 14)
+        await db.collection("experiences").doc(expId).update({
+          maxGuests: expConfig.maxGuests ?? 14,
+        });
       } else {
         const ref = db.collection("experiences").doc();
         expId = ref.id;

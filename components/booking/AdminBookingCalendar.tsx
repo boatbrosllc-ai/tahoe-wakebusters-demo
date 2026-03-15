@@ -56,7 +56,7 @@ export function AdminBookingCalendar({
   const bookingsByDate = useMemo(() => {
     const map = new Map<string, AdminBookingCalendarItem[]>();
     for (const b of bookings) {
-      const dateStr = b.startDate ?? (b.createdAt ? isoToChicagoDateStr(b.createdAt) : null);
+      const dateStr = b.startDate;
       if (!dateStr) continue;
       if (!map.has(dateStr)) map.set(dateStr, []);
       map.get(dateStr)!.push(b);
@@ -64,6 +64,11 @@ export function AdminBookingCalendar({
     map.forEach((list) => list.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? "")));
     return map;
   }, [bookings]);
+
+  const omittedNoStartDate = useMemo(
+    () => bookings.filter((b) => !b.startDate).length,
+    [bookings]
+  );
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
@@ -130,6 +135,11 @@ export function AdminBookingCalendar({
         <h2 className="text-xl font-semibold text-brand-dark">
           {MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}
         </h2>
+        {omittedNoStartDate > 0 && (
+          <p className="text-xs text-amber-700 font-medium">
+            {omittedNoStartDate} booking{omittedNoStartDate !== 1 ? "s" : ""} missing trip date — check list view
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <button
             type="button"

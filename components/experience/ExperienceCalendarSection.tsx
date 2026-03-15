@@ -509,22 +509,29 @@ export function ExperienceCalendarSection({
     }
   }, [rates, selectedDurationForModal]);
 
+  // When user clicks Back from step 1 (ticketed), we allow staying at step 0 instead of auto-advancing to 1
+  const userCameBackFromStep1Ref = useRef(false);
+
   // Declared before the useEffect below that depends on it — avoids forward-reference TDZ bug
   const goToInlineStep = useCallback(
     (step: number) => {
-      setInlineStepIndex(step);
+      setInlineStepIndex((prev) => {
+        if (step === 0 && prev === 1) userCameBackFromStep1Ref.current = true;
+        if (step === 1) userCameBackFromStep1Ref.current = false;
+        return step;
+      });
       setShowInlineBoatStep(step >= 3);
       setShowDetailsStep(step >= 4);
     },
     []
   );
 
-  // Ticketed: skip the duration step — jump straight to the calendar (step 1)
+  // Ticketed: skip the duration step — jump straight to the calendar (step 1), unless user clicked Back from step 1
   useEffect(() => {
-    if (isTicketed && onOpenInModal && inlineStepIndex === 0) {
+    if (isTicketed && onOpenInModal && inlineStepIndex === 0 && !userCameBackFromStep1Ref.current) {
       goToInlineStep(1);
     }
-  }, [isTicketed, onOpenInModal, goToInlineStep]);
+  }, [isTicketed, onOpenInModal, inlineStepIndex, goToInlineStep]);
 
   // Watersports / single-boat: skip the boat step — auto-assign the only boat and go to checkout
   useEffect(() => {

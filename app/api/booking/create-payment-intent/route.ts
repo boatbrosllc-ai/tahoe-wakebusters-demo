@@ -222,8 +222,10 @@ export async function POST(request: NextRequest) {
     const hasExperience = !!hold.experienceId;
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
+    const isSharedTicketed = (hold as { bookingMode?: string }).bookingMode === "shared";
+    // For shared ticketed, always recompute pricing from rate × partySize so total is never wrong (ticket cost × guests).
     let pricing: import("@/lib/booking/types").BookingPricing;
-    if (hold.pricing) {
+    if (hold.pricing && !isSharedTicketed) {
       pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
     } else {
       let rate: Rate | ExperienceRate | BoatRate;
