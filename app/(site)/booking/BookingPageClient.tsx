@@ -55,6 +55,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const [experiences, setExperiences] = useState<ExperienceItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryTrigger, setRetryTrigger] = useState(0);
 
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
   const [boats, setBoats] = useState<BoatOption[]>([]);
@@ -107,13 +108,20 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
+        setExperiences([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
         const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Failed to load");
         setError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, []);
+  }, [retryTrigger]);
+
+  const handleRetry = () => {
+    setError(null);
+    setLoading(true);
+    setRetryTrigger((t) => t + 1);
+  };
 
   useEffect(() => {
     if (!selectedExperience) {
@@ -501,6 +509,18 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
               <p className="text-center text-sm text-red-600">{error}</p>
             )}
           </div>
+        ) : error != null && Array.isArray(experiences) && experiences.length === 0 ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-8 sm:p-10 text-center shadow-soft">
+            <p className="text-red-800 font-semibold">Something went wrong</p>
+            <p className="mt-2 text-sm text-red-700">{error}</p>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="mt-4 rounded-xl bg-brand-primary text-white font-semibold py-3 px-6 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 transition-colors"
+            >
+              Try again
+            </button>
+          </div>
         ) : (
           <div className="rounded-2xl border border-brand-dark/10 bg-white p-8 sm:p-10 text-center shadow-soft">
             <p className="text-brand-dark font-semibold">No experiences available yet</p>
@@ -508,10 +528,6 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
               Check back soon — experiences will appear here once they are published.
             </p>
           </div>
-        )}
-
-        {error && !useExperiencePicker && (
-          <p className="text-center text-sm text-brand-muted mt-6">{error}</p>
         )}
       </div>
     </div>

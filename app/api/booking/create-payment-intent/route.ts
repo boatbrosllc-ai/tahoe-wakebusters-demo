@@ -223,9 +223,10 @@ export async function POST(request: NextRequest) {
     const hasBoat = !!hold.boatId;
     const isListingBoatFlow = hasExperience && hasBoat;
     const isSharedTicketed = (hold as { bookingMode?: string }).bookingMode === "shared";
-    // For shared ticketed, always recompute pricing from rate × partySize so total is never wrong (ticket cost × guests).
+    // Use hold's stored pricing when available (charter or shared ticketed). For shared ticketed, the hold was
+    // created with the correct party size, so using hold.pricing avoids recomputation bugs (e.g. partySize type/read).
     let pricing: import("@/lib/booking/types").BookingPricing;
-    if (hold.pricing && !isSharedTicketed) {
+    if (hold.pricing) {
       pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
     } else {
       let rate: Rate | ExperienceRate | BoatRate;
