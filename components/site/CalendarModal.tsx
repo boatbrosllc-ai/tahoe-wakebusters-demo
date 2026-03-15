@@ -69,6 +69,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     [calendarMonth.getFullYear(), calendarMonth.getMonth()]
   );
 
+  const todayStr = useMemo(() => toDateStr(new Date()), []);
+
   useEffect(() => {
     if (!open) return;
     setExperiencesLoading(true);
@@ -190,7 +192,6 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     return map;
   }, [slots]);
 
-  const todayStr = useMemo(() => toDateStr(new Date()), []);
   const [currentYear, currentMonth] = useMemo(() => {
     const [y, m] = todayStr.split("-").map(Number);
     return [y, m - 1]; // month 0-indexed

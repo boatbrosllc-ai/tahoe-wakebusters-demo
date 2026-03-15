@@ -19,14 +19,22 @@ export type ExperienceForTicketed = {
   id?: string;
 };
 
-export type RateDoc = { id: string; data: () => ExperienceRate };
+/** Accepts Firestore QueryDocumentSnapshot-like or { id, data() } so slots and create-hold can pass .docs. */
+export type RateDocLike = { id: string; data: () => unknown };
 
 /**
  * Stable order for rate docs so slots API and create-hold always get the same "first" rate
  * when falling back to first active rate's duration (Firestore query order is undefined).
  */
-function stableRates(rates: { id: string; data: () => ExperienceRate }[]): { id: string; data: () => ExperienceRate }[] {
+function stableRates(rates: RateDocLike[]): RateDocLike[] {
   return [...rates].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function getDurationHours(d: RateDocLike): number | undefined {
+  const raw = d.data();
+  return typeof raw === "object" && raw !== null && "durationHours" in raw
+    ? (raw as { durationHours?: number }).durationHours
+    : undefined;
 }
 
 /**
@@ -35,18 +43,18 @@ function stableRates(rates: { id: string; data: () => ExperienceRate }[]): { id:
  */
 export function resolveTicketedTripDuration(
   experience: ExperienceForTicketed,
-  rates: { id: string; data: () => ExperienceRate }[]
+  rates: RateDocLike[]
 ): number {
   const sorted = stableRates(rates);
   const tripHours = experience.tripDurationHours;
   if (typeof tripHours === "number" && tripHours > 0) return tripHours;
   if (experience.defaultRateId && sorted.length > 0) {
     const defaultRate = sorted.find((d) => d.id === experience.defaultRateId);
-    const dur = defaultRate ? (defaultRate.data() as ExperienceRate).durationHours : undefined;
+    const dur = defaultRate ? getDurationHours(defaultRate) : undefined;
     if (typeof dur === "number" && dur > 0) return dur;
   }
   if (sorted.length > 0) {
-    const first = (sorted[0].data() as ExperienceRate).durationHours;
+    const first = getDurationHours(sorted[0]);
     if (typeof first === "number" && first > 0) return first;
   }
   return 1;
@@ -59,7 +67,7 @@ export function resolveTicketedTripDuration(
  */
 export function getTicketedDepartureAndDuration(
   experience: ExperienceForTicketed,
-  rates: { id: string; data: () => ExperienceRate }[]
+  rates: RateDocLike[]
 ): { deptHour: number; deptMinute: number; tripDuration: number } {
   const sorted = stableRates(rates);
   const experienceSlug = (typeof experience.slug === "string" ? experience.slug.trim() : "").toLowerCase();

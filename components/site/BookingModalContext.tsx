@@ -11,6 +11,9 @@ export interface BookingModalInitialSelection {
   pricingType?: "charter" | "ticketed";
   /** When set, modal uses this for ticketed flows instead of hardcoded 'shared' (e.g. after auto-switch to charter on calendar). */
   bookingMode?: "shared" | "charter";
+  /** From calendar/slug fetch so modal can validate slot before hold creation. */
+  departureHour?: number;
+  departureMinute?: number;
 }
 
 type BookingModalContextValue = {

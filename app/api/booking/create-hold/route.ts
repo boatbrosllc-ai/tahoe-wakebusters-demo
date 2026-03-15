@@ -6,7 +6,7 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
-import { getTicketedDepartureAndDuration, validateTicketedSlotParsed } from "@/lib/booking/ticketed-slot-utils";
+import { getTicketedDepartureAndDuration, validateTicketedSlotParsed, type RateDocLike } from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
@@ -26,7 +26,7 @@ function validateTicketedSlotId(
   parsedForValidation: NonNullable<ReturnType<typeof parseSlotId>>,
   experience: Experience & ExperienceForTicketed,
   rate: ExperienceRate,
-  ratesDocs: { id: string; data: () => ExperienceRate }[],
+  ratesDocs: RateDocLike[],
   slotId: string,
   experienceId: string
 ): NextResponse | null {
@@ -334,7 +334,7 @@ export async function POST(request: NextRequest) {
           const errResp = validateTicketedSlotId(
             parsedForValidation,
             experience,
-            rate,
+            rate as ExperienceRate,
             ratesSnap.docs,
             input.slotId,
             expId
@@ -432,7 +432,7 @@ export async function POST(request: NextRequest) {
           const errResp = validateTicketedSlotId(
             parsedForValidation,
             experience,
-            rate,
+            rate as ExperienceRate,
             ratesSnapExp.docs,
             input.slotId,
             expId

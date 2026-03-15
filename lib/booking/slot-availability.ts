@@ -20,7 +20,7 @@ export class SlotConflictError extends Error {
 
 export type AssertSlotAvailableOpts = {
   db: Firestore;
-  Timestamp: import("firebase-admin/firestore").Timestamp;
+  Timestamp: typeof import("firebase-admin/firestore").Timestamp;
   get: (q: import("firebase-admin/firestore").Query) => Promise<import("firebase-admin/firestore").QuerySnapshot>;
   experienceId: string;
   experienceIdVariants: string[];
