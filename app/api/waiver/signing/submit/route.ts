@@ -5,6 +5,7 @@ import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { submitWaiverSigningSchema } from "@/lib/waiver/schema";
 import {
   getTemplateById,
+  getRequestById,
   allocateGroupSignerSlot,
   consumeTokenIfValid,
   updateRequestSigned,

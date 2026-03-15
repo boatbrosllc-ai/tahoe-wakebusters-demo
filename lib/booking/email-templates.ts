@@ -111,14 +111,16 @@ const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COL
  * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType, addonsSummary: addonsSummaryFromContext } = context;
   const isTicketed = pricingType === "ticketed";
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const ticketCount = booking.partySize ?? 1;
   const addonsSummary =
-    booking.addonSelections.length > 0
-      ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
-      : "None";
+    addonsSummaryFromContext !== undefined
+      ? addonsSummaryFromContext
+      : booking.addonSelections.length > 0
+        ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
+        : "None";
   // Single source of truth: Stripe reflects actual charges; fallback to booking.pricing (all in cents).
   const stripe = booking.stripe as BookingStripe | undefined;
   const isDeposit = isDepositFromBookingStripe(booking);
@@ -253,6 +255,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     durationHours: 2,
     locationText: "We'll send exact meeting point after booking.",
     cancellationPolicyText: DEFAULT_CANCELLATION_POLICY,
+    addonsSummary: "Cooler: qty 1",
   };
   return renderBookingConfirmationHtml(sampleBooking, sampleContext);
 }

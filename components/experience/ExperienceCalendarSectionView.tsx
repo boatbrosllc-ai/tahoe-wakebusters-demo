@@ -243,7 +243,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                 spotsAvailable={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined}
               />
             )}
-            {onOpenInModal && isTicketed ? (
+            {onOpenInModal != null && isTicketed ? (
               /* Ticketed: simple single-column calendar — clicking a date opens the modal directly */
               <div ref={panel2Ref as React.RefObject<HTMLDivElement>} className="flex flex-col">
                 <h2 className={cn("text-xl sm:text-2xl font-extrabold tracking-tight", darkCard ? "text-white lg:text-3xl" : "text-brand-dark lg:text-3xl")}>
@@ -301,7 +301,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                         const isFullyUnavailable = isCharterLocked;
                         const isAvailable = !isPast && (isTicketedCell ? (openForDate > 0 && spotsLeft !== 0) : (openForDate > 0 && !isFullyUnavailable));
-                        const soldOutNoSlots = onOpenInModal && isTicketed && openForDate === 0;
+                        const soldOutNoSlots = onOpenInModal != null && isTicketed && openForDate === 0;
                         const hasBookingsUrgency = !isPast && (isTicketedCell ? (spotsBookedFirst ?? 0) > 0 && spotsLeft !== 0 : (isAvailable && !isSoldOutShared && bookedCount > 0));
                         const hasBookingsOnDateFirst = isTicketedCell && !isPast && (spotsBookedFirst ?? 0) > 0;
                         const displayBookedFirst = isTicketedCell ? (spotsBookedFirst ?? 0) : bookedCount;
@@ -312,7 +312,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             key={dateStr}
                             type="button"
                             disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable || soldOutNoSlots}
-                            onClick={() => ((onOpenInModal && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
+                            onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
                             title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedFirst} already booked this day` : undefined}
                             className={cn(
                               "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] md:min-h-[64px] touch-manipulation",
@@ -557,7 +557,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const isFullyBookedTicketed = isTicketed && !isPast && (spotsLeft === 0 && slotData != null || (typeof ticketsAvail2 === "number" && ticketsAvail2 === 0));
                                 const isFullyBookedCharter = !isTicketed && !isPast && entry != null && openForDuration === 0;
                                 const isFullyBooked = isFullyBookedTicketed || isFullyBookedCharter;
-                                const soldOutNoSlots2 = onOpenInModal && isTicketed && (slotsByDate.get(dateStr)?.open ?? 0) === 0;
+                                const soldOutNoSlots2 = onOpenInModal != null && isTicketed && (slotsByDate.get(dateStr)?.open ?? 0) === 0;
                                 const hasBookingsUrgencyTicketed = isTicketed && !isPast && (spotsBooked ?? 0) > 0 && spotsLeft !== 0;
                                 const hasBookingsUrgencyCharter = !isTicketed && !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasBookingsUrgency = hasBookingsUrgencyTicketed || hasBookingsUrgencyCharter;
@@ -568,7 +568,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     key={dateStr}
                                     type="button"
                                     disabled={isPast || !isAvailable || isFullyUnavailable || soldOutNoSlots2}
-                                    onClick={() => ((onOpenInModal && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
+                                    onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency || hasBookingsOnDate) ? `${displayBookedCount} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] touch-manipulation",
@@ -929,7 +929,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const ticketsAvail3 = ticketsAvailableByDate?.[dateStr];
                                 const isFullyBooked3 = !isPast && (isTicketed ? (spotsLeft3 === 0 && slotData3 != null || (typeof ticketsAvail3 === "number" && ticketsAvail3 === 0)) : (entry != null && openForDuration === 0));
                                 const openForDate3 = entry?.open ?? 0;
-                                const soldOutNoSlots3 = onOpenInModal && isTicketed && openForDate3 === 0;
+                                const soldOutNoSlots3 = onOpenInModal != null && isTicketed && openForDate3 === 0;
                                 const hasBookingsUrgency3 = !isPast && (isTicketed ? (spotsBooked3 ?? 0) > 0 && spotsLeft3 !== 0 : (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay3)) && bookedCount3 > 0 && !isFullyBooked3);
                                 const hasBookingsOnDate3 = isTicketed && !isPast && (spotsBooked3 ?? 0) > 0;
                                 const displayBookedCount3 = isTicketed ? (spotsBooked3 ?? 0) : bookedCount3;
@@ -938,7 +938,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     key={dateStr}
                                     type="button"
                                     disabled={isPast || !isAvailable3 || isFullyUnavailable3 || soldOutNoSlots3}
-                                    onClick={() => ((onOpenInModal && isTicketed ? isAvailable3 : (isAvailable3 || isSoldOutShared3)) && handleDayClick(dateStr))}
+                                    onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable3 : (isAvailable3 || isSoldOutShared3)) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency3 || hasBookingsOnDate3) ? `${displayBookedCount3} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 min-h-[44px] min-w-[44px] sm:min-h-[58px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full touch-manipulation",
@@ -1324,7 +1324,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const hasBooked = cell.bookedCount > 0;
                         const isPast = cell.isPast;
                         const isHoliday = holidayDateStrings.has(cell.dateStr);
-                        const isClickable = cell.isCurrentMonth && !isPast && (onOpenInModal && isTicketed ? hasOpen : (hasOpen || hasBooked));
+                        const isClickable = cell.isCurrentMonth && !isPast && (onOpenInModal != null && isTicketed ? hasOpen : (hasOpen || hasBooked));
                         return (
                           <button
                             key={cell.dateStr + cell.day}

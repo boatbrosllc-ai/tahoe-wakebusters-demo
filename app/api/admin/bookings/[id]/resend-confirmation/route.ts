@@ -10,6 +10,7 @@ import { sendBookingConfirmationEmail } from "@/lib/booking/brevo";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { getRequestById } from "@/lib/waiver/firestore";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
 
@@ -75,6 +76,28 @@ export async function POST(
     const endAt = formatBookingDateTime(end);
     const durationHours = parsed?.durationHours ?? 3;
 
+    let waiverSigningUrl: string | undefined;
+    let waiverGroupSigningUrl: string | undefined;
+    if (booking.waiver?.requestId && booking.waiver?.status === "pending") {
+      const req = await getRequestById(booking.waiver.requestId);
+      if (req?.status === "pending" && req.signingUrl) {
+        waiverSigningUrl = req.signingUrl;
+        waiverGroupSigningUrl = (req as { groupSigningUrl?: string }).groupSigningUrl;
+      }
+    }
+
+    const addonsById = new Map<string, { name?: string }>();
+    if (experienceId && (booking.addonSelections?.length ?? 0) > 0) {
+      const addonsSnap = await db.collection("experiences").doc(experienceId).collection("addons").get();
+      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as { name?: string }));
+    }
+    const addonsSummary =
+      (booking.addonSelections?.length ?? 0) > 0
+        ? (booking.addonSelections ?? [])
+            .map((sel) => `${addonsById.get(sel.addonId)?.name ?? sel.addonId}: qty ${sel.qty}`)
+            .join(", ")
+        : "None";
+
     const isDeposit =
       booking.status === "deposit_paid" ||
       booking.status === "final_due" ||
@@ -96,9 +119,10 @@ export async function POST(
           ? (booking.finalChargeAt as { toDate(): Date }).toDate().toISOString()
           : undefined,
       manageLink: undefined as string | undefined,
-      waiverSigningUrl: undefined as string | undefined,
-      waiverGroupSigningUrl: undefined as string | undefined,
+      waiverSigningUrl,
+      waiverGroupSigningUrl,
       pricingType,
+      addonsSummary,
     };
 
     await sendBookingConfirmationEmail(booking, emailContext);

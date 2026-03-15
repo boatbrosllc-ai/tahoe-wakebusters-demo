@@ -297,6 +297,14 @@ export async function convertHoldToBooking(
   const specialNotes = fullInput.specialNotesOverride ?? (hold.answers?.comments?.trim() || undefined);
   const bookingId = db.collection("bookings").doc().id;
   const parsedSlot = parseSlotId(hold.slotId);
+  const startDateStrFallback = hold.slotId.length >= 10 ? hold.slotId.slice(0, 10) : null;
+  if (!parsedSlot) {
+    bookingWarn("convert-hold", "slotId failed to parse; using date fallback for startDateStr", { holdId, slotId: hold.slotId });
+    if (!startDateStrFallback || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStrFallback)) {
+      bookingError("convert-hold", "slotId unparseable and no valid date prefix; cannot create booking", null, { holdId, slotId: hold.slotId });
+      throw new Error("Invalid slot: cannot determine trip date");
+    }
+  }
   const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
 
   let discountRef: DocumentReference | null = null;
@@ -335,7 +343,7 @@ export async function convertHoldToBooking(
     ...(hold.boatId ? { boatId: hold.boatId } : {}),
     ...((hold as { bookingMode?: "shared" | "charter" }).bookingMode ? { bookingMode: (hold as { bookingMode?: "shared" | "charter" }).bookingMode } : {}),
     slotId: hold.slotId,
-    ...(parsedSlot ? { startDateStr: parsedSlot.dateStr } : {}),
+    startDateStr: parsedSlot ? parsedSlot.dateStr : startDateStrFallback ?? undefined,
     rateId: hold.rateId,
     addonSelections: hold.addonSelections,
     partySize: hold.partySize,
@@ -433,6 +441,12 @@ export async function convertHoldToBooking(
     customerEmail: customer.email,
     customerName: customer.name,
   });
+  const resolvedAddonSummary =
+    hold.addonSelections?.length > 0
+      ? hold.addonSelections
+          .map((sel) => `${addonsById.get(sel.addonId)?.name ?? sel.addonId}: qty ${sel.qty}`)
+          .join(", ")
+      : "None";
   const emailContext = {
     boatName: boatNameForEmail ?? experienceName,
     startAt: formatSlotDateTime(startTs),
@@ -449,6 +463,7 @@ export async function convertHoldToBooking(
     waiverSigningUrl: waiverResult?.includeInConfirmationEmail ? waiverResult.signingUrl : undefined,
     waiverGroupSigningUrl: waiverResult?.groupSigningUrl,
     pricingType: experienceForPricing?.pricingType,
+    addonsSummary: resolvedAddonSummary,
   };
   try {
     await Promise.all([
@@ -458,11 +473,15 @@ export async function convertHoldToBooking(
   } catch (emailErr) {
     bookingError("convert-hold", "Brevo confirmation email failed", emailErr, { bookingId });
   }
+  const confirmationSubject =
+    waiverResult?.includeInConfirmationEmail && waiverResult?.signingUrl
+      ? "Booking Confirmation & Waiver – Boat Bros ATX"
+      : "Booking Confirmation – Boat Bros ATX";
   logEmailSent({
     to: customer.email,
     toName: customer.name,
     templateId: "booking_confirmation",
-    subject: "Booking Confirmation – Boat Bros ATX",
+    subject: confirmationSubject,
     bookingId,
   }).catch((err) => bookingError("convert-hold", "logEmailSent failed", err, { bookingId }));
   if (waiverResult?.sendSeparateWaiverInvite) {

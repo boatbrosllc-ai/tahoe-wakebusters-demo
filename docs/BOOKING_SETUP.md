@@ -363,6 +363,13 @@ To release expired holds periodically, call `POST /api/booking/cleanup-holds` wi
 - **Manage booking:** Set `MANAGE_BOOKING_SECRET` in env. Confirmation email includes a signed link to `/booking/manage?token=...` where the customer can update card or pay remaining balance.
 - **Firestore index:** For `run-final-charges` you may need a composite index on `bookings`: `status` (Ascending) + `finalChargeAt` (Ascending). If the query fails, use the link in the error to create the index in Firebase Console.
 
+## Console messages and troubleshooting
+
+- **`api/admin/session` 401** — Shown when something sends a **POST** to `/api/admin/session` with an invalid or expired token (e.g. admin login with wrong credentials or after token expiry). The site header uses **GET** to check session and never triggers 401; you can ignore this if you are not on the admin login page.
+- **Stripe: "You have not registered or verified the domain" (Apple Pay)** — To enable Apple Pay in the Payment Element, [register and verify your domain](https://stripe.com/docs/payments/payment-methods/pmd-registration) in the Stripe Dashboard. Until then, card and other enabled methods still work.
+- **"Unable to download payment manifest" (Google Pay)** — Often a network or CORS issue with `pay.google.com`; Google Pay may still work in supported browsers. You can ignore if card payments succeed.
+- **`/api/booking/complete-after-payment` 500** — Payment succeeded but creating the booking failed. Check **server logs** (e.g. Netlify Functions logs) for `[booking:complete-after-payment]`; the logged error and stack show the cause. Common causes: missing or invalid **Firebase** env (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` or service account path), **Stripe** key, **Brevo** key, or Firestore permissions. The client shows a generic “contact support” message for config errors; for other errors the server returns the message so the user sees it in the booking modal.
+
 ## Security notes
 
 - Stripe secret key and webhook secret, Brevo API key, and Firebase private key are server-only; never expose them to the client.

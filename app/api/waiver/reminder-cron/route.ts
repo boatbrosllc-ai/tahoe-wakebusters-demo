@@ -65,11 +65,11 @@ export async function POST(request: NextRequest) {
       return { id: doc.id, full };
     });
 
-    const tokenIds = [...new Set(pageRequests.map((r) => r.full.signingTokenId).filter(Boolean) as string[])];
+    const tokenIds = Array.from(new Set(pageRequests.map((r) => r.full.signingTokenId).filter(Boolean) as string[]));
     const tokenDocs = await (tokenIds.length > 0 ? Promise.all(tokenIds.map((id) => getTokenById(id))) : Promise.resolve([]));
     const tokenById = new Map(tokenIds.map((id, i) => [id, tokenDocs[i] ?? null]));
 
-    const bookingIds = [...new Set(pageRequests.map((r) => r.full.bookingId))];
+    const bookingIds = Array.from(new Set(pageRequests.map((r) => r.full.bookingId)));
     const bookingSnaps =
       bookingIds.length > 0
         ? await Promise.all(bookingIds.map((id) => db.collection("bookings").doc(id).get()))

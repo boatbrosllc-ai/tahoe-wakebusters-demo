@@ -52,6 +52,8 @@ export interface BookingEmailContext {
   waiverGroupSigningUrl?: string;
   /** "ticketed" for ticket-based experiences; "charter" (or undefined) for boat charters. */
   pricingType?: "charter" | "ticketed";
+  /** Pre-resolved addon names summary for confirmation email (e.g. "Cooler: qty 1, Towel: qty 2"). */
+  addonsSummary?: string;
 }
 
 const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
@@ -76,13 +78,15 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const html = renderBookingConfirmationHtml(booking, context);
 
   const templateId = bookingEnv.brevoBookingTemplateId;
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, waiverSigningUrl } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, waiverSigningUrl, addonsSummary: addonsSummaryFromContext } = context;
   const isDepositForTemplate = isDepositFromBookingStripe(booking);
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
-    booking.addonSelections.length > 0
-      ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
-      : "None";
+    addonsSummaryFromContext !== undefined
+      ? addonsSummaryFromContext
+      : booking.addonSelections.length > 0
+        ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
+        : "None";
   // Use same source as confirmation HTML: Stripe amounts reflect actual charges (all in cents).
   const stripe = booking.stripe as { totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number } | undefined;
   const totalAmountCents = stripe?.totalAmountCents ?? booking.pricing.totalCents;

@@ -357,7 +357,8 @@ export function InlineBookingDetailsStep({
     bookingCache.invalidateBookingCaches(experienceId);
     if (!holdId || !paymentIntentId) {
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
-      setPaymentPhase("success");
+      setCompleteAfterPaymentError(null);
+      setPaymentPhase("successWithWarning");
       return;
     }
     try {
@@ -439,7 +440,7 @@ export function InlineBookingDetailsStep({
         </div>
         <h3 className="text-lg font-bold text-brand-dark">Payment received — confirmation pending</h3>
         <p className="text-sm text-brand-muted">
-          Your payment was captured successfully, but we couldn&apos;t complete the booking confirmation. Please try again below, or contact us at {siteConfig.phone} if it keeps failing.
+          Your payment was successful, but we couldn&apos;t complete the booking confirmation. Please contact us at {siteConfig.phone} so we can confirm your reservation.
         </p>
         {completeAfterPaymentError && <p className="text-xs text-red-600">{completeAfterPaymentError}</p>}
         <div className="flex flex-wrap gap-2 justify-center">
@@ -803,7 +804,10 @@ export function InlineBookingDetailsStep({
                 setAppliedDiscountLoading(true);
                 setAppliedDiscountError(null);
                 try {
-                  const totalBefore = priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0) + priceSummary.salesTaxCents;
+                  const totalBefore = priceSummary.rateCents
+                  + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
+                  + priceSummary.salesTaxCents
+                  + priceSummary.tipCents; // include tip to match server
                   const res = await fetch("/api/booking/validate-discount", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },

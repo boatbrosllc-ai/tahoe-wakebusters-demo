@@ -293,9 +293,12 @@ export async function POST(request: NextRequest) {
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
     const firstRate = ratesSnap.docs[0];
     const rateId = firstRate?.id ?? "manual";
-    const durationFromRate = firstRate ? (firstRate.data() as { durationHours?: number }).durationHours : durationHours;
 
     const slotId = buildSlotId(tripDate, startHour, durationHours);
+    const parsedSlotIdCheck = parseSlotId(slotId);
+    if (!parsedSlotIdCheck) {
+      console.warn("[admin/bookings] buildSlotId produced unparseable slotId", { slotId, tripDate, startHour, durationHours });
+    }
     const noteParts = [source, externalReference ? `Ref: ${externalReference}` : "", specialNotes].filter(Boolean);
     const notes = noteParts.join(" — ");
     const pricing = {
@@ -463,11 +466,20 @@ export async function POST(request: NextRequest) {
       const locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
       const cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
       const experienceName = exp.title ?? experienceId;
+      const addonsById = new Map<string, { name?: string }>();
+      const addonsSnap = await db.collection("experiences").doc(experienceId).collection("addons").get();
+      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as { name?: string }));
+      const addonsSummary =
+        (booking.addonSelections?.length ?? 0) > 0
+          ? (booking.addonSelections ?? [])
+              .map((sel) => `${addonsById.get(sel.addonId)?.name ?? sel.addonId}: qty ${sel.qty}`)
+              .join(", ")
+          : "None";
       const emailContext = {
         boatName: experienceName,
         startAt: formatSlotDateTime({ toDate: () => slotStart }),
         endAt: formatSlotDateTime({ toDate: () => slotEnd }),
-        durationHours: durationFromRate,
+        durationHours, // use admin-specified value, not the rate's duration
         locationText,
         cancellationPolicyText,
         isDeposit: false,
@@ -475,6 +487,7 @@ export async function POST(request: NextRequest) {
         waiverSigningUrl: undefined,
         waiverGroupSigningUrl: undefined,
         pricingType: exp.pricingType,
+        addonsSummary,
       };
       const bookingForEmail = { ...booking, id: bookingId } as Booking;
       await sendBookingConfirmationEmail(bookingForEmail, emailContext);

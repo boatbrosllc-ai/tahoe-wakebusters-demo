@@ -2294,7 +2294,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           setAppliedDiscountError(null);
                           setAppliedDiscountLoading(true);
                           try {
-                            const totalBeforeDiscount = (priceSummary.rateCents + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)) + priceSummary.salesTaxCents;
+                            const totalBeforeDiscount = priceSummary.rateCents
+                              + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
+                              + priceSummary.salesTaxCents
+                              + priceSummary.tipCents; // include tip to match server
                             const res = await fetch("/api/booking/validate-discount", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
