@@ -315,11 +315,13 @@ export function ExperiencesListClient() {
           <p className="mt-4 text-brand-muted text-base max-w-md mx-auto">Find your day or reach out — we&apos;re here to help.</p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button
+              type="button"
+              variant="secondary"
               size="lg"
-              className="rounded-full h-12 px-8 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 font-semibold shadow-lg shadow-brand-primary/25 hover:shadow-xl hover:shadow-brand-primary/30 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
+              className="rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] font-semibold hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation h-12 px-6 sm:px-8"
               onClick={() => setBookingModalOpen(true)}
             >
-              Reserve your spot
+              Book now
             </Button>
             <Button asChild variant="outline" size="lg" className="rounded-full h-12 px-8 border-2 border-brand-dark/20 text-brand-dark hover:bg-brand-dark/5 hover:border-brand-dark/30 transition-all duration-200">
               <Link href="/contact">Contact us</Link>

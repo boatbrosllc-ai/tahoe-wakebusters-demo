@@ -890,7 +890,7 @@ export function ExperienceForm({
             <div className="flex items-start gap-2">
               <Info className="h-4 w-4 text-sky-600 mt-0.5 shrink-0" aria-hidden />
               <p className="text-sm text-sky-800">
-                Each rate is charged <strong>per ticket</strong>. In the Rates section below you can set a base price and optional higher prices for weekends, Fri/Sun, and holidays. Add special date ranges to override prices for specific periods.
+                Each option is <strong>per ticket</strong>. In Rates below: set your base price, then optional higher prices for weekends and holidays. Use “Raise prices on these dates” to add specific date ranges (e.g. July 4).
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1009,7 +1009,7 @@ export function ExperienceForm({
             <h2 className="text-lg font-semibold text-brand-dark">Rates & calendar</h2>
             <p className="text-sm text-brand-muted mt-1">
               {data.pricingType === "ticketed"
-                ? "Set per-ticket prices for each duration. Optionally set higher prices for weekends, Fri/Sun, and holidays. Add special date ranges to override prices for specific periods. The calendar shows which days use which price."
+                ? "Set your ticket price, then when to charge more (weekends, holidays, or specific dates)."
                 : "Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced."}
             </p>
           </div>
