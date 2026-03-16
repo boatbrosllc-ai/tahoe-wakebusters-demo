@@ -1071,6 +1071,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents, exp.pricingType)}
                             </span>
                           )}
+                          {exp.pricingType === "ticketed" && (
+                            <span className="text-xs text-white/80 mt-0.5 block">Prices may vary by date</span>
+                          )}
                         </div>
                       </button>
                     );

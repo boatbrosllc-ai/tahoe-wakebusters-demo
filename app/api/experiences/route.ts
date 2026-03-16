@@ -52,7 +52,7 @@ export async function GET() {
           fromPriceCents,
           active: exp.active ?? true,
           sortOrder: exp.sortOrder,
-          ...(isTicketed && { pricingType: "ticketed" as const }),
+          pricingType: isTicketed ? ("ticketed" as const) : ("charter" as const),
           ...(isTicketed && (exp.maxCapacity != null ? { maxCapacity: exp.maxCapacity } : { maxCapacity: 35 })),
           ...(isTicketed && { departureHour: exp.departureHour ?? 19 }),
           ...(isTicketed && { departureMinute: exp.departureMinute ?? 0 }),

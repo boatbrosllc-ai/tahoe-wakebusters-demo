@@ -11,7 +11,7 @@ import { getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 
-type ListingData = { title?: string; subtitle?: string; heroUrl?: string };
+type ListingData = { title?: string; subtitle?: string; heroUrl?: string; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" };
 
 export function ExperiencesListClient() {
   const [order, setOrder] = useState<string[] | null>(null);
@@ -31,12 +31,14 @@ export function ExperiencesListClient() {
       .then((data) => {
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
         const map: Record<string, ListingData> = {};
-        list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string } }) => {
+        list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }) => {
           if (item.slug) {
             map[item.slug] = {
               title: item.title,
               subtitle: item.subtitle,
               heroUrl: item.heroMedia?.url,
+              fromPriceCents: item.fromPriceCents ?? undefined,
+              pricingType: item.pricingType,
             };
           }
         });
@@ -60,14 +62,16 @@ export function ExperiencesListClient() {
   /** All boats are up to 14 people; use this for every experience card. */
   const CAPACITY_ALL = "Up to 14";
 
-  const experienceWithListingData = (exp: Experience): Experience => {
+  const experienceWithListingData = (exp: Experience): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
     const listing = listingBySlug[exp.slug];
     return {
       ...exp,
       title: listing?.title?.trim() || exp.title,
       shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
       heroImage: listing?.heroUrl || exp.heroImage,
-      capacity: CAPACITY_ALL, // All boats up to 14
+      capacity: CAPACITY_ALL,
+      ...(listing?.fromPriceCents != null && { fromPriceCents: listing.fromPriceCents }),
+      ...(listing?.pricingType && { pricingType: listing.pricingType }),
     };
   };
 
@@ -222,7 +226,12 @@ export function ExperiencesListClient() {
                     </p>
                     <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
                       {firstData.fromPriceCents != null && (
-                        <span className="text-base sm:text-xl font-bold text-brand-primary">{formatExperiencePriceLabel(firstData.slug, firstData.fromPriceCents)}</span>
+                        <span className="text-base sm:text-xl font-bold text-brand-primary">
+                          {formatExperiencePriceLabel(firstData.slug, firstData.fromPriceCents, (firstData as { pricingType?: "charter" | "ticketed" }).pricingType)}
+                        </span>
+                      )}
+                      {(firstData as { pricingType?: "charter" | "ticketed" }).pricingType === "ticketed" && (
+                        <span className="text-white/80 text-xs sm:text-sm">Prices may vary by date</span>
                       )}
                       <span className="inline-flex items-center gap-1.5 text-white font-medium text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                         View trip <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
@@ -278,7 +287,12 @@ export function ExperiencesListClient() {
                         </p>
                         <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-3">
                           {data.fromPriceCents != null && (
-                            <span className="text-sm sm:text-base font-bold text-brand-primary">{formatExperiencePriceLabel(data.slug, data.fromPriceCents)}</span>
+                            <span className="text-sm sm:text-base font-bold text-brand-primary">
+                              {formatExperiencePriceLabel(data.slug, data.fromPriceCents, (data as { pricingType?: "charter" | "ticketed" }).pricingType)}
+                            </span>
+                          )}
+                          {(data as { pricingType?: "charter" | "ticketed" }).pricingType === "ticketed" && (
+                            <span className="text-white/80 text-xs">Prices may vary by date</span>
                           )}
                           <span className="inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                             View trip <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />

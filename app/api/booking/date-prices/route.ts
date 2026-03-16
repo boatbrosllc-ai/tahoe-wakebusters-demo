@@ -12,7 +12,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 26;
 
 import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
-import { getExperienceBySlug } from "@/content/experiences";
 import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
@@ -64,21 +63,13 @@ export async function GET(request: NextRequest) {
     const chosenRate = rateIdParam
       ? rates.find((r) => r.id === rateIdParam) ?? sortedRates[0]
       : sortedRates[0];
-    // For ticketed experiences, the listing page overrides the display price with the static
-    // content fromPriceCents (e.g. $35/ticket from content/experiences.ts). Use the same
-    // override here so the calendar shows the same per-ticket price as the listing page.
-    const contentExp = getExperienceBySlug(effectiveSlug || (exp.slug ?? ""));
-    const ticketedDisplayPriceCents =
-      isTicketed && contentExp?.fromPriceCents != null
-        ? contentExp.fromPriceCents
-        : chosenRate.priceCents;
-
+    // Use full rate pricing (weekday + weekend + holiday + special dates) for both charter and ticketed.
+    // Ticketed listing "From $X per ticket" can come from content override or min rate; calendar shows actual price per date.
     const rateForPricing = {
-      priceCents: ticketedDisplayPriceCents,
-      // Ticketed: weekend/holiday overrides are disabled in admin — always use base price
-      priceWeekendCents: isTicketed ? undefined : chosenRate.priceWeekendCents,
-      priceFriSunCents: isTicketed ? undefined : chosenRate.priceFriSunCents,
-      priceHolidayCents: isTicketed ? undefined : chosenRate.priceHolidayCents,
+      priceCents: chosenRate.priceCents,
+      priceWeekendCents: chosenRate.priceWeekendCents,
+      priceFriSunCents: chosenRate.priceFriSunCents,
+      priceHolidayCents: chosenRate.priceHolidayCents,
       durationHours: chosenRate.durationHours,
     };
 
@@ -97,8 +88,8 @@ export async function GET(request: NextRequest) {
       const dateStr = toDateStrCentral(d);
       dateStrs.push(dateStr);
       prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
-      // Only mark holiday highlights for charter experiences
-      if (!isTicketed && (isDateInAnyHolidayRange(dateStr, holidayDates) || isDefaultUSHoliday(dateStr))) {
+      // Mark holiday highlights for calendar (charter and ticketed)
+      if (isDateInAnyHolidayRange(dateStr, holidayDates) || isDefaultUSHoliday(dateStr)) {
         holidayDateStrings.push(dateStr);
       }
     }

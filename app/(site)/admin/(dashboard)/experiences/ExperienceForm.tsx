@@ -886,11 +886,11 @@ export function ExperienceForm({
         )}
 
         {data.pricingType === "ticketed" && (
-          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-5">
+          <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 space-y-5">
             <div className="flex items-start gap-2">
-              <Info className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden />
-              <p className="text-sm text-amber-800">
-                Each rate price is charged <strong>per ticket</strong>. Weekend and holiday pricing overrides are disabled — all days use the same flat per-ticket rate.
+              <Info className="h-4 w-4 text-sky-600 mt-0.5 shrink-0" aria-hidden />
+              <p className="text-sm text-sky-800">
+                Each rate is charged <strong>per ticket</strong>. In the Rates section below you can set a base price and optional higher prices for weekends, Fri/Sun, and holidays. Add special date ranges to override prices for specific periods.
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -927,7 +927,7 @@ export function ExperienceForm({
                   placeholder="e.g. 1"
                   aria-label="Trip duration in hours"
                 />
-                <p className="text-xs text-amber-700 mt-1">Sets the slot end time (e.g. 1 = 1 hour)</p>
+                <p className="text-xs text-sky-700 mt-1">Sets the slot end time (e.g. 1 = 1 hour)</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-brand-dark mb-1">
@@ -975,7 +975,7 @@ export function ExperienceForm({
                     <option value="PM">PM</option>
                   </select>
                 </div>
-                <p className="text-xs text-amber-700 mt-1.5">
+                <p className="text-xs text-sky-700 mt-1.5">
                   {(() => {
                     const h = data.departureHour;
                     const m = data.departureMinute;
@@ -989,13 +989,13 @@ export function ExperienceForm({
             <label className="flex items-start gap-3 cursor-pointer select-none">
               <input
                 type="checkbox"
-                className="mt-0.5 h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                className="mt-0.5 h-4 w-4 rounded border-sky-400 text-sky-600 focus:ring-sky-500"
                 checked={data.showSpotsRemaining ?? false}
                 onChange={(e) => update("showSpotsRemaining", e.target.checked)}
               />
               <span>
-                <span className="block text-sm font-medium text-amber-800">Show spots remaining on booking calendar</span>
-                <span className="block text-xs text-amber-700 mt-0.5">When enabled, customers see &lsquo;X of 12 spots left&rsquo; on the calendar</span>
+                <span className="block text-sm font-medium text-sky-800">Show spots remaining on booking calendar</span>
+                <span className="block text-xs text-sky-700 mt-0.5">When enabled, customers see &lsquo;X of 12 spots left&rsquo; on the calendar</span>
               </span>
             </label>
           </div>
@@ -1009,7 +1009,7 @@ export function ExperienceForm({
             <h2 className="text-lg font-semibold text-brand-dark">Rates & calendar</h2>
             <p className="text-sm text-brand-muted mt-1">
               {data.pricingType === "ticketed"
-                ? "Set per-ticket prices for each duration. Weekend and holiday overrides are hidden — all days use the same rate."
+                ? "Set per-ticket prices for each duration. Optionally set higher prices for weekends, Fri/Sun, and holidays. Add special date ranges to override prices for specific periods. The calendar shows which days use which price."
                 : "Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced."}
             </p>
           </div>
@@ -1027,7 +1027,8 @@ export function ExperienceForm({
           friSunDays={data.friSunDays}
           onFriSunDaysChange={(friSunDays) => setData((prev) => ({ ...prev, friSunDays }))}
           boatHint={false}
-          hideCalendar={data.pricingType === "ticketed"}
+          hideCalendar={false}
+          pricingMode={data.pricingType}
         />}
       </section>
 

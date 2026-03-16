@@ -201,8 +201,10 @@ interface DynamicPricingEditorProps {
   friSunDays?: number[];
   onFriSunDaysChange?: (days: number[]) => void;
   boatHint?: boolean;
-  /** When true (ticketed mode), hide weekend/holiday/calendar sections — all days use the same rate. */
+  /** When true, hide weekend/holiday/special-dates/calendar sections (legacy: all days same rate). */
   hideCalendar?: boolean;
+  /** "ticketed" = per-ticket copy and hint; "charter" = default. When "ticketed", pass hideCalendar=false to allow weekend/holiday pricing. */
+  pricingMode?: "charter" | "ticketed";
 }
 
 export function DynamicPricingEditor({
@@ -216,7 +218,9 @@ export function DynamicPricingEditor({
   onFriSunDaysChange,
   boatHint = false,
   hideCalendar = false,
+  pricingMode = "charter",
 }: DynamicPricingEditorProps) {
+  const isTicketed = pricingMode === "ticketed";
   const weekendDays = weekendDaysProp.length > 0 ? weekendDaysProp : [0, 6];
   const friSunDays = Array.isArray(friSunDaysProp) ? friSunDaysProp : [];
   const weekdayDays = [0, 1, 2, 3, 4, 5, 6].filter((d) => !weekendDays.includes(d) && !friSunDays.includes(d));
@@ -373,9 +377,9 @@ export function DynamicPricingEditor({
       {/* Rates & calendar – no inner title; parent provides "Rates & calendar" */}
       <section className="rounded-xl border border-brand-dark/10 bg-brand-bg/20 overflow-hidden">
         <div className="p-4 sm:p-6 space-y-5">
-          {hideCalendar && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Weekend and holiday pricing overrides are disabled in ticketed mode — all days charge the same per-ticket rate.
+          {isTicketed && !hideCalendar && (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+              <strong>Per-ticket pricing:</strong> Set base and optional weekend/holiday premiums. Customers see the correct price for each date when they book.
             </div>
           )}
           {!hideCalendar && onWeekendDaysChange && (
@@ -430,9 +434,11 @@ export function DynamicPricingEditor({
               </div>
             </div>
           )}
-          {/* Charter durations */}
+          {/* Durations: charter lengths or ticket durations */}
           <div>
-            <p className="text-sm font-medium text-brand-dark mb-1.5">{hideCalendar ? "Durations" : "Charter lengths"}</p>
+            <p className="text-sm font-medium text-brand-dark mb-1.5">
+              {hideCalendar ? (isTicketed ? "Ticket durations" : "Durations") : "Charter lengths"}
+            </p>
             <div className="flex flex-wrap gap-2 items-center">
               {rates.map((r, i) => (
                 <span
@@ -470,8 +476,16 @@ export function DynamicPricingEditor({
 
           {/* Base prices – default; holidays/custom below override these */}
           <div>
-            <p className="text-sm font-medium text-brand-dark mb-1.5">{hideCalendar ? "Ticket prices by duration" : "Rates by day type (default)"}</p>
-            <p className="text-xs text-brand-muted mb-3">{hideCalendar ? "Set the per-ticket price for each duration." : "Default prices for each charter. Holidays and custom dates below override these when they apply."}</p>
+            <p className="text-sm font-medium text-brand-dark mb-1.5">
+              {hideCalendar ? "Ticket prices by duration" : isTicketed ? "Per-ticket prices by day type" : "Rates by day type (default)"}
+            </p>
+            <p className="text-xs text-brand-muted mb-3">
+              {hideCalendar
+                ? "Set the per-ticket price for each duration."
+                : isTicketed
+                  ? "Base per-ticket price plus optional weekend/holiday premiums. Special date ranges below override when they apply."
+                  : "Default prices for each charter. Holidays and custom dates below override these when they apply."}
+            </p>
             <div className="overflow-x-auto rounded-xl border border-brand-dark/10">
               <table className="w-full border-collapse text-sm">
                 <thead>
@@ -480,7 +494,7 @@ export function DynamicPricingEditor({
                     {!hideCalendar && <th className="text-left py-3 px-3 font-medium text-brand-muted w-40">Days</th>}
                     {rates.map((r, i) => (
                       <th key={i} className="text-left py-3 px-3 font-medium text-brand-muted border-l border-brand-dark/10 min-w-[7rem]">
-                        {r.displayName || `${r.durationHours ?? "?"}h Charter`}
+                        {r.displayName || (isTicketed ? `${r.durationHours ?? "?"}h` : `${r.durationHours ?? "?"}h Charter`)}
                       </th>
                     ))}
                   </tr>
@@ -489,13 +503,17 @@ export function DynamicPricingEditor({
                   {rates.length === 0 ? (
                     <tr className="bg-amber-50/30">
                       <td colSpan={(hideCalendar ? 0 : 2) + rates.length} className="py-6 px-3 text-sm text-brand-muted text-center">
-                        {hideCalendar ? "Add a duration above, then set per-ticket prices here." : "Add a charter duration above, then set prices here."}
+                        {hideCalendar
+                          ? "Add a duration above, then set per-ticket prices here."
+                          : isTicketed
+                            ? "Add a ticket duration above (e.g. 1 hour), then set per-ticket prices. Optionally set weekend and holiday premiums."
+                            : "Add a charter duration above, then set prices here."}
                       </td>
                     </tr>
                   ) : (
                     <>
                       <tr className="border-b border-brand-dark/10 bg-white">
-                        {!hideCalendar && <td className="py-3 px-3 font-medium text-brand-dark">Weekdays</td>}
+                        {!hideCalendar && <td className="py-3 px-3 font-medium text-brand-dark">{isTicketed ? "Weekday (base)" : "Weekdays"}</td>}
                         {!hideCalendar && <td className="py-3 px-3 text-brand-muted text-sm">{weekdayLabel}</td>}
                         {rates.map((r, i) => {
                           const p = priceField(`weekday-${i}`, r.priceCents, (v) => setRateNum(i, "priceCents", v ?? 0), false);
