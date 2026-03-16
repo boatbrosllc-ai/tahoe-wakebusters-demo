@@ -43,6 +43,7 @@ interface ExperienceItem {
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
+  allowDeposit?: boolean;
 }
 
 interface BoatOption {
@@ -90,6 +91,9 @@ const EMPTY_RATES_FOR_SELECTION: CachedRateOption[] = [];
 
 /** Weekday labels: always Sunday first so headers match the calendar grid (getDay() 0 = Sunday). */
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** Session key for persisting success state so close/reopen shows receipt and booking ID. */
+const SESSION_SUCCESS_KEY = "bb_booking_success";
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
@@ -188,7 +192,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
-  const [payFullAmount, setPayFullAmount] = useState(false);
+  const [payFullAmount, setPayFullAmount] = useState(true);
+  const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
+  const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
   const [holdId, setHoldId] = useState<string | null>(null);
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
   // Persists the last successfully-created holdId per slot across back-navigation so
@@ -344,6 +350,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // Reset modal and data state when opening (useBookingModalData refetches experiences on open/selectionKey).
   useEffect(() => {
     if (!open) return;
+    // Hydrate success state from session so close/reopen shows receipt and booking ID
+    try {
+      const raw = typeof window !== "undefined" ? sessionStorage.getItem(SESSION_SUCCESS_KEY) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw) as { bookingId?: string; receiptToken?: string | null };
+        if (parsed?.bookingId) {
+          setCompletedBookingId(parsed.bookingId);
+          setCompletedReceiptToken(parsed.receiptToken ?? null);
+          setPaymentPhase("success");
+          return;
+        }
+      }
+    } catch (_) {
+      // SSR or invalid JSON — ignore
+    }
     if (initialSelection?.date) {
       const isTicketedPreselect = initialSelection.pricingType === "ticketed";
       setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
@@ -385,7 +406,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setMarketingOptIn(false);
     setCancellationAck(false);
     setPaymentPhase("form");
-    setPayFullAmount(false);
+    setPayFullAmount(true);
+    setCompletedBookingId(null);
+    setCompletedReceiptToken(null);
     setHoldId(null);
     setReleaseToken(null);
     setPaymentIntentId(null);
@@ -456,6 +479,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   useEffect(() => {
     setSelectedSlot(null);
   }, [isTicketed]);
+
+  // Force full payment when deposit is not allowed or when ticketed
+  useEffect(() => {
+    if (selectedExperience?.allowDeposit !== true || isTicketed) {
+      setPayFullAmount(true);
+    }
+  }, [selectedExperience?.allowDeposit, isTicketed]);
 
   // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice).
   // Validate that the selected slot's startHour matches experience.departureHour when available; if mismatch, clear and refresh.
@@ -1910,8 +1940,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     )}
                   </div>
 
-                  {/* Pay deposit or full — hidden for ticketed (always full) */}
-                  {!isTicketed && (
+                  {/* Pay deposit or full — only when experience allows deposit and not ticketed */}
+                  {selectedExperience?.allowDeposit === true && !isTicketed && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
@@ -2124,6 +2154,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           });
                           const data = await res.json().catch(() => ({}));
                           if (res.ok && data?.success) {
+                            const bid = data.bookingId ?? null;
+                            const tok = data.receiptToken ?? null;
+                            setCompletedBookingId(bid);
+                            setCompletedReceiptToken(tok);
+                            try {
+                              if (typeof window !== "undefined") {
+                                sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({ bookingId: data.bookingId, receiptToken: data.receiptToken ?? null }));
+                              }
+                            } catch (_) {}
                             setPaymentPhase("success");
                             setPaymentError(null);
                           } else {
@@ -2147,6 +2186,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     >
                       Close
                     </button>
+                    {completedReceiptToken != null && (
+                      <a
+                        href={`/booking/success?receipt_token=${completedReceiptToken}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-medium text-brand-primary hover:underline shrink-0"
+                      >
+                        View receipt
+                      </a>
+                    )}
                   </div>
                 </div>
               )}
@@ -2264,7 +2313,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               body: JSON.stringify({ holdId, paymentIntentId }),
                             });
                             const data = await res.json().catch(() => ({}));
-                            if (res.ok) {
+                            if (res.ok && data?.success) {
+                              const bid = data.bookingId ?? null;
+                              const tok = data.receiptToken ?? null;
+                              setCompletedBookingId(bid);
+                              setCompletedReceiptToken(tok);
+                              try {
+                                if (typeof window !== "undefined") {
+                                  sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({ bookingId: data.bookingId, receiptToken: data.receiptToken ?? null }));
+                                }
+                              } catch (_) {}
                               setPaymentPhase("success");
                             } else {
                               bookingError("client", "complete-after-payment failed", null, { status: res.status, error: data?.error });
@@ -2395,13 +2453,27 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       )}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleModalOpenChange(false)}
-                    className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
-                  >
-                    Close
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-center">
+                    {completedReceiptToken != null && (
+                      <button
+                        type="button"
+                        onClick={() => window.open(`/booking/success?receipt_token=${completedReceiptToken}`, "_blank", "noopener")}
+                        className="w-full sm:w-auto rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
+                      >
+                        View receipt
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleModalOpenChange(false)}
+                      className="w-full sm:w-auto rounded-xl border-2 border-brand-primary bg-white text-brand-primary font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/10 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  {completedBookingId != null && (
+                    <p className="text-xs text-brand-muted">Booking #{completedBookingId}</p>
+                  )}
                 </div>
               )}
             </div>

@@ -6,7 +6,7 @@
 import { useCallback, useRef, useEffect } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { bookingError } from "@/lib/booking/debug";
-import { buildSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
@@ -194,14 +194,15 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
       opts.setPaymentError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
       return;
     }
+    // Ticketed: only verify the selected slot is for the selected date. The slot id came from our API
+    // and create-hold validates it server-side; re-deriving expectedSlotId from experience/rate caused
+    // false positives when client defaults (duration/minute) differed from the server's resolved values.
     if (isTicketed && selectedDate && selectedExperience) {
-      const depHour = selectedExperience.departureHour ?? 19;
-      const depMinute = selectedExperience.departureMinute ?? 0;
-      const duration =
-        selectedRate?.durationHours ?? (selectedExperience as { tripDurationHours?: number }).tripDurationHours ?? 1;
-      const expectedSlotId = buildSlotId(selectedDate, depHour, duration, depMinute);
-      if (selectedSlot.id !== expectedSlotId) {
-        opts.setPaymentError("Departure time has changed — please re-select your date.");
+      const parsed = parseSlotId(selectedSlot.id);
+      if (!parsed || parsed.dateStr !== selectedDate) {
+        opts.setPaymentError(
+          "The selected time doesn't match your date. Please go back and choose your date again."
+        );
         if (selectedExperience.id) bookingCache.invalidate(`slots|${selectedExperience.id}|`);
         return;
       }
@@ -243,10 +244,13 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
         opts.setPaymentPhase("form");
         if (holdRes.status === 409) {
           const boatTakenOnly = !isTicketed && boats.length > 1;
+          const ticketedMessage = "Not enough tickets remaining for this date. Please choose a different date or reduce your ticket count.";
           opts.setPaymentError(
             boatTakenOnly
               ? "This boat was just booked. Please choose another boat below."
-              : "This time is no longer available. Please choose another date or time."
+              : isTicketed
+                ? ticketedMessage
+                : "This time is no longer available. Please choose another date or time."
           );
           bookingCache.invalidate(`slots|${selectedExperience.id}`);
           bookingCache

@@ -22,6 +22,7 @@ export interface ExperienceItem {
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
+  allowDeposit?: boolean;
 }
 
 export interface BoatOption {
@@ -204,8 +205,8 @@ export function useBookingModalData(
         setBoats(boatList);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
-        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number };
-        if (detail?.pricingType || detail?.departureHour != null) {
+        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean };
+        if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null) {
           selection?.setSelectedExperience((prev) =>
             prev
               ? {
@@ -214,6 +215,7 @@ export function useBookingModalData(
                   ...(detail.pricingType === "ticketed" && detail.maxCapacity != null && { maxCapacity: detail.maxCapacity }),
                   ...(detail.pricingType === "ticketed" && detail.departureHour != null && { departureHour: detail.departureHour }),
                   ...(detail.pricingType === "ticketed" && detail.departureMinute != null && { departureMinute: detail.departureMinute }),
+                  ...(detail.allowDeposit != null && { allowDeposit: detail.allowDeposit }),
                 }
               : null
           );

@@ -10,6 +10,8 @@ import type {
   ExperienceSeasonal,
 } from "@/lib/booking/types";
 
+import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
+
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
 function stripUndefined<T>(obj: T): T {
   if (obj === undefined) return obj;
@@ -81,6 +83,7 @@ function parseBody(
   departureHour: number;
   departureMinute: number;
   tripDurationHours: number;
+  allowDeposit: boolean;
 }> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -215,10 +218,15 @@ function parseBody(
   }
   if (typeof b.sortOrder === "number") out.sortOrder = b.sortOrder;
   if (b.pricingType === "ticketed" || b.pricingType === "charter") out.pricingType = b.pricingType;
+  // Ticketed experiences must never have allowDeposit: true; clear stale value when saving as ticketed.
+  if (out.pricingType === "ticketed") out.allowDeposit = false;
   if (typeof b.maxCapacity === "number" && b.maxCapacity >= 0) out.maxCapacity = Math.floor(b.maxCapacity);
   if (typeof b.departureHour === "number") out.departureHour = Math.min(23, Math.max(0, Math.floor(b.departureHour)));
   if (typeof b.departureMinute === "number") out.departureMinute = Math.min(59, Math.max(0, Math.floor(b.departureMinute)));
   if (typeof b.tripDurationHours === "number" && b.tripDurationHours > 0) out.tripDurationHours = b.tripDurationHours;
+  if (typeof b.allowDeposit === "boolean") {
+    out.allowDeposit = b.pricingType === "ticketed" ? false : b.allowDeposit;
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -277,7 +285,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (!expSnap.exists) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const { rates, addons, ...expFieldsInner } = parsed;
+    const storedPricingType = expSnap.data()?.pricingType as string | undefined;
+    const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType);
+    const { rates, addons } = parsed;
     const ratesRef = expRef.collection("rates");
     const addonsRef = expRef.collection("addons");
 
@@ -291,8 +301,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const batch = db.batch();
     const expUpdate: Record<string, unknown> = {};
 
-    if (Object.keys(expFieldsInner).length > 0) {
-      Object.assign(expUpdate, stripUndefined(expFieldsInner as Record<string, unknown>));
+    if (Object.keys(expFieldsForUpdate).length > 0) {
+      Object.assign(expUpdate, stripUndefined(expFieldsForUpdate));
     }
 
     if (Array.isArray(rates) && existingRatesSnap) {

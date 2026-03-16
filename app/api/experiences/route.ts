@@ -27,6 +27,7 @@ export interface ExperienceListItem {
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
+  allowDeposit?: boolean;
 }
 
 export async function GET() {
@@ -55,6 +56,7 @@ export async function GET() {
           ...(isTicketed && (exp.maxCapacity != null ? { maxCapacity: exp.maxCapacity } : { maxCapacity: 35 })),
           ...(isTicketed && { departureHour: exp.departureHour ?? 19 }),
           ...(isTicketed && { departureMinute: exp.departureMinute ?? 0 }),
+          allowDeposit: exp.allowDeposit === true,
         };
       });
     // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)

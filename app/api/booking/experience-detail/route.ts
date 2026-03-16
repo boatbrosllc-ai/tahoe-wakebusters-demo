@@ -53,6 +53,7 @@ export interface ExperienceDetailResponse {
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
+  allowDeposit?: boolean;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -83,7 +84,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
@@ -193,6 +194,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         maxCapacity: expData?.maxCapacity,
       }),
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
+      allowDeposit: expData.allowDeposit === true,
     };
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },

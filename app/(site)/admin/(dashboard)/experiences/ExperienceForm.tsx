@@ -84,6 +84,7 @@ export type ExperienceFormData = {
   departureMinute: number;
   tripDurationHours: number;
   showSpotsRemaining?: boolean;
+  allowDeposit: boolean;
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -135,6 +136,7 @@ function getDefaultFormData(): ExperienceFormData {
     departureMinute: 0,
     tripDurationHours: 1,
     showSpotsRemaining: false,
+    allowDeposit: false,
   };
 }
 
@@ -242,6 +244,7 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     departureMinute: typeof api.departureMinute === "number" ? api.departureMinute : 0,
     tripDurationHours: typeof api.tripDurationHours === "number" && api.tripDurationHours > 0 ? api.tripDurationHours : 1,
     showSpotsRemaining: api.showSpotsRemaining === true,
+    allowDeposit: api.allowDeposit === true,
   };
 }
 
@@ -301,7 +304,9 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     weekendDays: d.weekendDays.length > 0 ? d.weekendDays : [0, 6],
     ...(d.friSunDays?.length ? { friSunDays: d.friSunDays } : {}),
     pricingType: d.pricingType,
+    ...(d.pricingType === "charter" && { allowDeposit: d.allowDeposit ?? false }),
     ...(d.pricingType === "ticketed" && {
+      allowDeposit: false,
       maxCapacity: d.maxCapacity || undefined,
       departureHour: d.departureHour,
       departureMinute: d.departureMinute,
@@ -864,6 +869,21 @@ export function ExperienceForm({
             <p className="text-sm text-brand-muted">Per-person pricing with a fixed daily departure time and capacity limit.</p>
           </button>
         </div>
+
+        {data.pricingType === "charter" && (
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-brand-dark/20 text-brand-primary focus:ring-brand-primary"
+              checked={data.allowDeposit ?? false}
+              onChange={(e) => update("allowDeposit", e.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-brand-dark">Allow 50/50 deposit</span>
+              <span className="block text-xs text-brand-muted mt-0.5">Customers can pay 50% now, remainder charged 48h before trip</span>
+            </span>
+          </label>
+        )}
 
         {data.pricingType === "ticketed" && (
           <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-5">

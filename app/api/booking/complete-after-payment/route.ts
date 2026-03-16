@@ -10,6 +10,7 @@ import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { convertHoldToBooking, type ConvertHoldInput, type ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
+import { signReceiptToken } from "@/lib/booking/receiptToken";
 import type { BookingCardDisplay } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
@@ -142,12 +143,44 @@ export async function POST(request: NextRequest) {
 
     if ("alreadyConverted" in result) {
       bookingLog("complete-after-payment", "hold already converted (idempotent)", { holdId: input.holdId });
-      return NextResponse.json({ success: true, alreadyConverted: true });
+      let bookingId: string | undefined;
+      try {
+        const byFull = await db.collection("bookings").where("stripe.paymentIntentId", "==", input.paymentIntentId).limit(1).get();
+        if (!byFull.empty) {
+          bookingId = byFull.docs[0].id;
+        } else {
+          const byDeposit = await db.collection("bookings").where("stripe.depositPaymentIntentId", "==", input.paymentIntentId).limit(1).get();
+          if (!byDeposit.empty) bookingId = byDeposit.docs[0].id;
+        }
+      } catch (lookupErr) {
+        bookingWarn("complete-after-payment", "alreadyConverted: booking lookup failed (non-fatal)", { holdId: input.holdId, err: lookupErr });
+      }
+      let receiptToken: string | undefined;
+      if (bookingId) {
+        try {
+          receiptToken = signReceiptToken(bookingId);
+        } catch (tokenErr) {
+          bookingWarn("complete-after-payment", "receipt token failed (non-fatal)", { bookingId, err: tokenErr });
+        }
+      }
+      return NextResponse.json({
+        success: true,
+        alreadyConverted: true,
+        ...(bookingId ? { bookingId } : {}),
+        ...(receiptToken ? { receiptToken } : {}),
+      });
     }
     bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId: input.holdId });
+    let receiptToken: string | undefined;
+    try {
+      receiptToken = signReceiptToken(result.bookingId);
+    } catch (tokenErr) {
+      bookingWarn("complete-after-payment", "receipt token failed (non-fatal)", { bookingId: result.bookingId, err: tokenErr });
+    }
     return NextResponse.json({
       success: true,
       bookingId: result.bookingId,
+      ...(receiptToken ? { receiptToken } : {}),
       ...(result.discountLimitExceeded && { discountLimitExceeded: true }),
     });
   } catch (err) {

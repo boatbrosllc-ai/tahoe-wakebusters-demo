@@ -4,6 +4,7 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Booking } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 /** GET: unified calendar events (bookings + blocks) for admin week/timeline view.
  * Query: experienceId, from (YYYY-MM-DD), to (YYYY-MM-DD), boatId (optional).
@@ -38,8 +39,6 @@ export async function GET(request: NextRequest) {
       ? (expSnap.data() as { slug: string }).slug.trim()
       : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
-
-    const SLOT_TAKEN_STATUSES = new Set(["paid", "deposit_paid", "final_due", "final_paid", "final_processing"]);
 
     // Bounded per-variant queries with startDateStr range (mirrors slots API).
     const bookingSnaps = await Promise.all(
@@ -129,7 +128,7 @@ export async function GET(request: NextRequest) {
 
     bookingDocs.forEach((doc) => {
       const b = doc.data() as Booking & { startDateStr?: string };
-      if (!SLOT_TAKEN_STATUSES.has(b.status as string)) return;
+      if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) return;
       const parsed = parseSlotIdRelaxed(b.slotId ?? "");
       const dateStr = parsed?.dateStr ?? (b.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(b.startDateStr) ? b.startDateStr : null);
       if (!dateStr) return;

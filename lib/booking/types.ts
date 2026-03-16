@@ -178,6 +178,8 @@ export interface Experience {
   showSpotsRemaining?: boolean;
   /** Denormalized minimum rate price in cents; kept in sync by admin write paths to avoid subcollection reads on list queries. */
   fromPriceCents?: number;
+  /** When true, charter customers can choose between 50% deposit and full payment. Defaults to false (full-only). */
+  allowDeposit?: boolean;
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents

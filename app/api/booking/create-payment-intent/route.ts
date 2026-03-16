@@ -272,9 +272,30 @@ export async function POST(request: NextRequest) {
     const depositCents = Math.round(totalCents * 0.5);
     const finalCents = totalCents - depositCents;
     // Shared ticketed experiences always charge full — no deposit option.
-    const payFullAmount = (hold as { bookingMode?: string }).bookingMode === "shared"
-      ? true
-      : input.payFullAmount;
+    let payFullAmount: boolean;
+    if ((hold as { bookingMode?: string }).bookingMode === "shared") {
+      payFullAmount = true;
+    } else if (hold.experienceId && input.payFullAmount === false) {
+      try {
+        const expSnap = await db.collection("experiences").doc(hold.experienceId).get();
+        const experience = expSnap.exists ? (expSnap.data() as Experience) : null;
+        if (experience?.allowDeposit === true) {
+          payFullAmount = false;
+        } else {
+          payFullAmount = true;
+          if (!experience) {
+            bookingWarn("create-payment-intent", "deposit coerced to full: experience not found", { holdId: input.holdId, experienceId: hold.experienceId });
+          } else {
+            bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit not enabled", { holdId: input.holdId, experienceId: hold.experienceId });
+          }
+        }
+      } catch (fetchErr) {
+        payFullAmount = true;
+        bookingWarn("create-payment-intent", "deposit coerced to full: experience fetch failed", { holdId: input.holdId, experienceId: hold.experienceId, err: fetchErr });
+      }
+    } else {
+      payFullAmount = input.payFullAmount;
+    }
     const chargeCents = payFullAmount ? totalCents : depositCents;
     bookingLog("create-payment-intent", "pricing", {
       holdId: input.holdId,
