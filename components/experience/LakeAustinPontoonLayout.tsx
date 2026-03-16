@@ -88,8 +88,9 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
               Pick your date and time in the next step — we&apos;ll hold your slot while you checkout.
             </p>
             <Button
+              variant="secondary"
               size="lg"
-              className="mt-6 w-full rounded-xl h-14 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-lg"
+              className="mt-6 w-full rounded-xl h-14 text-base font-bold shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation"
               onClick={handleBookNow}
             >
               Book now

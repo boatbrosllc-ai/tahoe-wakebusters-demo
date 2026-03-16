@@ -105,7 +105,7 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
               </span>
             </div>
             <div className="mt-8 flex flex-wrap gap-4">
-              <Button size="lg" className="rounded-xl h-14 px-10 text-base font-bold shadow-premium ring-2 ring-white/30 ring-offset-2 ring-offset-brand-dark hover:ring-brand-primary" onClick={handleBookNow}>
+              <Button variant="secondary" size="lg" className="rounded-xl h-14 px-10 text-base font-bold shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] ring-2 ring-white/30 ring-offset-2 ring-offset-brand-dark hover:ring-brand-secondary/80 touch-manipulation" onClick={handleBookNow}>
                 Book now
               </Button>
               <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-10 border-2 border-white/60 text-white hover:bg-white/15 hover:border-white font-medium">
@@ -121,8 +121,8 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
         <span className="font-bold text-brand-dark">
           {fromPrice ? `From $${fromPrice}` : "See dates"}
         </span>
-        <Button size="lg" className="rounded-xl shrink-0" onClick={handleBookNow}>
-          Reserve your spot
+        <Button variant="secondary" size="lg" className="rounded-xl shrink-0 shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] font-semibold touch-manipulation h-12 px-6" onClick={handleBookNow}>
+          Book now
         </Button>
       </div>
 
@@ -135,7 +135,7 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
           <p className="mt-2 text-brand-muted text-base max-w-lg mx-auto">
             Pick your date and time in the next step — we&apos;ll hold your slot while you checkout.
           </p>
-          <Button size="lg" className="mt-6 rounded-xl h-14 px-12 text-base font-bold shadow-premium" onClick={handleBookNow}>
+          <Button variant="secondary" size="lg" className="mt-6 rounded-xl h-14 px-12 text-base font-bold shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation" onClick={handleBookNow}>
             Book now
           </Button>
         </div>
@@ -283,8 +283,8 @@ export function StaticExperienceDetail({ experience }: StaticExperienceDetailPro
               Find your day in the booking flow — we&apos;ll hold your slot while you checkout.
             </p>
             <div className="relative flex flex-wrap justify-center gap-4">
-              <Button size="lg" className="rounded-xl h-14 px-12 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-premium" onClick={handleBookNow}>
-                Reserve your spot
+              <Button variant="secondary" size="lg" className="rounded-xl h-14 px-12 text-base font-bold shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation" onClick={handleBookNow}>
+                Book now
               </Button>
               <Button asChild variant="outline" size="lg" className="rounded-xl h-14 px-12 border-2 border-white/50 text-white hover:bg-white/15 font-medium">
                 <Link href="/experiences">All experiences</Link>

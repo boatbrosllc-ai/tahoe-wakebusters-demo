@@ -40,9 +40,10 @@ export function StickyMobileBar({
         From ${price}
       </span>
       <Button
+        variant="secondary"
         size="lg"
         onClick={handlePrimary}
-        className="rounded-full shrink-0 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 focus-visible:ring-brand-primary min-h-[44px] min-w-[44px] touch-manipulation"
+        className="rounded-xl shrink-0 shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] focus-visible:ring-brand-secondary min-h-[44px] min-w-[44px] touch-manipulation font-semibold"
       >
         {onBookNow ? "Book now" : "Check Availability"}
       </Button>

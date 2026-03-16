@@ -189,7 +189,7 @@ function StaticCalendarFallback({
       </p>
       <div className="mt-3 flex flex-col gap-2">
         {onOpenBookingModal && (
-          <Button size="lg" className="w-full rounded-xl" onClick={onOpenBookingModal}>
+          <Button variant="secondary" size="lg" className="w-full rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] font-semibold touch-manipulation" onClick={onOpenBookingModal}>
             Book now
           </Button>
         )}
