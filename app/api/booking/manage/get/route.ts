@@ -94,8 +94,13 @@ export async function POST(request: NextRequest) {
     const finalCents = stripe.finalAmountCents ?? 0;
     const depositCents = stripe.depositAmountCents ?? 0;
     const totalCents = stripe.totalAmountCents ?? booking.pricing?.totalCents ?? 0;
+    // Allow recovery when booking has an incomplete final intent (e.g. stuck in final_processing).
     const canPayRemaining =
-      (status === "final_due" || status === "final_failed" || status === "final_requires_action") && finalCents > 0;
+      (status === "final_due" ||
+        status === "final_failed" ||
+        status === "final_requires_action" ||
+        status === "final_processing") &&
+      finalCents > 0;
 
     return NextResponse.json({
       bookingId: payload.bookingId,

@@ -107,6 +107,12 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
       opts.onOpenChange(true);
       return;
     }
+    // When closing from success screen, clear persisted success so next open starts fresh (Book now no longer "stuck" on receipt)
+    if (opts.paymentPhase === "success") {
+      try {
+        if (typeof window !== "undefined") window.sessionStorage.removeItem("bb_booking_success");
+      } catch (_) {}
+    }
     const inPaymentPhase =
       opts.paymentPhase === "stripe" || opts.paymentPhase === "loading" || opts.paymentPhase === "completing";
     if (opts.holdId && inPaymentPhase && !opts.releaseOnCloseDoneRef.current) {

@@ -177,7 +177,7 @@ export function InlineBookingDetailsStep({
   const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
   useEffect(() => {
-    if (bookingMode !== "shared" && allowDeposit !== true) setCharterPayFull(true);
+    if (bookingMode !== "shared" && allowDeposit === false) setCharterPayFull(true);
   }, [bookingMode, allowDeposit]);
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
@@ -767,8 +767,8 @@ export function InlineBookingDetailsStep({
           )}
         </div>
 
-        {/* Payment amount — deposit option only when experience allows */}
-        {bookingMode !== "shared" && allowDeposit === true ? (
+        {/* Payment amount — deposit option hidden only when experience disables it (allowDeposit === false) */}
+        {bookingMode !== "shared" && allowDeposit !== false ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="flex flex-col gap-2">
@@ -781,7 +781,7 @@ export function InlineBookingDetailsStep({
                 )}
               >
                 <span className="font-semibold">Pay 50% deposit</span>
-                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now (estimate)</span>
+                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now · remaining balance charged 48h before your trip</span>
               </button>
               <button
                 type="button"

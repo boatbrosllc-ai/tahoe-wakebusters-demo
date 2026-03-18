@@ -42,7 +42,9 @@ export interface BookingEmailContext {
   cancellationPolicyText: string;
   /** True when 50% deposit was paid; remaining charged at T-48h. */
   isDeposit?: boolean;
-  /** ISO date string for when the remaining balance will be auto-charged (when isDeposit). */
+  /** When true, remaining balance was already charged (e.g. resend for final_paid); use "was charged" not "will be charged". */
+  remainingAlreadyCharged?: boolean;
+  /** ISO date string for when the remaining balance will be auto-charged (when isDeposit and !remainingAlreadyCharged). */
   finalChargeAt?: string;
   /** Signed manage-booking URL (deposit flow) or receipt URL. */
   manageLink?: string;
@@ -66,8 +68,9 @@ function getSender(): { name: string; email: string } {
  * Send booking confirmation email to the customer email from the booking details form.
  * Uses transactional send endpoint. If BREVO_BOOKING_TEMPLATE_ID is set, use template; else send HTML from email-templates.
  * Pass context for formatted date/time and boat/location/cancellation text.
+ * Returns the subject line used so callers can log it (e.g. email audit).
  */
-export async function sendBookingConfirmationEmail(booking: Booking, context: BookingEmailContext): Promise<void> {
+export async function sendBookingConfirmationEmail(booking: Booking, context: BookingEmailContext): Promise<string> {
   const toEmail = booking.customer?.email?.trim();
   if (!toEmail) {
     throw new Error("Booking customer email is required to send confirmation");
@@ -76,8 +79,14 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
 
   const templateId = bookingEnv.brevoBookingTemplateId;
   const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, waiverSigningUrl, addonsSummary: addonsSummaryFromContext } = context;
-  // Same rule as email-templates: context.isDeposit from convert-hold is authoritative so deposit never shows as "full payment"
-  const isDepositForTemplate = context.isDeposit === true || isDepositFromBookingStripe(booking);
+  // Only use deposit-specific copy when we have valid stripe.depositAmountCents (defensive guard; matches email-templates).
+  const stripe = booking.stripe as { totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number } | undefined;
+  const hasValidDepositAmount = typeof stripe?.depositAmountCents === "number" && stripe.depositAmountCents > 0;
+  const isDepositFromContextOrBooking = context.isDeposit === true || isDepositFromBookingStripe(booking);
+  const isDepositForTemplate = isDepositFromContextOrBooking && hasValidDepositAmount;
+  if (isDepositFromContextOrBooking && !hasValidDepositAmount) {
+    console.warn("[brevo] sendBookingConfirmationEmail: deposit mode indicated but depositAmountCents missing or zero; using full-payment copy", { bookingId: (booking as { id?: string }).id });
+  }
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     addonsSummaryFromContext !== undefined
@@ -86,9 +95,8 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
         ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
         : "None";
   // Use same source as confirmation HTML: Stripe amounts reflect actual charges (all in cents).
-  const stripe = booking.stripe as { totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number } | undefined;
   const totalAmountCents = stripe?.totalAmountCents ?? booking.pricing.totalCents;
-  const depositPaidCents = stripe?.depositAmountCents ?? booking.pricing.totalCents;
+  const depositPaidCents = hasValidDepositAmount ? (stripe!.depositAmountCents as number) : booking.pricing.totalCents;
   const remainingCents =
     stripe?.finalAmountCents != null
       ? stripe.finalAmountCents
@@ -154,6 +162,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
       console.error("[brevo] sendBookingConfirmationEmail", errMsg);
       throw new Error(errMsg);
     }
+    return emailSubject;
   } catch (err) {
     const isAbort = err instanceof Error && err.name === "AbortError";
     if (isAbort) throw err;
@@ -171,6 +180,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
       console.error("[brevo] sendBookingConfirmationEmail", errMsg);
       throw new Error(errMsg);
     }
+    return emailSubject;
   }
 }
 
@@ -353,20 +363,37 @@ export async function sendWaiverTemplateMissingAlert(
 }
 
 /**
- * Send contact form submission to the business email (CONTACT_EMAIL or boatbrosllc@gmail.com).
- * Uses same Brevo transactional API as booking emails.
+ * Send cancellation email to the customer. Refund amounts are derived from actual Stripe refund
+ * objects; only confirmed successful refunds are shown as a final amount. Pending refunds use
+ * wording that reflects pending settlement.
  */
 export async function sendBookingCancellationEmail(params: {
   to: string;
   customerName: string;
   experienceName: string;
   tripDate?: string;
+  /** Confirmed successful refund total (from Stripe refund objects). */
   refundAmount?: string;
+  /** True when at least one refund is pending; use pending wording instead of final amount. */
+  refundPending?: boolean;
+  /** Optional amount for pending refund(s); when set with refundPending, "refund of $X is being processed". */
+  pendingRefundAmount?: string;
 }): Promise<void> {
-  const { to, customerName, experienceName, tripDate, refundAmount } = params;
+  const { to, customerName, experienceName, tripDate, refundAmount, refundPending, pendingRefundAmount } = params;
   const subject = "Booking canceled – Boat Bros ATX";
   const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
-  const refundLine = refundAmount ? `<p><strong>Refund amount:</strong> ${refundAmount.replace(/</g, "&lt;")}</p>` : "";
+  const parts: string[] = [];
+  if (refundAmount) {
+    parts.push(`<p><strong>Refund amount:</strong> ${refundAmount.replace(/</g, "&lt;")}</p>`);
+  }
+  if (refundPending) {
+    parts.push(
+      pendingRefundAmount != null && pendingRefundAmount !== ""
+        ? `<p><strong>Refund in progress:</strong> A refund of ${pendingRefundAmount.replace(/</g, "&lt;")} is being processed and will be credited to your original payment method once complete.</p>`
+        : `<p><strong>Refund in progress:</strong> Your refund is being processed and will be credited to your original payment method once the refund is complete.</p>`
+    );
+  }
+  const refundLine = parts.join("");
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">

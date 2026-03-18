@@ -497,25 +497,22 @@ export async function convertHoldToBooking(
     pricingType: experienceForPricing?.pricingType,
     addonsSummary: resolvedAddonSummary,
   };
+  let confirmationSubject: string | undefined;
   try {
-    await Promise.all([
-      sendBookingConfirmationEmail(booking as Booking, emailContext),
-      sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext),
-    ]);
+    confirmationSubject = await sendBookingConfirmationEmail(booking as Booking, emailContext);
+    await sendBookingConfirmationCopyToBusiness(booking as Booking, emailContext);
   } catch (emailErr) {
     bookingError("convert-hold", "Brevo confirmation email failed", emailErr, { bookingId });
   }
-  const confirmationSubject =
-    waiverResult?.includeInConfirmationEmail && waiverResult?.signingUrl
-      ? "Booking Confirmation & Waiver – Boat Bros ATX"
-      : "Booking Confirmation – Boat Bros ATX";
-  logEmailSent({
-    to: customer.email,
-    toName: customer.name,
-    templateId: "booking_confirmation",
-    subject: confirmationSubject,
-    bookingId,
-  }).catch((err) => bookingError("convert-hold", "logEmailSent failed", err, { bookingId }));
+  if (confirmationSubject != null) {
+    logEmailSent({
+      to: customer.email,
+      toName: customer.name,
+      templateId: "booking_confirmation",
+      subject: confirmationSubject,
+      bookingId,
+    }).catch((err) => bookingError("convert-hold", "logEmailSent failed", err, { bookingId }));
+  }
   if (waiverResult?.sendSeparateWaiverInvite) {
     try {
       await sendWaiverInviteAndMarkSent(waiverResult);

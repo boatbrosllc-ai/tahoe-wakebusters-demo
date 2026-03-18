@@ -279,14 +279,15 @@ export async function POST(request: NextRequest) {
       try {
         const expSnap = await db.collection("experiences").doc(hold.experienceId).get();
         const experience = expSnap.exists ? (expSnap.data() as Experience) : null;
-        if (experience?.allowDeposit === true) {
+        // Charter requires explicit allowDeposit === true in Firestore (match experience-detail API)
+        if (experience && experience.allowDeposit === true) {
           payFullAmount = false;
         } else {
           payFullAmount = true;
           if (!experience) {
             bookingWarn("create-payment-intent", "deposit coerced to full: experience not found", { holdId: input.holdId, experienceId: hold.experienceId });
           } else {
-            bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit not enabled", { holdId: input.holdId, experienceId: hold.experienceId });
+            bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", { holdId: input.holdId, experienceId: hold.experienceId });
           }
         }
       } catch (fetchErr) {

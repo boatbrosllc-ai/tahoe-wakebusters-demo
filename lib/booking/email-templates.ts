@@ -95,7 +95,7 @@ const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COL
  * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType, addonsSummary: addonsSummaryFromContext } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType, addonsSummary: addonsSummaryFromContext, remainingAlreadyCharged } = context;
   const isTicketed = pricingType === "ticketed";
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const ticketCount = booking.partySize ?? 1;
@@ -106,11 +106,15 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
         ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
         : "None";
   // Single source of truth: Stripe reflects actual charges; fallback to booking.pricing (all in cents).
-  // Prefer context.isDeposit when set (e.g. convert-hold just created this as deposit) so wording is never wrong.
+  // Only render deposit-specific copy when we have a valid stripe.depositAmountCents (defensive guard).
   const stripe = booking.stripe as BookingStripe | undefined;
-  const isDeposit =
-    context.isDeposit === true || isDepositMode(booking);
-  const depositPaidCents = stripe?.depositAmountCents ?? booking.pricing.totalCents;
+  const hasValidDepositAmount = typeof stripe?.depositAmountCents === "number" && stripe.depositAmountCents > 0;
+  const isDepositFromContextOrBooking = context.isDeposit === true || isDepositMode(booking);
+  if (isDepositFromContextOrBooking && !hasValidDepositAmount) {
+    console.warn("[email-templates] deposit mode indicated but depositAmountCents missing or zero; using full-payment copy", { bookingId: (booking as { id?: string }).id });
+  }
+  const isDeposit = isDepositFromContextOrBooking && hasValidDepositAmount;
+  const depositPaidCents = hasValidDepositAmount ? (stripe!.depositAmountCents as number) : booking.pricing.totalCents;
   const remainingCents =
     stripe?.finalAmountCents != null
       ? stripe.finalAmountCents
@@ -124,15 +128,20 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
       ? new Date(finalChargeAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
       : null;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  /** Short line for deposit flow so the email body is explicit that this was a deposit, not full payment. */
+  /** Short line for deposit flow: distinguish "remaining will be charged" vs "remaining was already charged" (e.g. resend for final_paid). */
   const depositCopy = isDeposit
-    ? `You paid a 50% deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) will be charged automatically 48 hours before your trip${finalChargeAtFormatted ? ` on ${finalChargeAtFormatted}` : ""}.`
+    ? context.remainingAlreadyCharged
+      ? `You paid a 50% deposit (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) was already charged. Your booking is fully paid.`
+      : `You paid a 50% deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) will be charged automatically 48 hours before your trip${finalChargeAtFormatted ? ` on ${finalChargeAtFormatted}` : ""}.`
     : "";
 
+  const remainingBalanceLabel = context.remainingAlreadyCharged
+    ? "Remaining balance (already charged)"
+    : `Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "48 hours before your trip"})`;
   const paymentRows = isDeposit
     ? `
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Deposit paid today (50%)</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${depositPaidFormatted}</td></tr>
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "48 hours before your trip"})</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${remainingFormatted}</td></tr>
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">${remainingBalanceLabel}</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${remainingFormatted}</td></tr>
                       <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total booking value</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`
     : `
                       <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total paid (full payment)</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`;

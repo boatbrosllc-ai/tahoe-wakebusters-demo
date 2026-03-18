@@ -97,7 +97,7 @@ export async function POST(
       }
     });
 
-    let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; error?: string }> = [];
+    let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; amount?: number; error?: string }> = [];
     const skippedRefunds: Array<{ paymentIntentId: string; reason: string }> = [];
     if (body.refund !== false && process.env.STRIPE_SECRET_KEY) {
       const intentIds = [
@@ -122,6 +122,7 @@ export async function POST(
             paymentIntentId: piId,
             id: refund.id,
             status: refund.status ?? undefined,
+            amount: refund.amount ?? undefined,
           });
         } catch (refundErr) {
           const msg = refundErr instanceof Error ? refundErr.message : String(refundErr);
@@ -133,33 +134,28 @@ export async function POST(
 
     try {
       const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
+      const { formatMoney } = await import("@/lib/booking/format-money");
       const expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
       const experienceName = expSnapForName?.exists ? (expSnapForName.data() as { title?: string })?.title ?? "Your trip" : "Your trip";
       const tripDateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
-      let refundAmount: string | undefined;
-      const successfulRefunds = refunds.filter((r) => r.status === "succeeded" || !r.error);
-      if (successfulRefunds.length > 0) {
-        const stripe = getStripe();
-        let totalCents = 0;
-        for (const r of successfulRefunds) {
-          try {
-            const pi = await stripe.paymentIntents.retrieve(r.paymentIntentId);
-            if (pi.amount != null) totalCents += pi.amount;
-          } catch {
-            // skip
-          }
-        }
-        if (totalCents > 0) {
-          const { formatMoney } = await import("@/lib/booking/format-money");
-          refundAmount = formatMoney(totalCents);
-        }
-      }
+      // Compute refund amount from actual Stripe refund objects; only include confirmed successful refunds.
+      const succeededRefunds = refunds.filter((r) => r.status === "succeeded" && r.amount != null);
+      const totalConfirmedCents = succeededRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0);
+      const refundAmount = totalConfirmedCents > 0 ? formatMoney(totalConfirmedCents) : undefined;
+      const pendingRefunds = refunds.filter((r) => r.status === "pending");
+      const refundPending = pendingRefunds.length > 0;
+      const pendingRefundAmount =
+        refundPending && pendingRefunds.some((r) => r.amount != null)
+          ? formatMoney(pendingRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0))
+          : undefined;
       await sendBookingCancellationEmail({
         to: booking.customer?.email ?? "",
         customerName: booking.customer?.name ?? "Guest",
         experienceName,
         tripDate: tripDateStr ?? undefined,
         refundAmount,
+        refundPending,
+        pendingRefundAmount,
       });
     } catch (emailErr) {
       console.error("[admin/cancel] Cancellation email failed", bookingId, emailErr);

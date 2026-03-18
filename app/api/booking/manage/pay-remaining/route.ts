@@ -226,9 +226,9 @@ export async function POST(request: NextRequest) {
     if (!paymentIntent.client_secret) {
       return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
     }
+    // Do not set status to final_processing here: only move to processing/paid when Stripe confirms an actual attempt (webhook or cron reconciliation).
     await bookingRef.update({
       "stripe.finalPaymentIntentId": paymentIntent.id,
-      status: "final_processing",
       updatedAt: FieldValue.serverTimestamp(),
     });
     return NextResponse.json({

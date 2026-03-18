@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const db = getDb();
-    const { Timestamp } = getFirestoreExports();
+    const { Timestamp, FieldValue } = getFirestoreExports();
     const now = new Date();
     const nowTs = Timestamp.fromDate(now);
 
@@ -59,13 +59,46 @@ export async function POST(request: NextRequest) {
         if (!existingFinalPiId) continue;
         try {
           const existingPi = await stripe.paymentIntents.retrieve(existingFinalPiId);
-          if (existingPi.status !== "succeeded") continue;
-          await db.collection("bookings").doc(bookingId).update({
-            status: "final_paid",
-            "stripe.finalChargedAt": Timestamp.now(),
-            updatedAt: Timestamp.now(),
-          });
-          console.log("[run-final-charges] reconciled final_processing → final_paid", { bookingId, piId: existingFinalPiId });
+          const piStatus = existingPi.status;
+          if (piStatus === "succeeded") {
+            await db.collection("bookings").doc(bookingId).update({
+              status: "final_paid",
+              "stripe.finalChargedAt": Timestamp.now(),
+              updatedAt: Timestamp.now(),
+            });
+            console.log("[run-final-charges] reconciled final_processing → final_paid", { bookingId, piId: existingFinalPiId });
+            continue;
+          }
+          // Terminal incomplete or failed: allow retries by resetting status and clearing stale intent.
+          if (
+            piStatus === "canceled" ||
+            piStatus === "requires_payment_method" ||
+            piStatus === "requires_confirmation"
+          ) {
+            await db.collection("bookings").doc(bookingId).update({
+              status: "final_due",
+              "stripe.finalPaymentIntentId": FieldValue.delete(),
+              updatedAt: Timestamp.now(),
+            });
+            console.log("[run-final-charges] reconciled final_processing → final_due (stale intent cleared)", {
+              bookingId,
+              piId: existingFinalPiId,
+              piStatus,
+            });
+            continue;
+          }
+          if (piStatus === "requires_action") {
+            await db.collection("bookings").doc(bookingId).update({
+              status: "final_requires_action",
+              updatedAt: Timestamp.now(),
+            });
+            console.log("[run-final-charges] reconciled final_processing → final_requires_action", {
+              bookingId,
+              piId: existingFinalPiId,
+            });
+            continue;
+          }
+          // processing: leave as final_processing; will reconcile on a later run when succeeded.
         } catch {
           // retrieve failed; skip this booking this run
         }

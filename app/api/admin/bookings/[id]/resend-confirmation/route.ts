@@ -7,10 +7,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { sendBookingConfirmationEmail } from "@/lib/booking/brevo";
+import { logEmailSent } from "@/lib/booking/email-log";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { getRequestById } from "@/lib/waiver/firestore";
+import { isDepositMode } from "@/lib/booking/deposit-mode";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
 
@@ -98,13 +100,9 @@ export async function POST(
             .join(", ")
         : "None";
 
-    const isDeposit =
-      booking.status === "deposit_paid" ||
-      booking.status === "final_due" ||
-      booking.status === "final_processing" ||
-      booking.status === "final_paid" ||
-      booking.status === "final_requires_action" ||
-      booking.status === "final_failed";
+    const isDeposit = isDepositMode(booking);
+    // Do not treat final_paid as upcoming-charge: remaining balance is already settled.
+    const remainingAlreadyCharged = booking.status === "final_paid";
 
     const emailContext = {
       boatName: boatNameForEmail,
@@ -114,8 +112,9 @@ export async function POST(
       locationText,
       cancellationPolicyText,
       isDeposit,
+      remainingAlreadyCharged,
       finalChargeAt:
-        isDeposit && booking.finalChargeAt
+        isDeposit && !remainingAlreadyCharged && booking.finalChargeAt
           ? (booking.finalChargeAt as { toDate(): Date }).toDate().toISOString()
           : undefined,
       manageLink: undefined as string | undefined,
@@ -125,7 +124,14 @@ export async function POST(
       addonsSummary,
     };
 
-    await sendBookingConfirmationEmail(booking, emailContext);
+    const subject = await sendBookingConfirmationEmail(booking, emailContext);
+    await logEmailSent({
+      to: booking.customer?.email ?? "",
+      toName: booking.customer?.name,
+      templateId: "booking_confirmation",
+      subject,
+      bookingId,
+    }).catch((err) => console.error("[resend-confirmation] logEmailSent failed", err));
 
     return NextResponse.json({ ok: true, message: "Confirmation email sent" });
   } catch (err) {

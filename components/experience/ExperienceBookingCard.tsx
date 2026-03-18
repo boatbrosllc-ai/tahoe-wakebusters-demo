@@ -278,9 +278,9 @@ export function ExperienceBookingCard({
     };
   }, [fetchMonthSlots, calendarMonth, isDateSelectionActive]);
 
-  // When deposit is not allowed, force full payment so UI and server stay in sync
+  // When deposit is explicitly disabled, force full payment so UI and server stay in sync
   useEffect(() => {
-    if (allowDeposit !== true) setPayFullAmount(true);
+    if (allowDeposit === false) setPayFullAmount(true);
   }, [allowDeposit]);
 
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
@@ -944,8 +944,8 @@ export function ExperienceBookingCard({
         </label>
       </div>
 
-      {/* Pay deposit or full — only when experience allows deposit; hidden for ticketed (always full) */}
-      {!isTicketed && allowDeposit === true && (
+      {/* Pay deposit or full — hidden when experience disables deposit (allowDeposit === false) or ticketed (always full) */}
+      {!isTicketed && allowDeposit !== false && (
         <div className="mb-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
           <div className="flex flex-col gap-2">

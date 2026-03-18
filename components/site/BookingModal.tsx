@@ -213,6 +213,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   /** One-shot ref to prevent duplicate release calls from concurrent close triggers (Dialog overlay + cleanup). */
   const releaseOnCloseDoneRef = useRef(false);
+  /** Captured when user clicks "Proceed to payment": true if they had selected deposit (payFullAmount was false). Used to show notice when server returns full payment. */
+  const userChoseDepositRef = useRef(false);
   /** Refs for cleanup effect to see current hold/payment state when modal unmounts. */
   const paymentPhaseRef = useRef(paymentPhase);
   const holdIdRef = useRef(holdId);
@@ -519,9 +521,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setSelectedSlot(null);
   }, [isTicketed]);
 
-  // Force full payment when deposit is not allowed or when ticketed
+  // Force full payment only when deposit is explicitly disabled or when ticketed
   useEffect(() => {
-    if (selectedExperience?.allowDeposit !== true || isTicketed) {
+    if (selectedExperience?.allowDeposit === false || isTicketed) {
       setPayFullAmount(true);
     }
   }, [selectedExperience?.allowDeposit, isTicketed]);
@@ -849,6 +851,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const isCalendarFirstFlow = !!initialSelection?.slotId;
 
   const handleBack = () => {
+    if (paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
     if (step === 2) setStep(1);
     else if (step === 3) {
       if (isCalendarFirstFlow) onOpenChange(false);
@@ -857,7 +860,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setStep(2);
       }
     } else if (step === 4) {
-      if (paymentPhase === "stripe" && holdId) {
+      if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
         releaseCreatedHold();
       }
       if (isTicketed) {
@@ -1992,7 +1995,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
 
                   {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
-                  {!isTicketed && selectedExperience?.allowDeposit === true && (
+                  {!isTicketed && selectedExperience?.allowDeposit !== false && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
@@ -2152,7 +2155,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </div>
                       <button
                         type="button"
-                        onClick={handleProceedToPayment}
+                        onClick={() => {
+                          userChoseDepositRef.current = !payFullAmount;
+                          handleProceedToPayment();
+                        }}
                         disabled={!isStripeCheckoutReady || !priceReady}
                         className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base disabled:opacity-60 disabled:cursor-not-allowed"
                       >
@@ -2258,6 +2264,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                   <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
+                  {userChoseDepositRef.current && payFullAmount && !isTicketed && (
+                    <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      This experience requires full payment at checkout. You&apos;re being charged the full amount now.
+                    </p>
+                  )}
                   <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 shrink-0 space-y-3">
                     {holdExpiresAt && (
                       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -2288,7 +2299,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold text-brand-primary">
-                          ${((isTicketed || payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          ${(((isTicketed || payFullAmount) ? (totalCentsFromServer ?? priceSummary.totalCents) : (depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}
                         </p>
                         <p className="text-[11px] text-brand-muted">
                           {(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}
@@ -2325,7 +2336,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
                         <span>{(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}</span>
                         <span>
-                          ${((isTicketed || payFullAmount ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                          ${(((isTicketed || payFullAmount) ? (totalCentsFromServer ?? priceSummary.totalCents) : (depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}
                         </span>
                       </div>
                     </div>
