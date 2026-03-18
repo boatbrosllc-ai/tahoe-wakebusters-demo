@@ -153,7 +153,7 @@ export function ExperienceBookingCard({
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<SlotDto | null>(null);
-  const [selectedRateId, setSelectedRateId] = useState<string | null>(rates[0]?.id ?? null);
+  const [selectedRateId, setSelectedRateId] = useState<string | null>(() => rates.find((r) => r.durationHours === 3)?.id ?? rates[0]?.id ?? null);
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
   const [customer, setCustomer] = useState({ name: "", email: "", phone: "" });
   const [discountCode, setDiscountCode] = useState("");
@@ -229,6 +229,16 @@ export function ExperienceBookingCard({
   useEffect(() => {
     if (!isTicketed || rates.length === 0) return;
     setSelectedRateId((prev) => prev ?? rates[0].id);
+  }, [isTicketed, rates]);
+
+  // Charter: when rates load and none selected, default to 3-hour duration.
+  useEffect(() => {
+    if (isTicketed || rates.length === 0) return;
+    setSelectedRateId((prev) => {
+      if (prev != null && rates.some((r) => r.id === prev)) return prev;
+      const threeHour = rates.find((r) => r.durationHours === 3);
+      return threeHour?.id ?? rates[0]?.id ?? null;
+    });
   }, [isTicketed, rates]);
 
   const openSlotsByDate = useMemo(() => {

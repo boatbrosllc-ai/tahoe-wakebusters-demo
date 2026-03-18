@@ -326,10 +326,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
-  // When rates first load (from hook), set calendar rate if none selected (non-ticketed or initial).
+  // When rates first load (from hook), set calendar rate if none selected. Prefer 3-hour duration.
   useEffect(() => {
     if (ratesForSelection.length === 0 || selectedRateIdForCalendar) return;
-    setSelectedRateIdForCalendar(ratesForSelection[0].id);
+    const threeHourRate = ratesForSelection.find((r) => r.durationHours === 3);
+    const defaultRate = threeHourRate ?? ratesForSelection[0];
+    setSelectedRateIdForCalendar(defaultRate.id);
   }, [ratesForSelection, selectedRateIdForCalendar]);
 
   const dateOptions = useMemo(

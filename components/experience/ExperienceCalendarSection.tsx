@@ -508,11 +508,12 @@ export function ExperienceCalendarSection({
     return () => controller.abort();
   }, [experienceId, dateRange.start, dateRange.end, rateIdForPricing]);
 
-  // When only one rate, auto-select duration so calendar shows availability without an extra click
+  // When rates load, set default duration so calendar shows availability. Prefer 3-hour; else first (single rate) or shortest.
   useEffect(() => {
-    if (rates.length === 1 && selectedDurationForModal === null) {
-      setSelectedDurationForModal(rates[0].durationHours);
-    }
+    if (rates.length === 0 || selectedDurationForModal !== null) return;
+    const threeHour = rates.find((r) => r.durationHours === 3);
+    const defaultDuration = threeHour?.durationHours ?? [...rates].sort((a, b) => a.durationHours - b.durationHours)[0]?.durationHours;
+    if (defaultDuration != null) setSelectedDurationForModal(defaultDuration);
   }, [rates, selectedDurationForModal]);
 
   // When user clicks Back from step 1 (ticketed), we allow staying at step 0 instead of auto-advancing to 1
