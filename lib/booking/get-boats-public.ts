@@ -94,18 +94,22 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
   const boat = doc.data() as ListingBoat;
   const experienceIds = Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [];
 
-  const experiences: ExperienceRef[] = [];
-  for (const expId of experienceIds) {
-    const expDoc = await db.collection("experiences").doc(expId).get();
-    if (!expDoc.exists) continue;
-    const exp = expDoc.data() as Experience;
-    if (!exp.active) continue;
-    const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
-    const title = typeof exp.title === "string" ? exp.title : "";
-    if (expSlug && title) {
-      experiences.push({ id: expDoc.id, slug: expSlug, title });
-    }
-  }
+  const experiencePromises = experienceIds.map((expId) =>
+    db.collection("experiences").doc(expId).get()
+  );
+  const experienceSnaps = await Promise.all(experiencePromises);
+  const experiences: ExperienceRef[] = experienceSnaps
+    .map((expDoc, i) => {
+      const expId = experienceIds[i];
+      if (!expDoc.exists) return null;
+      const exp = expDoc.data() as Experience;
+      if (!exp.active) return null;
+      const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
+      const title = typeof exp.title === "string" ? exp.title : "";
+      if (!expSlug || !title) return null;
+      return { id: expDoc.id, slug: expSlug, title };
+    })
+    .filter((x): x is ExperienceRef => x !== null);
 
   return {
     id: doc.id,

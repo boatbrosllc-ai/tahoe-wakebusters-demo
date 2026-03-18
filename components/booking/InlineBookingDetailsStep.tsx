@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { runCreateHoldAndPaymentIntent, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { cn } from "@/lib/utils";
@@ -207,15 +208,7 @@ export function InlineBookingDetailsStep({
       const id = overrideHoldId ?? holdId;
       const token = overrideReleaseToken ?? releaseToken;
       if (!id) return;
-      try {
-        await fetch("/api/booking/release-hold", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ holdId: id, ...(token && { release_token: token }) }),
-        });
-      } catch {
-        // best-effort
-      }
+      await releaseHold(id, token ?? null);
       setHoldId(null);
       setReleaseToken(null);
     },
@@ -294,14 +287,10 @@ export function InlineBookingDetailsStep({
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
-    let createdHoldId: string | null = null;
-    let createdReleaseToken: string | null = null;
     try {
       bookingLog("client", "InlineBookingDetailsStep create-hold request", { experienceId, boatId: boatId ?? undefined, slotId: slot.id, rateId, partySize });
-      const holdRes = await fetch("/api/booking/create-hold", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await runCreateHoldAndPaymentIntent(
+        {
           experienceId,
           boatId: boatId ?? undefined,
           slotId: slot.id,
@@ -312,17 +301,17 @@ export function InlineBookingDetailsStep({
           customerDraft: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           marketingOptIn,
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
-          ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
-          ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
+          tipCents: tipCentsToSend > 0 ? tipCentsToSend : undefined,
+          discountCode: (appliedDiscount?.code ?? discountCode.trim()) || undefined,
           bookingMode: bookingMode ?? "charter",
-          ...(holdId ? { resumeHoldId: holdId } : {}),
-        }),
-      });
-      const holdData = await holdRes.json();
-      if (!holdRes.ok) {
-        const rawError = holdData.error ?? "Failed to create hold";
-        const hint = holdData.hint ? ` ${holdData.hint}` : "";
-        bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: holdRes.status, error: holdData.error, hint: holdData.hint });
+          resumeHoldId: holdId || undefined,
+        },
+        payFullAmount
+      );
+      if (!result.ok) {
+        const rawError = result.error;
+        const hint = result.hint ? ` ${result.hint}` : "";
+        bookingLog("client", "InlineBookingDetailsStep create-hold/create-payment failed", { status: result.status, error: result.error });
         const availabilityErrors = [
           "Slot is not valid for this experience",
           "Slot is outside the allowed booking window",
@@ -330,56 +319,32 @@ export function InlineBookingDetailsStep({
           "Slot no longer available",
         ];
         const isAvailabilityError =
-          holdRes.status === 409 ||
+          result.status === 409 ||
           (typeof rawError === "string" && availabilityErrors.some((e) => rawError.includes(e) || rawError === e));
         const displayError = isAvailabilityError
           ? "This time slot is no longer available. Please go back and choose a different date or time."
           : `${rawError}${hint}`;
         setPaymentError(displayError);
         setPaymentPhase("form");
+        if (result.holdId) releaseHold(result.holdId, result.releaseToken ?? null);
         if (isAvailabilityError) {
           bookingCache.invalidateBookingCaches(experienceId);
           setTimeout(() => onBack(), 2500);
         }
         return;
       }
-      const newHoldId = holdData.holdId;
-      createdHoldId = newHoldId;
-      createdReleaseToken = holdData.releaseToken ?? null;
-      setHoldId(newHoldId);
-      setReleaseToken(createdReleaseToken);
-      bookingLog("client", "InlineBookingDetailsStep create-hold success, create-payment-intent request", { holdId: newHoldId, payFullAmount });
-      const intentRes = await fetch("/api/booking/create-payment-intent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: newHoldId, payFullAmount }),
-      });
-      const intentData = await intentRes.json();
-      if (!intentRes.ok) {
-        bookingLog("client", "InlineBookingDetailsStep create-payment-intent failed", { status: intentRes.status, error: intentData.error });
-        await releaseCreatedHold(createdHoldId, createdReleaseToken);
-        setPaymentError(intentData.error ?? "Failed to start payment");
-        setPaymentPhase("form");
-        return;
-      }
-      if (!intentData.clientSecret) {
-        bookingError("client", "InlineBookingDetailsStep create-payment-intent missing clientSecret", null, { holdId: newHoldId });
-        await releaseCreatedHold(createdHoldId, createdReleaseToken);
-        setPaymentError("Payment intent missing client secret");
-        setPaymentPhase("form");
-        return;
-      }
-      bookingLog("client", "InlineBookingDetailsStep create-payment-intent success", { holdId: newHoldId });
+      setHoldId(result.holdId);
+      setReleaseToken(result.releaseToken);
       if (!STRIPE_PUBLISHABLE_KEY) {
-        await releaseCreatedHold(createdHoldId, createdReleaseToken);
+        releaseHold(result.holdId, result.releaseToken);
         setPaymentError("Stripe not configured.");
         setPaymentPhase("form");
         return;
       }
-      setClientSecret(intentData.clientSecret);
-      setPaymentIntentId(intentData.paymentIntentId ?? null);
-      if (typeof intentData.depositCents === "number") setDepositCentsFromServer(intentData.depositCents);
-      if (!payFullAmount && typeof intentData.depositCents !== "number") {
+      setClientSecret(result.clientSecret);
+      setPaymentIntentId(result.paymentIntentId ?? null);
+      if (typeof result.depositCents === "number") setDepositCentsFromServer(result.depositCents);
+      if (!payFullAmount && typeof result.depositCents !== "number") {
         setPaymentError("Could not get deposit amount. Please try again.");
         setPaymentPhase("form");
         return;
@@ -387,7 +352,6 @@ export function InlineBookingDetailsStep({
       setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "InlineBookingDetailsStep create-hold or create-payment-intent threw", err, {});
-      await releaseCreatedHold(createdHoldId, createdReleaseToken);
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
     }

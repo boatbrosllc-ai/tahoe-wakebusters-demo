@@ -71,6 +71,18 @@ Then restart the server again.
 
 ---
 
+## Optional: Brevo template (deposit vs full payment)
+
+If you use `BREVO_BOOKING_TEMPLATE_ID`, the app passes these params (among others):
+
+- **`isDeposit`** – `true` when the customer paid a 50% deposit (remaining charged 48h before trip).
+- **`amountPaidNowFormatted`** – The amount paid in this transaction (deposit amount when `isDeposit`, full total when full payment). **Use this** for “You paid X” in your template so deposit customers don’t see the full total as “amount paid.”
+- **`totalPaid`** / **`depositPaidFormatted`** / **`remainingFormatted`** – For itemized lines: when `isDeposit`, show deposit and remaining; when not, show total paid.
+
+Subject line when not using a template: includes “(deposit received)” for deposit bookings.
+
+---
+
 ## Still not working?
 
 - **"Missing required env: BREVO_API_KEY"** → Key not in `.env.local` or server not restarted.

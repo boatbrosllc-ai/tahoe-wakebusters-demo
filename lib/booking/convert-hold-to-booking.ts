@@ -407,10 +407,41 @@ export async function convertHoldToBooking(
     if (discountRef) {
       const discountSnap = await tx.get(discountRef);
       if (discountSnap.exists) {
-        const discountData = discountSnap.data() as { usedCount?: number; maxRedemptions?: number };
+        const discountData = discountSnap.data() as {
+          usedCount?: number;
+          maxRedemptions?: number;
+          active?: boolean;
+          expiresAt?: { toDate(): Date } | { seconds?: number };
+        };
         const usedCount = discountData.usedCount ?? 0;
         const maxRedemptions = discountData.maxRedemptions;
-        if (typeof maxRedemptions === "number" && usedCount >= maxRedemptions) {
+        const active = discountData.active !== false;
+        const expiresAtRaw = discountData.expiresAt;
+        const expiresAtDate =
+          expiresAtRaw == null
+            ? null
+            : typeof (expiresAtRaw as { toDate?: () => Date }).toDate === "function"
+              ? (expiresAtRaw as { toDate(): Date }).toDate()
+              : typeof (expiresAtRaw as { seconds?: number }).seconds === "number"
+                ? new Date((expiresAtRaw as { seconds: number }).seconds * 1000)
+                : null;
+        const notExpired = !expiresAtDate || expiresAtDate > new Date();
+        if (!active || !notExpired) {
+          bookingWarn("convert-hold", "discount applied but inactive or expired at conversion", {
+            holdId,
+            bookingId,
+            active,
+            expiresAt: expiresAtDate?.toISOString() ?? null,
+          });
+          discountLimitExceeded = true;
+          tx.set(db.collection("pendingRefunds").doc(), {
+            holdId,
+            bookingId,
+            reason: "discount_limit_exceeded",
+            status: "pending",
+            createdAt: Timestamp.now(),
+          });
+        } else if (typeof maxRedemptions === "number" && usedCount >= maxRedemptions) {
           discountLimitExceeded = true;
           tx.set(db.collection("pendingRefunds").doc(), {
             holdId,

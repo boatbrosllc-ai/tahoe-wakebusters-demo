@@ -10,6 +10,7 @@ import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
+import { runCreateHoldAndPaymentIntent, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
@@ -190,7 +191,7 @@ export function ExperienceBookingCard({
     setSlotsLoadError(null);
     setSlotStolen(false);
     try {
-      const data = await fetchSlotsCache(experienceId, range.start, range.end);
+      const data = await fetchSlotsCache(experienceId, range.start, range.end, undefined, { ticketed: isTicketed });
       const slotCount = (data.slots ?? []).length;
       bookingDebugLog("ExperienceBookingCard", "slots fetch success", { monthKey: key, slotCount });
       setSlots((prev) => {
@@ -316,99 +317,49 @@ export function ExperienceBookingCard({
     setError(null);
     setSubmitting(true);
     setPaymentPhase("loading");
-    let createdHoldId: string | null = null;
-    let createdReleaseToken: string | null = null;
-    const releaseCreatedHold = async () => {
-      if (!createdHoldId) return;
-      try {
-        await fetch("/api/booking/release-hold", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            holdId: createdHoldId,
-            ...(createdReleaseToken && { release_token: createdReleaseToken }),
-          }),
-        });
-      } catch {
-        // best-effort
-      }
-      createdHoldId = null;
-      createdReleaseToken = null;
-      setHoldId(null);
-      setHoldSlotId(null);
-      setHoldExpiresAt(null);
-    };
     try {
       bookingLog("client", "ExperienceBookingCard create-hold request", { experienceId, slotId: selectedSlot.id, rateId: selectedRateId, partySize });
-      const createHoldRes = await fetch("/api/booking/create-hold", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await runCreateHoldAndPaymentIntent(
+        {
           experienceId,
           slotId: selectedSlot.id,
           rateId: selectedRateId,
           addonSelections: Object.entries(addonSelections).filter(([, qty]) => qty > 0).map(([addonId, qty]) => ({ addonId, qty })),
           partySize,
           petsCount: 0,
-          answers: {},
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
           bookingMode: isTicketed ? "shared" : "charter",
-          ...(discountCode.trim() && { discountCode: discountCode.trim() }),
-          ...(holdId && holdSlotId === selectedSlot.id ? { resumeHoldId: holdId } : {}),
-        }),
-      });
-      const holdData = await createHoldRes.json();
-      if (!createHoldRes.ok) {
-        const hint = holdData.hint ? ` ${holdData.hint}` : "";
-        bookingLog("client", "ExperienceBookingCard create-hold failed", { status: createHoldRes.status, error: holdData.error, hint: holdData.hint });
-        setError(`${holdData.error ?? "Could not reserve slot"}${hint}`);
-        if (holdData.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
+          discountCode: discountCode.trim() || undefined,
+          resumeHoldId: holdId && holdSlotId === selectedSlot.id ? holdId : undefined,
+        },
+        isTicketed ? true : payFullAmount
+      );
+      if (!result.ok) {
+        const hint = result.hint ? ` ${result.hint}` : "";
+        bookingLog("client", "ExperienceBookingCard create-hold/create-payment failed", { status: result.status, error: result.error });
+        setError(`${result.error ?? "Could not reserve slot"}${hint}`);
+        if (result.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
         setPaymentPhase("form");
+        if (result.holdId) releaseHold(result.holdId, result.releaseToken ?? null);
         return;
       }
-      createdHoldId = holdData.holdId;
-      createdReleaseToken = holdData.releaseToken ?? null;
-      setHoldId(holdData.holdId);
+      setHoldId(result.holdId);
       setHoldSlotId(selectedSlot.id);
-      setHoldExpiresAt(holdData.expiresAt ?? null);
-      setPricing(holdData.pricing ?? null);
-      bookingLog("client", "ExperienceBookingCard create-hold success, create-payment-intent request", { holdId: holdData.holdId, payFullAmount: isTicketed ? true : payFullAmount });
-
-      const intentRes = await fetch("/api/booking/create-payment-intent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: holdData.holdId, payFullAmount: isTicketed ? true : payFullAmount }),
-      });
-      const intentData = await intentRes.json();
-      if (!intentRes.ok) {
-        bookingLog("client", "ExperienceBookingCard create-payment-intent failed", { status: intentRes.status, error: intentData.error });
-        await releaseCreatedHold();
-        setError(intentData.error ?? "Could not start payment");
-        setPaymentPhase("form");
-        return;
-      }
-      const secret = intentData.clientSecret;
-      if (!secret) {
-        bookingError("client", "ExperienceBookingCard create-payment-intent missing clientSecret", null, { holdId: holdData.holdId });
-        await releaseCreatedHold();
-        setError("Payment intent missing client secret");
-        setPaymentPhase("form");
-        return;
-      }
+      setHoldExpiresAt(result.expiresAt ?? null);
+      setPricing((result.pricing ?? null) as { totalCents: number; currency: string } | null);
       if (!isStripeCheckoutReady) {
-        await releaseCreatedHold();
+        releaseHold(result.holdId, result.releaseToken);
         setError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
         setPaymentPhase("form");
         return;
       }
-      bookingLog("client", "ExperienceBookingCard create-payment-intent success", { holdId: holdData.holdId });
-      setClientSecret(secret);
-      setPaymentIntentId(intentData.paymentIntentId ?? null);
+      bookingLog("client", "ExperienceBookingCard create-payment-intent success", { holdId: result.holdId });
+      setClientSecret(result.clientSecret);
+      setPaymentIntentId(result.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (e) {
       bookingError("client", "ExperienceBookingCard create-hold or create-payment-intent threw", e, {});
-      await releaseCreatedHold();
       setError(e instanceof Error ? e.message : "Something went wrong");
       setPaymentPhase("form");
     } finally {

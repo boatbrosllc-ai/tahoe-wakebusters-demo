@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Rate not available" }, { status: 400 });
     }
 
-    const date = new Date(dateStr + "T12:00:00");
+    const date = new Date(dateStr + "T12:00:00.000Z");
     if (isNaN(date.getTime())) {
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }

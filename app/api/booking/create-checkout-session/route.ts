@@ -104,12 +104,16 @@ export async function POST(request: NextRequest) {
       try {
         const existingSession = await stripe.checkout.sessions.retrieve(existingSessionId);
         if (existingSession.status === "open") {
-          if (input.embedded && existingSession.client_secret) {
+          const isEmbeddedSession = !!(existingSession.client_secret && (existingSession as { ui_mode?: string }).ui_mode === "custom");
+          const isRedirectSession = !!existingSession.url;
+          const wantEmbedded = input.embedded;
+          if (wantEmbedded && isEmbeddedSession && existingSession.client_secret) {
             return NextResponse.json({ clientSecret: existingSession.client_secret, sessionId: existingSession.id });
           }
-          if (existingSession.url) {
+          if (!wantEmbedded && isRedirectSession && existingSession.url) {
             return NextResponse.json({ url: existingSession.url, sessionId: existingSession.id });
           }
+          // Mode mismatch: caller wants embedded but session is redirect (or vice versa) — fall through to create new session
         }
       } catch (sessionErr) {
         console.warn("[create-checkout-session] Failed to retrieve existing session, creating new one", existingSessionId, sessionErr);

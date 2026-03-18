@@ -115,11 +115,16 @@ function BookingSuccessContent() {
       <div className="container-narrow px-4 sm:px-6 lg:px-8">
         <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 sm:p-8">
           <h1 className="text-2xl sm:text-3xl font-bold text-brand-dark mb-2">You&apos;re all set</h1>
-          <p className="text-brand-muted mb-6">
+          <p className="text-brand-muted mb-4">
             {data.customer?.email
               ? `A confirmation email with your receipt has been sent to ${data.customer.email}.`
               : "A confirmation email with your receipt has been sent to the email address on your booking."}
           </p>
+          {data.paymentSummary && (data.paymentSummary.mode === "event_deposit" || data.paymentSummary.mode === "state_fallback_deposit") && (
+            <p className="text-sm text-brand-muted mb-4">
+              You paid a <strong>50% deposit</strong> today. The remaining balance will be charged automatically 48 hours before your trip.
+            </p>
+          )}
           {data.bookingId && (
             <p className="text-sm text-brand-muted mb-6">Booking #{data.bookingId}</p>
           )}

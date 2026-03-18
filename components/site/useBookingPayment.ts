@@ -5,6 +5,7 @@
  */
 import { useCallback, useRef, useEffect } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { runCreateHoldAndPaymentIntent, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import { bookingError } from "@/lib/booking/debug";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
@@ -68,6 +69,7 @@ export interface UseBookingPaymentOptions {
   lastHoldRef: React.MutableRefObject<{ slotId: string; holdId: string } | null>;
   releaseOnCloseDoneRef: React.MutableRefObject<boolean>;
   holdIdRef: React.MutableRefObject<string | null>;
+  releaseTokenRef: React.MutableRefObject<string | null>;
   paymentPhaseRef: React.MutableRefObject<string>;
 }
 
@@ -214,13 +216,9 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
-    let createdHoldId: string | null = null;
-    let createdReleaseToken: string | null = null;
     try {
-      const holdRes = await fetch("/api/booking/create-hold", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await runCreateHoldAndPaymentIntent(
+        {
           experienceId: selectedExperience.id,
           boatId: selectedBoat?.id ?? (opts.boats.length === 1 ? opts.boats[0].id : undefined),
           slotId: selectedSlot.id,
@@ -231,18 +229,16 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
           customerDraft: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           marketingOptIn,
           answers: { how_did_you_hear: howDidYouHear.trim(), comments: comments.trim() },
-          ...(tipCentsToSend > 0 && { tipCents: tipCentsToSend }),
-          ...((appliedDiscount?.code ?? discountCode.trim()) && { discountCode: appliedDiscount?.code ?? discountCode.trim() }),
+          tipCents: tipCentsToSend > 0 ? tipCentsToSend : undefined,
+          discountCode: (appliedDiscount?.code ?? discountCode.trim()) || undefined,
           bookingMode: isTicketed ? (initialSelection?.bookingMode ?? "shared") : "charter",
-          ...(lastHoldRef.current?.slotId === selectedSlot.id ? { resumeHoldId: lastHoldRef.current.holdId } : {}),
-        }),
-      });
-      const holdData = await holdRes.json();
-      if (!holdRes.ok) {
-        const message = holdData.error ?? "Failed to create hold";
-        const hint = holdData.hint ? ` ${holdData.hint}` : "";
+          resumeHoldId: lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId ?? undefined : undefined,
+        },
+        isTicketed ? true : payFullAmount
+      );
+      if (!result.ok) {
         opts.setPaymentPhase("form");
-        if (holdRes.status === 409) {
+        if (result.status === 409) {
           const boatTakenOnly = !isTicketed && boats.length > 1;
           const ticketedMessage = "Not enough tickets remaining for this date. Please choose a different date or reduce your ticket count.";
           opts.setPaymentError(
@@ -280,59 +276,39 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
             }
           }
         } else {
-          opts.setPaymentError(`${message}${hint}`);
+          const hint = result.hint ? ` ${result.hint}` : "";
+          opts.setPaymentError(`${result.error}${hint}`);
+        }
+        if (result.holdId && result.releaseToken !== undefined) {
+          releaseHold(result.holdId, result.releaseToken);
         }
         return;
       }
-      const { holdId: newHoldId, releaseToken: newReleaseToken, expiresAt: newExpiresAt } = holdData;
-      createdHoldId = newHoldId;
-      createdReleaseToken = newReleaseToken ?? null;
-      opts.setHoldId(newHoldId);
-      opts.setReleaseToken(createdReleaseToken);
-      if (typeof newExpiresAt === "string") opts.setHoldExpiresAt(newExpiresAt);
-      lastHoldRef.current = { slotId: selectedSlot.id, holdId: newHoldId };
-      const intentRes = await fetch("/api/booking/create-payment-intent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: newHoldId, payFullAmount: isTicketed ? true : payFullAmount }),
-      });
-      const intentData = await intentRes.json();
-      if (!intentRes.ok) {
-        await releaseCreatedHold(createdHoldId, createdReleaseToken);
-        const msg = intentData.error ?? "Failed to start payment";
-        opts.setPaymentError(intentData.hint ? `${msg}. ${intentData.hint}` : msg);
-        opts.setPaymentPhase("form");
-        return;
-      }
-      const secret = intentData.clientSecret;
-      if (!secret) {
-        bookingError("client", "create-payment-intent missing clientSecret", null, { holdId: newHoldId });
-        await releaseCreatedHold(createdHoldId, createdReleaseToken);
-        opts.setPaymentError("Payment intent missing client secret");
-        opts.setPaymentPhase("form");
-        return;
-      }
-      opts.setClientSecret(secret);
-      opts.setPaymentIntentId(intentData.paymentIntentId ?? null);
-      if (typeof intentData.depositCents === "number") opts.setDepositCentsFromServer(intentData.depositCents);
-      if (typeof intentData.totalCents === "number") opts.setTotalCentsFromServer(intentData.totalCents);
-      if (typeof intentData.finalCents === "number") opts.setFinalCentsFromServer(intentData.finalCents);
-      if (typeof intentData.expiresAt === "string") opts.setHoldExpiresAt(intentData.expiresAt);
+      lastHoldRef.current = { slotId: selectedSlot.id, holdId: result.holdId };
+      opts.setHoldId(result.holdId);
+      opts.setReleaseToken(result.releaseToken);
+      if (result.expiresAt) opts.setHoldExpiresAt(result.expiresAt);
+      if (result.expiresAtFromIntent) opts.setHoldExpiresAt(result.expiresAtFromIntent);
+      if (typeof result.depositCents === "number") opts.setDepositCentsFromServer(result.depositCents);
+      if (typeof result.totalCents === "number") opts.setTotalCentsFromServer(result.totalCents);
+      if (typeof result.finalCents === "number") opts.setFinalCentsFromServer(result.finalCents);
+      opts.setClientSecret(result.clientSecret);
+      opts.setPaymentIntentId(result.paymentIntentId);
       opts.setPaymentPhase("stripe");
     } catch (err) {
       bookingError("client", "create-hold or create-payment-intent threw", err, {});
-      await releaseCreatedHold(createdHoldId, createdReleaseToken);
       opts.setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       opts.setPaymentPhase("form");
     }
   }, [releaseCreatedHold]);
 
-  // Defensive cleanup: release hold when modal closes during payment
+  // Defensive cleanup: release hold when modal closes during payment (include release_token so non-admin release succeeds)
   useEffect(() => {
     if (!options.open) return;
     return () => {
       const opts = optionsRef.current;
       const h = opts.holdIdRef.current;
+      const token = opts.releaseTokenRef.current;
       const p = opts.paymentPhaseRef.current;
       const inPaymentPhase = p === "stripe" || p === "loading" || p === "completing";
       if (h && inPaymentPhase && !opts.releaseOnCloseDoneRef.current) {
@@ -340,7 +316,7 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
         fetch("/api/booking/release-hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ holdId: h }),
+          body: JSON.stringify({ holdId: h, ...(token && { release_token: token }) }),
         }).catch(() => {});
       }
     };

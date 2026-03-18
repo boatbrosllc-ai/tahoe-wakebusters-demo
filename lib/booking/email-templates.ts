@@ -138,15 +138,18 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
       ? new Date(finalChargeAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
       : null;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  const depositCopy = "";
+  /** Short line for deposit flow so the email body is explicit that this was a deposit, not full payment. */
+  const depositCopy = isDeposit
+    ? `You paid a 50% deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) will be charged automatically 48 hours before your trip${finalChargeAtFormatted ? ` on ${finalChargeAtFormatted}` : ""}.`
+    : "";
 
   const paymentRows = isDeposit
     ? `
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Paid today (50%)</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${depositPaidFormatted}</td></tr>
-                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "before your trip"})</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${remainingFormatted}</td></tr>
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Deposit paid today (50%)</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${depositPaidFormatted}</td></tr>
+                      <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "48 hours before your trip"})</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${remainingFormatted}</td></tr>
                       <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total booking value</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`
     : `
-                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total paid</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`;
+                      <tr><td style="padding: 12px 0 6px; font-size: 14px; font-weight: 600; color: ${DARK_COLOR};">Total paid (full payment)</td><td style="padding: 12px 0 6px; font-size: 18px; font-weight: 700; color: ${PRIMARY_COLOR}; text-align: right;">${totalFormatted}</td></tr>`;
 
   return `
 <!DOCTYPE html>
@@ -165,7 +168,7 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
           <tr>
             <td style="background: ${HEADER_GRADIENT}; padding: 28px 32px; text-align: center;">
               <img src="${getEmailLogoUrl()}" alt="Boat Bros ATX" width="260" height="72" style="max-width: 260px; height: auto; display: block; margin: 0 auto;" />
-              <p style="margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">Booking confirmed</p>
+              <p style="margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">${isDeposit ? "Booking confirmed (deposit received)" : "Booking confirmed (full payment)"}</p>
             </td>
           </tr>
           <!-- Body -->

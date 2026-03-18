@@ -56,9 +56,6 @@ export interface BookingEmailContext {
   addonsSummary?: string;
 }
 
-const BOOKING_CONFIRMATION_SUBJECT = "Booking Confirmation – Boat Bros ATX";
-const BOOKING_CONFIRMATION_WAIVER_SUBJECT = "Booking Confirmation & Waiver – Boat Bros ATX";
-
 function getSender(): { name: string; email: string } {
   const email = process.env.BREVO_SENDER_EMAIL?.trim() || "noreply@boatbrosatx.com";
   const name = process.env.BREVO_SENDER_NAME?.trim() || "Boat Bros ATX";
@@ -98,7 +95,14 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const totalPaid = formatMoney(totalAmountCents);
   const depositPaidFormatted = formatMoney(depositPaidCents);
   const remainingFormatted = formatMoney(remainingCents);
+  /** Amount paid in this transaction: deposit when 50/50, full total when full payment. Use this in templates for "You paid X" to avoid showing full total for deposit. */
+  const amountPaidNowFormatted = isDepositForTemplate ? depositPaidFormatted : totalPaid;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
+
+  const subjectForDeposit = isDepositForTemplate ? " (deposit received)" : "";
+  const subjectBase = waiverSigningUrl ? "Booking Confirmation & Waiver" : "Booking Confirmation";
+  const subjectSuffix = " – Boat Bros ATX";
+  const emailSubject = `${subjectBase}${subjectForDeposit}${subjectSuffix}`;
 
   const toName = booking.customer?.name?.trim() ?? "";
   const payload: Record<string, unknown> = templateId
@@ -113,6 +117,8 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           duration,
           addonsSummary,
           totalPaid,
+          /** Use for "You paid X" in template: deposit amount when isDeposit, full total when full payment. */
+          amountPaidNowFormatted,
           depositPaidFormatted,
           remainingFormatted,
           cancellationPolicy,
@@ -125,7 +131,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
     : {
         sender: getSender(),
         to: [{ email: toEmail, name: toName }],
-        subject: waiverSigningUrl ? BOOKING_CONFIRMATION_WAIVER_SUBJECT : BOOKING_CONFIRMATION_SUBJECT,
+        subject: emailSubject,
         htmlContent: html,
       };
 

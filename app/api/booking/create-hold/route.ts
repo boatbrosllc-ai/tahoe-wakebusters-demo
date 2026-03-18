@@ -524,6 +524,13 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
+      const parsedSlotLegacy = parseSlotId(input.slotId);
+      if (!parsedSlotLegacy) {
+        return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+      }
+      if (!isAllowedSlotTime(parsedSlotLegacy.startHour, parsedSlotLegacy.startMinute, parsedSlotLegacy.durationHours, undefined)) {
+        return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
+      }
       addonsById = new Map<string, Addon>();
       addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
       slotsRef = db.collection("boats").doc(boatId).collection("slots");

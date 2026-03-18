@@ -214,8 +214,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Refs for cleanup effect to see current hold/payment state when modal unmounts. */
   const paymentPhaseRef = useRef(paymentPhase);
   const holdIdRef = useRef(holdId);
+  const releaseTokenRef = useRef(releaseToken);
   paymentPhaseRef.current = paymentPhase;
   holdIdRef.current = holdId;
+  releaseTokenRef.current = releaseToken;
 
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
   const isTicketed = selectedExperience?.pricingType === "ticketed" || (!!open && initialSelection?.pricingType === "ticketed");
@@ -730,6 +732,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     lastHoldRef,
     releaseOnCloseDoneRef,
     holdIdRef,
+    releaseTokenRef,
     paymentPhaseRef,
   };
   const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange } = useBookingPayment(paymentOptions);
@@ -2443,9 +2446,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && (priceSummary.totalCents > 0 || totalCentsFromServer != null) ? (
                         (isTicketed || payFullAmount) ? (
-                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
+                          <>We&apos;ve received your <strong>full payment</strong> of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
                         ) : (
-                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
+                          <>We&apos;ve received your <strong>50% deposit</strong> of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance of <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
                         )
                       ) : (
                         "We&apos;ve received your payment. Your receipt has been sent to your confirmation email."

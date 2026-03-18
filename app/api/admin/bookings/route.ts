@@ -103,8 +103,10 @@ export async function GET(request: NextRequest) {
     if (hitLimit) headers.set("X-Results-Truncated", "true");
 
     let nextCursor: string | null = null;
+    if (hitLimit) {
+      nextCursor = snap.docs[snap.docs.length - 1].id;
+    }
     if (docs.length > limit) {
-      nextCursor = docs[limit - 1].id;
       docs = docs.slice(0, limit);
     }
 
