@@ -2170,6 +2170,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             const tok = data.receiptToken ?? null;
                             setCompletedBookingId(bid);
                             setCompletedReceiptToken(tok);
+                            const ps = data.paymentSummary as { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number } | undefined;
+                            if (ps && typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
+                            if (ps && typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
+                            if (ps && typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
+                            if (ps && typeof ps.isDeposit === "boolean") setPayFullAmount(!ps.isDeposit);
                             try {
                               if (typeof window !== "undefined") {
                                 sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({ bookingId: data.bookingId, receiptToken: data.receiptToken ?? null }));
@@ -2320,6 +2325,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               const tok = data.receiptToken ?? null;
                               setCompletedBookingId(bid);
                               setCompletedReceiptToken(tok);
+                              const ps = data.paymentSummary as { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number } | undefined;
+                              if (ps && typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
+                              if (ps && typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
+                              if (ps && typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
+                              if (ps && typeof ps.isDeposit === "boolean") setPayFullAmount(!ps.isDeposit);
                               try {
                                 if (typeof window !== "undefined") {
                                   sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({ bookingId: data.bookingId, receiptToken: data.receiptToken ?? null }));
@@ -2448,7 +2458,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         (isTicketed || payFullAmount) ? (
                           <>We&apos;ve received your <strong>full payment</strong> of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
                         ) : (
-                          <>We&apos;ve received your <strong>50% deposit</strong> of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance of <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
+                          (() => {
+                            const depositCents = depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5);
+                            let remainingCents: number;
+                            if (typeof finalCentsFromServer === "number" && finalCentsFromServer > 0) {
+                              remainingCents = finalCentsFromServer;
+                            } else if (totalCentsFromServer != null && depositCentsFromServer != null && totalCentsFromServer > depositCentsFromServer) {
+                              remainingCents = totalCentsFromServer - depositCentsFromServer;
+                            } else {
+                              remainingCents = Math.round(priceSummary.totalCents * 0.5);
+                            }
+                            return (
+                              <>We&apos;ve received your <strong>50% deposit</strong> of <span className="font-semibold text-brand-dark">${(depositCents / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance of <span className="font-semibold text-brand-dark">${(remainingCents / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
+                            );
+                          })()
                         )
                       ) : (
                         "We&apos;ve received your payment. Your receipt has been sent to your confirmation email."

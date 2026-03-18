@@ -25,11 +25,20 @@ const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
  * Derive deposit/full-pay mode from booking.stripe (and status). Used to select payment rows
  * so email reflects persisted payment truth. Exported for use by Brevo template params so template
  * and HTML paths stay consistent.
+ * Uses two signals so we never show "full payment" when it was a deposit:
+ * 1) status is in deposit flow (e.g. final_due, deposit_paid); or
+ * 2) amount-based: depositAmountCents is set and less than total (charge was partial).
  */
 export function isDepositFromBookingStripe(booking: Booking): boolean {
   const stripe = booking.stripe;
   if (stripe?.depositAmountCents == null) return false;
-  return DEPOSIT_STATUSES.has(booking.status);
+  const totalCents = stripe?.totalAmountCents ?? booking.pricing?.totalCents;
+  const depositCents = stripe.depositAmountCents;
+  // Status in deposit flow (e.g. we just created with status "final_due")
+  if (DEPOSIT_STATUSES.has(booking.status)) return true;
+  // Amount-based fallback: partial payment = deposit (never show "full payment" when amount paid < total)
+  if (typeof totalCents === "number" && totalCents > 0 && depositCents < totalCents) return true;
+  return false;
 }
 
 /** Absolute URL for the Boat Bros email logo (Lockup Pink – used in all transactional emails). */
@@ -122,8 +131,10 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
         ? booking.addonSelections.map((s) => `${s.addonId}: qty ${s.qty}`).join(", ")
         : "None";
   // Single source of truth: Stripe reflects actual charges; fallback to booking.pricing (all in cents).
+  // Prefer context.isDeposit when set (e.g. convert-hold just created this as deposit) so wording is never wrong.
   const stripe = booking.stripe as BookingStripe | undefined;
-  const isDeposit = isDepositFromBookingStripe(booking);
+  const isDeposit =
+    context.isDeposit === true || isDepositFromBookingStripe(booking);
   const depositPaidCents = stripe?.depositAmountCents ?? booking.pricing.totalCents;
   const remainingCents =
     stripe?.finalAmountCents != null

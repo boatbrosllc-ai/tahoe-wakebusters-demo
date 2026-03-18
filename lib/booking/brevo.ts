@@ -76,7 +76,8 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
 
   const templateId = bookingEnv.brevoBookingTemplateId;
   const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, waiverSigningUrl, addonsSummary: addonsSummaryFromContext } = context;
-  const isDepositForTemplate = isDepositFromBookingStripe(booking);
+  // Same rule as email-templates: context.isDeposit from convert-hold is authoritative so deposit never shows as "full payment"
+  const isDepositForTemplate = context.isDeposit === true || isDepositFromBookingStripe(booking);
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const addonsSummary =
     addonsSummaryFromContext !== undefined

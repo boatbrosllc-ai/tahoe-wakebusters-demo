@@ -91,19 +91,36 @@ export async function POST(request: NextRequest) {
       card = { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year };
     }
     const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-    const totalCents = totalCentsFromMeta || (pi.amount ?? 0);
-    const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
-    const depositCents = depositCentsFromMeta || (pi.amount ?? 0);
-    const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - depositCents);
     const amountCharged = pi.amount ?? 0;
+    const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
     // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
     const isDepositByStage = paymentStage === "deposit";
-    const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
+    const db = getDb();
+    const holdRef = db.collection("holds").doc(input.holdId);
+    const holdSnap = await holdRef.get();
+    const hold = holdSnap.exists ? (holdSnap.data() as { pricing?: { totalCents?: number }; tipCents?: number; discountCents?: number }) : null;
+    // When metadata total is missing/0, use hold pricing so we don't treat deposit amount as full total (which would make remaining = 0)
+    let totalCents: number;
+    if (totalCentsFromMeta > 0) {
+      totalCents = totalCentsFromMeta;
+    } else if (hold?.pricing && typeof hold.pricing.totalCents === "number") {
+      const tipCents = typeof hold.tipCents === "number" ? hold.tipCents : 0;
+      const discountCents = typeof hold.discountCents === "number" ? hold.discountCents : 0;
+      totalCents = Math.max(0, hold.pricing.totalCents + tipCents - discountCents);
+      bookingLog("complete-after-payment", "using hold pricing for total (metadata total missing)", { totalCents, amountCharged });
+    } else {
+      totalCents = amountCharged;
+    }
+    const depositCents = depositCentsFromMeta || (isDepositByStage ? amountCharged : totalCents);
+    const finalCentsFromMeta = parseInt(pi.metadata?.finalCents ?? "0", 10) || 0;
+    const finalCents = finalCentsFromMeta > 0 ? finalCentsFromMeta : Math.max(0, totalCents - amountCharged);
+    const isDepositByAmount = totalCents > 0 && amountCharged > 0 && amountCharged < totalCents;
     const useDepositInput = customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
     bookingLog("complete-after-payment", "PI metadata and convert decision", {
       holdId: input.holdId,
       paymentStage: paymentStage ?? null,
       totalCentsFromMeta,
+      totalCents,
       amountCharged,
       depositCentsFromMeta,
       finalCents,
@@ -134,7 +151,12 @@ export async function POST(request: NextRequest) {
             currency: pi.currency ?? undefined,
           };
 
-    const db = getDb();
+    const paymentSummaryForClient = {
+      isDeposit: useDepositInput,
+      depositCents: useDepositInput ? amountCharged : totalCents,
+      totalCents,
+      finalCents: useDepositInput ? Math.max(0, totalCents - amountCharged) : 0,
+    };
     bookingLog("complete-after-payment", "calling convertHoldToBooking", {
       holdId: input.holdId,
       paymentStage: useDepositInput ? "deposit" : "full",
@@ -168,6 +190,7 @@ export async function POST(request: NextRequest) {
         alreadyConverted: true,
         ...(bookingId ? { bookingId } : {}),
         ...(receiptToken ? { receiptToken } : {}),
+        paymentSummary: paymentSummaryForClient,
       });
     }
     bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId: input.holdId });
@@ -182,6 +205,7 @@ export async function POST(request: NextRequest) {
       bookingId: result.bookingId,
       ...(receiptToken ? { receiptToken } : {}),
       ...(result.discountLimitExceeded && { discountLimitExceeded: true }),
+      paymentSummary: paymentSummaryForClient,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
