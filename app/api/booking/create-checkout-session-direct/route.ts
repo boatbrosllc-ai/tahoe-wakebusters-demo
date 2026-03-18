@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
@@ -323,12 +323,22 @@ export async function POST(request: NextRequest) {
           ? getDepartureInventoryRef(db, holdPayload.experienceId as string, parsedSlot.dateStr)
           : null;
         await db.runTransaction(async (tx) => {
+          // Firestore: all reads must complete before any write.
           const slotSnap = await tx.get(slotRef);
+          const reservedAfterRelease =
+            inventoryRef != null && typeof holdPayload.partySize === "number"
+              ? Math.max(0, (await getReservedSeats(tx, inventoryRef)) - holdPayload.partySize)
+              : null;
+          // Writes only after reads.
           if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === holdId) {
             tx.update(slotRef, { status: "open", holdId: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
           }
-          if (inventoryRef && typeof holdPayload.partySize === "number") {
-            await releaseCapacity(tx, inventoryRef, holdPayload.partySize);
+          if (inventoryRef != null && reservedAfterRelease !== null) {
+            tx.set(
+              inventoryRef,
+              { reservedSeats: reservedAfterRelease, updatedAt: FieldValue.serverTimestamp() },
+              { merge: true }
+            );
           }
           tx.update(db.collection("holds").doc(holdId), { status: "expired" });
         });

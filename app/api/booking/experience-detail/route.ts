@@ -194,7 +194,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         maxCapacity: expData?.maxCapacity,
       }),
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
-      allowDeposit: expData.allowDeposit === true,
+      // Charters allow deposit by default unless explicitly disabled; ticketed never
+      allowDeposit: pricingType === "ticketed" ? false : expData?.allowDeposit !== false,
     };
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },
