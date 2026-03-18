@@ -47,6 +47,8 @@ interface ExperienceItem {
   departureHour?: number;
   departureMinute?: number;
   allowDeposit?: boolean;
+  allowTipNow?: boolean;
+  allowTipLater?: boolean;
 }
 
 interface BoatOption {

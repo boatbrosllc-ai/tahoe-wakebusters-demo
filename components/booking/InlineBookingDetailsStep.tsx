@@ -170,7 +170,7 @@ export function InlineBookingDetailsStep({
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning" | "successRecoveryFailed">("form");
   const [holdId, setHoldId] = useState<string | null>(null);
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
