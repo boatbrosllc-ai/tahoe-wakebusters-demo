@@ -44,7 +44,8 @@ export type BookingLogStep =
   | "complete-after-payment"
   | "convert-hold"
   | "stripe-webhook"
-  | "client";
+  | "client"
+  | "slot-availability";
 
 /** Log an info-level booking step. Suppressed in production unless BOOKING_LOG_LEVEL=verbose. */
 export function bookingLog(
