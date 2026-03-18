@@ -73,7 +73,7 @@ export default function LocationPage() {
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
               Find us at {location.addressFormatted}. Get directions, see hours, or{" "}
-              <Link href="/booking" className="text-white font-medium underline decoration-white/50 hover:decoration-white">
+              <Link href="/experiences" className="text-white font-medium underline decoration-white/50 hover:decoration-white">
                 book online
               </Link>
               .
@@ -139,7 +139,7 @@ export default function LocationPage() {
                       Call
                     </a>
                     <Link
-                      href="/booking"
+                      href="/experiences"
                       className="inline-flex items-center justify-center min-h-[48px] rounded-xl bg-brand-secondary px-5 py-3 text-sm font-semibold text-white hover:bg-brand-secondary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2"
                     >
                       Book Now
@@ -200,7 +200,7 @@ export default function LocationPage() {
               ))}
             </ul>
             <p className="mt-6 text-brand-dark/90">
-              See our <Link href="/experiences" className="text-brand-primary font-medium hover:underline">experiences</Link> and <Link href="/booking" className="text-brand-primary font-medium hover:underline">book online</Link>.
+              See our <Link href="/experiences" className="text-brand-primary font-medium hover:underline">experiences</Link> and <Link href="/experiences" className="text-brand-primary font-medium hover:underline">book online</Link>.
             </p>
           </div>
         </section>
@@ -245,7 +245,7 @@ export default function LocationPage() {
                 Call {location.phone}
               </a>
               <Link
-                href="/booking"
+                href="/experiences"
                 className="inline-flex items-center justify-center min-h-[48px] w-full sm:w-auto rounded-xl bg-white px-6 py-4 text-base font-semibold text-brand-dark hover:bg-white/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
               >
                 Book Now

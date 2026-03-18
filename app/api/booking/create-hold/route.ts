@@ -230,6 +230,7 @@ export async function POST(request: NextRequest) {
     const hasBoat = !!input.boatId;
     // When the experience has listing boats, slots live under boats/{boatId}/slots. We must have boatId.
     // Exception: ticketed experiences don't require a boat — admin assigns boats later.
+    // When there is exactly one listing boat, use it so the client doesn't have to send boatId.
     if (hasExperience && !hasBoat) {
       const expCheckDoc = await db.collection("experiences").doc(input.experienceId!).get();
       const expCheckData = expCheckDoc.exists ? (expCheckDoc.data() as Experience) : null;
@@ -240,9 +241,12 @@ export async function POST(request: NextRequest) {
           .where("isListingBoat", "==", true)
           .where("active", "==", true)
           .where("experienceIds", "array-contains", input.experienceId)
-          .limit(1)
+          .limit(2)
           .get();
-        if (!listingBoatsSnap.empty) {
+        const count = listingBoatsSnap.size;
+        if (count === 1) {
+          input.boatId = listingBoatsSnap.docs[0].id;
+        } else if (count > 1) {
           return NextResponse.json(
             { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
             { status: 400 }
@@ -250,9 +254,10 @@ export async function POST(request: NextRequest) {
         }
       }
     }
-    const isListingBoatFlow = hasExperience && hasBoat; // experience slots + boat rates
-    const isExperienceOnly = hasExperience && !hasBoat;
-    const isLegacyBoat = !hasExperience && hasBoat;
+    const hasBoatResolved = !!input.boatId;
+    const isListingBoatFlow = hasExperience && hasBoatResolved; // experience slots + boat rates
+    const isExperienceOnly = hasExperience && !hasBoatResolved;
+    const isLegacyBoat = !hasExperience && hasBoatResolved;
     bookingLog("create-hold", "flow branch", {
       isListingBoatFlow,
       isExperienceOnly,

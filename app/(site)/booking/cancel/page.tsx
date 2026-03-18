@@ -83,7 +83,7 @@ function CancelContent() {
           </Button>
         )}
         <Button asChild size="lg">
-          <Link href="/booking">Back to booking</Link>
+          <Link href="/">Back to home</Link>
         </Button>
       </div>
     </div>
@@ -99,7 +99,7 @@ export default function BookingCancelPage() {
             <h1 className="text-2xl sm:text-3xl font-bold text-brand-dark mb-2">Checkout cancelled</h1>
             <p className="text-brand-muted mb-8">No charge was made. Releasing your held slot…</p>
             <Button asChild size="lg">
-              <Link href="/booking">Back to booking</Link>
+              <Link href="/">Back to home</Link>
             </Button>
           </div>
         </div>

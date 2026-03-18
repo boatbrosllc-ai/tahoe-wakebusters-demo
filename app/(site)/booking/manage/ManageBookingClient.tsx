@@ -291,8 +291,8 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Invalid link</h1>
           <p className="text-brand-muted mb-6">This manage-booking link is missing or invalid.</p>
-          <Link href="/booking" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
-            Back to booking
+          <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
+            Back to experiences
           </Link>
         </div>
       </div>
@@ -313,8 +313,8 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Unable to load booking</h1>
           <p className="text-brand-muted mb-6">{error ?? "Invalid or expired link."}</p>
-          <Link href="/booking" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
-            Back to booking
+          <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
+            Back to experiences
           </Link>
         </div>
       </div>

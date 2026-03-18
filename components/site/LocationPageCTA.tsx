@@ -20,7 +20,7 @@ export function LocationPageCTA() {
         Call
       </a>
       <Link
-        href="/booking"
+        href="/experiences"
         className="flex-1 rounded-xl bg-brand-secondary py-3.5 text-center text-sm font-semibold text-white hover:bg-brand-secondary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
       >
         Book Now

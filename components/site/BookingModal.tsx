@@ -2195,16 +2195,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     >
                       Close
                     </button>
-                    {completedReceiptToken != null && (
-                      <a
-                        href={`/booking/success?receipt_token=${completedReceiptToken}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm font-medium text-brand-primary hover:underline shrink-0"
-                      >
-                        View receipt
-                      </a>
-                    )}
                   </div>
                 </div>
               )}
@@ -2453,29 +2443,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
                       {selectedExperience && (priceSummary.totalCents > 0 || totalCentsFromServer != null) ? (
                         (isTicketed || payFullAmount) ? (
-                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. You&apos;ll get a confirmation email shortly.</>
+                          <>We&apos;ve received your full payment of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
                         ) : (
-                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. You&apos;ll get a confirmation email shortly.</>
+                          <>We&apos;ve received your deposit of <span className="font-semibold text-brand-dark">${((depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining <span className="font-semibold text-brand-dark">${((finalCentsFromServer ?? (totalCentsFromServer != null && depositCentsFromServer != null ? totalCentsFromServer - depositCentsFromServer : Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
                         )
                       ) : (
-                        "We&apos;ve received your payment. You&apos;ll get a confirmation email shortly."
+                        "We&apos;ve received your payment. Your receipt has been sent to your confirmation email."
                       )}
                     </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-center">
-                    {completedReceiptToken != null && (
-                      <button
-                        type="button"
-                        onClick={() => window.open(`/booking/success?receipt_token=${completedReceiptToken}`, "_blank", "noopener")}
-                        className="w-full sm:w-auto rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
-                      >
-                        View receipt
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => handleModalOpenChange(false)}
-                      className="w-full sm:w-auto rounded-xl border-2 border-brand-primary bg-white text-brand-primary font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/10 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
+                      className="w-full sm:w-auto rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
                     >
                       Close
                     </button>

@@ -222,7 +222,7 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           experienceId: selectedExperience.id,
-          boatId: selectedBoat?.id ?? undefined,
+          boatId: selectedBoat?.id ?? (opts.boats.length === 1 ? opts.boats[0].id : undefined),
           slotId: selectedSlot.id,
           rateId: selectedRateId,
           partySize,

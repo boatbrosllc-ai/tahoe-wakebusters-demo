@@ -123,7 +123,7 @@ export default function MenuPage() {
         <div className="mt-14 sm:mt-8 space-y-8 sm:space-y-3">
           <CallCard phone={siteConfig.phone} phoneTel={siteConfig.phoneTel} />
 
-          <Link href="/booking" className="block">
+          <Link href="/experiences" className="block">
             <Button
               variant="secondary"
               size="lg"

@@ -121,6 +121,9 @@ export async function POST(request: NextRequest) {
     // Experiences with listing boats: slots live under boats/{boatId}/slots. Require boatId so we hold the correct slot.
     const listingBoatIds = boatsSnap.docs.map((d) => d.id);
     const hasListingBoats = listingBoatIds.length > 0;
+    if (hasListingBoats && !input.boatId && listingBoatIds.length === 1) {
+      input.boatId = listingBoatIds[0];
+    }
     const useBoatSlots = hasListingBoats && !!input.boatId;
 
     if (hasListingBoats && !input.boatId) {
