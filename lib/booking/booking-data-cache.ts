@@ -289,6 +289,7 @@ export interface ExperienceBySlugResult {
     departureMinute?: number;
     showSpotsRemaining?: boolean;
     seasonal?: CachedSeasonalConfig;
+    allowDeposit?: boolean;
   };
   addons?: Array<{
     id?: string;

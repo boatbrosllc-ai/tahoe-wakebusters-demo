@@ -12,7 +12,7 @@ import type { CachedSeasonalConfig } from "@/lib/booking/booking-data-cache";
 
 interface ExperienceDetailFromApi {
   id: string;
-  experience: { title: string; slug: string; maxGuests: number; petsMax: number; seasonal?: CachedSeasonalConfig };
+  experience: { title: string; slug: string; maxGuests: number; petsMax: number; seasonal?: CachedSeasonalConfig; allowDeposit?: boolean };
   rates: { id: string; durationHours: number; displayName: string; priceCents: number; active: boolean }[];
   addons: { id: string; name: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
 }
@@ -31,6 +31,7 @@ function mapCacheResultToApiData(
       maxGuests: exp?.maxGuests ?? 14,
       petsMax: exp?.petsMax ?? 0,
       seasonal: exp?.seasonal,
+      allowDeposit: exp?.allowDeposit,
     },
     rates: (data.rates ?? []).map((r) => ({
       id: r.id,
@@ -141,6 +142,7 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
         addons={apiData.addons}
         maxGuests={apiData.experience.maxGuests ?? 14}
         petsMax={apiData.experience.petsMax ?? 0}
+        allowDeposit={apiData.experience.allowDeposit}
         seasonalConfig={apiData.experience.seasonal?.enabled ? apiData.experience.seasonal : undefined}
       />
     );

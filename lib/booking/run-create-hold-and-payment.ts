@@ -29,6 +29,8 @@ export interface CreateHoldAndPaymentSuccess {
   pricing: Record<string, unknown> | null;
   clientSecret: string;
   paymentIntentId: string | null;
+  /** Server-resolved payFullAmount (may differ from client when deposit is disabled). */
+  payFullAmount?: boolean;
   depositCents?: number;
   totalCents?: number;
   finalCents?: number;
@@ -126,6 +128,7 @@ export async function runCreateHoldAndPaymentIntent(
       pricing,
       clientSecret,
       paymentIntentId: intentData.paymentIntentId ?? null,
+      payFullAmount: typeof intentData.payFullAmount === "boolean" ? intentData.payFullAmount : undefined,
       depositCents: typeof intentData.depositCents === "number" ? intentData.depositCents : undefined,
       totalCents: typeof intentData.totalCents === "number" ? intentData.totalCents : undefined,
       finalCents: typeof intentData.finalCents === "number" ? intentData.finalCents : undefined,

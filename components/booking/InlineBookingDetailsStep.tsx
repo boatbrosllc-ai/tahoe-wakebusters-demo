@@ -108,6 +108,8 @@ export interface InlineBookingDetailsStepProps {
   experienceTitle: string;
   experienceMaxGuests: number;
   experiencePetsMax: number;
+  /** When false or undefined, deposit option is hidden and server forces full payment. */
+  allowDeposit?: boolean;
   boatId?: string;
   boatName?: string;
   slot: { id: string; startAt: string; endAt: string };
@@ -127,6 +129,7 @@ export function InlineBookingDetailsStep({
   experienceTitle,
   experienceMaxGuests,
   experiencePetsMax,
+  allowDeposit,
   boatId,
   boatName,
   slot,
@@ -171,9 +174,11 @@ export function InlineBookingDetailsStep({
   /** When complete-after-payment fails: error message for successWithWarning view. */
   const [completeAfterPaymentError, setCompleteAfterPaymentError] = useState<string | null>(null);
 
-  // Derived: no state or effect needed — shared bookings always pay full upfront
-  const [charterPayFull, setCharterPayFull] = useState(false);
+  const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
+  useEffect(() => {
+    if (bookingMode !== "shared" && allowDeposit !== true) setCharterPayFull(true);
+  }, [bookingMode, allowDeposit]);
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
     ? Math.min(experienceMaxGuests, spotsRemaining)
@@ -333,6 +338,7 @@ export function InlineBookingDetailsStep({
         }
         return;
       }
+      if (typeof result.payFullAmount === "boolean") setCharterPayFull(result.payFullAmount);
       setHoldId(result.holdId);
       setReleaseToken(result.releaseToken);
       if (!STRIPE_PUBLISHABLE_KEY) {
@@ -761,8 +767,8 @@ export function InlineBookingDetailsStep({
           )}
         </div>
 
-        {/* Payment amount */}
-        {bookingMode !== "shared" ? (
+        {/* Payment amount — deposit option only when experience allows */}
+        {bookingMode !== "shared" && allowDeposit === true ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="flex flex-col gap-2">
@@ -790,14 +796,14 @@ export function InlineBookingDetailsStep({
               </button>
             </div>
           </div>
-        ) : (
+        ) : bookingMode === "shared" ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="rounded-xl border-2 border-brand-primary bg-brand-primary/10 py-3 px-3 text-sm">
               <span className="font-semibold">Pay in full · ${(priceSummary.totalCents / 100).toFixed(2)}</span>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Discount */}
         <div>

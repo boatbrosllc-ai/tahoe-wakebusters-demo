@@ -112,6 +112,8 @@ interface ExperienceBookingCardProps {
   addons: AddonDto[];
   maxGuests: number;
   petsMax: number;
+  /** When false or undefined, deposit option is hidden and server forces full payment. */
+  allowDeposit?: boolean;
   pricingType?: "charter" | "ticketed";
   maxCapacity?: number;
   departureHour?: number;
@@ -131,6 +133,7 @@ export function ExperienceBookingCard({
   addons,
   maxGuests,
   petsMax,
+  allowDeposit,
   pricingType,
   maxCapacity,
   departureHour,
@@ -162,7 +165,7 @@ export function ExperienceBookingCard({
   const [holdSlotId, setHoldSlotId] = useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   const [pricing, setPricing] = useState<{ totalCents: number; currency: string } | null>(null);
-  const [payFullAmount, setPayFullAmount] = useState(false);
+  const [payFullAmount, setPayFullAmount] = useState(true);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
@@ -275,6 +278,11 @@ export function ExperienceBookingCard({
     };
   }, [fetchMonthSlots, calendarMonth, isDateSelectionActive]);
 
+  // When deposit is not allowed, force full payment so UI and server stay in sync
+  useEffect(() => {
+    if (allowDeposit !== true) setPayFullAmount(true);
+  }, [allowDeposit]);
+
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim()), [customer.email]);
   const showEmailError = customer.email.length > 0 && !emailValid;
@@ -344,6 +352,7 @@ export function ExperienceBookingCard({
         if (result.holdId) releaseHold(result.holdId, result.releaseToken ?? null);
         return;
       }
+      if (typeof result.payFullAmount === "boolean") setPayFullAmount(result.payFullAmount);
       setHoldId(result.holdId);
       setHoldSlotId(selectedSlot.id);
       setHoldExpiresAt(result.expiresAt ?? null);
@@ -935,8 +944,8 @@ export function ExperienceBookingCard({
         </label>
       </div>
 
-      {/* Pay deposit or full — hidden for ticketed (always full) */}
-      {!isTicketed && (
+      {/* Pay deposit or full — only when experience allows deposit; hidden for ticketed (always full) */}
+      {!isTicketed && allowDeposit === true && (
         <div className="mb-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
           <div className="flex flex-col gap-2">

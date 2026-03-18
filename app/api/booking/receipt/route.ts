@@ -6,28 +6,7 @@ import { signReceiptToken, verifyReceiptToken } from "@/lib/booking/receiptToken
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import type { Booking, Slot, Boat, Rate } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, BoatRate } from "@/lib/booking/types";
-import type { BookingStatus } from "@/lib/booking/types";
-
-/** Deposit-related statuses: booking is in deposit flow (deposit paid or final balance due/paid). */
-const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
-  "deposit_paid",
-  "final_due",
-  "final_processing",
-  "final_paid",
-  "final_requires_action",
-  "final_failed",
-]);
-
-/**
- * True when the booking is a deposit booking: stripe has split fields (depositAmountCents)
- * and booking status indicates deposit flow. Used for mode selection so we don't treat
- * full-paid or legacy records as deposit when split fields persist.
- */
-function isDepositBooking(booking: Booking): boolean {
-  const stripe = booking.stripe;
-  if (stripe?.depositAmountCents == null) return false;
-  return DEPOSIT_STATUSES.has(booking.status);
-}
+import { isDepositMode } from "@/lib/booking/deposit-mode";
 
 export async function GET(request: NextRequest) {
   try {
@@ -181,7 +160,7 @@ export async function GET(request: NextRequest) {
       (session?.amount_total != null ? session.amount_total : pi?.amount) ?? 0;
     const totalAmountCents = stripe?.totalAmountCents ?? booking.pricing.totalCents;
 
-    const isDeposit = isDepositBooking(booking);
+    const isDeposit = isDepositMode(booking);
     let mode: "event_deposit" | "event_full" | "state_fallback" | "state_fallback_deposit";
     let paidNowCents: number;
     if (isDeposit && hasEvent) {

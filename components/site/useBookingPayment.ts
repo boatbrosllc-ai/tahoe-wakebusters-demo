@@ -30,6 +30,7 @@ export interface UseBookingPaymentOptions {
   setDepositCentsFromServer: (v: number | null) => void;
   setTotalCentsFromServer: (v: number | null) => void;
   setFinalCentsFromServer: (v: number | null) => void;
+  setPayFullAmount: (v: boolean) => void;
   setStep: (s: 1 | 2 | 3 | 4) => void;
   setSelectedBoat: React.Dispatch<React.SetStateAction<BoatOption | null>>;
   setSelectedDate: (v: string | null) => void;
@@ -289,6 +290,7 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
       opts.setReleaseToken(result.releaseToken);
       if (result.expiresAt) opts.setHoldExpiresAt(result.expiresAt);
       if (result.expiresAtFromIntent) opts.setHoldExpiresAt(result.expiresAtFromIntent);
+      if (typeof result.payFullAmount === "boolean") opts.setPayFullAmount(result.payFullAmount);
       if (typeof result.depositCents === "number") opts.setDepositCentsFromServer(result.depositCents);
       if (typeof result.totalCents === "number") opts.setTotalCentsFromServer(result.totalCents);
       if (typeof result.finalCents === "number") opts.setFinalCentsFromServer(result.finalCents);

@@ -44,7 +44,7 @@ export interface ConvertHoldInputDeposit {
   amountTotalCents?: number;
   currency?: string;
   stripe: {
-    /** Optional: when set, we can charge remaining balance off-session later. */
+    /** Optional: when set, we can charge remaining balance off-session later. Missing customerId is an ops follow-up (e.g. link customer later); do not coerce to full-payment. */
     customerId?: string;
     paymentMethodId?: string;
     card?: BookingCardDisplay;

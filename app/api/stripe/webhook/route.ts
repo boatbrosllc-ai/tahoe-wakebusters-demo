@@ -285,13 +285,29 @@ export async function POST(request: NextRequest) {
       const paymentMethodId = typeof pm === "object" && pm?.id ? pm.id : undefined;
 
       const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-      const totalCents = totalCentsFromMeta || (piAmountTotal ?? 0);
       const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
       const amountCharged = piAmountTotal ?? 0;
+      // When metadata total is missing/0, use hold pricing so we don't treat deposit amount as full total (which would wrongly classify as full payment)
+      let totalCents: number;
+      if (totalCentsFromMeta > 0) {
+        totalCents = totalCentsFromMeta;
+      } else {
+        const holdRef = db.collection("holds").doc(holdId);
+        const holdSnap = await holdRef.get();
+        const hold = holdSnap.exists ? (holdSnap.data() as { pricing?: { totalCents?: number }; tipCents?: number; discountCents?: number }) : null;
+        if (hold?.pricing && typeof hold.pricing.totalCents === "number") {
+          const tipCents = typeof hold.tipCents === "number" ? hold.tipCents : 0;
+          const discountCents = typeof hold.discountCents === "number" ? hold.discountCents : 0;
+          totalCents = Math.max(0, hold.pricing.totalCents + tipCents - discountCents);
+          bookingLog("stripe-webhook", "payment_intent.succeeded using hold pricing for total (metadata total missing)", { holdId, totalCents, amountCharged });
+        } else {
+          totalCents = amountCharged;
+        }
+      }
       const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - (depositCentsFromMeta || amountCharged));
       // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback); do NOT require customerId
       const isDepositByStage = paymentStage === "deposit";
-      const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
+      const isDepositByAmount = totalCents > 0 && amountCharged > 0 && amountCharged < totalCents;
       const useDepositInput = isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
 
       const convertInput: ConvertHoldInput =

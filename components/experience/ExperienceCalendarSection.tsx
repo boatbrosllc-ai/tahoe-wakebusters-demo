@@ -143,7 +143,7 @@ export function ExperienceCalendarSection({
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [loading, setLoading] = useState(!!experienceIdProp || !!firestoreSlug);
   /** When loading by firestoreSlug, full experience + addons from API (for inline details step when onOpenInModal). */
-  const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number } | null>(null);
+  const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean } | null>(null);
   const [fetchedAddons, setFetchedAddons] = useState<{ id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[]>([]);
   const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | "shared" | undefined>(pricingTypeProp ?? undefined);
   const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(departureHourProp ?? undefined);
@@ -246,6 +246,7 @@ export function ExperienceCalendarSection({
               title: exp.title,
               maxGuests: typeof exp.maxGuests === "number" ? exp.maxGuests : 0,
               petsMax: typeof exp.petsMax === "number" ? exp.petsMax : 0,
+              allowDeposit: exp.allowDeposit,
             });
             setFetchedPricingType(exp.pricingType ?? undefined);
             setFetchedDepartureHour(exp.pricingType === "ticketed" && typeof exp.departureHour === "number" ? exp.departureHour : undefined);
@@ -868,7 +869,7 @@ export function ExperienceCalendarSection({
     : "";
 
   /** When onOpenInModal and loading by firestoreSlug, use fetched experience/addons for inline details step so all steps stay on page. */
-  const effectiveExperienceForDetails = experienceForDetails ?? (onOpenInModal && experienceId && fetchedExperience ? { id: experienceId, title: fetchedExperience.title, maxGuests: fetchedExperience.maxGuests, petsMax: fetchedExperience.petsMax } : undefined);
+  const effectiveExperienceForDetails = experienceForDetails ?? (onOpenInModal && experienceId && fetchedExperience ? { id: experienceId, title: fetchedExperience.title, maxGuests: fetchedExperience.maxGuests, petsMax: fetchedExperience.petsMax, allowDeposit: fetchedExperience.allowDeposit } : undefined);
   const effectiveRatesForDetails = ratesForDetails ?? (onOpenInModal && rates.length > 0 ? rates : undefined);
   const effectiveAddonsForDetails = addonsForDetails ?? (onOpenInModal ? fetchedAddons : undefined);
   const hasInlineDetails = !!(effectiveExperienceForDetails && effectiveRatesForDetails && effectiveAddonsForDetails !== undefined);
