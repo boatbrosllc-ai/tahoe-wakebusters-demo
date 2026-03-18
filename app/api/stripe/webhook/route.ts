@@ -31,6 +31,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing stripe-signature" }, { status: 400 });
     }
     const webhookSecret = bookingEnv.stripeWebhookSecret;
+    if (typeof webhookSecret !== "string" || webhookSecret.trim() === "") {
+      console.error("[stripe-webhook] STRIPE_WEBHOOK_SECRET is missing or empty; refusing to verify payload (would accept unsigned).");
+      return NextResponse.json({ error: "Webhook misconfiguration" }, { status: 500 });
+    }
     const stripe = getStripe();
     try {
       event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
@@ -80,7 +84,7 @@ export async function POST(request: NextRequest) {
     const writeEventResult = async (
       docId: string,
       data: {
-        status: "completed" | "failed_retryable";
+        status: "completed" | "failed_retryable" | "failed_permanent";
         processedAt: FirestoreTimestamp;
         error?: string;
         outcome?: string;
@@ -103,9 +107,9 @@ export async function POST(request: NextRequest) {
       const currency = session.currency ?? undefined;
       const holdId = session.metadata?.holdId;
       if (!holdId) {
-        console.error("[stripe-webhook] checkout.session.completed missing holdId in metadata", { sessionId, paymentIntentId });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in session metadata", sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        console.error("[stripe-webhook] checkout.session.completed missing holdId in metadata (permanent; no retry)", { sessionId, paymentIntentId });
+        await writeEventResult(eventId, { status: "failed_permanent", processedAt: Timestamp.now(), error: "Missing holdId in session metadata", sessionId, paymentIntentId, amountTotal, currency });
+        return NextResponse.json({ received: true });
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
@@ -133,10 +137,24 @@ export async function POST(request: NextRequest) {
       const holdExpiresAt = (hold.expiresAt as { toDate(): Date });
       if (holdExpiresAt.toDate() < new Date()) {
         bookingLog("stripe-webhook", "checkout.session.completed hold expired (idempotent success)", { holdId, sessionIdPrefix: sessionId.slice(0, 8) });
+        try {
+          await db.collection("pendingRefunds").add({
+            holdId,
+            sessionId,
+            paymentIntentId,
+            reason: "hold_expired_after_checkout_payment",
+            status: "pending",
+            createdAt: Timestamp.now(),
+            amountTotal,
+            currency,
+          });
+        } catch (refundFlagErr) {
+          console.error("[stripe-webhook] Failed to write pendingRefunds for checkout hold expired", refundFlagErr);
+        }
         await writeEventResult(eventId, {
           status: "completed",
           processedAt: Timestamp.now(),
-          outcome: "checkout_session_completed_hold_expired",
+          outcome: "checkout_session_completed_hold_expired_refund_flagged",
           error: "Hold expired",
           holdId,
           sessionId,
@@ -262,10 +280,14 @@ export async function POST(request: NextRequest) {
       }
 
       const holdId = piRaw.metadata?.holdId;
+      if (!holdId && !paymentStage) {
+        await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "skipped_no_booking_metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        return NextResponse.json({ received: true });
+      }
       if (!holdId) {
-        bookingError("stripe-webhook", "payment_intent.succeeded missing holdId in metadata", null, { paymentIntentId: piId });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        bookingError("stripe-webhook", "payment_intent.succeeded missing holdId in metadata (permanent; no retry)", null, { paymentIntentId: piId });
+        await writeEventResult(eventId, { status: "failed_permanent", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        return NextResponse.json({ received: true });
       }
       bookingLog("stripe-webhook", "payment_intent.succeeded resolving PI and calling convertHoldToBooking", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
 

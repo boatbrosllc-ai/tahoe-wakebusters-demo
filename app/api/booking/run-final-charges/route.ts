@@ -163,13 +163,31 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        type LockTxResult = { acquired: true } | { acquired: false; reason: string };
+        let lockAcquired: boolean;
         try {
-          await db.collection("bookings").doc(bookingId).update({
-            "stripe.finalChargeLockAt": nowTs,
-            "stripe.finalChargeAttemptedAt": nowTs,
+          const txResult = await db.runTransaction(async (tx): Promise<LockTxResult> => {
+            const bookingRef = db.collection("bookings").doc(bookingId);
+            const snap = await tx.get(bookingRef);
+            if (!snap.exists) return { acquired: false, reason: "not_found" };
+            const b = snap.data() as Booking;
+            if (b.status !== "final_due") return { acquired: false, reason: "status_changed" };
+            const lockAt = b.stripe?.finalChargeLockAt;
+            if (isFinalChargeLockRecent(lockAt, now)) return { acquired: false, reason: "lock_held" };
+            tx.update(bookingRef, {
+              "stripe.finalChargeLockAt": nowTs,
+              "stripe.finalChargeAttemptedAt": nowTs,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            return { acquired: true };
           });
-        } catch (updateErr) {
-          console.warn("[run-final-charges] lock update failed", { bookingId }, updateErr);
+          lockAcquired = txResult.acquired;
+          if (!lockAcquired) {
+            skipped++;
+            continue;
+          }
+        } catch (txErr) {
+          console.warn("[run-final-charges] lock transaction failed", { bookingId }, txErr);
           skipped++;
           continue;
         }
@@ -213,8 +231,10 @@ export async function POST(request: NextRequest) {
           await db.collection("bookings").doc(bookingId).update({
             status: newStatus,
             "stripe.finalError": { code, message: err.message ?? undefined },
+            "stripe.finalChargeLockAt": FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
           });
-          console.log("[run-final-charges] final charge failed, status updated", { bookingId, newStatus, code });
+          console.log("[run-final-charges] final charge failed, lock cleared, status updated", { bookingId, newStatus, code });
           attempted++;
           failed++;
           errors.push(`${bookingId}: ${code ?? err.message}`);

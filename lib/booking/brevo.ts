@@ -21,6 +21,8 @@ import type { Booking } from "./types";
 const BREVO_API_BASE = "https://api.brevo.com/v3";
 
 const BREVO_FETCH_TIMEOUT_MS = 8000;
+/** Exponential back-off: 1s, then 3s before final failure. */
+const SEND_RETRY_DELAYS_MS = [1000, 3000];
 
 function getHeaders(): Record<string, string> {
   return {
@@ -31,6 +33,42 @@ function getHeaders(): Record<string, string> {
 
 function fetchOpts(): RequestInit {
   return { signal: AbortSignal.timeout(BREVO_FETCH_TIMEOUT_MS) };
+}
+
+async function sendWithRetry(
+  url: string,
+  body: Record<string, unknown>,
+  opts?: { retries?: number }
+): Promise<Response> {
+  const retries = opts?.retries ?? 2;
+  let lastRes: Response | null = null;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(body),
+        ...fetchOpts(),
+      });
+      if (res.ok) return res;
+      lastRes = res;
+      if (attempt < retries) {
+        const delayMs = SEND_RETRY_DELAYS_MS[attempt] ?? 3000;
+        console.warn("[brevo] sendWithRetry attempt failed, retrying", { attempt: attempt + 1, status: res.status, delayMs });
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        const delayMs = SEND_RETRY_DELAYS_MS[attempt] ?? 3000;
+        console.warn("[brevo] sendWithRetry attempt threw, retrying", { attempt: attempt + 1, delayMs, error: err instanceof Error ? err.message : String(err) });
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  if (lastErr) throw lastErr;
+  return lastRes!;
 }
 
 export interface BookingEmailContext {
@@ -149,39 +187,14 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
     ? { templateId, to: payload.to, params: payload.params }
     : { sender: payload.sender, to: payload.to, subject: payload.subject, htmlContent: payload.htmlContent };
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-      ...fetchOpts(),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      const errMsg = `Brevo send failed: ${res.status} ${text}`;
-      console.error("[brevo] sendBookingConfirmationEmail", errMsg);
-      throw new Error(errMsg);
-    }
-    return emailSubject;
-  } catch (err) {
-    const isAbort = err instanceof Error && err.name === "AbortError";
-    if (isAbort) throw err;
-    // One retry after short delay for transient Brevo failures
-    await new Promise((r) => setTimeout(r, 1500));
-    const res = await fetch(url, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-      ...fetchOpts(),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      const errMsg = `Brevo send failed (after retry): ${res.status} ${text}`;
-      console.error("[brevo] sendBookingConfirmationEmail", errMsg);
-      throw new Error(errMsg);
-    }
-    return emailSubject;
+  const res = await sendWithRetry(url, body as Record<string, unknown>);
+  if (!res.ok) {
+    const text = await res.text();
+    const errMsg = `Brevo send failed: ${res.status} ${text}`;
+    console.error("[brevo] sendBookingConfirmationEmail", errMsg);
+    throw new Error(errMsg);
   }
+  return emailSubject;
 }
 
 const BUSINESS_EMAIL = process.env.CONTACT_EMAIL?.trim() || "boatbrosllc@gmail.com";
@@ -225,21 +238,17 @@ export async function sendBookingReminderEmail(
 ): Promise<void> {
   const html = buildReminderHtml(type, params);
   const subject = getReminderSubject(type, params.experienceName);
-  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      sender: getSender(),
-      to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
-      subject,
-      htmlContent: html,
-    }),
-    ...fetchOpts(),
-  });
+  const body = {
+    sender: getSender(),
+    to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
+    subject,
+    htmlContent: html,
+  };
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body);
   if (!res.ok) {
     const text = await res.text();
-    console.error("[brevo] sendBookingReminderEmail", type, res.status, text);
-    throw new Error(`Brevo reminder send failed: ${res.status}`);
+    console.error("[brevo] sendBookingReminderEmail final failure", type, res.status, text);
+    throw new Error(`Brevo reminder send failed: ${res.status} ${text}`);
   }
 }
 
@@ -250,21 +259,17 @@ export async function sendBookingReminderEmail(
 export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestParams): Promise<void> {
   const html = buildFinalPaymentRequestHtml(params);
   const subject = getFinalPaymentRequestSubject();
-  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      sender: getSender(),
-      to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
-      subject,
-      htmlContent: html,
-    }),
-    ...fetchOpts(),
-  });
+  const body = {
+    sender: getSender(),
+    to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
+    subject,
+    htmlContent: html,
+  };
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body);
   if (!res.ok) {
     const text = await res.text();
-    console.error("[brevo] sendFinalPaymentRequestEmail", res.status, text);
-    throw new Error(`Brevo send failed: ${res.status}`);
+    console.error("[brevo] sendFinalPaymentRequestEmail final failure", res.status, text);
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
   }
 }
 
@@ -296,21 +301,17 @@ export async function sendFinalChargeFailedEmail(
   ${ctaHtml}
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
-    const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({
-        sender: getSender(),
-        to: [{ email: toEmail.trim(), name: toName.trim() || undefined }],
-        subject,
-        htmlContent: html,
-      }),
-      ...fetchOpts(),
-    });
+  const reqBody = {
+    sender: getSender(),
+    to: [{ email: toEmail.trim(), name: toName.trim() || undefined }],
+    subject,
+    htmlContent: html,
+  };
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, reqBody);
   if (!res.ok) {
     const text = await res.text();
-    console.error("[brevo] sendFinalChargeFailedEmail", res.status, text);
-    throw new Error(`Brevo send failed: ${res.status}`);
+    console.error("[brevo] sendFinalChargeFailedEmail final failure", res.status, text);
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
   }
 }
 

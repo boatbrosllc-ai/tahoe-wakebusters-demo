@@ -26,8 +26,11 @@ import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
+import { TAX_RATE } from "@/lib/booking/constants";
+import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
+const SESSION_STORAGE_HOLD_ID_KEY = "booking_holdId_modal";
 
 interface ExperienceItem {
   id: string;
@@ -83,9 +86,6 @@ interface AddonOption {
   highlight?: boolean;
 }
 
-/** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
-const TEXAS_SALES_TAX_RATE = 0.0825;
-
 /** Stable empty array for ratesForSelection when no rates loaded yet (avoids new [] reference every render). */
 const EMPTY_RATES_FOR_SELECTION: CachedRateOption[] = [];
 
@@ -103,7 +103,7 @@ function BookingPaymentForm({
   onSuccess,
   onError,
 }: {
-  onSuccess: () => void;
+  onSuccess: (paymentIntentId?: string) => void;
   onError: (message: string) => void;
 }) {
   const stripe = useStripe();
@@ -114,13 +114,13 @@ function BookingPaymentForm({
     if (!stripe || !elements) return;
     setProcessing(true);
     try {
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
         redirect: "if_required",
       });
       if (error) onError(error.message ?? "Payment failed");
-      else onSuccess();
+      else onSuccess(paymentIntent?.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {
@@ -130,10 +130,10 @@ function BookingPaymentForm({
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <PaymentElement />
-      <button
+        <button
         type="submit"
         disabled={!stripe || processing}
-        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
+        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
       >
         {processing ? "Processing…" : "Pay now"}
       </button>
@@ -191,7 +191,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
+  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning" | "successRecoveryFailed">("form");
   const [payFullAmount, setPayFullAmount] = useState(true);
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
   const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
@@ -209,6 +209,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [finalCentsFromServer, setFinalCentsFromServer] = useState<number | null>(null);
   /** Server says this payment was a deposit (true) or full (false). Used for success message so we never show "full payment" after a deposit. */
   const [isDepositFromServer, setIsDepositFromServer] = useState<boolean | null>(null);
+  /** When recovery of holdId/paymentIntentId fails after Stripe success: show fallback with this PI ID. */
+  const [recoveryFailedPiId, setRecoveryFailedPiId] = useState<string | null>(null);
   /** Hold expiry (ISO string) from create-hold; shown during payment and used to block progression when expired. */
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
   /** One-shot ref to prevent duplicate release calls from concurrent close triggers (Dialog overlay + cleanup). */
@@ -222,6 +224,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   paymentPhaseRef.current = paymentPhase;
   holdIdRef.current = holdId;
   releaseTokenRef.current = releaseToken;
+  useEffect(() => {
+    if (holdId) {
+      try {
+        if (typeof sessionStorage !== "undefined") sessionStorage.setItem(SESSION_STORAGE_HOLD_ID_KEY, holdId);
+      } catch (_) {}
+    } else {
+      try {
+        if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(SESSION_STORAGE_HOLD_ID_KEY);
+      } catch (_) {}
+    }
+  }, [holdId]);
 
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
   const isTicketed = selectedExperience?.pricingType === "ticketed" || (!!open && initialSelection?.pricingType === "ticketed");
@@ -556,6 +569,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Single-pass derivation of all three boat-availability sets for the selected time slot.
    * Only considers slots with the SAME duration as selectedSlot so we don't show boats that have
    * a different duration open (e.g. 2hr open but 3hr held). Matches the duration-filtered time list. */
+  const ticketedForSlot = selectedExperience?.pricingType === "ticketed";
   const { availableBoatIdsForSelectedSlot, unavailableBoatIdsForSelectedSlot, bookedBoatIdsForSelectedSlot } = useMemo(() => {
     const empty = new Set<string>();
     if (!selectedSlot?.startAt) return { availableBoatIdsForSelectedSlot: empty, unavailableBoatIdsForSelectedSlot: empty, bookedBoatIdsForSelectedSlot: empty };
@@ -565,21 +579,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     const unavailable = new Set<string>();
     const booked = new Set<string>();
     for (const s of monthSlots) {
-      if (!s.boatId) continue;
+      const boatKey = s.boatId && s.boatId.trim() ? s.boatId : ticketedForSlot ? "_ticketed" : null;
+      if (boatKey === null) continue;
       if (new Date(s.startAt).getTime() !== selectedStartMs) continue;
-      // Only count slots with the same duration as the selected slot (e.g. 3hr with 3hr).
       const slotDuration = parseSlotId(s.id)?.durationHours ?? null;
       if (slotDuration !== selectedDurationHours) continue;
-      if (s.status === "open") available.add(s.boatId);
+      if (s.status === "open") available.add(boatKey);
       else {
-        unavailable.add(s.boatId);
-        booked.add(s.boatId);
+        unavailable.add(boatKey);
+        booked.add(boatKey);
       }
     }
-    // If no boats found (e.g. refetch made the selected slot stale), still treat the selected slot's boat as available so the user can try (create-hold will 409 if really taken).
     if (available.size === 0 && selectedSlot.boatId) available.add(selectedSlot.boatId);
     return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };
-  }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots]);
+  }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots, ticketedForSlot]);
   const slotsByDate = useMemo(() => {
     const map = new Map<
       string,
@@ -696,7 +709,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }));
     const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
     const subtotalBeforeTax = rateCents + addonsTotalCents;
-    const salesTaxCents = Math.round(subtotalBeforeTax * TEXAS_SALES_TAX_RATE);
+    const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
     const pct = Math.min(35, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
@@ -810,6 +823,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (tipLaterWasOpenRef.current && !tipLaterMessageOpen) setTipChoice("later");
     tipLaterWasOpenRef.current = tipLaterMessageOpen;
   }, [tipLaterMessageOpen]);
+
+  // Auto-select the only tip option when listing allows only one
+  const allowTipNow = selectedExperience?.allowTipNow !== false;
+  const allowTipLater = selectedExperience?.allowTipLater !== false;
+  const tipSectionRequired = allowTipNow || allowTipLater;
+  useEffect(() => {
+    if (!tipSectionRequired) return;
+    if (allowTipNow && !allowTipLater) setTipChoice("now");
+    else if (!allowTipNow && allowTipLater) setTipChoice("later");
+  }, [tipSectionRequired, allowTipNow, allowTipLater]);
 
   // Confetti when booking is confirmed (payment success) — dynamic import to avoid SSR resolution
   useEffect(() => {
@@ -999,19 +1022,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     <Dialog
       open={open}
       onOpenChange={handleModalOpenChange}
+      fullScreenOnMobile
       className={cn(
-        "w-[calc(100vw-2rem)] max-w-md max-h-[85dvh]",
-        "md:max-w-2xl md:max-h-[85dvh]",
-        "lg:max-w-3xl lg:max-h-[85dvh]"
+        "max-h-[90dvh] sm:max-h-[85dvh]",
+        "sm:max-w-md md:max-w-2xl lg:max-w-3xl"
       )}
     >
       <div
         className={cn(
-          "flex flex-col overflow-hidden min-h-[260px] max-h-[85dvh]",
+          "flex flex-col overflow-hidden min-h-[260px] max-h-[90dvh] sm:max-h-[85dvh] overflow-x-hidden",
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
-              ? "h-[70dvh] min-h-[380px] sm:min-h-[400px] md:min-h-[420px] max-h-[85dvh]"
+              ? "h-[70dvh] min-h-[320px] sm:min-h-[400px] md:min-h-[420px] max-h-[90dvh] sm:max-h-[85dvh]"
               : "flex-1 min-h-0"
         )}
       >
@@ -1062,7 +1085,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         <div
           className={cn(
             "flex flex-col overflow-hidden min-h-0 flex-1",
-            step !== 4 && "max-h-[calc(85dvh-11rem)]",
+            step !== 4 && "max-h-[calc(90dvh-11rem)] sm:max-h-[calc(85dvh-11rem)]",
             step === 4 && "min-h-0"
           )}
         >
@@ -1076,64 +1099,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             )}
           >
             {/* Step 1: Category */}
-            <div
-              className={cn(
-                "w-1/4 shrink-0 pr-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
-                panel1Collapsed && "!min-h-0 !h-0 overflow-hidden"
-              )}
-            >
-              {loading ? (
-                <div className="py-12 flex justify-center">
-                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-                </div>
-              ) : experiences && experiences.length > 0 ? (
-                <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-4 md:gap-5 flex-1 min-h-0">
-                  {experiences.map((exp) => {
-                    const isSelected = selectedExperience?.id === exp.id;
-                    const hasImage = exp.heroMedia?.url && exp.heroMedia.type === "image";
-                    return (
-                      <button
-                        key={exp.id}
-                        type="button"
-                        onClick={() => handleSelectCategory(exp)}
-                        className={cn(
-                          "relative flex flex-col overflow-hidden rounded-2xl border-2 min-h-[165px] md:min-h-[200px] transition-all",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          isSelected ? "border-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]"
-                        )}
-                      >
-                        <div className="absolute inset-0 bg-brand-dark/5">
-                          {hasImage ? (
-                            <Image src={getDisplayImageUrl(exp.heroMedia.url)} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
-                          ) : (
-                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
-                          )}
-                        </div>
-                        <div className="relative flex flex-1 flex-col justify-end p-4 md:p-5 bg-gradient-to-t from-black/80 via-black/30 to-transparent">
-                          <span className="text-base md:text-lg font-semibold text-white drop-shadow-md">{exp.title}</span>
-                          {exp.subtitle ? (
-                            <span className="text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">{exp.subtitle}</span>
-                          ) : null}
-                          {exp.fromPriceCents != null && (
-                            <span className="text-sm font-medium text-white/95 mt-1">
-                              {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents, exp.pricingType)}
-                            </span>
-                          )}
-                          {exp.pricingType === "ticketed" && (
-                            <span className="text-xs text-white/80 mt-0.5 block">Prices may vary by date</span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : experiencesLoadError ? (
-                <p className="text-sm text-amber-700 py-8 px-4">{experiencesLoadError}. Please try again or contact us.</p>
-              ) : (
-                <p className="text-sm text-brand-muted py-8">No experiences available.</p>
-              )}
-              <p className="text-center text-xs text-brand-muted mt-4">Select a category to continue</p>
-            </div>
+            <BookingStep1Category
+              loading={loading}
+              experiences={experiences}
+              experiencesLoadError={experiencesLoadError}
+              selectedExperience={selectedExperience}
+              onSelectCategory={handleSelectCategory}
+              panel1Collapsed={panel1Collapsed}
+            />
 
             {/* Step 2: Date & time — duration, calendar, time; then continue to boat */}
             <div
@@ -1683,7 +1656,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           })}
                         {priceSummary.salesTaxCents > 0 && (
                           <div className="flex justify-between items-baseline text-sm">
-                            <span className="text-brand-muted">Sales tax (8.25%)</span>
+                            <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
                             <span className="font-medium text-brand-dark">+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
                           </div>
                         )}
@@ -1744,7 +1717,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               <div className="flex justify-between items-baseline">
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
                                 {priceReady ? (
-                                  <span className="text-xl font-bold text-brand-primary">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                  depositCentsFromServer != null ? (
+                                    <span className="text-xl font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
+                                  ) : (
+                                    <span className="inline-block h-7 w-24 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                                  )
                                 ) : (
                                   <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
                                 )}
@@ -1752,7 +1729,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               <div className="flex justify-between items-baseline text-sm">
                                 <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
                                 {priceReady ? (
-                                  <span className="font-medium text-brand-dark">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)}</span>
+                                  depositCentsFromServer != null ? (
+                                    <span className="font-medium text-brand-dark">${(depositCentsFromServer / 100).toFixed(2)}</span>
+                                  ) : (
+                                    <span className="inline-block h-5 w-20 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                                  )
                                 ) : (
                                   <span className="h-5 w-14 animate-pulse rounded bg-brand-dark/10" aria-hidden />
                                 )}
@@ -1777,7 +1758,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           onChange={(e) => setCustomerName(e.target.value)}
                           required
                           placeholder="As on ID"
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors"
                         />
                       </div>
                       <div>
@@ -1790,7 +1771,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           required
                           placeholder="you@example.com"
                           className={cn(
-                            "w-full rounded-xl border-2 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors",
+                            "w-full rounded-xl border-2 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors",
                             customerEmail.length > 0 && !emailValid ? "border-red-500" : "border-brand-dark/15"
                           )}
                         />
@@ -1807,7 +1788,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           onChange={(e) => setCustomerPhone(e.target.value)}
                           required
                           placeholder="(555) 000-0000"
-                          className={cn("w-full rounded-xl border-2 bg-white px-3 py-2.5 text-sm placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors", customerPhone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
+                          className={cn("w-full rounded-xl border-2 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors", customerPhone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
                         />
                         {customerPhone.length > 0 && phoneError && (
                           <p className="text-xs text-red-600 mt-1">{phoneError}</p>
@@ -1838,7 +1819,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           value={partySize}
                           onChange={(e) => setPartySize(parseInt(e.target.value, 10) || 1)}
                           required
-                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
+                          className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
                           aria-describedby="booking-party-size-hint"
                         >
                           {Array.from({ length: ticketMax }, (_, i) => i + 1).map((n) => (
@@ -1945,12 +1926,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     );})()}
                   </Dialog>
 
-                  {/* Tip — required: choose Tip now or Tip later */}
+                  {/* Tip — shown only when listing allows at least one of Tip now / Tip later */}
+                  {tipSectionRequired && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
-                      Tip <span className="text-red-500 font-semibold normal-case" aria-hidden>*</span>
+                      Tip {allowTipNow && allowTipLater ? <span className="text-red-500 font-semibold normal-case" aria-hidden>*</span> : null}
                     </p>
                     <div className="flex gap-2">
+                      {allowTipNow && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1967,6 +1950,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         Tip now
                       </button>
+                      )}
+                      {allowTipLater && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1984,6 +1969,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         Tip later
                       </button>
+                      )}
                     </div>
                     {tipChoice === "now" && priceSummary.tipCents > 0 && (
                       <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
@@ -1991,10 +1977,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     {tipChoice === "later" && (
                       <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
                     )}
-                    {tipChoice === null && paymentError?.toLowerCase().includes("tip") && (
+                    {tipChoice === null && allowTipNow && allowTipLater && paymentError?.toLowerCase().includes("tip") && (
                       <p className="text-xs text-red-600 mt-1.5">Please choose Tip now or Tip later.</p>
                     )}
                   </div>
+                  )}
 
                   {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
                   {!isTicketed && selectedExperience?.allowDeposit !== false && (
@@ -2015,7 +2002,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
-                          ${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now — we&apos;ll charge the remaining 50% 48 hours before your trip
+                          {depositCentsFromServer != null ? `$${(depositCentsFromServer / 100).toFixed(2)} now` : "Loading…"} — we&apos;ll charge the remaining 50% 48 hours before your trip
                         </span>
                       </button>
                       <button
@@ -2051,7 +2038,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           setAppliedDiscountError(null);
                         }}
                         placeholder="Enter code"
-                        className="flex-1 min-w-[120px] rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                        className="flex-1 min-w-[120px] rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
                         aria-label="Discount code"
                       />
                       <button
@@ -2065,8 +2052,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           try {
                             const totalBeforeDiscount = priceSummary.rateCents
                               + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
-                              + priceSummary.salesTaxCents
-                              + priceSummary.tipCents; // include tip to match server
+                              + priceSummary.salesTaxCents;
                             const res = await fetch("/api/booking/validate-discount", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -2086,7 +2072,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             setAppliedDiscountLoading(false);
                           }
                         }}
-                        className="shrink-0 rounded-xl border-2 border-brand-primary bg-brand-primary text-white font-semibold px-4 py-2 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="shrink-0 rounded-xl border-2 border-brand-primary bg-brand-primary text-white font-semibold px-4 py-2.5 text-base min-h-[44px] touch-manipulation hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {appliedDiscountLoading ? "Checking…" : "Apply"}
                       </button>
@@ -2103,7 +2089,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       value={howDidYouHear}
                       onChange={(e) => setHowDidYouHear(e.target.value)}
                       placeholder="How did you hear about us?"
-                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
                     />
                     <textarea
                       id="booking-comments"
@@ -2111,7 +2097,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       onChange={(e) => setComments(e.target.value)}
                       placeholder="Special requests or notes"
                       rows={2}
-                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2 text-sm resize-none placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base resize-none touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
                     />
                   </div>
 
@@ -2142,7 +2128,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         </p>
                         {priceReady ? (
                           <p className="text-xl sm:text-2xl font-bold text-brand-primary">
-                            ${(((isTicketed || payFullAmount) ? priceSummary.totalCents : Math.round(priceSummary.totalCents * 0.5)) / 100).toFixed(2)}
+                            {(isTicketed || payFullAmount)
+                              ? `$${(priceSummary.totalCents / 100).toFixed(2)}`
+                              : depositCentsFromServer != null
+                                ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                                : null}
+                            {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                              <span className="inline-block h-6 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
+                            )}
                           </p>
                         ) : (
                           <p className="text-xl sm:text-2xl font-bold text-brand-primary">
@@ -2183,6 +2176,32 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="h-12 w-12 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
                   <p className="text-sm font-medium text-brand-dark">Completing your booking…</p>
                   <p className="text-xs text-brand-muted">Please don&apos;t close this window.</p>
+                </div>
+              )}
+              {paymentPhase === "successRecoveryFailed" && (
+                <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
+                    <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
+                    <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
+                      Your payment was successful. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference.
+                    </p>
+                    {recoveryFailedPiId && (
+                      <p className="text-xs font-mono text-brand-dark/80 bg-brand-dark/5 px-2 py-1 rounded mt-2">Payment reference: {recoveryFailedPiId}</p>
+                    )}
+                    <p className="text-sm font-medium text-brand-dark mt-2">Contact us at {siteConfig.phone}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleModalOpenChange(false)}
+                    className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
+                  >
+                    Close
+                  </button>
                 </div>
               )}
               {paymentPhase === "successWithWarning" && (
@@ -2301,7 +2320,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold text-brand-primary">
-                          ${(((isTicketed || payFullAmount) ? (totalCentsFromServer ?? priceSummary.totalCents) : (depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}
+                          {(isTicketed || payFullAmount)
+                            ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
+                            : depositCentsFromServer != null
+                              ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                              : null}
+                          {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                            <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                          )}
                         </p>
                         <p className="text-[11px] text-brand-muted">
                           {(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}
@@ -2325,7 +2351,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       ))}
                       {priceSummary.salesTaxCents > 0 && (
                         <div className="flex justify-between text-brand-dark">
-                          <span className="text-brand-muted">Sales tax (8.25%)</span>
+                          <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
                           <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
                         </div>
                       )}
@@ -2338,7 +2364,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
                         <span>{(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}</span>
                         <span>
-                          ${(((isTicketed || payFullAmount) ? (totalCentsFromServer ?? priceSummary.totalCents) : (depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5))) / 100).toFixed(2)}
+                          {(isTicketed || payFullAmount)
+                            ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
+                            : depositCentsFromServer != null
+                              ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                              : null}
+                          {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                            <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                          )}
                         </span>
                       </div>
                     </div>
@@ -2366,20 +2399,22 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingPaymentForm
-                        onSuccess={async () => {
+                        onSuccess={async (paymentIntentIdFromConfirm?: string) => {
                           setPaymentPhase("completing");
                           if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
-                          if (!holdId || !paymentIntentId) {
-                            bookingError("client", "complete-after-payment skipped: missing holdId or paymentIntentId", null, { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
-                            setPaymentError("Your payment succeeded. If you don't see a confirmation email, contact us with your email and we'll confirm your booking.");
-                            setPaymentPhase("success");
+                          const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
+                          const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
+                          if (!resolvedHoldId || !resolvedPiId) {
+                            bookingError("client", "complete-after-payment recovery failed: missing holdId or paymentIntentId", null, { hasHoldId: !!resolvedHoldId, hasPaymentIntentId: !!resolvedPiId });
+                            setRecoveryFailedPiId(resolvedPiId ?? null);
+                            setPaymentPhase("successRecoveryFailed");
                             return;
                           }
                           try {
                             const res = await fetch("/api/booking/complete-after-payment", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ holdId, paymentIntentId }),
+                              body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId }),
                             });
                             const data = await res.json().catch(() => ({}));
                             if (res.ok && data?.success) {
@@ -2416,7 +2451,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               setPaymentPhase("successWithWarning");
                             }
                           } catch (e) {
-                            bookingError("client", "complete-after-payment request failed", e, { holdId });
+                            bookingError("client", "complete-after-payment request failed", e, { holdId: resolvedHoldId });
                             setPaymentError(
                               `Payment captured but we couldn't confirm your booking. Please contact us with your email to confirm. Call us at ${siteConfig.phone}.`
                             );
@@ -2473,7 +2508,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       const v = parseInt(e.target.value, 10);
                       if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
                     }}
-                    className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
+                    className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
                   />
                 </div>
                 <button

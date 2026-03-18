@@ -127,6 +127,10 @@ export const bookingEnv = {
     const v = getEnv("MANAGE_BOOKING_SECRET");
     return v == null || v === "" ? undefined : v;
   },
+  /** Same as manageBookingSecret but throws at read time if unset. Use when the flow requires it (e.g. hold release, success pages, 50/50 deposit). */
+  get manageBookingSecretRequired(): string {
+    return requireEnv("MANAGE_BOOKING_SECRET");
+  },
 };
 
 export function hasFirebaseConfig(): boolean {
@@ -233,4 +237,12 @@ export function hasStripeConfig(): boolean {
   } catch {
     return false;
   }
+}
+
+// Startup-time assertion: fail loudly if webhook secret is missing so misconfigured deployments fail at cold start.
+const _webhookSecret = getEnv("STRIPE_WEBHOOK_SECRET");
+if (typeof _webhookSecret !== "string" || _webhookSecret.trim() === "") {
+  throw new Error(
+    "STRIPE_WEBHOOK_SECRET is required for Stripe webhooks. Set it in the deployment environment so misconfigured deployments fail at cold start."
+  );
 }

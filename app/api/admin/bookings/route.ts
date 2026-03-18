@@ -59,29 +59,35 @@ export async function GET(request: NextRequest) {
       return end;
     };
 
-    let query = db.collection("bookings") as FirebaseFirestore.Query;
-
-    if (fromTripDate && toTripDate) {
-      query = query
-        .where("startDateStr", ">=", fromTripDate)
-        .where("startDateStr", "<=", toTripDate)
-        .orderBy("startDateStr", "desc");
-    } else {
-      query = query.orderBy("createdAt", "desc");
-      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
-      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
-    }
-
-    // Do not add status or experienceId to Firestore query (would require composite indexes).
-    // Apply them in JS after fetch; max 200 docs is acceptable for admin.
-    // When experienceId filter is set, use variant set (doc id + slug) so legacy slug variants are included.
+    // Build variant set for experienceId filter (doc id + slug); use in-query when <= 10 for index support.
     let variantSet: Set<string> | null = null;
+    let experienceIdInValues: string[] | null = null;
     if (experienceIdParam) {
       const expSnapForFilter = await db.collection("experiences").doc(experienceIdParam).get();
       const slug = (expSnapForFilter.exists && (expSnapForFilter.data() as { slug?: string })?.slug)
         ? String((expSnapForFilter.data() as { slug: string }).slug).trim()
         : "";
       variantSet = new Set(getExperienceIdVariants(experienceIdParam, slug));
+      if (variantSet.size > 0 && variantSet.size <= 10) {
+        experienceIdInValues = Array.from(variantSet);
+      }
+    }
+
+    let query = db.collection("bookings") as FirebaseFirestore.Query;
+
+    if (fromTripDate && toTripDate) {
+      if (experienceIdInValues) query = query.where("experienceId", "in", experienceIdInValues);
+      if (statusFilter) query = query.where("status", "==", statusFilter);
+      query = query
+        .where("startDateStr", ">=", fromTripDate)
+        .where("startDateStr", "<=", toTripDate)
+        .orderBy("startDateStr", "desc");
+    } else {
+      if (experienceIdInValues) query = query.where("experienceId", "in", experienceIdInValues);
+      if (statusFilter) query = query.where("status", "==", statusFilter);
+      query = query.orderBy("createdAt", "desc");
+      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
     }
 
     if (cursorParam) {
@@ -89,25 +95,25 @@ export async function GET(request: NextRequest) {
       if (cursorDoc.exists) query = query.startAfter(cursorDoc);
     }
 
-    // Fetch only `limit` docs so that when JS filters (status/experienceId) are applied,
-    // we don't silently return incomplete results. Surface truncation so the UI can warn.
-    const fetchSize = limit;
+    // When experienceId filter has >10 variants we can't use Firestore "in"; apply in JS and fetch more.
+    const fetchSize = variantSet && variantSet.size > 10 ? limit * 10 : limit;
     const snap = await query.limit(fetchSize).get();
     let docs = snap.docs;
 
-    if (statusFilter) docs = docs.filter((d) => (d.data() as Booking).status === statusFilter);
-    if (variantSet) docs = docs.filter((d) => variantSet!.has((d.data() as Booking).experienceId ?? ""));
+    if (variantSet && variantSet.size > 10) {
+      docs = docs.filter((d) => variantSet!.has((d.data() as Booking).experienceId ?? ""));
+    }
 
     const hitLimit = snap.docs.length >= fetchSize;
     const headers = new Headers();
     if (hitLimit) headers.set("X-Results-Truncated", "true");
 
     let nextCursor: string | null = null;
-    if (hitLimit) {
-      nextCursor = snap.docs[snap.docs.length - 1].id;
-    }
     if (docs.length > limit) {
       docs = docs.slice(0, limit);
+    }
+    if (hitLimit && docs.length > 0) {
+      nextCursor = docs[docs.length - 1].id;
     }
 
     const experienceIds = new Set<string>();

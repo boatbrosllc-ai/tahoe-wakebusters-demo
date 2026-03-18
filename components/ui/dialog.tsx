@@ -99,7 +99,7 @@ export function Dialog({
             )}
           </div>
         )}
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-4 sm:px-6 py-4 sm:py-5">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-4 sm:px-6 py-4 sm:py-5 overflow-x-hidden">
           {children}
         </div>
       </div>

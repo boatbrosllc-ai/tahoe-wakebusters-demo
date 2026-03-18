@@ -24,7 +24,7 @@ export interface UseBookingPaymentOptions {
   setReleaseToken: (v: string | null) => void;
   setHoldExpiresAt: (v: string | null) => void;
   setPaymentError: (v: string | null) => void;
-  setPaymentPhase: (v: "form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning") => void;
+  setPaymentPhase: (v: "form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning" | "successRecoveryFailed") => void;
   setClientSecret: (v: string | null) => void;
   setPaymentIntentId: (v: string | null) => void;
   setDepositCentsFromServer: (v: number | null) => void;
@@ -183,7 +183,8 @@ export function useBookingPayment(options: UseBookingPaymentOptions) {
       opts.setPaymentError("Please enter a valid phone number.");
       return;
     }
-    if (tipChoice === null) {
+    const tipRequired = opts.selectedExperience?.allowTipNow !== false || opts.selectedExperience?.allowTipLater !== false;
+    if (tipRequired && tipChoice === null) {
       opts.setPaymentError("Please choose a tip option: Tip now or Tip later.");
       return;
     }

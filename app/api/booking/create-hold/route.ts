@@ -579,7 +579,8 @@ export async function POST(request: NextRequest) {
     if (input.discountCode) {
       const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
       const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
-      const result = validateAndApplyDiscount(discountDoc, pricing.totalCents + tipCents);
+      // Discount base = pre-tip subtotal (rate + addons + tax) per contract with validate-discount.
+      const result = validateAndApplyDiscount(discountDoc, pricing.totalCents);
       if (!result.valid) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }

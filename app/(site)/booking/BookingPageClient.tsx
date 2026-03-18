@@ -229,7 +229,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     for (const slot of allSlots) {
       if (slot.status !== "open") continue;
       if (typeof (slot as { spotsRemaining?: number }).spotsRemaining === "number" && (slot as { spotsRemaining: number }).spotsRemaining === 0) continue;
-      if (selectedBoat && slot.boatId !== selectedBoat.id) continue;
+      if (selectedBoat && slot.boatId && slot.boatId !== selectedBoat.id) continue;
       const dateStr: string = slot.dateStr ?? (slot.startAt ? isoToChicagoDateStr(slot.startAt) : "");
       if (dateStr) available.add(dateStr);
     }

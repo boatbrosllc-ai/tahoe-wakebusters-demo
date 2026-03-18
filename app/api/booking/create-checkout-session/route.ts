@@ -213,9 +213,17 @@ export async function POST(request: NextRequest) {
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
+    const paymentIntentMetadata: Record<string, string> = {
+      holdId: input.holdId,
+      slotId: hold.slotId,
+      rateId: hold.rateId,
+      ...(hold.experienceId && { experienceId: hold.experienceId }),
+      ...(hold.boatId && { boatId: hold.boatId }),
+    };
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       line_items: lineItems,
+      payment_intent_data: { metadata: paymentIntentMetadata },
       customer_email:
         hold.customerDraft.email === "checkout@pending.local" ? undefined : hold.customerDraft.email,
       metadata,

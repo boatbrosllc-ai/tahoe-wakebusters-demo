@@ -1,3 +1,11 @@
+/**
+ * GET /api/booking/receipt
+ * Returns booking receipt data. When called with session_id or payment_intent_id (first-time
+ * redirect from Stripe), the response includes a receiptToken. Subsequent calls must use
+ * ?receipt_token=... only; unauthenticated session_id/payment_intent_id access does not
+ * return customer PII (customer, answers, specialNotes).
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getDb } from "@/lib/booking/firebase-admin";
@@ -148,10 +156,9 @@ export async function GET(request: NextRequest) {
     }
 
     const durationHours = rate?.durationHours;
-    const newReceiptToken =
-      !receiptToken
-        ? signReceiptToken(doc.id)
-        : undefined;
+    // When caller used session_id or payment_intent_id, issue a receipt token so subsequent
+    // calls use ?receipt_token=... only (no PII returned until then).
+    const newReceiptToken = !receiptToken ? signReceiptToken(doc.id) : undefined;
 
     const stripe = booking.stripe;
     const depositAmountCents = stripe?.depositAmountCents;
@@ -188,6 +195,7 @@ export async function GET(request: NextRequest) {
       paymentSummary.finalChargeAt = (booking.finalChargeAt as { toDate: () => Date }).toDate().toISOString();
     }
 
+    // When customerVerified is false (session_id or payment_intent_id only), do not return PII.
     const payload: Record<string, unknown> = {
       bookingId: doc.id,
       boatName,
@@ -200,7 +208,11 @@ export async function GET(request: NextRequest) {
       status: booking.status,
       paymentSummary,
     };
-    if (customerVerified) payload.customer = booking.customer;
+    if (customerVerified) {
+      payload.customer = booking.customer;
+      if (booking.answers != null) payload.answers = booking.answers;
+      if (booking.specialNotes != null) payload.specialNotes = booking.specialNotes;
+    }
     if (newReceiptToken) payload.receiptToken = newReceiptToken;
     return NextResponse.json(payload);
   } catch (err) {

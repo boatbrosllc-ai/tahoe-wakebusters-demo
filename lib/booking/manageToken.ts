@@ -39,8 +39,8 @@ export interface ManageTokenPayload {
 
 /**
  * Sign a manage-booking token. Include customerEmail to bind the link to that customer.
- * Optional tripDateStr (YYYY-MM-DD): when provided, expiry is the earlier of 30 days from now or trip date + 7 days.
- * Otherwise exp = 30 days from now.
+ * Optional tripDateStr (YYYY-MM-DD): when provided, expiry is min(30 days from now, trip date + 7 days).
+ * For far-future trips the token stays valid up to 7 days after the trip. No tripDateStr: exp = 30 days from now.
  */
 export function signManageToken(payload: {
   bookingId: string;
@@ -57,9 +57,7 @@ export function signManageToken(payload: {
     // Force UTC parsing so token lifetime is consistent across server timezones
     const tripEndOfDay = new Date(payload.tripDateStr + "T23:59:59Z").getTime() / 1000;
     const tripPlusSevenDays = tripEndOfDay + 7 * 24 * 60 * 60;
-    // Conservative cap: token never valid longer than 8 days from now
-    const eightDaysFromNow = nowSec + 8 * 24 * 60 * 60;
-    exp = Math.min(thirtyDaysFromNow, Math.floor(tripPlusSevenDays), eightDaysFromNow);
+    exp = Math.min(thirtyDaysFromNow, Math.floor(tripPlusSevenDays));
   } else {
     exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
   }

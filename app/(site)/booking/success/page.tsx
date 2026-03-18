@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState, useRef, Suspense } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
+const RECEIPT_TOKEN_STORAGE_KEY = "booking_receipt_token";
+
 interface ReceiptData {
   bookingId: string;
   customer?: { name: string; email: string; phone: string };
@@ -66,6 +68,9 @@ function BookingSuccessContent() {
       setData(json);
       if (json.receiptToken) {
         setStoredReceiptToken(json.receiptToken);
+        try {
+          if (typeof sessionStorage !== "undefined") sessionStorage.setItem(RECEIPT_TOKEN_STORAGE_KEY, json.receiptToken);
+        } catch (_) {}
         fetchedRef.current = true;
       }
     } catch (e) {
@@ -77,9 +82,20 @@ function BookingSuccessContent() {
   }, []);
 
   useEffect(() => {
-    const token = receiptTokenParam ?? storedReceiptToken;
+    const tokenFromUrl = receiptTokenParam ?? null;
+    const tokenFromStorage =
+      typeof sessionStorage !== "undefined" ? sessionStorage.getItem(RECEIPT_TOKEN_STORAGE_KEY) : null;
+    const token = tokenFromUrl || tokenFromStorage || storedReceiptToken;
     if (token || sessionId || paymentIntentId) {
-      fetchReceipt(sessionId ?? null, paymentIntentId ?? null, token);
+      const delayMs = 500;
+      const t = setTimeout(() => {
+        if (token) {
+          fetchReceipt(null, null, token);
+        } else {
+          fetchReceipt(sessionId ?? null, paymentIntentId ?? null, null);
+        }
+      }, delayMs);
+      return () => clearTimeout(t);
     } else {
       setLoading(false);
       setError("Missing session_id, payment_intent_id, or receipt_token");

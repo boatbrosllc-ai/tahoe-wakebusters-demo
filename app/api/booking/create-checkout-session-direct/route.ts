@@ -14,14 +14,16 @@ import { signReleaseToken } from "@/lib/booking/releaseToken";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
-const HOLD_EXPIRY_MINUTES = 10;
+const HOLD_EXPIRY_MINUTES = 20;
 
-/** Placeholder customer for direct checkout; Stripe collects real details. */
-const PLACEHOLDER_CUSTOMER = {
-  name: "Checkout",
-  email: "checkout@pending.local",
-  phone: "+15555555555",
-};
+/** Unique placeholder per hold to avoid Stripe customer index conflicts across concurrent direct checkouts. */
+function placeholderCustomerForHold(holdId: string) {
+  return {
+    name: "Checkout",
+    email: `checkout+${holdId}@pending.internal`,
+    phone: "+15555555555",
+  };
+}
 
 function parseBody(body: unknown): { experienceId: string; slotId: string; boatId?: string; partySize: number; petsCount: number; discountCode?: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -192,7 +194,7 @@ export async function POST(request: NextRequest) {
       partySize: input.partySize,
       petsCount: input.petsCount,
       answers: {} as Record<string, string>,
-      customerDraft: PLACEHOLDER_CUSTOMER,
+      customerDraft: placeholderCustomerForHold(holdId),
       marketingOptIn: false,
       status: "active",
       expiresAt: Timestamp.fromDate(expiresAt),
@@ -292,6 +294,7 @@ export async function POST(request: NextRequest) {
       experienceId: input.experienceId,
     };
     if (input.boatId) metadata.boatId = input.boatId;
+    const paymentIntentMetadata: Record<string, string> = { holdId, slotId: input.slotId, rateId, experienceId: input.experienceId };
     const releaseToken = signReleaseToken(holdId, Math.floor(expiresAt.getTime() / 1000));
     let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
     try {
@@ -305,6 +308,7 @@ export async function POST(request: NextRequest) {
           { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
         ],
         metadata,
+        payment_intent_data: { metadata: paymentIntentMetadata },
         success_url: `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: releaseToken
           ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(holdId)}&release_token=${encodeURIComponent(releaseToken)}`

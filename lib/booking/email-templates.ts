@@ -33,7 +33,8 @@ export type EmailTemplateId =
   | "booking_confirmation"
   | "booking_reminder_1week"
   | "booking_reminder_24h"
-  | "booking_reminder_dayof";
+  | "booking_reminder_dayof"
+  | "final_payment_request";
 
 export interface EmailTemplateMeta {
   id: EmailTemplateId;

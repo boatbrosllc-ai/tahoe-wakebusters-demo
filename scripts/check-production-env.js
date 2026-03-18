@@ -16,6 +16,7 @@ const required = [
   "BREVO_API_KEY",
   "APP_BASE_URL",
   "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+  "MANAGE_BOOKING_SECRET",
 ];
 
 // Firebase: either service account path (path mode) OR project + client_email + private key (variable mode)

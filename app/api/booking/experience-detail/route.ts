@@ -54,6 +54,8 @@ export interface ExperienceDetailResponse {
   departureHour?: number;
   departureMinute?: number;
   allowDeposit?: boolean;
+  allowTipNow?: boolean;
+  allowTipLater?: boolean;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -84,7 +86,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
@@ -196,6 +198,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
       // Charters require explicit opt-in for deposit (match create-payment-intent); ticketed never
       allowDeposit: pricingType === "ticketed" ? false : expData?.allowDeposit === true,
+      allowTipNow: expData?.allowTipNow !== false,
+      allowTipLater: expData?.allowTipLater !== false,
     };
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },

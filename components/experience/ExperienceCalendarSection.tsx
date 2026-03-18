@@ -104,7 +104,7 @@ interface ExperienceCalendarSectionProps {
   /** When set, picking a time opens the app BookingModal with this selection (experience + date + slot). Use for "calendar first" flow. */
   onOpenInModal?: (selection: ExperienceCalendarOpenModalSelection) => void;
   /** When provided with ratesForDetails and addonsForDetails, details & payment step is shown inline (third panel) instead of opening the modal. */
-  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number };
+  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
   ratesForDetails?: RateOption[];
   addonsForDetails?: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
   /** When "dark-card", use the pontoon-style card look (dark bg, white text, compact) in the same spot as BookingPreviewCard. */
@@ -143,7 +143,7 @@ export function ExperienceCalendarSection({
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [loading, setLoading] = useState(!!experienceIdProp || !!firestoreSlug);
   /** When loading by firestoreSlug, full experience + addons from API (for inline details step when onOpenInModal). */
-  const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean } | null>(null);
+  const [fetchedExperience, setFetchedExperience] = useState<{ title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean } | null>(null);
   const [fetchedAddons, setFetchedAddons] = useState<{ id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[]>([]);
   const [fetchedPricingType, setFetchedPricingType] = useState<"charter" | "ticketed" | "shared" | undefined>(pricingTypeProp ?? undefined);
   const [fetchedDepartureHour, setFetchedDepartureHour] = useState<number | undefined>(departureHourProp ?? undefined);
@@ -247,6 +247,8 @@ export function ExperienceCalendarSection({
               maxGuests: typeof exp.maxGuests === "number" ? exp.maxGuests : 0,
               petsMax: typeof exp.petsMax === "number" ? exp.petsMax : 0,
               allowDeposit: exp.allowDeposit,
+              allowTipNow: exp.allowTipNow,
+              allowTipLater: exp.allowTipLater,
             });
             setFetchedPricingType(exp.pricingType ?? undefined);
             setFetchedDepartureHour(exp.pricingType === "ticketed" && typeof exp.departureHour === "number" ? exp.departureHour : undefined);
@@ -870,7 +872,7 @@ export function ExperienceCalendarSection({
     : "";
 
   /** When onOpenInModal and loading by firestoreSlug, use fetched experience/addons for inline details step so all steps stay on page. */
-  const effectiveExperienceForDetails = experienceForDetails ?? (onOpenInModal && experienceId && fetchedExperience ? { id: experienceId, title: fetchedExperience.title, maxGuests: fetchedExperience.maxGuests, petsMax: fetchedExperience.petsMax, allowDeposit: fetchedExperience.allowDeposit } : undefined);
+  const effectiveExperienceForDetails = experienceForDetails ?? (onOpenInModal && experienceId && fetchedExperience ? { id: experienceId, title: fetchedExperience.title, maxGuests: fetchedExperience.maxGuests, petsMax: fetchedExperience.petsMax, allowDeposit: fetchedExperience.allowDeposit, allowTipNow: fetchedExperience.allowTipNow, allowTipLater: fetchedExperience.allowTipLater } : undefined);
   const effectiveRatesForDetails = ratesForDetails ?? (onOpenInModal && rates.length > 0 ? rates : undefined);
   const effectiveAddonsForDetails = addonsForDetails ?? (onOpenInModal ? fetchedAddons : undefined);
   const hasInlineDetails = !!(effectiveExperienceForDetails && effectiveRatesForDetails && effectiveAddonsForDetails !== undefined);

@@ -12,6 +12,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingReminderEmail } from "@/lib/booking/brevo";
+import { getReminderSubject } from "@/lib/booking/reminder-emails";
+import { logEmailSent } from "@/lib/booking/email-log";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getRequestById } from "@/lib/waiver/firestore";
 import type { Booking } from "@/lib/booking/types";
@@ -195,15 +197,24 @@ export async function POST(request: NextRequest) {
 
         try {
           if (!booking.reminder1WeekSentAt && in1WeekWindow(tripStartMs, nowMs)) {
-            await sendBookingReminderEmail("1week", params);
+            const type = "1week";
+            const subject = getReminderSubject(type, params.experienceName);
+            await sendBookingReminderEmail(type, params);
+            await logEmailSent({ to: toEmail, toName: customerName, templateId: "booking_reminder_1week", subject, bookingId: doc.id });
             await doc.ref.update({ reminder1WeekSentAt: Timestamp.now() });
             processed++;
           } else if (!booking.reminder24hSentAt && in24hWindow(tripStartMs, nowMs)) {
-            await sendBookingReminderEmail("24h", params);
+            const type = "24h";
+            const subject = getReminderSubject(type, params.experienceName);
+            await sendBookingReminderEmail(type, params);
+            await logEmailSent({ to: toEmail, toName: customerName, templateId: "booking_reminder_24h", subject, bookingId: doc.id });
             await doc.ref.update({ reminder24hSentAt: Timestamp.now() });
             processed++;
           } else if (!booking.reminderDayOfSentAt && inDayOfWindow(tripStartMs, nowMs)) {
-            await sendBookingReminderEmail("dayof", params);
+            const type = "dayof";
+            const subject = getReminderSubject(type, params.experienceName);
+            await sendBookingReminderEmail(type, params);
+            await logEmailSent({ to: toEmail, toName: customerName, templateId: "booking_reminder_dayof", subject, bookingId: doc.id });
             await doc.ref.update({ reminderDayOfSentAt: Timestamp.now() });
             processed++;
           } else {

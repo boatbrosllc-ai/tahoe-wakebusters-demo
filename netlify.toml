@@ -1,3 +1,7 @@
+# Before launch: set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or RATE_LIMIT_*)
+# For GA4 boatbrosatx.com stream: set NEXT_PUBLIC_GA_MEASUREMENT_ID=G-LC8L2Q2H7G in Netlify env.
+# so rate limiting is active in production (see lib/booking/rate-limit.ts and GET /api/health).
+# Set DISABLE_LEGACY_BOOKING_FALLBACK=true once startDateStr backfill is complete (see slots/route.ts).
 [build]
   command = "npm run build"
   # Publish dir is set by @netlify/plugin-nextjs when present; omit or use .next for static fallback.

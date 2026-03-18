@@ -74,7 +74,7 @@ export interface ExperienceCalendarSectionViewProps {
   bookedBoatIdsForInlineSlot: Set<string>;
   selectedBoatInline: { id: string; name: string; photos?: string[] } | null;
   setSelectedBoatInline: (v: { id: string; name: string; photos?: string[] } | null) => void;
-  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean };
+  experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
   ratesForDetails?: { id: string; durationHours: number; displayName: string; priceCents: number }[];
   addonsForDetails?: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
   experienceId?: string | null;
@@ -801,7 +801,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                           <>
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(3)} className={cn("mb-2 text-xs font-medium shrink-0", darkCard ? "text-white/80 hover:text-white" : "text-brand-muted hover:text-brand-primary")}>← Back to boat</button>}
                             <div className={cn("min-h-0 flex-1 overflow-y-auto rounded-xl", darkCard && "bg-white text-brand-dark shadow-lg p-4")}>
-                              <InlineBookingDetailsStep experienceId={experienceForDetails.id} experienceTitle={experienceForDetails.title} experienceMaxGuests={experienceForDetails.maxGuests} experiencePetsMax={experienceForDetails.petsMax} allowDeposit={experienceForDetails.allowDeposit} boatId={selectedBoatInline?.id} boatName={selectedBoatInline?.name} slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }} rateId={inlineDetailsRate!.id} rateDisplayName={inlineDetailsRate!.displayName ?? `${inlineDetailsRate!.durationHours} hr`} rateDurationHours={inlineDetailsRate!.durationHours} selectedDate={selectedDate} addons={addonsForDetails ?? []} onBack={() => goToInlineStep?.(3)} onSuccess={() => { goToInlineStep?.(0); setShowInlineBoatStep(false); setShowDetailsStep(false); }} bookingMode={bookingMode} spotsRemaining={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined} />
+                              <InlineBookingDetailsStep experienceId={experienceForDetails.id} experienceTitle={experienceForDetails.title} experienceMaxGuests={experienceForDetails.maxGuests} experiencePetsMax={experienceForDetails.petsMax} allowDeposit={experienceForDetails.allowDeposit} allowTipNow={experienceForDetails.allowTipNow} allowTipLater={experienceForDetails.allowTipLater} boatId={selectedBoatInline?.id} boatName={selectedBoatInline?.name} slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }} rateId={inlineDetailsRate!.id} rateDisplayName={inlineDetailsRate!.displayName ?? `${inlineDetailsRate!.durationHours} hr`} rateDurationHours={inlineDetailsRate!.durationHours} selectedDate={selectedDate} addons={addonsForDetails ?? []} onBack={() => goToInlineStep?.(3)} onSuccess={() => { goToInlineStep?.(0); setShowInlineBoatStep(false); setShowDetailsStep(false); }} bookingMode={bookingMode} spotsRemaining={selectedDate ? slotDataByDate.get(selectedDate)?.spotsRemaining : undefined} />
                             </div>
                           </>
                         ))}
@@ -1258,6 +1258,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             experienceMaxGuests={experienceForDetails.maxGuests}
                             experiencePetsMax={experienceForDetails.petsMax}
                             allowDeposit={experienceForDetails.allowDeposit}
+                            allowTipNow={experienceForDetails.allowTipNow}
+                            allowTipLater={experienceForDetails.allowTipLater}
                             boatId={selectedBoatInline?.id}
                             boatName={selectedBoatInline?.name}
                             slot={{ id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }}

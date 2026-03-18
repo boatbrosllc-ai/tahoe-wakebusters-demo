@@ -35,7 +35,7 @@ const NO_STORE_HEADERS = {
 // When true, legacy fallback queries are never run; when unset or false, legacy fallback runs when index is missing.
 // Legacy queries use .limit(2000); if a query returns 2000 docs, some bookings may be hidden and availability can be overstated.
 // Removal path: (1) Run startDateStr backfill to exhaustion (e.g. api/admin/backfill-booking-boat-ids pattern for startDateStr),
-// (2) set DISABLE_LEGACY_BOOKING_FALLBACK=true in production. Firestore index (experienceId, status) is used for legacy booking fallback.
+// (2) confirm (experienceId, startDateStr) composite index is deployed in firestore.indexes.json, (3) set DISABLE_LEGACY_BOOKING_FALLBACK=true in production (e.g. Netlify env).
 const LEGACY_FALLBACK_ENABLED = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
 const LEGACY_QUERY_LIMIT = 2000;
 
@@ -250,6 +250,8 @@ export async function GET(request: NextRequest) {
                 db.collection("bookings")
                   .where("experienceId", "==", expId)
                   .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                  .where("startDateStr", ">=", startDate)
+                  .where("startDateStr", "<=", endDate)
                   .limit(LEGACY_QUERY_LIMIT)
                   .get()
             )
@@ -319,6 +321,8 @@ export async function GET(request: NextRequest) {
                 db.collection("holds")
                   .where("experienceId", "==", expId)
                   .where("status", "==", "active")
+                  .where("startDateStr", ">=", startDate)
+                  .where("startDateStr", "<=", endDate)
                   .limit(LEGACY_QUERY_LIMIT)
                   .get()
               )
@@ -391,7 +395,7 @@ export async function GET(request: NextRequest) {
             holdId: null,
             bookingId: null,
             updatedAt: null,
-            boatId: tBoatIds[0] ?? "",
+            boatId: "", // Ticketed: slot is not boat-specific; capacity is shared across boats
             experienceId,
             maxCapacity,
             spotsBooked,
@@ -591,6 +595,8 @@ export async function GET(request: NextRequest) {
               db.collection("bookings")
                 .where("experienceId", "==", expId)
                 .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                .where("startDateStr", ">=", startDate)
+                .where("startDateStr", "<=", endDate)
                 .limit(LEGACY_QUERY_LIMIT)
                 .get()
             )

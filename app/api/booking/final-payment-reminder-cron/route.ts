@@ -13,6 +13,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendFinalPaymentRequestEmail } from "@/lib/booking/brevo";
+import { getFinalPaymentRequestSubject } from "@/lib/booking/reminder-emails";
+import { logEmailSent } from "@/lib/booking/email-log";
 import { formatMoney } from "@/lib/booking/format-money";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { signManageToken } from "@/lib/booking/manageToken";
@@ -161,6 +163,7 @@ export async function POST(request: NextRequest) {
       const payLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(signManageToken({ bookingId: doc.id, customerEmail: toEmail, tripDateStr: booking.startDateStr }))}`;
 
       try {
+        const subject = getFinalPaymentRequestSubject();
         await sendFinalPaymentRequestEmail({
           to: toEmail,
           customerName,
@@ -170,6 +173,7 @@ export async function POST(request: NextRequest) {
           amountFormatted: formatMoney(finalCents),
           payLink,
         });
+        await logEmailSent({ to: toEmail, toName: customerName, templateId: "final_payment_request", subject, bookingId: doc.id });
         await doc.ref.update({ finalPaymentRequestSentAt: Timestamp.now() });
         processed++;
       } catch (err) {

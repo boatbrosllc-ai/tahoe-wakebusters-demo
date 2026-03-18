@@ -85,6 +85,8 @@ export type ExperienceFormData = {
   tripDurationHours: number;
   showSpotsRemaining?: boolean;
   allowDeposit: boolean;
+  allowTipNow: boolean;
+  allowTipLater: boolean;
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -137,6 +139,8 @@ function getDefaultFormData(): ExperienceFormData {
     tripDurationHours: 1,
     showSpotsRemaining: false,
     allowDeposit: false,
+    allowTipNow: true,
+    allowTipLater: true,
   };
 }
 
@@ -245,6 +249,8 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     tripDurationHours: typeof api.tripDurationHours === "number" && api.tripDurationHours > 0 ? api.tripDurationHours : 1,
     showSpotsRemaining: api.showSpotsRemaining === true,
     allowDeposit: api.allowDeposit === true,
+    allowTipNow: api.allowTipNow !== false,
+    allowTipLater: api.allowTipLater !== false,
   };
 }
 
@@ -305,6 +311,8 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     ...(d.friSunDays?.length ? { friSunDays: d.friSunDays } : {}),
     pricingType: d.pricingType,
     ...(d.pricingType === "charter" && { allowDeposit: d.allowDeposit ?? false }),
+    allowTipNow: d.allowTipNow !== false,
+    allowTipLater: d.allowTipLater !== false,
     ...(d.pricingType === "ticketed" && {
       allowDeposit: false,
       maxCapacity: d.maxCapacity || undefined,
@@ -884,6 +892,34 @@ export function ExperienceForm({
             </span>
           </label>
         )}
+
+        <div className="space-y-3 pt-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Tip options</p>
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-brand-dark/20 text-brand-primary focus:ring-brand-primary"
+              checked={data.allowTipNow !== false}
+              onChange={(e) => update("allowTipNow", e.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-brand-dark">Allow &quot;Tip now&quot;</span>
+              <span className="block text-xs text-brand-muted mt-0.5">Customers can add a tip (20–35%) at checkout</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-brand-dark/20 text-brand-primary focus:ring-brand-primary"
+              checked={data.allowTipLater !== false}
+              onChange={(e) => update("allowTipLater", e.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-brand-dark">Allow &quot;Tip later&quot;</span>
+              <span className="block text-xs text-brand-muted mt-0.5">Customers can choose to tip the crew directly later</span>
+            </span>
+          </label>
+        </div>
 
         {data.pricingType === "ticketed" && (
           <div className="rounded-xl bg-sky-50 border border-sky-200 p-4 space-y-5">

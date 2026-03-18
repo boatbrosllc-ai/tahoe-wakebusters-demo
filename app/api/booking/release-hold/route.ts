@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
     } else {
       const allowed = await isAdminAllowed(request);
       if (!allowed) {
-        return NextResponse.json({ error: "release_token required or admin auth" }, { status: 400 });
+        return NextResponse.json({ error: "release_token required or admin auth (internal only)" }, { status: 400 });
       }
     }
 

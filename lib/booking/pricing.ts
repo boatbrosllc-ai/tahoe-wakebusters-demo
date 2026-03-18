@@ -7,8 +7,8 @@
 import type { Rate, Addon, AddonSelection, BookingPricing, ExperienceHolidayDate, BoatPriceOverride } from "./types";
 import type { ExperienceAddon } from "./types";
 import { getDateStrInSlotTimezone } from "./experience-slots";
+import { TAX_RATE } from "./constants";
 
-const TAX_RATE = 0.0825; // 8.25% example; adjust per jurisdiction
 const FEE_CENTS = 0; // optional booking fee
 
 type RateLike = { basePriceCents?: number; priceCents?: number; priceWeekendCents?: number; priceHolidayCents?: number };

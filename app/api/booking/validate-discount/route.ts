@@ -13,6 +13,8 @@ const MIN_CODE_LENGTH = 4;
 /** Constant-time delay (ms) when returning invalid to avoid timing-based oracles. */
 const INVALID_RESPONSE_DELAY_MS = 80;
 
+/** Discount base contract: totalCents must be the pre-tip subtotal (rate + addons + tax). Tip is excluded so client display and server charge agree. */
+
 export async function POST(request: NextRequest) {
   const clientKey = getClientKey(request);
   const rl = await checkRateLimitValidateDiscount(clientKey);

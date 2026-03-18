@@ -180,6 +180,10 @@ export interface Experience {
   fromPriceCents?: number;
   /** When true, charter customers can choose between 50% deposit and full payment. Defaults to false (full-only). */
   allowDeposit?: boolean;
+  /** When false, hide "Tip now" option for this listing. Defaults to true. */
+  allowTipNow?: boolean;
+  /** When false, hide "Tip later" option for this listing. Defaults to true. */
+  allowTipLater?: boolean;
 }
 
 // Rates (subcollection experiences/{experienceId}/rates/{rateId}) — spec uses priceCents

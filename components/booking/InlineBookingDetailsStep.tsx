@@ -12,10 +12,11 @@ import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime"
 import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
 import { siteConfig } from "@/config/site";
+import { TAX_RATE } from "@/lib/booking/constants";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
-const TEXAS_SALES_TAX_RATE = 0.0825;
+const SESSION_STORAGE_HOLD_ID_KEY = "booking_holdId";
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
@@ -65,7 +66,7 @@ function PaymentFormInner({
   onSuccess,
   onError,
 }: {
-  onSuccess: () => void;
+  onSuccess: (paymentIntentId?: string) => void;
   onError: (message: string) => void;
 }) {
   const stripe = useStripe();
@@ -76,13 +77,13 @@ function PaymentFormInner({
     if (!stripe || !elements) return;
     setProcessing(true);
     try {
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
         redirect: "if_required",
       });
       if (error) onError(error.message ?? "Payment failed");
-      else onSuccess();
+      else onSuccess(paymentIntent?.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {
@@ -110,6 +111,10 @@ export interface InlineBookingDetailsStepProps {
   experiencePetsMax: number;
   /** When false or undefined, deposit option is hidden and server forces full payment. */
   allowDeposit?: boolean;
+  /** When false, hide "Tip now" option. Default true. */
+  allowTipNow?: boolean;
+  /** When false, hide "Tip later" option. Default true. */
+  allowTipLater?: boolean;
   boatId?: string;
   boatName?: string;
   slot: { id: string; startAt: string; endAt: string };
@@ -130,6 +135,8 @@ export function InlineBookingDetailsStep({
   experienceMaxGuests,
   experiencePetsMax,
   allowDeposit,
+  allowTipNow = true,
+  allowTipLater = true,
   boatId,
   boatName,
   slot,
@@ -173,12 +180,21 @@ export function InlineBookingDetailsStep({
   const [paymentError, setPaymentError] = useState<string | null>(null);
   /** When complete-after-payment fails: error message for successWithWarning view. */
   const [completeAfterPaymentError, setCompleteAfterPaymentError] = useState<string | null>(null);
+  /** When recovery of holdId/paymentIntentId fails after Stripe success: show fallback with this PI ID. */
+  const [recoveryFailedPiId, setRecoveryFailedPiId] = useState<string | null>(null);
 
   const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
   useEffect(() => {
     if (bookingMode !== "shared" && allowDeposit === false) setCharterPayFull(true);
   }, [bookingMode, allowDeposit]);
+
+  const tipSectionRequired = allowTipNow || allowTipLater;
+  useEffect(() => {
+    if (!tipSectionRequired) return;
+    if (allowTipNow && !allowTipLater) setTipChoice("now");
+    else if (!allowTipNow && allowTipLater) setTipChoice("later");
+  }, [tipSectionRequired, allowTipNow, allowTipLater]);
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
     ? Math.min(experienceMaxGuests, spotsRemaining)
@@ -232,7 +248,7 @@ export function InlineBookingDetailsStep({
       }));
     const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
     const subtotalBeforeTax = rateCents + addonsTotalCents;
-    const salesTaxCents = Math.round(subtotalBeforeTax * TEXAS_SALES_TAX_RATE);
+    const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
     const pct = Math.min(35, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
@@ -274,7 +290,7 @@ export function InlineBookingDetailsStep({
       setPaymentError(phoneError ?? "Please enter a valid phone number (at least 10 digits).");
       return;
     }
-    if (tipChoice === null) {
+    if (tipSectionRequired && tipChoice === null) {
       setPaymentError("Please choose a tip option: Tip now or Tip later.");
       return;
     }
@@ -340,6 +356,9 @@ export function InlineBookingDetailsStep({
       }
       if (typeof result.payFullAmount === "boolean") setCharterPayFull(result.payFullAmount);
       setHoldId(result.holdId);
+      try {
+        if (typeof sessionStorage !== "undefined") sessionStorage.setItem(SESSION_STORAGE_HOLD_ID_KEY, result.holdId);
+      } catch (_) {}
       setReleaseToken(result.releaseToken);
       if (!STRIPE_PUBLISHABLE_KEY) {
         releaseHold(result.holdId, result.releaseToken);
@@ -363,22 +382,25 @@ export function InlineBookingDetailsStep({
     }
   };
 
-  const handlePaymentSuccess = async () => {
+  const handlePaymentSuccess = async (paymentIntentIdFromConfirm?: string) => {
     setPaymentPhase("completing");
     setCompleteAfterPaymentError(null);
     bookingCache.invalidateBookingCaches(experienceId);
-    if (!holdId || !paymentIntentId) {
-      bookingLog("client", "InlineBookingDetailsStep complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
+    const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
+    const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
+    if (!resolvedHoldId || !resolvedPiId) {
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment recovery failed: missing holdId or paymentIntentId", { hasHoldId: !!resolvedHoldId, hasPaymentIntentId: !!resolvedPiId });
       setCompleteAfterPaymentError(null);
-      setPaymentPhase("successWithWarning");
+      setPaymentPhase("successRecoveryFailed");
+      setRecoveryFailedPiId(resolvedPiId ?? null);
       return;
     }
     try {
-      bookingLog("client", "InlineBookingDetailsStep complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment request", { holdId: resolvedHoldId, paymentIntentIdPrefix: resolvedPiId.slice(0, 24) + "..." });
       const res = await fetch("/api/booking/complete-after-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId, paymentIntentId }),
+        body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId }),
       });
       const data = await res.json().catch(() => ({}));
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment response", { status: res.status, ok: res.ok, success: data?.success, bookingId: data?.bookingId });
@@ -390,21 +412,22 @@ export function InlineBookingDetailsStep({
       }
       setPaymentPhase("success");
     } catch (e) {
-      bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId });
+      bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId: resolvedHoldId });
       setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
       setPaymentPhase("successWithWarning");
     }
   };
 
   const handleRetryCompleteAfterPayment = async () => {
-    if (!holdId || !paymentIntentId) return;
+    const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
+    if (!resolvedHoldId || !paymentIntentId) return;
     setCompleteAfterPaymentError(null);
     setPaymentPhase("completing");
     try {
       const res = await fetch("/api/booking/complete-after-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId, paymentIntentId }),
+        body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -439,6 +462,37 @@ export function InlineBookingDetailsStep({
         </button>
         </div>
       </BookingSuccessWithConfetti>
+    );
+  }
+
+  if (paymentPhase === "successRecoveryFailed") {
+    return (
+      <div className="py-6 flex flex-col items-center gap-4 text-center">
+        <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+          <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
+        <p className="text-sm text-brand-muted">
+          Your payment was successful. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference so we can confirm your reservation.
+        </p>
+        {recoveryFailedPiId && (
+          <p className="text-xs font-mono text-brand-dark/80 bg-brand-dark/5 px-2 py-1 rounded">
+            Payment reference: {recoveryFailedPiId}
+          </p>
+        )}
+        <p className="text-sm font-medium text-brand-dark">
+          Contact us at {siteConfig.phone}
+        </p>
+        <button
+          type="button"
+          onClick={onSuccess}
+          className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
+        >
+          Close
+        </button>
+      </div>
     );
   }
 
@@ -488,7 +542,7 @@ export function InlineBookingDetailsStep({
 
   if (paymentPhase === "stripe" && clientSecret && stripePromise) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 overflow-x-hidden">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
@@ -545,7 +599,7 @@ export function InlineBookingDetailsStep({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pb-4">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 sm:space-y-5 pb-4">
         {/* Summary */}
         <div className="rounded-xl border-2 border-brand-dark/10 bg-white p-4">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
@@ -569,7 +623,7 @@ export function InlineBookingDetailsStep({
             ))}
             {priceSummary.salesTaxCents > 0 && (
               <div className="flex justify-between">
-                <span className="text-brand-muted">Sales tax (8.25%)</span>
+                <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
                 <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
               </div>
             )}
@@ -623,7 +677,7 @@ export function InlineBookingDetailsStep({
         {/* Contact */}
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Contact details</p>
-          <div className="space-y-2 rounded-xl border-2 border-brand-dark/10 bg-white p-3">
+          <div className="space-y-2 rounded-xl border-2 border-brand-dark/10 bg-white p-4">
             <input
               type="text"
               value={customerName}
@@ -726,10 +780,12 @@ export function InlineBookingDetailsStep({
           )}
         </div>
 
-        {/* Tip */}
+        {/* Tip — only when listing allows at least one option */}
+        {tipSectionRequired && (
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Tip *</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Tip {allowTipNow && allowTipLater ? "*" : ""}</p>
           <div className="flex gap-2">
+            {allowTipNow && (
             <button
               type="button"
               onClick={() => {
@@ -744,6 +800,8 @@ export function InlineBookingDetailsStep({
             >
               Tip now
             </button>
+            )}
+            {allowTipLater && (
             <button
               type="button"
               onClick={() => {
@@ -758,6 +816,7 @@ export function InlineBookingDetailsStep({
             >
               Tip later
             </button>
+            )}
           </div>
           {tipChoice === "now" && priceSummary.tipCents > 0 && (
             <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
@@ -766,6 +825,7 @@ export function InlineBookingDetailsStep({
             <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
           )}
         </div>
+        )}
 
         {/* Payment amount — deposit option hidden only when experience disables it (allowDeposit === false) */}
         {bookingMode !== "shared" && allowDeposit !== false ? (
@@ -781,7 +841,9 @@ export function InlineBookingDetailsStep({
                 )}
               >
                 <span className="font-semibold">Pay 50% deposit</span>
-                <span className="block text-xs text-brand-muted">${(Math.round(priceSummary.totalCents * 0.5) / 100).toFixed(2)} now · remaining balance charged 48h before your trip</span>
+                <span className="block text-xs text-brand-muted">
+                  {depositCentsFromServer != null ? `$${(depositCentsFromServer / 100).toFixed(2)} now` : "Loading…"} · remaining balance charged 48h before your trip
+                </span>
               </button>
               <button
                 type="button"
@@ -818,7 +880,7 @@ export function InlineBookingDetailsStep({
                 setAppliedDiscountError(null);
               }}
               placeholder="Enter code"
-              className="flex-1 rounded-lg border border-brand-dark/10 px-3 py-2 text-sm min-h-[44px]"
+              className="flex-1 rounded-lg border border-brand-dark/10 px-3 py-2.5 text-base min-h-[44px] touch-manipulation"
             />
             <button
               type="button"
@@ -829,15 +891,15 @@ export function InlineBookingDetailsStep({
                 setAppliedDiscountLoading(true);
                 setAppliedDiscountError(null);
                 try {
-                  const totalBefore = priceSummary.rateCents
+                  // Pre-tip subtotal (rate + addons + tax) per contract with validate-discount and create-hold.
+                const totalBeforeDiscount = priceSummary.rateCents
                   + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
-                  + priceSummary.salesTaxCents
-                  + priceSummary.tipCents; // include tip to match server
-                  const res = await fetch("/api/booking/validate-discount", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ code, totalCents: totalBefore }),
-                  });
+                  + priceSummary.salesTaxCents;
+                const res = await fetch("/api/booking/validate-discount", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ code, totalCents: totalBeforeDiscount }),
+                });
                   const data = await res.json().catch(() => ({}));
                   if (data.valid && typeof data.discountCents === "number" && data.code) {
                     setAppliedDiscount({ discountCents: data.discountCents, code: data.code });
@@ -851,7 +913,7 @@ export function InlineBookingDetailsStep({
                   setAppliedDiscountLoading(false);
                 }
               }}
-              className="rounded-lg border-2 border-brand-primary bg-brand-primary text-white font-semibold px-3 py-2 text-sm min-h-[44px] disabled:opacity-50"
+              className="rounded-lg border-2 border-brand-primary bg-brand-primary text-white font-semibold px-3 py-2.5 text-base min-h-[44px] touch-manipulation disabled:opacity-50"
             >
               Apply
             </button>
@@ -867,14 +929,14 @@ export function InlineBookingDetailsStep({
             value={howDidYouHear}
             onChange={(e) => setHowDidYouHear(e.target.value)}
             placeholder="How did you hear about us?"
-            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm min-h-[44px]"
+            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2.5 text-base min-h-[44px] touch-manipulation"
           />
           <textarea
             value={comments}
             onChange={(e) => setComments(e.target.value)}
             placeholder="Special requests or notes"
             rows={2}
-            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2 text-sm mt-2 resize-none"
+            className="w-full rounded-lg border border-brand-dark/10 px-3 py-2.5 text-base mt-2 resize-none touch-manipulation"
           />
         </div>
 
@@ -897,8 +959,8 @@ export function InlineBookingDetailsStep({
       </div>
 
       {/* Pay block */}
-      <div className="shrink-0 pt-3 border-t-2 border-brand-dark/10 bg-white">
-        <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+      <div className="shrink-0 pt-3 pb-[env(safe-area-inset-bottom)] border-t-2 border-brand-dark/10 bg-white">
+        <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold text-brand-dark">{payFullAmount ? "Total due" : "Deposit due"}</p>
             {priceLoading ? (
@@ -918,7 +980,7 @@ export function InlineBookingDetailsStep({
           <button
             type="button"
             onClick={handleProceedToPayment}
-            disabled={priceLoading || effectiveRateCents === null}
+            disabled={priceLoading || effectiveRateCents === null || (!payFullAmount && depositCentsFromServer == null)}
             className="w-full sm:w-auto sm:shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 disabled:pointer-events-none"
           >
             Proceed to payment

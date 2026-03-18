@@ -33,7 +33,7 @@ export const PRICING_MAP: Record<number, number> = {
 
 export const SOCIAL_PROOF = [
   { label: "★ 5.0", sub: "rating" },
-  { label: "273+", sub: "Google reviews" },
+  { label: "302+", sub: "Google reviews" },
   { label: "Top-rated", sub: "on Lake Austin" },
   { label: "Captain-led", sub: "" },
   { label: "Lily pad included", sub: "" },

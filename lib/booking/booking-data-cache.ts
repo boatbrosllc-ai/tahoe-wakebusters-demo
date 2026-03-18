@@ -290,6 +290,8 @@ export interface ExperienceBySlugResult {
     showSpotsRemaining?: boolean;
     seasonal?: CachedSeasonalConfig;
     allowDeposit?: boolean;
+    allowTipNow?: boolean;
+    allowTipLater?: boolean;
   };
   addons?: Array<{
     id?: string;

@@ -84,6 +84,8 @@ function parseBody(
   departureMinute: number;
   tripDurationHours: number;
   allowDeposit: boolean;
+  allowTipNow?: boolean;
+  allowTipLater?: boolean;
 }> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -227,6 +229,8 @@ function parseBody(
   if (typeof b.allowDeposit === "boolean") {
     out.allowDeposit = b.pricingType === "ticketed" ? false : b.allowDeposit;
   }
+  if (typeof b.allowTipNow === "boolean") out.allowTipNow = b.allowTipNow;
+  if (typeof b.allowTipLater === "boolean") out.allowTipLater = b.allowTipLater;
   return Object.keys(out).length ? out : null;
 }
 
