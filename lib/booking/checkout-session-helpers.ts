@@ -15,9 +15,10 @@ export type HoldLike = {
   bookingMode?: string;
 };
 
+/** Matches getFirestoreExports() from firebase-admin: the FieldValue namespace with delete(), serverTimestamp(), etc. */
 export type FirestoreExports = {
-  FieldValue: import("firebase-admin").firestore.FieldValue;
-  Timestamp?: import("firebase-admin").firestore.Timestamp;
+  FieldValue: typeof import("firebase-admin").firestore.FieldValue;
+  Timestamp?: typeof import("firebase-admin").firestore.Timestamp;
 };
 
 /**
