@@ -289,10 +289,10 @@ export async function POST(request: NextRequest) {
       const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
       const amountCharged = piAmountTotal ?? 0;
       const finalCents = parseInt(pi.metadata?.finalCents ?? "0", 10) || Math.max(0, totalCents - (depositCentsFromMeta || amountCharged));
-      // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
+      // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback); do NOT require customerId
       const isDepositByStage = paymentStage === "deposit";
       const isDepositByAmount = totalCentsFromMeta > 0 && amountCharged > 0 && amountCharged < totalCentsFromMeta;
-      const useDepositInput = !!customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
+      const useDepositInput = isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
 
       const convertInput: ConvertHoldInput =
         useDepositInput
@@ -302,9 +302,9 @@ export async function POST(request: NextRequest) {
               amountTotalCents: amountCharged,
               currency: piCurrency,
               stripe: {
-                customerId,
-                paymentMethodId,
-                card,
+                ...(customerId && { customerId }),
+                ...(paymentMethodId && { paymentMethodId }),
+                ...(card && { card }),
                 totalCents,
                 depositCents: amountCharged,
                 finalCents: Math.max(0, totalCents - amountCharged),

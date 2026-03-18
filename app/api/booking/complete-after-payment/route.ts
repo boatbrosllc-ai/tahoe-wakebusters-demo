@@ -115,7 +115,8 @@ export async function POST(request: NextRequest) {
     const finalCentsFromMeta = parseInt(pi.metadata?.finalCents ?? "0", 10) || 0;
     const finalCents = finalCentsFromMeta > 0 ? finalCentsFromMeta : Math.max(0, totalCents - amountCharged);
     const isDepositByAmount = totalCents > 0 && amountCharged > 0 && amountCharged < totalCents;
-    const useDepositInput = customerId && (isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount));
+    // Decide deposit vs full from metadata and amount; do NOT require customerId so we never show "full payment" for a deposit
+    const useDepositInput = isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
     bookingLog("complete-after-payment", "PI metadata and convert decision", {
       holdId: input.holdId,
       paymentStage: paymentStage ?? null,
@@ -137,9 +138,9 @@ export async function POST(request: NextRequest) {
             amountTotalCents: amountCharged,
             currency: pi.currency ?? undefined,
             stripe: {
-              customerId,
-              paymentMethodId: pm?.id,
-              card,
+              ...(customerId && { customerId }),
+              ...(pm?.id && { paymentMethodId: pm.id }),
+              ...(card && { card }),
               totalCents,
               depositCents: amountCharged,
               finalCents: Math.max(0, totalCents - amountCharged),

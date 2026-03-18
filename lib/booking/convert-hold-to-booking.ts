@@ -44,7 +44,8 @@ export interface ConvertHoldInputDeposit {
   amountTotalCents?: number;
   currency?: string;
   stripe: {
-    customerId: string;
+    /** Optional: when set, we can charge remaining balance off-session later. */
+    customerId?: string;
     paymentMethodId?: string;
     card?: BookingCardDisplay;
     totalCents: number;
@@ -322,8 +323,8 @@ export async function convertHoldToBooking(
   const stripeBlock: Booking["stripe"] = isDeposit
     ? {
         depositPaymentIntentId: input.paymentIntentId,
-        customerId: input.stripe.customerId,
-        paymentMethodId: input.stripe.paymentMethodId,
+        ...(input.stripe.customerId && { customerId: input.stripe.customerId }),
+        ...(input.stripe.paymentMethodId && { paymentMethodId: input.stripe.paymentMethodId }),
         depositAmountCents: input.stripe.depositCents,
         finalAmountCents: input.stripe.finalCents,
         totalAmountCents: input.stripe.totalCents,
