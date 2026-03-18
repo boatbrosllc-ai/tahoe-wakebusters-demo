@@ -12,7 +12,7 @@ import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
-import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
+import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv } from "@/lib/booking/env";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
@@ -259,44 +259,7 @@ export async function POST(request: NextRequest) {
           console.error("[create-checkout-session] Failed to delete orphaned coupon", stripeCouponId, delErr);
         }
       }
-      // Rollback: release slot (and shared-departure capacity when applicable) and expire hold so the slot/capacity is available again.
-      try {
-        const slotRefForRollback = hold.boatId
-          ? db.collection("boats").doc(hold.boatId).collection("slots").doc(hold.slotId)
-          : db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
-        const bookingMode = (hold as { bookingMode?: string }).bookingMode;
-        const isSharedTicketed = bookingMode === "shared" && !!hold.experienceId;
-        const parsedSlot = hold.slotId ? parseSlotId(hold.slotId) : null;
-        const inventoryRef = isSharedTicketed && parsedSlot
-          ? getDepartureInventoryRef(db, hold.experienceId!, parsedSlot.dateStr)
-          : null;
-        await db.runTransaction(async (tx) => {
-          // Firestore: all reads must complete before any write.
-          const slotSnap = await tx.get(slotRefForRollback);
-          const reservedAfterRelease =
-            inventoryRef != null && hold.partySize != null
-              ? Math.max(0, (await getReservedSeats(tx, inventoryRef)) - hold.partySize)
-              : null;
-          // Writes only after reads.
-          if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === input.holdId) {
-            tx.update(slotRefForRollback, {
-              status: "open",
-              holdId: FieldValue.delete(),
-              updatedAt: FieldValue.serverTimestamp(),
-            });
-          }
-          if (inventoryRef != null && reservedAfterRelease !== null) {
-            tx.set(
-              inventoryRef,
-              { reservedSeats: reservedAfterRelease, updatedAt: FieldValue.serverTimestamp() },
-              { merge: true }
-            );
-          }
-          tx.update(holdRef, { status: "expired" });
-        });
-      } catch (rollbackErr) {
-        console.error("[create-checkout-session] rollback on Stripe failure", rollbackErr);
-      }
+      await rollbackCheckoutSession(db, input.holdId, hold, { FieldValue, Timestamp });
       return NextResponse.json(
         { error: stripeErrorToUserMessage(details) },
         { status: 500 }

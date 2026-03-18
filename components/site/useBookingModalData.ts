@@ -8,6 +8,15 @@ import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 import { bookingError } from "@/lib/booking/debug";
 
+/** Booking window: when enabled, only dates within startDate–endDate (or startMonth–endMonth) are bookable. */
+export interface ExperienceSeasonalConfig {
+  enabled?: boolean;
+  startMonth?: number;
+  endMonth?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface ExperienceItem {
   id: string;
   slug: string;
@@ -25,6 +34,7 @@ export interface ExperienceItem {
   allowDeposit?: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
+  seasonal?: ExperienceSeasonalConfig;
 }
 
 export interface BoatOption {
@@ -209,8 +219,8 @@ export function useBookingModalData(
         setBoats(boatList);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
-        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
-        if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null || detail?.allowTipNow != null || detail?.allowTipLater != null) {
+        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceSeasonalConfig };
+        if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null || detail?.allowTipNow != null || detail?.allowTipLater != null || detail?.seasonal != null) {
           selection?.setSelectedExperience((prev) =>
             prev
               ? {
@@ -222,6 +232,7 @@ export function useBookingModalData(
                   ...(detail.allowDeposit != null && { allowDeposit: detail.allowDeposit }),
                   ...(detail.allowTipNow != null && { allowTipNow: detail.allowTipNow }),
                   ...(detail.allowTipLater != null && { allowTipLater: detail.allowTipLater }),
+                  ...(detail.seasonal != null && { seasonal: detail.seasonal }),
                 }
               : null
           );

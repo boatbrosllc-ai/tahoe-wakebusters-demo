@@ -20,16 +20,21 @@ const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
  * Single source of truth for deposit vs full-payment mode from a booking record.
  * Used by receipt API and email templates so messaging is consistent.
  *
- * Uses two signals so we never show "full payment" when it was a deposit:
- * 1) Status-driven: status is in deposit flow (e.g. final_due, deposit_paid).
- * 2) Amount-driven: stripe.depositAmountCents is set and less than total (partial charge).
+ * Status takes precedence: if status is in DEPOSIT_STATUSES, treat as deposit regardless of depositAmountCents.
+ * Otherwise use amount-driven signal: stripe.depositAmountCents set and less than total.
  */
 export function isDepositMode(booking: Booking): boolean {
+  if (DEPOSIT_STATUSES.has(booking.status)) {
+    const stripe = booking.stripe;
+    if (stripe?.depositAmountCents == null) {
+      console.warn("[deposit-mode] Booking status is deposit flow but depositAmountCents is absent", { status: booking.status });
+    }
+    return true;
+  }
   const stripe = booking.stripe;
   if (stripe?.depositAmountCents == null) return false;
   const totalCents = stripe?.totalAmountCents ?? booking.pricing?.totalCents;
   const depositCents = stripe.depositAmountCents;
-  if (DEPOSIT_STATUSES.has(booking.status)) return true;
   if (typeof totalCents === "number" && totalCents > 0 && depositCents < totalCents) return true;
   return false;
 }

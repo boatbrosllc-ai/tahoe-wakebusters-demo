@@ -131,6 +131,11 @@ async function getOrCreateStripeCustomer(
     }
   }
 
+  // After lock takeover, re-read in case the previous holder already created the customer.
+  const reSnap = await indexRef.get();
+  const reData = reSnap.exists ? (reSnap.data() as { customerId?: string | null }) : null;
+  if (reData?.customerId) return reData.customerId;
+
   try {
     const customer = await stripe.customers.create({
       email: email.trim(),

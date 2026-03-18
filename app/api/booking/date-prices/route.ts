@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { FieldPath } from "firebase-admin/firestore";
 import { getDb } from "@/lib/booking/firebase-admin";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,31 @@ import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-
 import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+
+const LEGACY_HOLDS_PAGE_SIZE = 100;
+
+/** Cursor-based pagination over legacy holds (no startDateStr) for one experience until exhaustion. */
+async function fetchAllLegacyHolds(
+  db: ReturnType<typeof getDb>,
+  expId: string
+): Promise<import("firebase-admin").firestore.QuerySnapshot> {
+  const allDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+  let lastDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
+  for (;;) {
+    let query = db
+      .collection("holds")
+      .where("experienceId", "==", expId)
+      .where("status", "==", "active")
+      .orderBy(FieldPath.documentId())
+      .limit(LEGACY_HOLDS_PAGE_SIZE);
+    if (lastDoc) query = query.startAfter(lastDoc) as typeof query;
+    const snap = await query.get();
+    allDocs.push(...snap.docs);
+    if (snap.empty || snap.docs.length < LEGACY_HOLDS_PAGE_SIZE) break;
+    lastDoc = snap.docs[snap.docs.length - 1];
+  }
+  return { docs: allDocs, empty: allDocs.length === 0, size: allDocs.length } as import("firebase-admin").firestore.QuerySnapshot;
+}
 
 /** YYYY-MM-DD in America/Chicago for consistent calendar and checkout pricing. */
 function toDateStrCentral(d: Date): string {
@@ -125,19 +151,11 @@ export async function GET(request: NextRequest) {
             .get()
         )
       );
-      // Short-term: higher limit to reduce undercounting. Long-term: backfill startDateStr on holds
-      // (e.g. via slotId inference as in ticket-availability/route.ts) and set DISABLE_LEGACY_HOLDS_FALLBACK=true.
+      // Cursor-based pagination for legacy holds (no startDateStr) to avoid undercounting. Long-term: backfill
+      // startDateStr on holds and set DISABLE_LEGACY_HOLDS_FALLBACK=true.
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
       const holdsLegacySnaps = legacyFallbackEnabled
-        ? await Promise.all(
-            allExpIds.map((expId) =>
-              db.collection("holds")
-                .where("experienceId", "==", expId)
-                .where("status", "==", "active")
-                .limit(500)
-                .get()
-            )
-          )
+        ? await Promise.all(allExpIds.map((expId) => fetchAllLegacyHolds(db, expId)))
         : ([] as QuerySnapshot[]);
 
       const holdDocMap = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();

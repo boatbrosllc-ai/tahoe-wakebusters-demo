@@ -80,9 +80,10 @@ export async function POST(request: NextRequest) {
   let cursor: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData> | null = null;
 
   while (true) {
+    const finalDueStatuses = ["final_due", "final_requires_action", "final_failed"];
     let q = db
       .collection("bookings")
-      .where("status", "==", "final_due")
+      .where("status", "in", finalDueStatuses)
       .where("startDateStr", ">=", windowStartStr)
       .where("startDateStr", "<=", windowEndStr)
       .orderBy("startDateStr", "desc")

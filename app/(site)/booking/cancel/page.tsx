@@ -56,11 +56,13 @@ function CancelContent() {
   const message =
     released === true
       ? "No charge was made. Your held slot has been released so others can book it."
-      : apiError || released === false
-        ? "This link is invalid or expired. If you had a held slot, it may already be released."
-        : holdId && loading
-          ? "Releasing your held slot…"
-          : "No charge was made.";
+      : holdId && !releaseToken
+        ? "Your slot will be released automatically within 10 minutes."
+        : apiError || released === false
+          ? "This link is invalid or expired. If you had a held slot, it may already be released."
+          : holdId && loading
+            ? "Releasing your held slot…"
+            : "No charge was made.";
 
   return (
     <div className="section-padding bg-brand-bg/30">

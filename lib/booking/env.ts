@@ -239,10 +239,12 @@ export function hasStripeConfig(): boolean {
   }
 }
 
-// Startup-time assertion: fail loudly if webhook secret is missing so misconfigured deployments fail at cold start.
-const _webhookSecret = getEnv("STRIPE_WEBHOOK_SECRET");
-if (typeof _webhookSecret !== "string" || _webhookSecret.trim() === "") {
-  throw new Error(
-    "STRIPE_WEBHOOK_SECRET is required for Stripe webhooks. Set it in the deployment environment so misconfigured deployments fail at cold start."
-  );
+/** Call at the top of the webhook handler only. Validates STRIPE_WEBHOOK_SECRET so misconfigured deployments fail when the webhook is hit. */
+export function validateWebhookEnv(): void {
+  const v = getEnv("STRIPE_WEBHOOK_SECRET");
+  if (typeof v !== "string" || v.trim() === "") {
+    throw new Error(
+      "STRIPE_WEBHOOK_SECRET is required for Stripe webhooks. Set it in the deployment environment."
+    );
+  }
 }

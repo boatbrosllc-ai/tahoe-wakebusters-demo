@@ -169,6 +169,7 @@ export function ExperienceBookingCard({
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slotStolen, setSlotStolen] = useState(false);
@@ -363,9 +364,10 @@ export function ExperienceBookingCard({
         return;
       }
       if (typeof result.payFullAmount === "boolean") setPayFullAmount(result.payFullAmount);
+      if (typeof result.depositCents === "number") setDepositCentsFromServer(result.depositCents);
       setHoldId(result.holdId);
       setHoldSlotId(selectedSlot.id);
-      setHoldExpiresAt(result.expiresAt ?? null);
+      setHoldExpiresAt(result.expiresAtFromIntent ?? result.expiresAt ?? null);
       setPricing((result.pricing ?? null) as { totalCents: number; currency: string } | null);
       if (!isStripeCheckoutReady) {
         releaseHold(result.holdId, result.releaseToken);
@@ -971,7 +973,9 @@ export function ExperienceBookingCard({
             >
               <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
               <span className="block mt-0.5 text-brand-muted font-normal text-xs">
-                ${(Math.round(orderSummaryTotalCents * 0.5) / 100).toFixed(2)} now (estimate) — remaining 50% charged 48 hours before your trip
+                {depositCentsFromServer != null
+                  ? `$${(depositCentsFromServer / 100).toFixed(2)} now — remaining balance charged 48 hours before your trip`
+                  : "Loading… — remaining 50% charged 48 hours before your trip"}
               </span>
             </button>
             <button
@@ -1010,11 +1014,15 @@ export function ExperienceBookingCard({
         </div>
         {!isTicketed && (
           <div className="flex justify-between text-sm font-semibold text-brand-dark">
-            <span>{payFullAmount ? "Total due now" : "Deposit due now (estimate)"}</span>
+            <span>{payFullAmount ? "Total due now" : "Deposit due now"}</span>
             {selectedRate ? (
-              <span className="text-brand-primary">
-                ${((isTicketed || payFullAmount ? orderSummaryTotalCents : Math.round(orderSummaryTotalCents * 0.5)) / 100).toFixed(2)}
-              </span>
+              payFullAmount ? (
+                <span className="text-brand-primary">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
+              ) : depositCentsFromServer != null ? (
+                <span className="text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
+              ) : (
+                <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+              )
             ) : (
               <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
             )}

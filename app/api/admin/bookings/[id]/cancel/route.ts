@@ -39,7 +39,7 @@ export async function POST(
 
   try {
     const db = getDb();
-    const { FieldValue } = getFirestoreExports();
+    const { FieldValue, Timestamp } = getFirestoreExports();
     const bookingRef = db.collection("bookings").doc(bookingId);
     const bookingSnap = await bookingRef.get();
     if (!bookingSnap.exists) {
@@ -47,50 +47,42 @@ export async function POST(
     }
     const booking = bookingSnap.data() as Booking;
     if (booking.status === "canceled" || booking.status === "refunded") {
-      return NextResponse.json({ ok: true, already: true });
+      return NextResponse.json({ ok: true, already: true, slotReleased: false });
     }
 
     const experienceId = booking.experienceId;
     const boatId = booking.boatId;
     const slotId = booking.slotId;
-    if (!slotId) {
-      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
-    }
 
-    // Listing-boat flow: slot lives under boats/{boatId}/slots. Else: experiences/{experienceId}/slots.
-    const slotRef = boatId
-      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
-      : experienceId
-        ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
-        : null;
-    if (!slotRef) {
-      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
-    }
-    const slotSnap = await slotRef.get();
-    if (!slotSnap.exists) {
-      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
-    }
-    const slot = slotSnap.data() as { status?: string; bookingId?: string };
-    if (slot.status !== "booked" || slot.bookingId !== bookingId) {
-      await bookingRef.update({ status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      return NextResponse.json({ ok: true, slotReleased: false, refund: null });
-    }
+    const slotRef = slotId
+      ? boatId
+          ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+          : experienceId
+            ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
+            : null
+      : null;
 
+    let slotReleased = false;
     await db.runTransaction(async (tx) => {
       tx.update(bookingRef, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      tx.update(slotRef, {
-        status: "open",
-        holdId: FieldValue.delete(),
-        bookingId: FieldValue.delete(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      // Ticketed/shared: release capacity in departure inventory so the slot can be rebooked.
+      if (slotRef) {
+        const slotSnap = await tx.get(slotRef);
+        if (slotSnap.exists) {
+          const slot = slotSnap.data() as { status?: string; bookingId?: string };
+          if (slot.status === "booked" && slot.bookingId === bookingId) {
+            tx.update(slotRef, {
+              status: "open",
+              holdId: FieldValue.delete(),
+              bookingId: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            slotReleased = true;
+          }
+        }
+      }
       const isShared = booking.bookingMode === "shared";
       const expId = booking.experienceId;
-      const dateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
+      const dateStr = booking.startDateStr ?? (slotId ? parseSlotId(slotId)?.dateStr : undefined);
       if (isShared && expId && dateStr && (booking.partySize ?? 0) > 0) {
         const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
         await releaseCapacity(tx, inventoryRef, booking.partySize ?? 0);
@@ -128,6 +120,18 @@ export async function POST(
           const msg = refundErr instanceof Error ? refundErr.message : String(refundErr);
           console.error("[admin/cancel] Stripe refund failed", { bookingId, piId }, refundErr);
           refunds.push({ paymentIntentId: piId, error: msg });
+          try {
+            await db.collection("pendingRefunds").add({
+              bookingId,
+              paymentIntentId: piId,
+              reason: "admin_cancel_refund_failed",
+              status: "pending",
+              createdAt: Timestamp.now(),
+              errorMessage: msg,
+            });
+          } catch (pendingErr) {
+            console.error("[admin/cancel] Failed to write pendingRefunds", pendingErr);
+          }
         }
       }
     }
@@ -186,7 +190,7 @@ export async function POST(
 
     return NextResponse.json({
       ok: true,
-      slotReleased: true,
+      slotReleased,
       refunds,
       ...(skippedRefunds.length > 0 && { skippedRefunds }),
       ...(cancellationPolicyWarning && { cancellationPolicyWarning }),

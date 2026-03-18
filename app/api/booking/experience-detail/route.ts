@@ -44,6 +44,14 @@ export interface ExperienceDetailAddon {
   highlight: boolean;
 }
 
+export interface ExperienceDetailSeasonal {
+  enabled?: boolean;
+  startMonth?: number;
+  endMonth?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface ExperienceDetailResponse {
   boats: ExperienceDetailBoat[];
   rates: ExperienceDetailRate[];
@@ -56,6 +64,8 @@ export interface ExperienceDetailResponse {
   allowDeposit?: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
+  /** Booking window: when set and enabled, calendar only shows dates within startDate–endDate (or startMonth–endMonth). */
+  seasonal?: ExperienceDetailSeasonal;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -86,7 +96,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!expDoc.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
-    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
+    const expData = expDoc.data() as { slug?: string; title?: string; name?: string; pricingType?: "charter" | "ticketed"; maxGuests?: number; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceDetailSeasonal };
     const experienceSlug = typeof expData?.slug === "string" ? expData.slug.trim().toLowerCase() : "";
     const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
@@ -200,6 +210,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       allowDeposit: pricingType === "ticketed" ? false : expData?.allowDeposit === true,
       allowTipNow: expData?.allowTipNow !== false,
       allowTipLater: expData?.allowTipLater !== false,
+      ...(expData?.seasonal && typeof expData.seasonal === "object" && { seasonal: { enabled: expData.seasonal.enabled === true, startMonth: expData.seasonal.startMonth, endMonth: expData.seasonal.endMonth, startDate: typeof expData.seasonal.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(expData.seasonal.startDate) ? expData.seasonal.startDate : undefined, endDate: typeof expData.seasonal.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(expData.seasonal.endDate) ? expData.seasonal.endDate : undefined } }),
     };
     return NextResponse.json(payload, {
       headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },

@@ -40,16 +40,52 @@ function BookingSuccessContent() {
   const [storedReceiptToken, setStoredReceiptToken] = useState<string | null>(null);
   const fetchedRef = useRef(false);
 
+  const RECEIPT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
+
   const fetchReceipt = useCallback(async (sid: string | null, piId: string | null, rToken: string | null) => {
     if (fetchedRef.current && rToken) return;
     setLoading(true);
     setError(null);
-    try {
+    const tryReceipt = async (): Promise<Response> => {
       const params = new URLSearchParams();
       if (rToken) params.set("receipt_token", rToken);
       else if (sid) params.set("session_id", sid);
       else if (piId) params.set("payment_intent_id", piId);
-      const res = await fetch(`/api/booking/receipt?${params.toString()}`);
+      return fetch(`/api/booking/receipt?${params.toString()}`);
+    };
+    try {
+      let res = await tryReceipt();
+      let attempt = 0;
+      while (res.status === 404 && !rToken && (sid || piId) && attempt < RECEIPT_RETRY_DELAYS_MS.length) {
+        await new Promise((r) => setTimeout(r, RECEIPT_RETRY_DELAYS_MS[attempt]));
+        attempt++;
+        res = await tryReceipt();
+      }
+      if (res.status === 404 && piId && !rToken) {
+        const completeRes = await fetch("/api/booking/complete-after-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentIntentId: piId }),
+        });
+        const completeJson = await completeRes.json().catch(() => ({}));
+        if (completeRes.ok && (completeJson.receiptToken || completeJson.bookingId)) {
+          if (completeJson.receiptToken) {
+            const tokenParams = new URLSearchParams({ receipt_token: completeJson.receiptToken });
+            const retryRes = await fetch(`/api/booking/receipt?${tokenParams.toString()}`);
+            if (retryRes.ok) {
+              const json = await retryRes.json();
+              setData(json);
+              setStoredReceiptToken(completeJson.receiptToken);
+              try {
+                if (typeof sessionStorage !== "undefined") sessionStorage.setItem(RECEIPT_TOKEN_STORAGE_KEY, completeJson.receiptToken);
+              } catch (_) {}
+              fetchedRef.current = true;
+              setLoading(false);
+              return;
+            }
+          }
+        }
+      }
       if (res.status === 401) {
         setError("This receipt link is invalid or has expired.");
         setData(null);

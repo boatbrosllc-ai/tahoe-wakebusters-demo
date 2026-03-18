@@ -259,6 +259,7 @@ export interface ExperienceDetailResult {
   boats: unknown[];
   rates: unknown[];
   addons: unknown[];
+  seasonal?: CachedSeasonalConfig;
 }
 
 export interface CachedRateOption {

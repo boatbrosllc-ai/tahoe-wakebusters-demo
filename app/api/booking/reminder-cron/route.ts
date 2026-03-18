@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
   const windowStartStr = toDateStr(new Date(nowMs - ONE_DAY_MS));
   const windowEndStr = toDateStr(new Date(nowMs + 8 * ONE_DAY_MS));
 
-  const paidStatuses = ["paid", "deposit_paid", "final_paid", "final_due"] as const;
+  const paidStatuses = ["paid", "deposit_paid", "final_paid", "final_due", "final_requires_action", "final_failed"] as const;
 
   let matched = 0;
   let processed = 0;

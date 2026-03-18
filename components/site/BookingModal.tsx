@@ -13,7 +13,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { slugMatches } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
@@ -49,6 +49,7 @@ interface ExperienceItem {
   allowDeposit?: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
+  seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string };
 }
 
 interface BoatOption {
@@ -315,7 +316,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const effectiveTicketMax = Math.min(ticketMax, availableTickets);
 
   /** For ticketed experiences: format departure time from departureHour/departureMinute. */
-  const departurTimeLabel = useMemo(() => {
+  const departureTimeLabel = useMemo(() => {
     if (!isTicketed || selectedExperience?.departureHour == null) return null;
     const h = selectedExperience.departureHour;
     const m = selectedExperience.departureMinute ?? 0;
@@ -368,6 +369,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     [viewMonthYear, viewMonthMonth]
   );
   const isViewMonthCurrent = viewMonthYear === today.year && viewMonthMonth === today.month;
+  /** When experience has a booking window, restrict month nav to that range. */
+  const canGoPrevMonth = useMemo(() => {
+    if (!selectedExperience?.seasonal?.enabled) return true;
+    const prevYear = viewMonthMonth === 1 ? viewMonthYear - 1 : viewMonthYear;
+    const prevMonth1 = viewMonthMonth === 1 ? 12 : viewMonthMonth - 1;
+    return isMonthInSeasonalRange(selectedExperience.seasonal, prevYear, prevMonth1);
+  }, [selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
+  const canGoNextMonth = useMemo(() => {
+    if (!selectedExperience?.seasonal?.enabled) return true;
+    const nextYear = viewMonthMonth === 12 ? viewMonthYear + 1 : viewMonthYear;
+    const nextMonth1 = viewMonthMonth === 12 ? 1 : viewMonthMonth + 1;
+    return isMonthInSeasonalRange(selectedExperience.seasonal, nextYear, nextMonth1);
+  }, [selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
   /** Force calendar grid to remount when month or data changes (fixes prod memo/closure not updating when slots/prices arrive). */
   const calendarRenderKey = `${viewMonthKey}|${monthDataRangeStart ?? ""}|s:${monthSlots.length}|p:${Object.keys(datePrices).length}|r:${selectedRateIdForCalendar ?? ""}`;
 
@@ -537,6 +551,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   useEffect(() => {
     setSelectedSlot(null);
   }, [isTicketed]);
+
+  // When experience has a booking window and current view month is outside it, snap to the start of the window
+  useEffect(() => {
+    const seasonal = selectedExperience?.seasonal;
+    if (!seasonal?.enabled) return;
+    if (!isMonthInSeasonalRange(seasonal, viewMonthYear, viewMonthMonth)) {
+      const startDate = seasonal.startDate && /^\d{4}-\d{2}-\d{2}$/.test(seasonal.startDate) ? seasonal.startDate : null;
+      if (startDate) {
+        const [y, m] = startDate.slice(0, 7).split("-").map(Number);
+        setViewMonthYear(y);
+        setViewMonthMonth(m);
+      } else {
+        const startMonth = seasonal.startMonth ?? 1;
+        const startYear = viewMonthYear; // may need to adjust for wrap-around; use current year as base
+        setViewMonthYear(startYear);
+        setViewMonthMonth(startMonth);
+      }
+    }
+  }, [selectedExperience?.id, selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
 
   // Force full payment only when deposit is explicitly disabled or when ticketed
   useEffect(() => {
@@ -1177,7 +1210,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <div className="flex items-center justify-center gap-2 w-full">
                       <button
                         type="button"
-                        disabled={isViewMonthCurrent}
+                        disabled={isViewMonthCurrent || !canGoPrevMonth}
                         onClick={() => {
                           if (viewMonthMonth === 1) {
                             setViewMonthYear((y) => y - 1);
@@ -1188,7 +1221,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         }}
                         className={cn(
                           "rounded-xl p-2.5 text-brand-dark transition-colors touch-manipulation",
-                          isViewMonthCurrent ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
+                          (isViewMonthCurrent || !canGoPrevMonth) ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
                         )}
                         aria-label="Previous month"
                       >
@@ -1199,6 +1232,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </span>
                       <button
                         type="button"
+                        disabled={!canGoNextMonth}
                         onClick={() => {
                           if (viewMonthMonth === 12) {
                             setViewMonthYear((y) => y + 1);
@@ -1207,7 +1241,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             setViewMonthMonth((m) => m + 1);
                           }
                         }}
-                        className="rounded-xl p-2.5 text-brand-dark hover:bg-brand-dark/10 active:bg-brand-dark/15 transition-colors touch-manipulation"
+                        className={cn(
+                          "rounded-xl p-2.5 text-brand-dark transition-colors touch-manipulation",
+                          !canGoNextMonth ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
+                        )}
                         aria-label="Next month"
                       >
                         <ChevronRight className="h-6 w-6 md:h-6 md:w-6" />
@@ -1252,7 +1289,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
                             : (entry?.open ?? 0));
                       const ticketsLeft = dataMatchesView && isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
-                      const isAvailable = !isPast && (isTicketed
+                      const dateSeasonalAllowed = !selectedExperience?.seasonal?.enabled || isSeasonalAllowed(selectedExperience.seasonal, new Date(dateStr + "T12:00:00"), dateStr);
+                      const isAvailable = !isPast && dateSeasonalAllowed && (isTicketed
                         ? openForDuration > 0
                         : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
@@ -1264,13 +1302,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         : (takenCount > 0 && openForDuration === 0));
                       const hasBookingsUrgency = !isPast && dataMatchesView && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
+                      const isOutsideSeasonal = selectedExperience?.seasonal?.enabled && !dateSeasonalAllowed;
                       const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
                       const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
                       return (
                         <button
                           key={dateStr}
                           type="button"
-                          disabled={isPast || !isAvailable || isFullyBooked}
+                          disabled={isPast || !isAvailable || isFullyBooked || isOutsideSeasonal}
                           onClick={() => {
                             if (!isAvailable) return;
                             setSelectedDate(dateStr);
@@ -1288,7 +1327,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             isAvailable && !isHoliday && !hasBookingsUrgency &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
                             isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
-                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40"
+                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40",
+                            isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5"
                           )}
                         >
                           <span className="block text-[8px] sm:text-[10px] md:text-xs text-brand-muted uppercase leading-none">{weekday}</span>
@@ -1333,10 +1373,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 {selectedDate && (
                   <div className="min-h-[2.5rem] transition-[opacity] duration-150 ease-out">
                     {isTicketed ? (
-                      departurTimeLabel ? (
+                      departureTimeLabel ? (
                         <div className="rounded-xl border-2 border-brand-primary/30 bg-brand-primary/5 px-4 py-3">
                           <p className="text-xs font-semibold text-brand-muted uppercase tracking-wider mb-0.5">Departure time</p>
-                          <p className="text-base font-bold text-brand-dark">{departurTimeLabel}</p>
+                          <p className="text-base font-bold text-brand-dark">{departureTimeLabel}</p>
                           {(slotsLoading || ticketCountsLoading) && (
                             <p className="text-xs text-brand-muted mt-1">Checking availability…</p>
                           )}
@@ -1593,36 +1633,36 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     {/* Order summary — always at top so user sees what they're booking */}
                     {selectedExperience && selectedDate && selectedSlot && selectedRate && (
                       <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden shrink-0">
-                      <div className="p-4 bg-gradient-to-br from-brand-primary/8 to-brand-primary/4 border-b border-brand-dark/5">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
-                        <h3 className="font-bold text-brand-dark text-lg leading-tight">{selectedExperience.title}</h3>
-                        {selectedBoat && (
-                          <p className="text-sm font-medium text-brand-dark/80 mt-0.5">
-                            {selectedBoat.name}
-                            {selectedBoat.slug && (
+                        <div className="p-4 bg-gradient-to-br from-brand-primary/8 to-brand-primary/4 border-b border-brand-dark/5">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
+                          <h3 className="font-bold text-brand-dark text-lg leading-tight">{selectedExperience.title}</h3>
+                          {selectedBoat && (
+                            <p className="text-sm font-medium text-brand-dark/80 mt-0.5">
+                              {selectedBoat.name}
+                              {selectedBoat.slug && (
+                                <>
+                                  {" · "}
+                                  <a href={`/boats/${selectedBoat.slug}`} className="text-brand-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded" target="_blank" rel="noopener noreferrer">
+                                    View boat details
+                                  </a>
+                                </>
+                              )}
+                            </p>
+                          )}
+                          <p className="text-sm text-brand-muted mt-2 flex items-center gap-1.5 flex-wrap">
+                            <span>{new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
+                            <span aria-hidden>·</span>
+                            <span>{isTicketed ? (departureTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}</span>
+                            {!isTicketed && (
                               <>
-                                {" · "}
-                                <a href={`/boats/${selectedBoat.slug}`} className="text-brand-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded" target="_blank" rel="noopener noreferrer">
-                                  View boat details
-                                </a>
+                                <span aria-hidden>·</span>
+                                <span>{selectedRate.durationHours} hr</span>
                               </>
                             )}
                           </p>
-                        )}
-                        <p className="text-sm text-brand-muted mt-2 flex items-center gap-1.5 flex-wrap">
-                          <span>{new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
-                          <span aria-hidden>·</span>
-                          <span>{isTicketed ? (departurTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}</span>
-                          {!isTicketed && (
-                            <>
-                              <span aria-hidden>·</span>
-                              <span>{selectedRate.durationHours} hr</span>
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div className="p-4 space-y-2">
-                        <div className="flex justify-between items-baseline text-sm">
+                        </div>
+                        <div className="p-4 space-y-2">
+                          <div className="flex justify-between items-baseline text-sm">
                           <span className="text-brand-muted">{priceSummary.rateLabel}</span>
                           {priceReady ? (
                             <span className="font-semibold text-brand-dark">${(priceSummary.rateCents / 100).toFixed(2)}</span>
@@ -2315,7 +2355,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-sm text-brand-muted">
                           {selectedDate && new Date(selectedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
                           {" · "}
-                          {isTicketed ? (departurTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}
+                          {isTicketed ? (departureTimeLabel ?? formatTime(selectedSlot.startAt)) : formatTime(selectedSlot.startAt)}
                           {" · "}
                           {priceSummary.rateLabel}
                         </p>

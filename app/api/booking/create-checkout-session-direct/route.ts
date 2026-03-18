@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
 import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
+import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
 import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
@@ -171,6 +172,7 @@ export async function POST(request: NextRequest) {
 
     let discountCents = 0;
     let discountCodeApplied: string | undefined;
+    let discountRef: import("firebase-admin").firestore.DocumentReference | null = null;
     if (input.discountCode) {
       const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
       const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
@@ -180,6 +182,7 @@ export async function POST(request: NextRequest) {
       }
       discountCents = result.discountCents;
       discountCodeApplied = result.discount.code;
+      if (!discountSnap.empty) discountRef = discountSnap.docs[0].ref;
     }
 
     const holdId = db.collection("holds").doc().id;
@@ -209,6 +212,18 @@ export async function POST(request: NextRequest) {
     holdPayload.effectiveRateCents = rateForPricing.priceCents;
 
     await db.runTransaction(async (tx) => {
+      if (discountRef) {
+        const discountSnapTx = await tx.get(discountRef);
+        if (discountSnapTx.exists) {
+          const d = discountSnapTx.data() as { usedCount?: number; maxRedemptions?: number };
+          const used = d.usedCount ?? 0;
+          const max = d.maxRedemptions;
+          if (typeof max === "number" && used >= max) {
+            throw new Error("This code has reached its usage limit");
+          }
+          tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+        }
+      }
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
@@ -322,36 +337,7 @@ export async function POST(request: NextRequest) {
           console.error("[create-checkout-session-direct] Failed to delete orphaned coupon", stripeCouponId, delErr);
         }
       }
-      try {
-        const bookingMode = (holdPayload as { bookingMode?: string }).bookingMode;
-        const isSharedTicketed = bookingMode === "shared" && !!holdPayload.experienceId;
-        const parsedSlot = holdPayload.slotId ? parseSlotId(holdPayload.slotId as string) : null;
-        const inventoryRef = isSharedTicketed && parsedSlot && holdPayload.experienceId
-          ? getDepartureInventoryRef(db, holdPayload.experienceId as string, parsedSlot.dateStr)
-          : null;
-        await db.runTransaction(async (tx) => {
-          // Firestore: all reads must complete before any write.
-          const slotSnap = await tx.get(slotRef);
-          const reservedAfterRelease =
-            inventoryRef != null && typeof holdPayload.partySize === "number"
-              ? Math.max(0, (await getReservedSeats(tx, inventoryRef)) - holdPayload.partySize)
-              : null;
-          // Writes only after reads.
-          if (slotSnap.exists && (slotSnap.data() as { holdId?: string }).holdId === holdId) {
-            tx.update(slotRef, { status: "open", holdId: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
-          }
-          if (inventoryRef != null && reservedAfterRelease !== null) {
-            tx.set(
-              inventoryRef,
-              { reservedSeats: reservedAfterRelease, updatedAt: FieldValue.serverTimestamp() },
-              { merge: true }
-            );
-          }
-          tx.update(db.collection("holds").doc(holdId), { status: "expired" });
-        });
-      } catch {
-        /* best-effort */
-      }
+      await rollbackCheckoutSession(db, holdId, holdPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, { FieldValue, Timestamp });
       throw sessionErr;
     }
 

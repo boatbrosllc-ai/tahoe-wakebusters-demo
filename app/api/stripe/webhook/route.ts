@@ -5,7 +5,7 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingConfirmationEmail, sendFinalChargeFailedEmail, upsertBrevoContact } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
-import { bookingEnv } from "@/lib/booking/env";
+import { bookingEnv, validateWebhookEnv } from "@/lib/booking/env";
 import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
@@ -25,6 +25,7 @@ import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 export async function POST(request: NextRequest) {
   let event: Stripe.Event | undefined;
   try {
+    validateWebhookEnv();
     const body = await request.text();
     const sig = request.headers.get("stripe-signature");
     if (!sig) {

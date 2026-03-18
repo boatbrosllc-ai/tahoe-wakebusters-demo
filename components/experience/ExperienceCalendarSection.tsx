@@ -292,6 +292,25 @@ export function ExperienceCalendarSection({
     return () => controller.abort();
   }, [experienceIdProp, firestoreSlug]);
 
+  // When we have experienceId but no seasonal from slug (e.g. opened by ID), fetch experience-detail to get booking window so calendar restricts dates correctly.
+  useEffect(() => {
+    if (!experienceId) return;
+    if (seasonalConfigProp !== undefined && seasonalConfigProp !== null) return;
+    const controller = new AbortController();
+    bookingCache.fetchExperienceDetail(experienceId, controller.signal)
+      .then((data) => {
+        if (data?.seasonal && typeof data.seasonal === "object" && data.seasonal.enabled) {
+          setFetchedSeasonalConfig(data.seasonal as SeasonalConfig);
+        } else {
+          setFetchedSeasonalConfig(null);
+        }
+      })
+      .catch(() => {
+        setFetchedSeasonalConfig(null);
+      });
+    return () => controller.abort();
+  }, [experienceId, seasonalConfigProp]);
+
   // Load rates when we have experienceId (from prop or from slug resolve). Keeps prices in sync when slug response omitted rates.
   // Skip when the slug effect already supplied rates — the slug endpoint always includes them.
   useEffect(() => {

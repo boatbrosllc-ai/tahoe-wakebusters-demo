@@ -740,7 +740,7 @@ export async function POST(request: NextRequest) {
         }
 
         // No valid reusable hold: create new hold and reserve full party size.
-        // Validate discount inside transaction to avoid race where concurrent requests exceed maxRedemptions.
+        // Validate discount inside transaction and atomically increment to avoid over-redemption.
         if (discountRef) {
           const discountSnapTx = await tx.get(discountRef);
           if (discountSnapTx.exists) {
@@ -750,6 +750,7 @@ export async function POST(request: NextRequest) {
             if (typeof max === "number" && used >= max) {
               throw new Error("This code has reached its usage limit");
             }
+            tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
           }
         }
         let blocked: boolean;
@@ -1020,7 +1021,7 @@ export async function POST(request: NextRequest) {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
-      // Validate discount inside transaction to avoid race where concurrent requests exceed maxRedemptions.
+      // Validate discount inside transaction and atomically increment to avoid over-redemption.
       if (discountRef) {
         const discountSnapTx = await tx.get(discountRef);
         if (discountSnapTx.exists) {
@@ -1030,6 +1031,7 @@ export async function POST(request: NextRequest) {
           if (typeof max === "number" && used >= max) {
             throw new Error("This code has reached its usage limit");
           }
+          tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
         }
       }
       tx.set(db.collection("holds").doc(holdId), holdPayload);

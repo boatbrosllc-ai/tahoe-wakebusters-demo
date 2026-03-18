@@ -14,12 +14,12 @@ import { signReceiptToken } from "@/lib/booking/receiptToken";
 import type { BookingCardDisplay } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 
-function parseBody(body: unknown): { holdId: string; paymentIntentId: string } | null {
+function parseBody(body: unknown): { holdId: string | null; paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   const paymentIntentId = typeof o.paymentIntentId === "string" ? o.paymentIntentId : null;
-  if (!holdId || !paymentIntentId) return null;
+  if (!paymentIntentId) return null;
   return { holdId, paymentIntentId };
 }
 
@@ -42,40 +42,45 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
-      bookingLog("complete-after-payment", "invalid body: holdId and paymentIntentId required");
-      return NextResponse.json({ error: "holdId and paymentIntentId required" }, { status: 400 });
+      bookingLog("complete-after-payment", "invalid body: paymentIntentId required");
+      return NextResponse.json({ error: "paymentIntentId required" }, { status: 400 });
     }
-    bookingLog("complete-after-payment", "parsed input", {
-      holdId: input.holdId,
-      paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
-    });
-
     const stripe = getStripe();
     let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
+    const metadataHoldId = pi.metadata?.holdId as string | undefined;
+    const holdId = input.holdId ?? metadataHoldId ?? null;
+    if (!holdId) {
+      bookingLog("complete-after-payment", "no holdId in body or PI metadata");
+      return NextResponse.json({ error: "Payment intent has no associated hold" }, { status: 400 });
+    }
+    bookingLog("complete-after-payment", "parsed input", {
+      holdId,
+      paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24) + "...",
+    });
     bookingLog("complete-after-payment", "PaymentIntent retrieved", {
-      holdId: input.holdId,
+      holdId,
       piStatus: pi.status,
       piId: pi.id,
     });
     if (pi.status !== "succeeded") {
       if (pi.status === "processing") {
-        bookingLog("complete-after-payment", "payment still processing, returning 202", { holdId: input.holdId });
+        bookingLog("complete-after-payment", "payment still processing, returning 202", { holdId });
         return NextResponse.json(
           { processing: true, message: "Payment is processing. Your booking will be confirmed shortly." },
           { status: 202 }
         );
       }
-      bookingLog("complete-after-payment", "payment not succeeded", { holdId: input.holdId, status: pi.status });
+      bookingLog("complete-after-payment", "payment not succeeded", { holdId, status: pi.status });
       return NextResponse.json(
         { error: "Payment has not succeeded yet. Your booking will be created shortly—check your email and Admin." },
         { status: 400 }
       );
     }
-    const metadataHoldId = pi.metadata?.holdId;
-    if (metadataHoldId !== input.holdId) {
+    const piMetadataHoldId = pi.metadata?.holdId;
+    if (piMetadataHoldId !== holdId) {
       bookingError("complete-after-payment", "holdId mismatch", null, {
-        metadataHoldId: metadataHoldId ?? null,
-        inputHoldId: input.holdId,
+        metadataHoldId: piMetadataHoldId ?? null,
+        inputHoldId: holdId,
       });
       return NextResponse.json(
         { error: "Payment intent does not match this hold" },
@@ -96,7 +101,7 @@ export async function POST(request: NextRequest) {
     // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
     const isDepositByStage = paymentStage === "deposit";
     const db = getDb();
-    const holdRef = db.collection("holds").doc(input.holdId);
+    const holdRef = db.collection("holds").doc(holdId);
     const holdSnap = await holdRef.get();
     const hold = holdSnap.exists ? (holdSnap.data() as { pricing?: { totalCents?: number }; tipCents?: number; discountCents?: number }) : null;
     // When metadata total is missing/0, use hold pricing so we don't treat deposit amount as full total (which would make remaining = 0)
@@ -118,7 +123,7 @@ export async function POST(request: NextRequest) {
     // Decide deposit vs full from metadata and amount; do NOT require customerId so we never show "full payment" for a deposit
     const useDepositInput = isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
     bookingLog("complete-after-payment", "PI metadata and convert decision", {
-      holdId: input.holdId,
+      holdId,
       paymentStage: paymentStage ?? null,
       totalCentsFromMeta,
       totalCents,
@@ -162,10 +167,10 @@ export async function POST(request: NextRequest) {
       holdId: input.holdId,
       paymentStage: useDepositInput ? "deposit" : "full",
     });
-    const result = await convertHoldToBooking(db, input.holdId, convertInput);
+    const result = await convertHoldToBooking(db, holdId, convertInput);
 
     if ("alreadyConverted" in result) {
-      bookingLog("complete-after-payment", "hold already converted (idempotent)", { holdId: input.holdId });
+      bookingLog("complete-after-payment", "hold already converted (idempotent)", { holdId });
       let bookingId: string | undefined;
       try {
         const byFull = await db.collection("bookings").where("stripe.paymentIntentId", "==", input.paymentIntentId).limit(1).get();
@@ -176,7 +181,7 @@ export async function POST(request: NextRequest) {
           if (!byDeposit.empty) bookingId = byDeposit.docs[0].id;
         }
       } catch (lookupErr) {
-        bookingWarn("complete-after-payment", "alreadyConverted: booking lookup failed (non-fatal)", { holdId: input.holdId, err: lookupErr });
+        bookingWarn("complete-after-payment", "alreadyConverted: booking lookup failed (non-fatal)", { holdId, err: lookupErr });
       }
       let receiptToken: string | undefined;
       if (bookingId) {
@@ -194,7 +199,7 @@ export async function POST(request: NextRequest) {
         paymentSummary: paymentSummaryForClient,
       });
     }
-    bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId: input.holdId });
+    bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId });
     let receiptToken: string | undefined;
     try {
       receiptToken = signReceiptToken(result.bookingId);
