@@ -252,6 +252,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     slotsLoadError,
     setSlotsLoadError,
     slotsLoading,
+    slotsPartialData,
     datePrices,
     setDatePrices,
     datePricesLoading,
@@ -1197,6 +1198,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <span className="block mt-1 text-xs">
                         Check <a href="/api/health" target="_blank" rel="noopener noreferrer" className="underline">/api/health</a> on this site for details.
                       </span>
+                    </p>
+                  )}
+                  {slotsPartialData && (
+                    <p className="text-sm text-amber-700 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200" role="alert">
+                      Availability may be incomplete — refresh or contact us to confirm.
                     </p>
                   )}
                   <div key={calendarRenderKey}>

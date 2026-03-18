@@ -147,7 +147,12 @@ function fetchCached<T>(
             (e as Error & { status?: number }).status = res.status;
             throw e;
           }
-          return res.json() as Promise<T>;
+          const partialData = res.headers.get("X-Slots-Partial-Data") === "true";
+          const data = (await res.json()) as T;
+          if (partialData && data && typeof data === "object" && !Array.isArray(data)) {
+            (data as T & { partialData?: boolean }).partialData = true;
+          }
+          return data;
         })
         .then((data) => {
           dataCache.delete(key); // remove then re-insert to update insertion order (LRU)
@@ -228,6 +233,7 @@ export interface ExperienceListItem {
   maxCapacity?: number;
   departureHour?: number;
   departureMinute?: number;
+  allowDeposit?: boolean;
 }
 
 export interface CachedSlotDto {
@@ -308,7 +314,7 @@ export function fetchSlots(
   endDate: string,
   signal?: AbortSignal,
   options?: { ticketed?: boolean },
-): Promise<{ slots: CachedSlotDto[] }> {
+): Promise<{ slots: CachedSlotDto[]; partialData?: boolean }> {
   const key = `slots|${experienceId}|${startDate}|${endDate}`;
   const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}`;
   const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;

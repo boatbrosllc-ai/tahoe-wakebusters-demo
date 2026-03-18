@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
@@ -50,12 +51,31 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
 
-    const boatsSnap = await db
-      .collection("boats")
-      .where("isListingBoat", "==", true)
-      .where("experienceIds", "array-contains", experienceId)
-      .get();
-    const allBoatIds = boatsSnap.docs.map((d) => d.id);
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    const experienceSlug = expSnap.exists
+      ? (typeof (expSnap.data() as { slug?: string })?.slug === "string"
+          ? (expSnap.data() as { slug: string }).slug.trim()
+          : "")
+      : "";
+    const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+    const boatSnaps = await Promise.all(
+      experienceIdVariants.map((variantId) =>
+        db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("experienceIds", "array-contains", variantId)
+          .get()
+      )
+    );
+    const seenBoatIds = new Set<string>();
+    const allBoatIds: string[] = [];
+    for (const snap of boatSnaps) {
+      for (const d of snap.docs) {
+        if (seenBoatIds.has(d.id)) continue;
+        seenBoatIds.add(d.id);
+        allBoatIds.push(d.id);
+      }
+    }
     const boatIds = bodyBoatIds && bodyBoatIds.length > 0
       ? bodyBoatIds.filter((id) => allBoatIds.includes(id))
       : allBoatIds;

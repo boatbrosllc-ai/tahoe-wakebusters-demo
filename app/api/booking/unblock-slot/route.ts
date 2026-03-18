@@ -58,8 +58,12 @@ export async function POST(request: NextRequest) {
     if (snap.empty) {
       return NextResponse.json({ ok: true, message: "No block found for this slot" });
     }
-    await snap.docs[0].ref.delete();
-    return NextResponse.json({ ok: true, slotId, boatId });
+    const batch = db.batch();
+    for (const doc of snap.docs) {
+      batch.delete(doc.ref);
+    }
+    await batch.commit();
+    return NextResponse.json({ ok: true, slotId, boatId, blocksDeleted: snap.docs.length });
   } catch (err) {
     console.error("[unblock-slot]", err);
     return NextResponse.json({ error: "Failed to unblock slot" }, { status: 500 });

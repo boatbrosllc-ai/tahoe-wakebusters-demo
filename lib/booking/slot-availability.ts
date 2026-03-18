@@ -8,6 +8,7 @@ import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import type { Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { bookingWarn } from "@/lib/booking/debug";
 
 export class SlotConflictError extends Error {
   constructor(
@@ -93,15 +94,30 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     }
   }
 
-  const blocked = await hasOverlappingBlock({
-    db,
-    Timestamp,
-    experienceId,
-    boatId,
-    slotStart,
-    slotEnd,
-    get,
-  });
+  let blocked: boolean;
+  try {
+    blocked = await hasOverlappingBlock({
+      db,
+      Timestamp,
+      experienceId,
+      boatId,
+      slotStart,
+      slotEnd,
+      get,
+    });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    const message = err instanceof Error ? err.message : String(err);
+    if (code === "failed-precondition" || /index/i.test(message)) {
+      bookingWarn("slot-availability", "blocks index unavailable; skipping block check", {
+        experienceId,
+        hint: "Firestore index may still be building. Deploy firestore:indexes first.",
+      });
+      blocked = false;
+    } else {
+      throw err;
+    }
+  }
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
   const paidSnaps = await Promise.all(

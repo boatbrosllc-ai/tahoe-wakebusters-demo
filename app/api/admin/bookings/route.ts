@@ -427,18 +427,26 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const paidBookingsSnap = await tx.get(
-        db.collection("bookings").where("experienceId", "==", experienceId).where("startDateStr", "==", tripDate)
+      const slugVariantsForOverlap = getExperienceIdVariants(experienceId, exp.slug ?? "");
+      const paidBookingSnaps = await Promise.all(
+        slugVariantsForOverlap.map((v) =>
+          tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate))
+        )
       );
-      for (const doc of paidBookingsSnap.docs) {
-        const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
-        if (boatId && b.boatId !== boatId) continue;
-        if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-        const p = b.slotId ? parseSlotId(b.slotId) : null;
-        if (!p) continue;
-        const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-        if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
-          throw Object.assign(new Error("This time slot overlaps an existing booking"), { code: "SLOT_CONFLICT" });
+      const seenBookingIds = new Set<string>();
+      for (const snap of paidBookingSnaps) {
+        for (const doc of snap.docs) {
+          if (seenBookingIds.has(doc.id)) continue;
+          seenBookingIds.add(doc.id);
+          const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
+          if (boatId && b.boatId !== boatId) continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const p = b.slotId ? parseSlotId(b.slotId) : null;
+          if (!p) continue;
+          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
+          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+            throw Object.assign(new Error("This time slot overlaps an existing booking"), { code: "SLOT_CONFLICT" });
+          }
         }
       }
 

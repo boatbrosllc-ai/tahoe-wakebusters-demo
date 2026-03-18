@@ -84,6 +84,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const [allSlots, setAllSlots] = useState<bookingCache.CachedSlotDto[] | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
+  const [slotsPartialData, setSlotsPartialData] = useState(false);
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
   const lastSlotsRetryForRef = useRef<string | null>(null);
@@ -174,6 +175,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   useEffect(() => {
     if (!selectedExperience) {
       setAllSlots(null);
+      setSlotsPartialData(false);
       return;
     }
     const { start: startDate, end: endDate } = getMonthRangeWithAdjacent(
@@ -197,6 +199,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         bookingDebugLog("BookingPageClient", "slots fetch success", { slotCount: slots.length, startDate, endDate });
         setAllSlots(slots);
         setSlotsLoadError(null);
+        setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -448,6 +451,11 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                     <ChevronRight className="h-5 w-5" aria-hidden />
                   </button>
                 </div>
+                {slotsPartialData && (
+                  <p className="text-sm text-amber-700 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200" role="alert">
+                    Availability may be incomplete — refresh or contact us to confirm.
+                  </p>
+                )}
                 {slotsLoadError ? (
                   <p className="text-sm text-amber-700 py-4 px-2">{slotsLoadError}</p>
                 ) : slotsLoading ? (

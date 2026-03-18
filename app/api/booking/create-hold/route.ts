@@ -9,6 +9,7 @@ import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle } fr
 import { getTicketedDepartureAndDuration, validateTicketedSlotParsed, type RateDocLike } from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
+import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
 import type { CreateHoldInput, CreateHoldResponse } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
@@ -637,6 +638,12 @@ export async function POST(request: NextRequest) {
         : "";
       const slugVariantsList = getExperienceIdVariants(expIdForCapacity, expSlug);
       const inventoryRef = getDepartureInventoryRef(db, expIdForCapacity, dateStr);
+      const { start: slotStartForBlock, end: slotEndForBlock } = getSlotStartEnd(
+        dateStr,
+        parsedForCapacity.startHour,
+        parsedForCapacity.durationHours,
+        parsedForCapacity.startMinute ?? 0
+      );
       let effectiveHoldId = holdId;
       let effectiveExpiresAt = expiresAt;
       await db.runTransaction(async (tx) => {
@@ -732,6 +739,30 @@ export async function POST(request: NextRequest) {
             }
           }
         }
+        let blocked: boolean;
+        try {
+          blocked = await hasOverlappingBlock({
+            db,
+            Timestamp,
+            experienceId: expIdForCapacity,
+            slotStart: slotStartForBlock,
+            slotEnd: slotEndForBlock,
+            get: (q) => tx.get(q),
+          });
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          const message = err instanceof Error ? err.message : String(err);
+          if (code === "failed-precondition" || /index/i.test(message)) {
+            bookingWarn("create-hold", "blocks index unavailable; skipping block check (ticketed)", {
+              experienceId: expIdForCapacity,
+              hint: "Firestore index may still be building. Deploy firestore:indexes first.",
+            });
+            blocked = false;
+          } else {
+            throw err;
+          }
+        }
+        if (blocked) throw new SlotConflictError("This slot is blocked");
         await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
         tx.set(db.collection("holds").doc(holdId), holdPayload);
       });

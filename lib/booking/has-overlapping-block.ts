@@ -26,19 +26,19 @@ export async function hasOverlappingBlock(opts: {
   const query = db
     .collection("blocks")
     .where("experienceId", "==", experienceId)
-    .where("startAt", "<", Timestamp.fromDate(slotEnd));
+    .where("endAt", ">", Timestamp.fromDate(slotStart));
 
   const getSnap = get ?? ((q: Query) => q.get());
   const snap = await getSnap(query);
   for (const doc of snap.docs) {
-    const b = doc.data() as { boatId?: string | null; endAt?: { toDate?: () => Date } };
+    const b = doc.data() as { boatId?: string | null; startAt?: { toDate?: () => Date }; endAt?: { toDate?: () => Date } };
     const blockBoatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
     const blockBoatId = blockBoatIdRaw ? blockBoatIdRaw : null;
     const matchesBoat = boatId ? blockBoatId === boatId || blockBoatId == null : blockBoatId == null;
     if (!matchesBoat) continue;
-    const endAt = b.endAt?.toDate?.();
-    if (!endAt) continue;
-    if (endAt.getTime() > slotStartMs) return true;
+    const startAt = b.startAt?.toDate?.();
+    if (!startAt || startAt.getTime() >= slotEndMs) continue;
+    return true;
   }
   return false;
 }

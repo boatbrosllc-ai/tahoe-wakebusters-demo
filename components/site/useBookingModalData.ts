@@ -103,6 +103,7 @@ export function useBookingModalData(
   const [monthSlots, setMonthSlots] = useState<SlotDto[]>([]);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsPartialData, setSlotsPartialData] = useState(false);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
@@ -151,6 +152,7 @@ export function useBookingModalData(
     setMonthDataRangeStart(null);
     setSlotsLoadError(null);
     setSlotsLoading(false);
+    setSlotsPartialData(false);
     setRatesSummary(null);
     setRatesLoadError(null);
     setDatePrices({});
@@ -358,6 +360,7 @@ export function useBookingModalData(
       setMonthSlots([]);
       setSlotsLoadError(null);
       setMonthDataRangeStart(null);
+      setSlotsPartialData(false);
       return;
     }
     const viewYear = selection?.viewMonthYear ?? new Date().getFullYear();
@@ -382,6 +385,7 @@ export function useBookingModalData(
         const refMatch = slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr;
         if (!refMatch) return;
         setSlotsLoadError(null);
+        setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
         const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {
@@ -505,6 +509,7 @@ export function useBookingModalData(
     slotsLoadError,
     setSlotsLoadError,
     slotsLoading,
+    slotsPartialData,
     datePrices,
     setDatePrices,
     datePricesLoading,

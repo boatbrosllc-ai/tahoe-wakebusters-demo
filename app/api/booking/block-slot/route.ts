@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
@@ -54,6 +55,14 @@ export async function POST(request: NextRequest) {
     const { FieldValue, Timestamp } = getFirestoreExports();
     const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
 
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    const experienceSlug = expSnap.exists
+      ? (typeof (expSnap.data() as { slug?: string })?.slug === "string"
+          ? (expSnap.data() as { slug: string }).slug.trim()
+          : "")
+      : "";
+    const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+
     if (boatId) {
       const boatRef = db.collection("boats").doc(boatId);
       const boatSnap = await boatRef.get();
@@ -61,7 +70,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Boat not found" }, { status: 404 });
       }
       const boat = boatSnap.data() as { experienceIds?: string[] };
-      if (!boat.experienceIds?.includes(experienceId)) {
+      if (!experienceIdVariants.some((v) => boat.experienceIds?.includes(v))) {
         return NextResponse.json({ error: "Boat not assigned to this experience" }, { status: 400 });
       }
     }

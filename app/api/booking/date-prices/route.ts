@@ -125,6 +125,8 @@ export async function GET(request: NextRequest) {
             .get()
         )
       );
+      // Short-term: higher limit to reduce undercounting. Long-term: backfill startDateStr on holds
+      // (e.g. via slotId inference as in ticket-availability/route.ts) and set DISABLE_LEGACY_HOLDS_FALLBACK=true.
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
       const holdsLegacySnaps = legacyFallbackEnabled
         ? await Promise.all(
@@ -132,7 +134,7 @@ export async function GET(request: NextRequest) {
               db.collection("holds")
                 .where("experienceId", "==", expId)
                 .where("status", "==", "active")
-                .limit(100)
+                .limit(500)
                 .get()
             )
           )
