@@ -1949,8 +1949,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     )}
                   </div>
 
-                  {/* Pay deposit or full — only when experience allows deposit and not ticketed */}
-                  {selectedExperience?.allowDeposit === true && !isTicketed && (
+                  {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
+                  {!isTicketed && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
