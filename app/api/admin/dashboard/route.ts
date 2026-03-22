@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
@@ -17,8 +17,6 @@ function formatTimeLabel(dateStr: string, startHour: number, durationHours: numb
   return formatBookingTime(start);
 }
 
-const AGG_PAGE_SIZE = 100;
-
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -27,9 +25,6 @@ export async function GET(request: NextRequest) {
     const db = getDb();
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
     const todayStr = getDateStrInSlotTimezone(now);
     const in7Days = new Date(now);
     in7Days.setDate(in7Days.getDate() + 6);
@@ -55,40 +50,39 @@ export async function GET(request: NextRequest) {
       experienceNames.set(doc.id, data.title ?? doc.id);
     });
 
-    let totalRevenueCents = 0;
-    let revenueThisMonthCents = 0;
-    let revenueLastMonthCents = 0;
-    let bookingCount = 0;
-    const byEmail = new Set<string>();
+    const thisMonthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const lastMonthYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const lastMonthMonth = now.getMonth() === 0 ? 12 : now.getMonth();
+    const lastMonthKey = `revenue_${lastMonthYear}_${String(lastMonthMonth).padStart(2, "0")}`;
+
+    const [summarySnap, thisMonthSnap, lastMonthSnap, allBookingsForUnique] = await Promise.all([
+      db.collection("summaries").doc("revenue").get(),
+      db.collection("summaries").doc(thisMonthKey).get(),
+      db.collection("summaries").doc(lastMonthKey).get(),
+      db.collection("bookings").orderBy("createdAt", "desc").limit(500).get(),
+    ]);
+
+    const summary = summarySnap.exists ? (summarySnap.data() as { totalRevenueCents?: number; bookingCount?: number }) : null;
+    const totalRevenueCents = summary?.totalRevenueCents ?? 0;
+    const bookingCountTotal = summary?.bookingCount ?? 0;
+    const uniqueCustomerEmails = new Set<string>();
+    let recentBookingsMissingBoatId = 0;
+    allBookingsForUnique.docs.forEach((d) => {
+      const b = d.data() as Booking;
+      const email = b.customer?.email?.trim();
+      if (email) uniqueCustomerEmails.add(email);
+      const st = b.status as string | undefined;
+      const bid = typeof b.boatId === "string" ? b.boatId.trim() : "";
+      if (st && BOOKING_STATUSES_SLOT_TAKEN.has(st as never) && !bid) recentBookingsMissingBoatId++;
+    });
+    const uniqueCustomerCount = uniqueCustomerEmails.size;
+    const revenueThisMonthCents = thisMonthSnap.exists ? ((thisMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0) : 0;
+    const revenueLastMonthCents = lastMonthSnap.exists ? ((lastMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0) : 0;
 
     type RecentRow = { id: string; createdAt: string; customerEmail: string; customerName: string; totalCents: number; status: string; experienceName: string };
     type UpcomingRow = { id: string; tripDateStr: string; timeLabel: string; experienceName: string; customerName: string; customerEmail: string; totalCents: number };
     const recentBookings: RecentRow[] = [];
     const upcomingBookings: UpcomingRow[] = [];
-
-    let aggCursor: QueryDocumentSnapshot<DocumentData> | null = null;
-    while (true) {
-      let aggQuery = db.collection("bookings").orderBy("createdAt", "desc").limit(AGG_PAGE_SIZE);
-      if (aggCursor) aggQuery = aggQuery.startAfter(aggCursor);
-      const aggSnap = await aggQuery.get();
-      if (aggSnap.empty) break;
-      aggSnap.docs.forEach((d) => {
-        const b = d.data() as Booking;
-        bookingCount += 1;
-        if (b.customer?.email) byEmail.add(b.customer.email.trim());
-        if (REVENUE_STATUSES.includes(b.status as (typeof REVENUE_STATUSES)[number])) {
-          const revenueCents = b.stripe?.totalAmountCents ?? b.pricing?.totalCents ?? 0;
-          if (revenueCents > 0) {
-            totalRevenueCents += revenueCents;
-            const createdAt = toDate(b.createdAt as { seconds?: number; toDate?: () => Date });
-            if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += revenueCents;
-            if (createdAt && createdAt >= startOfLastMonth && createdAt <= endOfLastMonth) revenueLastMonthCents += revenueCents;
-          }
-        }
-      });
-      if (aggSnap.size < AGG_PAGE_SIZE) break;
-      aggCursor = aggSnap.docs[aggSnap.docs.length - 1];
-    }
 
     recentBookingsSnap.docs.forEach((d) => {
       const b = d.data() as Booking;
@@ -130,15 +124,25 @@ export async function GET(request: NextRequest) {
       return a.timeLabel.localeCompare(b.timeLabel);
     });
 
+    const deadLetterSnap = await db.collection("notificationOutbox").where("status", "==", "dead_letter").limit(50).get();
+    let confirmationDeadLetterCount = 0;
+    deadLetterSnap.docs.forEach((d) => {
+      const row = d.data() as { type?: string };
+      if (row.type === "booking_confirmation") confirmationDeadLetterCount++;
+    });
+
     return NextResponse.json({
       totalRevenueCents,
       revenueThisMonthCents,
       revenueLastMonthCents,
-      bookingCount,
-      customerCount: byEmail.size,
+      bookingCountTotal,
+      uniqueCustomerCount,
       listingCount: experiencesSnap.size,
       recentBookings,
       upcomingBookings: upcomingBookings.slice(0, 14),
+      confirmationDeadLetterCount,
+      /** Among the last 500 bookings (by createdAt), paid/trip bookings with missing boatId — drive to zero via backfill. */
+      recentBookingsMissingBoatId,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

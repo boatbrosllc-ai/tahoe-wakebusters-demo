@@ -6,11 +6,21 @@
 
 export const ADMIN_EDGE_COOKIE_NAME = "admin_edge";
 
-function bufferToHex(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let hex = "";
-  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
-  return hex;
+/** Decode 64 hex chars to 32 bytes; returns null if invalid (caller still runs full HMAC compare). */
+function hexToBytes32(signHex: string): Uint8Array | null {
+  if (signHex.length !== 64 || !/^[0-9a-fA-F]+$/.test(signHex)) return null;
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    out[i] = parseInt(signHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function constantTimeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }
 
 /**
@@ -37,7 +47,12 @@ export async function verifyEdgeSessionCookie(cookieHeader: string | null, secre
       ["sign"]
     );
     const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
-    return bufferToHex(sig) === signHex;
+    const expected = new Uint8Array(sig);
+    const decoded = hexToBytes32(signHex);
+    const provided = decoded ?? new Uint8Array(32);
+    const hexOk = decoded !== null;
+    const bytesMatch = constantTimeEqualBytes(expected, provided);
+    return hexOk && bytesMatch;
   } catch {
     return false;
   }

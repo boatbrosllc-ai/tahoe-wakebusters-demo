@@ -72,6 +72,16 @@ export function getDb(): import("firebase-admin").firestore.Firestore {
   return getFirebaseApp().firestore();
 }
 
+/**
+ * Production startup: verify Admin SDK can reach Firestore (not just env parsing).
+ * Call from instrumentation so misconfiguration fails deploy/startup instead of first customer request.
+ */
+export async function assertFirebaseAdminReachableForProduction(): Promise<void> {
+  if (process.env.NODE_ENV !== "production") return;
+  const db = getDb();
+  await db.collection("experiences").limit(1).get();
+}
+
 /** Firebase Storage bucket for uploads (e.g. boat photos). Uses FIREBASE_STORAGE_BUCKET at call time so .env changes apply without restart. */
 export function getStorageBucket() {
   const app = getFirebaseApp();

@@ -31,6 +31,7 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Fails the job if required production secrets (including RELEASE_TOKEN_SECRET for user hold release) are missing from CI env.
       - name: Check env (required variable names)
         run: node scripts/check-production-env.js
         env:
@@ -40,6 +41,13 @@ jobs:
           BREVO_API_KEY: placeholder
           APP_BASE_URL: https://placeholder.example.com
           NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_placeholder
+          MANAGE_BOOKING_SECRET: placeholder
+          RECEIPT_TOKEN_SECRET: placeholder
+          RELEASE_TOKEN_SECRET: placeholder
+          ADMIN_EMAIL: admin@placeholder.example.com
+          NEXT_PUBLIC_FIREBASE_API_KEY: placeholder
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: placeholder.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: placeholder
           FIREBASE_PROJECT_ID: placeholder
           FIREBASE_CLIENT_EMAIL: placeholder@placeholder.iam.gserviceaccount.com
           FIREBASE_PRIVATE_KEY: placeholder

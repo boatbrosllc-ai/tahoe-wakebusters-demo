@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -81,9 +82,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 function ArticleJsonLd({
   post,
   canonical,
+  nonce,
 }: {
   post: NonNullable<ReturnType<typeof getBlogPostBySlug>>;
   canonical: string;
+  nonce?: string;
 }) {
   const imageUrl = post.image ? `${baseUrl}${post.image}` : undefined;
   const schema = {
@@ -116,6 +119,7 @@ function ArticleJsonLd({
   return (
     <script
       type="application/ld+json"
+      nonce={nonce}
       dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
     />
   );
@@ -124,9 +128,11 @@ function ArticleJsonLd({
 function BreadcrumbJsonLd({
   post,
   canonical,
+  nonce,
 }: {
   post: NonNullable<ReturnType<typeof getBlogPostBySlug>>;
   canonical: string;
+  nonce?: string;
 }) {
   const schema = {
     "@context": "https://schema.org",
@@ -140,12 +146,13 @@ function BreadcrumbJsonLd({
   return (
     <script
       type="application/ld+json"
+      nonce={nonce}
       dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
     />
   );
 }
 
-function FaqJsonLd({ post }: { post: NonNullable<ReturnType<typeof getBlogPostBySlug>> }) {
+function FaqJsonLd({ post, nonce }: { post: NonNullable<ReturnType<typeof getBlogPostBySlug>>; nonce?: string }) {
   if (!post.faqs?.length) return null;
   const schema = {
     "@context": "https://schema.org",
@@ -162,6 +169,7 @@ function FaqJsonLd({ post }: { post: NonNullable<ReturnType<typeof getBlogPostBy
   return (
     <script
       type="application/ld+json"
+      nonce={nonce}
       dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
     />
   );
@@ -250,6 +258,7 @@ function Block({ block }: { block: BlogBodyBlock }) {
 }
 
 export default async function BlogPostPage({ params }: Props) {
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   const { slug } = await params;
   const staticPost = getBlogPostBySlug(slug);
   const firestorePost = !staticPost ? await getPublishedPostBySlug(slug) : null;
@@ -259,13 +268,13 @@ export default async function BlogPostPage({ params }: Props) {
     return (
       <>
         {schema?.articleJsonLd && (
-          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.articleJsonLd) }} />
+          <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.articleJsonLd) }} />
         )}
         {schema?.breadcrumbJsonLd && (
-          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.breadcrumbJsonLd) }} />
+          <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.breadcrumbJsonLd) }} />
         )}
         {schema?.faqJsonLd && (
-          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.faqJsonLd) }} />
+          <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.faqJsonLd) }} />
         )}
         <ReadingProgress />
         <FirestoreBlogPostView post={firestorePost as import("@/components/site/FirestoreBlogPostView").FirestorePost} />
@@ -283,9 +292,9 @@ export default async function BlogPostPage({ params }: Props) {
 
   return (
     <>
-      <ArticleJsonLd post={post} canonical={canonical} />
-      <BreadcrumbJsonLd post={post} canonical={canonical} />
-      <FaqJsonLd post={post} />
+      <ArticleJsonLd post={post} canonical={canonical} nonce={nonce} />
+      <BreadcrumbJsonLd post={post} canonical={canonical} nonce={nonce} />
+      <FaqJsonLd post={post} nonce={nonce} />
       <ReadingProgress />
       <div className="min-h-screen bg-white overflow-x-hidden">
         {/* Hero – full viewport height option, premium overlay */}

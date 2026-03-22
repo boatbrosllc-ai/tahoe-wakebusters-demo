@@ -7,10 +7,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { getStripe } from "@/lib/booking/stripe-client";
+import { tryClaimSend, markClaimSent, markClaimFailed } from "@/lib/booking/notification-claim";
 import type { Booking } from "@/lib/booking/types";
+import { totalSummaryAttributedRevenueCents } from "@/lib/booking/summary-revenue";
+import type { DocumentSnapshot } from "firebase-admin/firestore";
+
+const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
 
 function parseBody(body: unknown): { refund?: boolean } {
   if (body == null || typeof body !== "object") return { refund: true };
@@ -37,6 +41,9 @@ export async function POST(
     // keep default
   }
 
+  let expSnapForName: DocumentSnapshot | null = null;
+  let tripDateStr: string | undefined = undefined;
+
   try {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
@@ -54,6 +61,9 @@ export async function POST(
     const boatId = booking.boatId;
     const slotId = booking.slotId;
 
+    tripDateStr = booking.startDateStr ?? parseSlotId(slotId ?? "")?.dateStr;
+    expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
+
     const slotRef = slotId
       ? boatId
           ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
@@ -62,9 +72,37 @@ export async function POST(
             : null
       : null;
 
+    /** Must match increments in convert-hold (deposit + optional final), webhook/cron final, and admin POST. */
+    const revenueCents = totalSummaryAttributedRevenueCents(booking);
+    const bookingExt = booking as Booking & { summaryCountersApplied?: boolean; holdId?: string };
+    const shouldAdjustSummary =
+      revenueCents > 0 &&
+      (bookingExt.summaryCountersApplied === true || !!bookingExt.holdId);
+    const createdAt = (booking as { createdAt?: { toDate?: () => Date } }).createdAt;
+    const createdDate = createdAt?.toDate?.();
+    const monthKey =
+      createdDate
+        ? `revenue_${createdDate.getFullYear()}_${String(createdDate.getMonth() + 1).padStart(2, "0")}`
+        : null;
+
     let slotReleased = false;
     await db.runTransaction(async (tx) => {
       tx.update(bookingRef, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
+      if (shouldAdjustSummary) {
+        const summaryRef = db.collection("summaries").doc("revenue");
+        tx.set(summaryRef, {
+          totalRevenueCents: FieldValue.increment(-revenueCents),
+          bookingCount: FieldValue.increment(-1),
+          customerCount: FieldValue.increment(-1),
+        }, { merge: true });
+        if (monthKey) {
+          const monthRef = db.collection("summaries").doc(monthKey);
+          tx.set(monthRef, {
+            revenueCents: FieldValue.increment(-revenueCents),
+            bookingCount: FieldValue.increment(-1),
+          }, { merge: true });
+        }
+      }
       if (slotRef) {
         const slotSnap = await tx.get(slotRef);
         if (slotSnap.exists) {
@@ -79,13 +117,6 @@ export async function POST(
             slotReleased = true;
           }
         }
-      }
-      const isShared = booking.bookingMode === "shared";
-      const expId = booking.experienceId;
-      const dateStr = booking.startDateStr ?? (slotId ? parseSlotId(slotId)?.dateStr : undefined);
-      if (isShared && expId && dateStr && (booking.partySize ?? 0) > 0) {
-        const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
-        await releaseCapacity(tx, inventoryRef, booking.partySize ?? 0);
       }
     });
 
@@ -136,33 +167,61 @@ export async function POST(
       }
     }
 
-    try {
-      const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
-      const { formatMoney } = await import("@/lib/booking/format-money");
-      const expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
-      const experienceName = expSnapForName?.exists ? (expSnapForName.data() as { title?: string })?.title ?? "Your trip" : "Your trip";
-      const tripDateStr = booking.startDateStr ?? parseSlotId(slotId)?.dateStr;
-      // Compute refund amount from actual Stripe refund objects; only include confirmed successful refunds.
-      const succeededRefunds = refunds.filter((r) => r.status === "succeeded" && r.amount != null);
-      const totalConfirmedCents = succeededRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0);
-      const refundAmount = totalConfirmedCents > 0 ? formatMoney(totalConfirmedCents) : undefined;
-      const pendingRefunds = refunds.filter((r) => r.status === "pending");
-      const refundPending = pendingRefunds.length > 0;
-      const pendingRefundAmount =
-        refundPending && pendingRefunds.some((r) => r.amount != null)
-          ? formatMoney(pendingRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0))
-          : undefined;
-      await sendBookingCancellationEmail({
-        to: booking.customer?.email ?? "",
-        customerName: booking.customer?.name ?? "Guest",
-        experienceName,
-        tripDate: tripDateStr ?? undefined,
-        refundAmount,
-        refundPending,
-        pendingRefundAmount,
-      });
-    } catch (emailErr) {
-      console.error("[admin/cancel] Cancellation email failed", bookingId, emailErr);
+    const experienceName = expSnapForName?.exists ? (expSnapForName.data() as { title?: string })?.title ?? "Your trip" : "Your trip";
+
+    const cancellationClaimed = await tryClaimSend(db, bookingId, CANCELLATION_TEMPLATE_KEY);
+    if (cancellationClaimed) {
+      try {
+        const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
+        const { formatMoney } = await import("@/lib/booking/format-money");
+        const succeededRefunds = refunds.filter((r) => r.status === "succeeded" && r.amount != null);
+        const totalConfirmedCents = succeededRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0);
+        const refundAmount = totalConfirmedCents > 0 ? formatMoney(totalConfirmedCents) : undefined;
+        const pendingRefunds = refunds.filter((r) => r.status === "pending");
+        const refundPending = pendingRefunds.length > 0;
+        const pendingRefundAmount =
+          refundPending && pendingRefunds.some((r) => r.amount != null)
+            ? formatMoney(pendingRefunds.reduce((sum, r) => sum + (r.amount ?? 0), 0))
+            : undefined;
+        await sendBookingCancellationEmail({
+          to: booking.customer?.email ?? "",
+          customerName: booking.customer?.name ?? "Guest",
+          experienceName,
+          tripDate: tripDateStr ?? undefined,
+          refundAmount,
+          refundPending,
+          pendingRefundAmount,
+        });
+        const { logNotificationSent } = await import("@/lib/booking/email-log");
+        await logNotificationSent({
+          channel: "email",
+          to: booking.customer?.email ?? "",
+          toName: booking.customer?.name,
+          templateId: "booking_cancellation",
+          subject: "Booking canceled – Boat Bros ATX",
+          bookingId,
+          eventSubtype: "booking_cancellation",
+        }).catch((err) => console.error("[admin/cancel] logNotificationSent failed", err));
+        if (booking.customer?.phone?.trim()) {
+          const { sendBookingCancellationSms } = await import("@/lib/booking/sms");
+          const smsSent = await sendBookingCancellationSms({
+            phone: booking.customer.phone,
+            customerName: booking.customer?.name ?? "Guest",
+            experienceName,
+            tripDate: tripDateStr ?? undefined,
+            bookingId,
+          });
+          if (smsSent) {
+            await bookingRef.update({ cancellationSmsSentAt: Timestamp.now() });
+          }
+        }
+        await markClaimSent(db, bookingId, CANCELLATION_TEMPLATE_KEY);
+        await bookingRef.update({ cancellationNotifiedAt: Timestamp.now() });
+      } catch (notifyErr) {
+        const errMsg = notifyErr instanceof Error ? notifyErr.message : String(notifyErr);
+        await markClaimFailed(db, bookingId, CANCELLATION_TEMPLATE_KEY, errMsg);
+        console.error("[admin/cancel] Cancellation notification failed", bookingId, notifyErr);
+      }
     }
 
     let cancellationPolicyWarning: string | undefined;

@@ -98,3 +98,32 @@ export function isoToChicagoDateStr(iso: string): string {
   const day = parts.find((p) => p.type === "day")?.value ?? "";
   return `${y}-${m}-${day}`;
 }
+
+const TRIP_DATE_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const TRIP_DATE_MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+/**
+ * Format a trip date stored as YYYY-MM-DD (Firestore startDateStr / slot day).
+ * Does not parse as a local-midnight Date (avoids off-by-one in other timezones).
+ */
+export function formatTripDateYyyyMmDd(yyyyMmDd: string | null | undefined): string {
+  if (!yyyyMmDd || !/^\d{4}-\d{2}-\d{2}$/.test(yyyyMmDd.trim())) return "—";
+  const [ys, ms, ds] = yyyyMmDd.trim().split("-");
+  const y = Number(ys);
+  const m = Number(ms);
+  const d = Number(ds);
+  if (!Number.isFinite(y) || m < 1 || m > 12 || d < 1 || d > 31) return "—";
+  const weekday = TRIP_DATE_WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${weekday}, ${TRIP_DATE_MONTHS_SHORT[m - 1]} ${d}, ${y}`;
+}
+
+/** Same source as {@link formatTripDateYyyyMmDd} without weekday (tables, compact rows). */
+export function formatTripDateYyyyMmDdShort(yyyyMmDd: string | null | undefined): string {
+  if (!yyyyMmDd || !/^\d{4}-\d{2}-\d{2}$/.test(yyyyMmDd.trim())) return "—";
+  const [ys, ms, ds] = yyyyMmDd.trim().split("-");
+  const y = Number(ys);
+  const m = Number(ms);
+  const d = Number(ds);
+  if (!Number.isFinite(y) || m < 1 || m > 12 || d < 1 || d > 31) return "—";
+  return `${TRIP_DATE_MONTHS_SHORT[m - 1]} ${d}, ${y}`;
+}

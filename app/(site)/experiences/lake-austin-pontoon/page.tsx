@@ -5,6 +5,7 @@ export default async function LakeAustinPontoonPage() {
   let heroImageUrl: string | null = null;
   let galleryImages: { url: string; alt?: string }[] = [];
   let overviewImageUrl: string | null = null;
+  let fromPriceCents: number | null = null;
 
   let socialProof: { rating?: number; ratingCount?: string; stats?: string[]; tagline?: string } | undefined;
 
@@ -12,6 +13,9 @@ export default async function LakeAustinPontoonPage() {
     const data = await getExperienceBySlug("pontoon");
     if (data?.experience) {
       const exp = data.experience;
+      if (typeof exp.fromPriceCents === "number" && exp.fromPriceCents > 0) {
+        fromPriceCents = exp.fromPriceCents;
+      }
       if (exp.heroMedia?.url) heroImageUrl = exp.heroMedia.url;
       const gallery = exp.gallery ?? [];
       const altTexts = exp.galleryAltTexts ?? [];
@@ -39,6 +43,7 @@ export default async function LakeAustinPontoonPage() {
       galleryImages={galleryImages.length > 0 ? galleryImages : undefined}
       overviewImageUrl={overviewImageUrl ?? undefined}
       socialProof={socialProof}
+      fromPriceCents={fromPriceCents}
     />
   );
 }

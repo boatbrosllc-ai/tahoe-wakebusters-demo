@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { BOOKING_PREVIEW, PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
+import { BOOKING_PREVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
 
 const durationOptions = BOOKING_PREVIEW.durations;
@@ -11,14 +11,16 @@ const durationOptions = BOOKING_PREVIEW.durations;
 export function BookingPreviewCard({
   onCheckAvailability,
   sectionId,
+  /** Denormalized on the experience document in Firestore; pass from the server page. */
+  fromPriceCents,
 }: {
   onCheckAvailability?: () => void;
   sectionId?: string;
+  fromPriceCents?: number | null;
 }) {
   const reduceMotion = useReducedMotion();
   const [duration, setDuration] = useState<number>(BOOKING_PREVIEW.durations[1]);
   const [guests, setGuests] = useState(6);
-  const price = PRICING_MAP[duration] ?? PRICING_MAP[4];
 
   const scrollToBooking = () => {
     if (sectionId) {
@@ -80,8 +82,14 @@ export function BookingPreviewCard({
       </div>
 
       <p className="text-2xl font-bold text-white mb-1">
-        From ${price}
-        <span className="text-white/70 text-base font-normal"> / trip</span>
+        {fromPriceCents != null && fromPriceCents > 0 ? (
+          <>
+            From ${(fromPriceCents / 100).toFixed(0)}
+            <span className="text-white/70 text-base font-normal"> / trip</span>
+          </>
+        ) : (
+          <span className="inline-block h-8 w-32 animate-pulse rounded-lg bg-white/20 align-middle" aria-hidden />
+        )}
       </p>
       <p className="text-white/60 text-sm mb-4">Prices vary by date</p>
 

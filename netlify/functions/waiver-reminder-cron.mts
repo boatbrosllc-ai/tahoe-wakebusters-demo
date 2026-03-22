@@ -22,7 +22,7 @@ export const handler = schedule("0 9 * * *", async () => {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${baseUrl}/api/waiver/reminder-cron`, {
+    const res = await fetch(`${baseUrl}/api/admin/cron/waiver-reminder`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cronSecret}`,

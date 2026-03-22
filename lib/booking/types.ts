@@ -253,6 +253,10 @@ export interface Addon {
 export interface AddonSelection {
   addonId: string;
   qty: number;
+  /** Unit price in cents captured at hold creation (authoritative for checkout / conversion). */
+  priceCents?: number;
+  /** Display name captured at hold creation for Stripe line items without re-fetching prices. */
+  name?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +321,11 @@ export interface Hold {
   status: HoldStatus;
   expiresAt: FirestoreTimestamp;
   createdAt: FirestoreTimestamp;
+  /** Set when hold is converted to a booking; used for receipt claim-token resolution. */
+  bookingId?: string;
   checkoutSessionId?: string;
+  /** Embedded vs hosted checkout; used with checkoutSessionId for mode-matching before Stripe. */
+  checkoutSessionMode?: "embedded" | "redirect";
   /** Optional tip (20% when "Tip now" selected). In cents. */
   tipCents?: number;
   /** Discount code applied at checkout (uppercase). */
@@ -332,6 +340,23 @@ export interface Hold {
   depositPaymentIntentId?: string;
   /** Stripe PaymentIntent id for full/final payment (reused on retry). */
   fullPaymentIntentId?: string;
+  /**
+   * Set on the first create-payment-intent extension of expiresAt; further PI retries must not extend again
+   * (prevents unbounded inventory locks via repeated intent creation).
+   */
+  paymentIntentExpiryExtendedAt?: FirestoreTimestamp;
+  /** Client idempotency key for shared-ticketed create-hold (dedupe rapid double-submit). */
+  clientHoldRequestId?: string;
+  /**
+   * Monotonic counter incremented on every hold create/resume; Stripe metadata must match so stale
+   * PaymentIntents cannot convert after intent id fields are cleared.
+   */
+  paymentAttemptVersion?: number;
+  /**
+   * Set while a Stripe Checkout Session is being created, to serialize concurrent
+   * create-checkout-session calls. Cleared when checkoutSessionId is persisted or on rollback.
+   */
+  sessionCreationInFlight?: FirestoreTimestamp;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,22 +377,20 @@ export interface BookingPricing {
   currency: string;
 }
 
-/** Legacy: full payment in one charge. New 50/50 flow uses deposit_* and final_* statuses. */
+/** Legacy: full payment in one charge. New 50/50 flow uses final_* statuses. Deposit flow jumps straight to final_due at creation; deposit_paid is not used. */
 export type BookingStatus =
   | "paid"
   | "canceled"
   | "refunded"
-  | "deposit_paid"
   | "final_due"
   | "final_processing"
   | "final_paid"
   | "final_requires_action"
   | "final_failed";
 
-/** Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct). */
+/** Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct). At runtime only paid, final_due, final_processing, final_paid, final_requires_action, final_failed are assigned; deposit_paid is not used. */
 export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
   "paid",
-  "deposit_paid",
   "final_due",
   "final_paid",
   "final_processing",
@@ -395,20 +418,33 @@ export interface BookingStripe {
   depositPaymentIntentId?: string;
   finalPaymentIntentId?: string;
   depositAmountCents?: number;
+  /** When true, summaries/revenue already includes the final payment increment (deposit+final). */
+  finalRevenueSummaryApplied?: boolean;
   finalAmountCents?: number;
   totalAmountCents?: number;
   depositPaidAt?: FirestoreTimestamp;
   finalChargedAt?: FirestoreTimestamp;
   finalChargeAttemptedAt?: FirestoreTimestamp;
   finalChargeLockAt?: FirestoreTimestamp;
+  /** Set when customer uses pay-remaining; cron skips cancel/recreate for ~30m. */
+  customerPayLockAt?: FirestoreTimestamp;
+  /** Set in a transaction immediately before Stripe creates a customer final PI; cleared on success/failure (TTL fallback in cron). */
+  customerFinalPiInFlightAt?: FirestoreTimestamp;
   /** When final charge failed (code/message for admin). */
   finalError?: { code?: string; message?: string };
+  /** When final-charge failure notification was sent (dedupe: only one sender per payment intent). */
+  finalFailureNotifiedAt?: FirestoreTimestamp;
+  finalFailureNotifiedPaymentIntentId?: string;
+  /** Short lease while a failure email send is in flight; cleared after send or on failure so retries can occur. */
+  finalFailureNotifyLeaseUntil?: FirestoreTimestamp;
 }
 
 export interface Booking {
   boatId?: string;
   experienceId?: string;
   bookingMode?: "shared" | "charter";
+  /** Source hold ID when booking was created from a hold; used for receipt claim-token resolution. */
+  holdId?: string;
   slotId: string;
   rateId: string;
   addonSelections: AddonSelection[];
@@ -438,6 +474,16 @@ export interface Booking {
   reminder24hSentAt?: FirestoreTimestamp;
   /** When "day of, 3 hours before" reminder was sent. */
   reminderDayOfSentAt?: FirestoreTimestamp;
+  /** When 48h final payment request was sent (email). */
+  finalPaymentRequestSentAt?: FirestoreTimestamp;
+  /** Channel-specific SMS sent markers (when SMS notifications are enabled). */
+  confirmationSmsSentAt?: FirestoreTimestamp;
+  finalReminderSmsSentAt?: FirestoreTimestamp;
+  reminder1WeekSmsSentAt?: FirestoreTimestamp;
+  reminder24hSmsSentAt?: FirestoreTimestamp;
+  reminderDayOfSmsSentAt?: FirestoreTimestamp;
+  finalPaymentRequestSmsSentAt?: FirestoreTimestamp;
+  cancellationSmsSentAt?: FirestoreTimestamp;
   /** Display-only card (brand, last4, exp). */
   card?: BookingCardDisplay;
   /** Billing address (e.g. for manual/admin-added bookings). */
@@ -456,6 +502,8 @@ export interface Booking {
     templateId: string;
     templateVersion: number;
   };
+  /** Set when marketing opt-in Brevo subscribe succeeds (recovery idempotency). */
+  brevoSubscribedAt?: FirestoreTimestamp;
   createdAt: FirestoreTimestamp;
   updatedAt?: FirestoreTimestamp;
 }
@@ -465,9 +513,19 @@ export interface PendingRefund {
   bookingId?: string;
   holdId?: string;
   duplicatePaymentIntentId?: string;
+  paymentIntentId?: string;
   reason: string;
-  status: "pending" | "resolved";
-  createdAt: FirestoreTimestamp;
+  status: "pending" | "resolved" | "failed";
+  createdAt?: FirestoreTimestamp;
+  /** Legacy rows may only have firstSeenAt; admin API falls back for display ordering. */
+  firstSeenAt?: FirestoreTimestamp;
+  resolvedAt?: FirestoreTimestamp;
+  notes?: string;
+  /** Set when automated refund processor completes a Stripe refund. */
+  stripeRefundId?: string;
+  lastProcessorError?: string;
+  nextRetryAt?: FirestoreTimestamp;
+  processorAttempts?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +550,8 @@ export interface CreateHoldInput {
   bookingMode?: "shared" | "charter";
   /** The hold ID the client wants to resume/extend. Required to reuse an existing active hold on a held slot. */
   resumeHoldId?: string;
+  /** Optional client-generated idempotency key (shared ticketed holds: reuse active hold for same key). */
+  holdRequestId?: string;
 }
 
 export interface CreateHoldResponse {
@@ -500,6 +560,9 @@ export interface CreateHoldResponse {
   pricing: BookingPricing;
   /** Signed token for release-hold (cancel URL). Omitted when RELEASE_TOKEN_SECRET (or MANAGE_BOOKING_SECRET) is unset. */
   releaseToken?: string;
+  /** Confirmed discount from server repricing (weekend/holiday rate, etc.). */
+  discountCents?: number;
+  discountCode?: string;
 }
 
 export interface CreateCheckoutSessionInput {
@@ -534,6 +597,69 @@ export interface Discount {
   active: boolean;
   /** Optional description for admin. */
   description?: string;
+  createdAt: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
+}
+
+// ---------------------------------------------------------------------------
+// Notification outbox (confirmation sends with retry)
+// ---------------------------------------------------------------------------
+
+export type NotificationOutboxStatus = "pending" | "claimed" | "sent" | "failed" | "dead_letter";
+
+export interface NotificationOutboxEntry {
+  bookingId: string;
+  type: "booking_confirmation";
+  payload: Record<string, unknown>;
+  status: NotificationOutboxStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: FirestoreTimestamp;
+  lastError?: string;
+  lastAttemptAt?: FirestoreTimestamp;
+  claimedAt?: FirestoreTimestamp;
+  claimedBy?: string;
+  sentAt?: FirestoreTimestamp;
+  createdAt: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
+}
+
+// ---------------------------------------------------------------------------
+// Notification send claim (idempotent per-booking-per-template)
+// ---------------------------------------------------------------------------
+
+export type NotificationClaimStatus = "claimed" | "sent" | "failed";
+
+export interface NotificationSendClaim {
+  bookingId: string;
+  templateKey: string;
+  status: NotificationClaimStatus;
+  claimedAt: FirestoreTimestamp;
+  claimedBy?: string;
+  sentAt?: FirestoreTimestamp;
+  failedAt?: FirestoreTimestamp;
+  lastError?: string;
+  attemptCount: number;
+  updatedAt: FirestoreTimestamp;
+}
+
+// ---------------------------------------------------------------------------
+// Reminder retry queue (failed reminders with nextAttemptAt)
+// ---------------------------------------------------------------------------
+
+export type ReminderRetryStatus = "pending" | "claimed" | "sent" | "failed" | "dead_letter";
+
+export interface ReminderRetryEntry {
+  bookingId: string;
+  templateKey: "reminder_1week" | "reminder_24h" | "reminder_dayof" | "final_payment_request" | "final_charge_success";
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: FirestoreTimestamp;
+  status: ReminderRetryStatus;
+  lastError?: string;
+  lastAttemptAt?: FirestoreTimestamp;
+  claimedAt?: FirestoreTimestamp;
+  sentAt?: FirestoreTimestamp;
   createdAt: FirestoreTimestamp;
   updatedAt?: FirestoreTimestamp;
 }

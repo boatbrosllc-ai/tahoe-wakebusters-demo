@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
-import { getMonthRangeWithAdjacent, toDateStr } from "@/lib/booking/booking-date-range";
+import { getMonthRangeWithAdjacent, getChicagoToday, toDateStr } from "@/lib/booking/booking-date-range";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
@@ -69,7 +69,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     [calendarMonth.getFullYear(), calendarMonth.getMonth()]
   );
 
-  const todayStr = useMemo(() => toDateStr(new Date()), []);
+  const todayStr = useMemo(() => getChicagoToday(), []);
 
   useEffect(() => {
     if (!open) return;

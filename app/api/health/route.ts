@@ -60,22 +60,34 @@ export async function GET(request: NextRequest) {
   if (privileged) {
     checks.releaseTokenSigning = hasReleaseTokenSecret() ? "ok" : "not_configured";
     checks.manageBookingSecret = process.env.MANAGE_BOOKING_SECRET?.trim() ? "ok" : "not_configured";
+    const isProduction = process.env.NODE_ENV === "production";
+    checks.disableLegacyBookingFallback = isProduction
+      ? (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true" ? "configured" : "not_configured")
+      : "n/a";
+    checks.disableLegacyHoldsFallback = isProduction
+      ? (process.env.DISABLE_LEGACY_HOLDS_FALLBACK === "true" ? "configured" : "not_configured")
+      : "n/a";
+    checks.adminEdgeSecret = isProduction
+      ? (process.env.ADMIN_EDGE_SECRET?.trim() ? "configured" : "not_configured")
+      : "n/a";
   }
 
   const rateLimitReady = isRateLimitReadyForProduction();
+  checks.rateLimitReady = rateLimitReady;
   checks.rateLimit = rateLimitReady ? "ok" : "degraded";
   if (!rateLimitReady) {
     if (privileged) {
       checks.rateLimitDetail =
         process.env.NODE_ENV === "production"
-          ? "Production requires RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN (or UPSTASH_REDIS_REST_*) for booking endpoints; otherwise all requests are rate limited."
+          ? "Production requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or RATE_LIMIT_* equivalents) for booking endpoints; otherwise rate limiting is disabled."
           : "Redis not configured; in-memory store used (dev only).";
     }
     ok = false;
   }
 
   const status = ok ? "ok" : "degraded";
-  const body = privileged ? { status, ...checks } : { status };
+  const rateLimit = rateLimitReady ? "ok" : "degraded";
+  const body = privileged ? { status, rateLimit, ...checks } : { status, rateLimit, rateLimitReady };
   const statusCode = ok ? 200 : 503;
   return NextResponse.json(body, { status: statusCode });
 }

@@ -15,16 +15,20 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
-    const snap = await db
-      .collection("pendingRefunds")
-      .where("status", "==", "pending")
-      .orderBy("createdAt", "desc")
-      .limit(100)
-      .get();
+    const [snap, failedSnap] = await Promise.all([
+      db
+        .collection("pendingRefunds")
+        .where("status", "==", "pending")
+        .orderBy("createdAt", "desc")
+        .limit(100)
+        .get(),
+      db.collection("pendingRefunds").where("status", "==", "failed").limit(50).get(),
+    ]);
 
-    const refunds = snap.docs.map((d) => {
+    const refunds = [...snap.docs, ...failedSnap.docs].map((d) => {
       const data = d.data() as PendingRefund & { paymentIntentId?: string };
-      const createdAt = data.createdAt ? toDate(data.createdAt as { seconds?: number; toDate?: () => Date }) : null;
+      const createdAtRaw = data.createdAt ?? (data as { firstSeenAt?: unknown }).firstSeenAt;
+      const createdAt = createdAtRaw ? toDate(createdAtRaw as { seconds?: number; toDate?: () => Date }) : null;
       const duplicatePaymentIntentId = data.duplicatePaymentIntentId ?? data.paymentIntentId;
       return {
         ...data,

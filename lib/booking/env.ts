@@ -23,8 +23,12 @@ function normalizePemKey(key: string): string {
   return s.trim();
 }
 
-/** When process.env truncates the key (e.g. multi-line .env), read full value from .env.local */
+/**
+ * Dev-only workaround: when process.env truncates the key (e.g. multi-line .env),
+ * read full value from .env.local. Never invoked in production (NODE_ENV, Netlify, Vercel).
+ */
 function readFirebasePrivateKeyFromEnvFile(): string | undefined {
+  if (process.env.NODE_ENV === "production" || process.env.NETLIFY || process.env.VERCEL) return undefined;
   try {
     const path = require("path") as typeof import("path");
     const fs = require("fs") as typeof import("fs");
@@ -122,6 +126,13 @@ export const bookingEnv = {
   get appBaseUrl(): string {
     return requireEnv("APP_BASE_URL").replace(/\/$/, "");
   },
+  /**
+   * Required for signing/verifying `release_token` on user-initiated hold release (`/api/booking/release-hold`).
+   * Validated at production startup via {@link assertProductionReleaseTokenSecret} / {@link assertProductionBookingEnv}.
+   */
+  get releaseTokenSecret(): string {
+    return requireEnv("RELEASE_TOKEN_SECRET");
+  },
   /** Secret for signing/verifying manage-booking links (HMAC). Set for 50/50 manage flow. */
   get manageBookingSecret(): string | undefined {
     const v = getEnv("MANAGE_BOOKING_SECRET");
@@ -130,6 +141,24 @@ export const bookingEnv = {
   /** Same as manageBookingSecret but throws at read time if unset. Use when the flow requires it (e.g. hold release, success pages, 50/50 deposit). */
   get manageBookingSecretRequired(): string {
     return requireEnv("MANAGE_BOOKING_SECRET");
+  },
+  /** Optional: Twilio Account SID for SMS. When set with auth token and from number, SMS notifications are sent. */
+  get twilioAccountSid(): string | undefined {
+    const v = getEnv("TWILIO_ACCOUNT_SID");
+    return v == null || v === "" ? undefined : v.trim();
+  },
+  get twilioAuthToken(): string | undefined {
+    const v = getEnv("TWILIO_AUTH_TOKEN");
+    return v == null || v === "" ? undefined : v.trim();
+  },
+  /** E.164 format (e.g. +15551234567). Required for sending SMS when Twilio is enabled. */
+  get twilioFromNumber(): string | undefined {
+    const v = getEnv("TWILIO_FROM_NUMBER");
+    return v == null || v === "" ? undefined : v.trim();
+  },
+  /** True when all Twilio vars are set so SMS can be sent. */
+  get smsEnabled(): boolean {
+    return !!(bookingEnv.twilioAccountSid && bookingEnv.twilioAuthToken && bookingEnv.twilioFromNumber);
   },
 };
 
@@ -245,6 +274,34 @@ export function validateWebhookEnv(): void {
   if (typeof v !== "string" || v.trim() === "") {
     throw new Error(
       "STRIPE_WEBHOOK_SECRET is required for Stripe webhooks. Set it in the deployment environment."
+    );
+  }
+}
+
+/**
+ * Production startup (e.g. instrumentation.ts): ensures hold release tokens can be issued and verified.
+ * Without RELEASE_TOKEN_SECRET, customers cannot release holds on cancel/back navigation.
+ */
+export function assertProductionReleaseTokenSecret(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  const v = getEnv("RELEASE_TOKEN_SECRET");
+  if (v == null || String(v).trim() === "") {
+    throw new Error(
+      "RELEASE_TOKEN_SECRET is required in production. Without it, customers cannot release holds on cancel or back navigation (slots stay locked until expiry)."
+    );
+  }
+}
+
+/**
+ * Production startup: fail on missing release token secret; warn if legacy booking fallback is still enabled.
+ */
+export function assertProductionBookingEnv(): void {
+  assertProductionReleaseTokenSecret();
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+    console.error(
+      "[booking-env] DISABLE_LEGACY_BOOKING_FALLBACK is not true in production. " +
+        "Run app/api/admin/backfill-start-date-str, verify data, then set DISABLE_LEGACY_BOOKING_FALLBACK=true to avoid large legacy booking scans on every hold."
     );
   }
 }

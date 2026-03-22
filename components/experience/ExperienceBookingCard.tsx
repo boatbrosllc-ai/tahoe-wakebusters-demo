@@ -9,11 +9,22 @@ import { formatBookingTimeFromIso, formatBookingDate, isoToChicagoDateStr } from
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
-import { fetchSlots as fetchSlotsCache, CachedSlotDto, invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
-import { runCreateHoldAndPaymentIntent, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
+import {
+  fetchSlots as fetchSlotsCache,
+  fetchDatePrices,
+  CachedSlotDto,
+  invalidateBookingCaches,
+} from "@/lib/booking/booking-data-cache";
+import { runCreateHold, runCreatePaymentIntentForHold, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
+import {
+  postCompleteAfterPaymentWithTimeout,
+  retryCompleteAfterPaymentOnce,
+  COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
+} from "@/lib/booking/complete-after-payment-client";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
+import { TAX_RATE } from "@/lib/booking/constants";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
@@ -32,9 +43,10 @@ function BookingPaymentForm({
     if (!stripe || !elements) return;
     setProcessing(true);
     try {
+      const returnUrl = typeof window !== "undefined" ? `${window.location.origin}/booking/success` : "";
       const { error } = await stripe.confirmPayment({
         elements,
-        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        confirmParams: { return_url: returnUrl },
         redirect: "if_required",
       });
       if (error) onError(error.message ?? "Payment failed");
@@ -161,6 +173,7 @@ export function ExperienceBookingCard({
   const [cancellationAck, setCancellationAck] = useState(false);
   const [partySize, setPartySize] = useState(2);
   const [holdId, setHoldId] = useState<string | null>(null);
+  const [releaseToken, setReleaseToken] = useState<string | null>(null);
   // Tracks which slot the current holdId was created for, so we can pass resumeHoldId on re-submission.
   const [holdSlotId, setHoldSlotId] = useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
@@ -173,6 +186,22 @@ export function ExperienceBookingCard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slotStolen, setSlotStolen] = useState(false);
+  /** Per-rate effective price for selected date (from date-prices). */
+  const [effectiveRateByRateId, setEffectiveRateByRateId] = useState<Record<string, number>>({});
+  const [datePricesLoading, setDatePricesLoading] = useState(false);
+  const [appliedDiscountCents, setAppliedDiscountCents] = useState(0);
+  const [appliedDiscountCode, setAppliedDiscountCode] = useState("");
+  const [discountApplying, setDiscountApplying] = useState(false);
+  const [showDepositCoercionBanner, setShowDepositCoercionBanner] = useState(false);
+  const [totalCentsFromServer, setTotalCentsFromServer] = useState<number | null>(null);
+  const userChoseDepositRef = useRef(false);
+  const createHoldInFlightRef = useRef(false);
+  const holdRequestIdRef = useRef<string | null>(null);
+  /** Filled after create-hold succeeds so retries send resumeHoldId if payment-intent fails. */
+  const holdResumeRef = useRef<{ slotId: string; holdId: string } | null>(null);
+  const paymentIntentFetchGenRef = useRef(0);
+  const completeAfterRetryInFlightRef = useRef(false);
+  const [completeAfterRetryBusy, setCompleteAfterRetryBusy] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     if (initialDate) {
       const d = new Date(initialDate + "T12:00:00");
@@ -185,6 +214,45 @@ export function ExperienceBookingCard({
   // Tracks which "YYYY-MM" months have been fetched; avoids redundant requests on
   // month navigation without blocking forced refreshes during polling.
   const loadedMonthsRef = useRef<Set<string>>(new Set());
+
+  const expAddonKeyForAttempt = useMemo(
+    () =>
+      JSON.stringify(
+        Object.entries(addonSelections)
+          .filter(([, q]) => q > 0)
+          .sort(([a], [b]) => a.localeCompare(b))
+      ),
+    [addonSelections]
+  );
+  const expBookingAttemptKey = useMemo(
+    () =>
+      [
+        selectedSlot?.id ?? "",
+        selectedRateId ?? "",
+        String(partySize),
+        isTicketed ? "shared" : "charter",
+        String(payFullAmount),
+        discountCode.trim().toUpperCase(),
+        expAddonKeyForAttempt,
+        customer.name.trim(),
+        customer.email.trim().toLowerCase(),
+        customer.phone.trim().replace(/\s+/g, ""),
+      ].join("\0"),
+    [selectedSlot?.id, selectedRateId, partySize, isTicketed, payFullAmount, discountCode, expAddonKeyForAttempt, customer.name, customer.email, customer.phone]
+  );
+  const prevExpBookingAttemptKeyRef = useRef(expBookingAttemptKey);
+  useEffect(() => {
+    if (prevExpBookingAttemptKeyRef.current !== expBookingAttemptKey) {
+      prevExpBookingAttemptKeyRef.current = expBookingAttemptKey;
+      holdRequestIdRef.current = null;
+    }
+  }, [expBookingAttemptKey]);
+
+  useEffect(() => {
+    if (paymentPhase === "success") {
+      holdRequestIdRef.current = null;
+    }
+  }, [paymentPhase]);
 
   const fetchMonthSlots = useCallback(async (monthDate: Date, forceRefresh = false) => {
     const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}`;
@@ -225,6 +293,49 @@ export function ExperienceBookingCard({
   useEffect(() => {
     if (initialDate) setSelectedDate(initialDate);
   }, [initialDate]);
+
+  const rateIdsKey = useMemo(() => rates.map((r) => r.id).sort().join(","), [rates]);
+
+  useEffect(() => {
+    if (!selectedDate || rates.length === 0) {
+      setDatePricesLoading(false);
+      setEffectiveRateByRateId({});
+      return;
+    }
+    const controller = new AbortController();
+    setDatePricesLoading(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const entries = await Promise.all(
+          rates.map(async (r) => {
+            const data = await fetchDatePrices(experienceId, selectedDate, 1, r.id, controller.signal);
+            const price = data?.prices?.[selectedDate];
+            return [r.id, typeof price === "number" ? price : null] as const;
+          })
+        );
+        if (cancelled) return;
+        const next: Record<string, number> = {};
+        for (const [id, v] of entries) {
+          if (v != null) next[id] = v;
+        }
+        setEffectiveRateByRateId(next);
+      } catch {
+        if (!cancelled) setEffectiveRateByRateId({});
+      } finally {
+        if (!cancelled) setDatePricesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [experienceId, selectedDate, rateIdsKey]);
+
+  useEffect(() => {
+    setAppliedDiscountCents(0);
+    setAppliedDiscountCode("");
+  }, [selectedDate, selectedRateId, partySize]);
 
   // Ticketed: auto-select the single rate (no duration picker shown).
   useEffect(() => {
@@ -289,9 +400,9 @@ export function ExperienceBookingCard({
     };
   }, [fetchMonthSlots, calendarMonth, isDateSelectionActive]);
 
-  // When deposit is explicitly disabled, force full payment so UI and server stay in sync
+  // When deposit is not explicitly enabled, force full payment so UI and server stay in sync
   useEffect(() => {
-    if (allowDeposit === false) setPayFullAmount(true);
+    if (allowDeposit !== true) setPayFullAmount(true);
   }, [allowDeposit]);
 
   const selectedRate = useMemo(() => rates.find((r) => r.id === selectedRateId) ?? null, [rates, selectedRateId]);
@@ -327,18 +438,66 @@ export function ExperienceBookingCard({
       }, 0),
     [addonMap, addonSelections]
   );
-  const orderSummaryTotalCents = selectedRate
-    ? (isTicketed ? selectedRate.priceCents * partySize : selectedRate.priceCents) + addonsTotalCents
+  const effectiveRateCents = selectedRateId ? effectiveRateByRateId[selectedRateId] ?? null : null;
+  const rateUnitCents = selectedRate ? effectiveRateCents ?? selectedRate.priceCents : 0;
+  // Server value (pricing?.totalCents) always takes precedence once available; fallback must be tax-inclusive to match Stripe charge.
+  const subtotalCents = selectedRate
+    ? (isTicketed ? rateUnitCents * partySize : rateUnitCents) + addonsTotalCents
     : 0;
+  const orderSummaryTotalCents = subtotalCents > 0 ? subtotalCents + Math.round(subtotalCents * TAX_RATE) : 0;
+  const displayTotalCents = Math.max(0, orderSummaryTotalCents - appliedDiscountCents);
+
+  const handleApplyDiscount = async () => {
+    const code = discountCode.trim().toUpperCase();
+    if (code.length < 4) {
+      setError("Enter a discount code (at least 4 characters).");
+      return;
+    }
+    setDiscountApplying(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/booking/validate-discount", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, totalCents: orderSummaryTotalCents }),
+      });
+      const data = (await res.json()) as { valid?: boolean; discountCents?: number; error?: string };
+      if (res.ok && data.valid && typeof data.discountCents === "number") {
+        setAppliedDiscountCents(data.discountCents);
+        setAppliedDiscountCode(code);
+      } else {
+        setAppliedDiscountCents(0);
+        setAppliedDiscountCode("");
+        setError(data.error ?? "Invalid discount code.");
+      }
+    } catch {
+      setAppliedDiscountCents(0);
+      setAppliedDiscountCode("");
+      setError("Could not validate discount.");
+    } finally {
+      setDiscountApplying(false);
+    }
+  };
 
   const handleCreateHoldAndPayment = async () => {
+    if (createHoldInFlightRef.current || paymentPhase !== "form") return;
     if (!selectedSlot || !selectedRateId || !customer.name.trim() || !customer.email.trim() || !customer.phone.trim() || !cancellationAck) return;
+    userChoseDepositRef.current = !isTicketed && !payFullAmount;
+    setShowDepositCoercionBanner(false);
+    createHoldInFlightRef.current = true;
     setError(null);
+    setClientSecret(null);
     setSubmitting(true);
     setPaymentPhase("loading");
+    if (!holdRequestIdRef.current) {
+      holdRequestIdRef.current =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `hr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+    }
     try {
       bookingLog("client", "ExperienceBookingCard create-hold request", { experienceId, slotId: selectedSlot.id, rateId: selectedRateId, partySize });
-      const result = await runCreateHoldAndPaymentIntent(
+      const result = await runCreateHold(
         {
           experienceId,
           slotId: selectedSlot.id,
@@ -349,42 +508,122 @@ export function ExperienceBookingCard({
           customerDraft: { name: customer.name.trim(), email: customer.email.trim(), phone: customer.phone.trim() },
           marketingOptIn,
           bookingMode: isTicketed ? "shared" : "charter",
-          discountCode: discountCode.trim() || undefined,
-          resumeHoldId: holdId && holdSlotId === selectedSlot.id ? holdId : undefined,
+          discountCode: (appliedDiscountCode || discountCode.trim()) || undefined,
+          resumeHoldId:
+            holdId && holdSlotId === selectedSlot.id
+              ? holdId
+              : holdResumeRef.current?.slotId === selectedSlot.id
+                ? holdResumeRef.current.holdId
+                : undefined,
+          holdRequestId: holdRequestIdRef.current,
         },
-        isTicketed ? true : payFullAmount
+        { persistHoldForResume: holdResumeRef }
       );
       if (!result.ok) {
+        const ref = result.incidentId ? ` Reference: ${result.incidentId}.` : "";
         const hint = result.hint ? ` ${result.hint}` : "";
-        bookingLog("client", "ExperienceBookingCard create-hold/create-payment failed", { status: result.status, error: result.error });
-        setError(`${result.error ?? "Could not reserve slot"}${hint}`);
+        bookingLog("client", "ExperienceBookingCard create-hold failed", { status: result.status, error: result.error });
+        setError(`${result.error ?? "Could not reserve slot"}${ref}${hint}`);
         if (result.error?.toLowerCase().includes("no longer available")) setSlotStolen(true);
         setPaymentPhase("form");
-        if (result.holdId) releaseHold(result.holdId, result.releaseToken ?? null);
+        if (result.holdId) {
+          void (async () => {
+            await releaseHold(result.holdId!, result.releaseToken ?? null);
+            if (holdResumeRef.current?.holdId === result.holdId) holdResumeRef.current = null;
+          })();
+        }
         return;
       }
-      if (typeof result.payFullAmount === "boolean") setPayFullAmount(result.payFullAmount);
-      if (typeof result.depositCents === "number") setDepositCentsFromServer(result.depositCents);
+      const p = result.pricing as { totalCents?: number } | null;
+      if (p && typeof p.totalCents === "number") setTotalCentsFromServer(p.totalCents);
       setHoldId(result.holdId);
+      setReleaseToken(result.releaseToken ?? null);
       setHoldSlotId(selectedSlot.id);
-      setHoldExpiresAt(result.expiresAtFromIntent ?? result.expiresAt ?? null);
+      setHoldExpiresAt(result.expiresAt ?? null);
       setPricing((result.pricing ?? null) as { totalCents: number; currency: string } | null);
+      setPaymentIntentId(null);
       if (!isStripeCheckoutReady) {
         releaseHold(result.holdId, result.releaseToken);
         setError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
         setPaymentPhase("form");
         return;
       }
-      bookingLog("client", "ExperienceBookingCard create-payment-intent success", { holdId: result.holdId });
-      setClientSecret(result.clientSecret);
-      setPaymentIntentId(result.paymentIntentId ?? null);
       setPaymentPhase("stripe");
     } catch (e) {
       bookingError("client", "ExperienceBookingCard create-hold or create-payment-intent threw", e, {});
       setError(e instanceof Error ? e.message : "Something went wrong");
       setPaymentPhase("form");
     } finally {
+      createHoldInFlightRef.current = false;
       setSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (paymentPhase !== "stripe" || !holdId || clientSecret) return;
+    if (!isStripeCheckoutReady) return;
+    const gen = ++paymentIntentFetchGenRef.current;
+    let cancelled = false;
+    const pf = isTicketed ? true : payFullAmount;
+    void (async () => {
+      const pi = await runCreatePaymentIntentForHold({
+        holdId,
+        payFullAmount: pf,
+        releaseToken,
+      });
+      if (cancelled || gen !== paymentIntentFetchGenRef.current) return;
+      if (!pi.ok) {
+        setPaymentPhase("form");
+        setError(pi.error ?? "Failed to start payment");
+        if (pi.holdId) {
+          void releaseHold(pi.holdId, pi.releaseToken ?? null).then(() => {
+            if (holdResumeRef.current?.holdId === pi.holdId) holdResumeRef.current = null;
+          });
+        }
+        return;
+      }
+      if (typeof pi.payFullAmount === "boolean") setPayFullAmount(pi.payFullAmount);
+      if (pi.payFullAmount === true && userChoseDepositRef.current) {
+        setShowDepositCoercionBanner(true);
+      }
+      if (typeof pi.depositCents === "number") setDepositCentsFromServer(pi.depositCents);
+      if (typeof pi.totalCents === "number") setTotalCentsFromServer(pi.totalCents);
+      setClientSecret(pi.clientSecret);
+      setPaymentIntentId(pi.paymentIntentId ?? null);
+      if (typeof pi.expiresAtFromIntent === "string") setHoldExpiresAt(pi.expiresAtFromIntent);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentPhase, holdId, clientSecret, payFullAmount, isTicketed, releaseToken]);
+
+  const handleRetryCompleteAfterPayment = async () => {
+    if (!holdId || !paymentIntentId) return;
+    if (completeAfterRetryInFlightRef.current) return;
+    completeAfterRetryInFlightRef.current = true;
+    setCompleteAfterRetryBusy(true);
+    setError(null);
+    try {
+      const out = await retryCompleteAfterPaymentOnce({ holdId, paymentIntentId });
+      if (!out.ok) {
+        if (out.stallTimeout) {
+          setError(out.message);
+        } else {
+          setError(out.error);
+        }
+        return;
+      }
+      const { res, data } = out;
+      if (res.ok && (data as { success?: boolean }).success) {
+        const expIdForCache = (data as { experienceId?: string }).experienceId ?? experienceId;
+        if (expIdForCache) invalidateBookingCaches(expIdForCache);
+        setPaymentPhase("success");
+      } else {
+        setError(((data as { error?: string }).error) ?? "Confirmation failed");
+      }
+    } finally {
+      completeAfterRetryInFlightRef.current = false;
+      setCompleteAfterRetryBusy(false);
     }
   };
 
@@ -544,6 +783,14 @@ export function ExperienceBookingCard({
         <p className="text-sm text-amber-800">
           {error ?? "Your payment was successful, but we couldn't complete the booking confirmation. Please contact us with your email so we can confirm your reservation."}
         </p>
+        <button
+          type="button"
+          onClick={() => void handleRetryCompleteAfterPayment()}
+          disabled={completeAfterRetryBusy}
+          className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 disabled:opacity-60 disabled:pointer-events-none"
+        >
+          {completeAfterRetryBusy ? "Trying again…" : "Try again"}
+        </button>
       </div>
     );
   }
@@ -562,26 +809,47 @@ export function ExperienceBookingCard({
     );
   }
 
-  if (paymentPhase === "stripe" && clientSecret && stripePromise) {
-    const dueCents = isTicketed || payFullAmount
-      ? (pricing?.totalCents ?? orderSummaryTotalCents)
-      : Math.round((pricing?.totalCents ?? orderSummaryTotalCents) * 0.5);
+  if (paymentPhase === "stripe" && stripePromise) {
+    const totalFromServer = pricing?.totalCents ?? totalCentsFromServer ?? displayTotalCents;
+    const priceDivergence = pricing?.totalCents != null && Math.abs(pricing.totalCents - orderSummaryTotalCents) > 1;
+    const displayDepositCents = !payFullAmount && depositCentsFromServer != null
+      ? depositCentsFromServer
+      : (isTicketed || payFullAmount ? totalFromServer : null);
+    const remainingCents = !payFullAmount && depositCentsFromServer != null && pricing?.totalCents != null
+      ? pricing.totalCents - depositCentsFromServer
+      : null;
     return (
       <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6", className)}>
         <h3 className="text-lg font-semibold text-brand-dark mb-1">Secure payment</h3>
+        {showDepositCoercionBanner && (
+          <p className="mb-4 text-sm font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2" role="alert">
+            This experience requires full payment at checkout. You&apos;re being charged the full amount now.
+          </p>
+        )}
         {error && (
           <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-2">{error}</p>
+        )}
+        {priceDivergence && (
+          <p className="mb-4 text-sm font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2" role="alert">
+            Price updated: ${((pricing?.totalCents ?? 0) / 100).toFixed(2)}
+          </p>
         )}
         <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/5 p-4 mb-4 space-y-1.5">
           <div className="flex justify-between items-baseline">
             <span className="text-sm font-semibold text-brand-dark">
               {isTicketed || payFullAmount ? "Total due now" : "Deposit due now"}
             </span>
-            <span className="text-xl font-bold text-brand-primary">${(dueCents / 100).toFixed(2)}</span>
+            {displayDepositCents != null ? (
+              <span className="text-xl font-bold text-brand-primary">${(displayDepositCents / 100).toFixed(2)}</span>
+            ) : (
+              <span className="inline-block h-7 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
+            )}
           </div>
           {!isTicketed && !payFullAmount && (
             <p className="text-xs text-brand-muted">
-              Remaining 50% (${((pricing?.totalCents ?? orderSummaryTotalCents) / 100 - dueCents / 100).toFixed(2)}) charged 48 hours before your trip
+              {remainingCents != null
+                ? `Remaining 50% ($${(remainingCents / 100).toFixed(2)}) charged 48 hours before your trip`
+                : "Remaining balance charged 48 hours before your trip"}
             </p>
           )}
         </div>
@@ -590,49 +858,58 @@ export function ExperienceBookingCard({
             <HoldCountdown expiresAt={holdExpiresAt} label="Your slot is held — complete payment in" compact />
           </p>
         )}
-        <Elements stripe={stripePromise} options={{ clientSecret }}>
-          <BookingPaymentForm
-            onSuccess={async () => {
-              setPaymentPhase("completing");
-              invalidateBookingCaches(experienceId);
-              if (!holdId || !paymentIntentId) {
-                bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
-                setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
-                setPaymentPhase("successWithWarning");
-                return;
-              }
-              try {
-                bookingLog("client", "ExperienceBookingCard complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
-                const res = await fetch("/api/booking/complete-after-payment", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ holdId, paymentIntentId }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                  bookingLog("client", "ExperienceBookingCard complete-after-payment failed", { status: res.status, error: (data as { error?: string }).error });
-                  setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
+        {!clientSecret ? (
+          <div className="min-h-[180px] flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-brand-primary/15 bg-brand-primary/5 px-4 mb-4" aria-busy="true">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+            <p className="text-sm text-brand-muted text-center">Preparing secure payment…</p>
+          </div>
+        ) : (
+          <Elements stripe={stripePromise} options={{ clientSecret }}>
+            <BookingPaymentForm
+              onSuccess={async () => {
+                setPaymentPhase("completing");
+                if (!holdId || !paymentIntentId) {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
+                  setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
                   setPaymentPhase("successWithWarning");
                   return;
                 }
-                const success = (data as { success?: boolean }).success;
-                if (success) {
-                  bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: (data as { bookingId?: string }).bookingId });
-                  setPaymentPhase("success");
-                } else {
-                  bookingLog("client", "ExperienceBookingCard complete-after-payment not successful", { holdId, data });
-                  setError((data as { error?: string }).error ?? "Booking confirmation is pending. Contact us if you don't receive an email.");
+                try {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
+                  const res = await postCompleteAfterPaymentWithTimeout({ holdId, paymentIntentId });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    invalidateBookingCaches(experienceId);
+                    bookingLog("client", "ExperienceBookingCard complete-after-payment failed", { status: res.status, error: (data as { error?: string }).error });
+                    setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
+                    setPaymentPhase("successWithWarning");
+                    return;
+                  }
+                  const expIdForCache = (data as { experienceId?: string }).experienceId ?? experienceId;
+                  if (expIdForCache) invalidateBookingCaches(expIdForCache);
+                  const success = (data as { success?: boolean }).success;
+                  if (success) {
+                    bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: (data as { bookingId?: string }).bookingId });
+                    setPaymentPhase("success");
+                  } else {
+                    bookingLog("client", "ExperienceBookingCard complete-after-payment not successful", { holdId, data });
+                    setError((data as { error?: string }).error ?? "Booking confirmation is pending. Contact us if you don't receive an email.");
+                    setPaymentPhase("successWithWarning");
+                  }
+                } catch (e) {
+                  bookingError("client", "ExperienceBookingCard complete-after-payment request failed", e, { holdId });
+                  if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
+                    setError(COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE);
+                  } else {
+                    setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
+                  }
                   setPaymentPhase("successWithWarning");
                 }
-              } catch (e) {
-                bookingError("client", "ExperienceBookingCard complete-after-payment request failed", e, { holdId });
-                setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
-                setPaymentPhase("successWithWarning");
-              }
-            }}
-            onError={(msg) => setError(msg)}
-          />
-        </Elements>
+              }}
+              onError={(msg) => setError(msg)}
+            />
+          </Elements>
+        )}
         <p className="text-center text-[11px] text-brand-muted mt-3">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
       </div>
     );
@@ -651,7 +928,7 @@ export function ExperienceBookingCard({
       )}
       {slotStolen && (
         <p className="mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2">
-          That time was just booked—pick another.
+          That time isn&apos;t available anymore — pick another date or time.
         </p>
       )}
       {error && (
@@ -841,7 +1118,13 @@ export function ExperienceBookingCard({
                     : "border-brand-dark/15 text-brand-dark"
                 )}
               >
-                {r.displayName} — ${(r.priceCents / 100).toFixed(0)}
+                {r.displayName}
+                {selectedDate &&
+                  (datePricesLoading ? (
+                    <span className="inline-block h-4 w-10 animate-pulse rounded bg-brand-dark/15 align-middle ml-1" aria-hidden />
+                  ) : (
+                    ` — $${((effectiveRateByRateId[r.id] ?? r.priceCents) / 100).toFixed(0)}`
+                  ))}
               </button>
             ))}
           </div>
@@ -921,13 +1204,35 @@ export function ExperienceBookingCard({
         {customer.phone.length > 0 && phoneError && (
           <p className="mt-1 text-sm text-red-600">{phoneError}</p>
         )}
-        <input
-          type="text"
-          placeholder="Discount code (optional)"
-          value={discountCode}
-          onChange={(e) => setDiscountCode(e.target.value)}
-          className="w-full rounded-xl border border-brand-dark/15 px-4 py-3 text-brand-dark placeholder:text-brand-muted/70"
-        />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            placeholder="Discount code (optional)"
+            value={discountCode}
+            onChange={(e) => {
+              setDiscountCode(e.target.value);
+              setAppliedDiscountCents(0);
+              setAppliedDiscountCode("");
+            }}
+            onBlur={() => {
+              if (discountCode.trim().length >= 4) void handleApplyDiscount();
+            }}
+            className="w-full rounded-xl border border-brand-dark/15 px-4 py-3 text-brand-dark placeholder:text-brand-muted/70"
+          />
+          <button
+            type="button"
+            onClick={() => void handleApplyDiscount()}
+            disabled={discountApplying}
+            className="rounded-xl border-2 border-brand-dark/15 px-4 py-3 text-sm font-semibold text-brand-dark hover:bg-brand-bg disabled:opacity-60"
+          >
+            {discountApplying ? "…" : "Apply"}
+          </button>
+        </div>
+        {appliedDiscountCents > 0 && (
+          <p className="text-xs text-brand-muted">
+            Discount applied: −${(appliedDiscountCents / 100).toFixed(2)} (estimate — final amount at checkout)
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label htmlFor="exp-booking-party-size" className="block text-xs text-brand-muted mb-1">
@@ -957,7 +1262,7 @@ export function ExperienceBookingCard({
       </div>
 
       {/* Pay deposit or full — hidden when experience disables deposit (allowDeposit === false) or ticketed (always full) */}
-      {!isTicketed && allowDeposit !== false && (
+      {!isTicketed && allowDeposit === true && (
         <div className="mb-4">
           <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
           <div className="flex flex-col gap-2">
@@ -990,7 +1295,11 @@ export function ExperienceBookingCard({
             >
               <span className="font-semibold text-brand-dark">Pay full amount</span>
               <span className="block mt-0.5 text-brand-muted font-normal text-xs">
-                ${(orderSummaryTotalCents / 100).toFixed(2)} now — all set, no later charge
+                {datePricesLoading && selectedDate ? (
+                  <span className="inline-block h-3 w-24 animate-pulse rounded bg-brand-dark/10 align-middle" aria-hidden />
+                ) : (
+                  <>${(displayTotalCents / 100).toFixed(2)} now — all set, no later charge</>
+                )}
               </span>
             </button>
           </div>
@@ -1001,13 +1310,28 @@ export function ExperienceBookingCard({
       <div className="border-t border-brand-dark/10 pt-4 mb-4">
         {isTicketed && selectedRate && (
           <p className="text-xs text-brand-muted mb-1">
-            {partySize} {partySize === 1 ? "ticket" : "tickets"} × ${(selectedRate.priceCents / 100).toFixed(0)}/ticket
+            {partySize} {partySize === 1 ? "ticket" : "tickets"} × $
+            {datePricesLoading && selectedDate ? (
+              <span className="inline-block h-3 w-10 animate-pulse rounded bg-brand-dark/15 align-middle" aria-hidden />
+            ) : (
+              (rateUnitCents / 100).toFixed(0)
+            )}
+            /ticket
           </p>
         )}
         <div className="flex justify-between text-sm text-brand-dark mb-1">
-          <span>Estimated total</span>
+          <span>
+            Estimated total
+            {datePricesLoading && selectedDate ? (
+              <span className="block text-[11px] font-normal text-brand-muted mt-0.5">Verifying date price…</span>
+            ) : null}
+          </span>
           {selectedRate ? (
-            <span className="font-semibold">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
+            datePricesLoading && selectedDate ? (
+              <span className="h-5 w-20 animate-pulse rounded bg-brand-dark/10" aria-hidden />
+            ) : (
+              <span className="font-semibold">${(displayTotalCents / 100).toFixed(2)}</span>
+            )
           ) : (
             <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
           )}
@@ -1016,8 +1340,10 @@ export function ExperienceBookingCard({
           <div className="flex justify-between text-sm font-semibold text-brand-dark">
             <span>{payFullAmount ? "Total due now" : "Deposit due now"}</span>
             {selectedRate ? (
-              payFullAmount ? (
-                <span className="text-brand-primary">${(orderSummaryTotalCents / 100).toFixed(2)}</span>
+              datePricesLoading && selectedDate ? (
+                <span className="h-5 w-16 animate-pulse rounded bg-brand-primary/20" aria-hidden />
+              ) : payFullAmount ? (
+                <span className="text-brand-primary">${(displayTotalCents / 100).toFixed(2)}</span>
               ) : depositCentsFromServer != null ? (
                 <span className="text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
               ) : (
@@ -1033,8 +1359,8 @@ export function ExperienceBookingCard({
       <Button
         size="lg"
         className="w-full rounded-xl"
-        disabled={!canProceed || submitting || !isStripeCheckoutReady}
-        onClick={handleCreateHoldAndPayment}
+        disabled={!canProceed || submitting || paymentPhase !== "form" || !isStripeCheckoutReady}
+        onClick={() => void handleCreateHoldAndPayment()}
       >
         {submitting ? "Preparing payment…" : "Continue to payment"}
       </Button>

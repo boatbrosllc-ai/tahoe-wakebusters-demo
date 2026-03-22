@@ -7,12 +7,16 @@
  *
  * All three Firestore reads are issued in parallel via Promise.all.
  */
+
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 26;
 
 const EXPERIENCE_DETAIL_FIREBASE_HINT =
   "Experience detail requires Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your deployment environment.";
@@ -24,7 +28,6 @@ export interface ExperienceDetailBoat {
   description?: string;
   photos: string[];
   fromPriceCents: number | null;
-  rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
 }
 
 export interface ExperienceDetailRate {
@@ -173,7 +176,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           description: boat.description,
           photos: boat.photos ?? [],
           fromPriceCents,
-          rates, // reference to the shared array — JSON.stringify will duplicate but callers should use top-level rates
         };
       });
 

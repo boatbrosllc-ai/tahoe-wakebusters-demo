@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Image from "next/image";
 import { loadStripe } from "@stripe/stripe-js";
-import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { Elements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
@@ -21,132 +21,53 @@ import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
-import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth } from "@/lib/booking/booking-date-range";
+import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth, getMsUntilNextChicagoMidnight } from "@/lib/booking/booking-date-range";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
+import {
+  completeAfterPaymentWithPolling,
+  type CompleteAfterPaymentClientOutcome,
+} from "@/lib/booking/complete-after-payment-client";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { TAX_RATE } from "@/lib/booking/constants";
+import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
+import { AddonSelector } from "@/components/site/booking-modal-steps/AddonSelector";
+import { BookingStep4PaymentForm } from "@/components/site/booking-modal-steps/BookingStep4PaymentForm";
+import { BookingSuccessPanel } from "@/components/site/booking-modal-steps/BookingSuccessPanel";
+import { WEEKDAY_LABELS } from "@/components/site/booking-modal-steps/booking-calendar-constants";
+import { usePriceSummary } from "@/components/site/usePriceSummary";
+import type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption } from "@/lib/booking/booking-modal-types";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
-const SESSION_STORAGE_HOLD_ID_KEY = "booking_holdId_modal";
-
-interface ExperienceItem {
-  id: string;
-  slug: string;
-  title: string;
-  subtitle: string;
-  heroMedia: { type: "image" | "video"; url: string };
-  maxGuests: number;
-  petsMax: number;
-  fromPriceCents: number | null;
-  active: boolean;
-  pricingType?: "charter" | "ticketed";
-  maxCapacity?: number;
-  departureHour?: number;
-  departureMinute?: number;
-  allowDeposit?: boolean;
-  allowTipNow?: boolean;
-  allowTipLater?: boolean;
-  seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string };
-}
-
-interface BoatOption {
-  id: string;
-  name: string;
-  slug?: string;
-  photos: string[];
-  fromPriceCents: number | null;
-  rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
-}
-
-interface SlotDto {
-  id: string;
-  startAt: string;
-  endAt: string;
-  status: string;
-  boatId?: string;
-  /** Ticketed: number of tickets already booked on this slot's date (from API). */
-  spotsBooked?: number;
-  spotsRemaining?: number;
-}
-
-interface RateOption {
-  id: string;
-  durationHours: number;
-  displayName: string;
-  priceCents: number;
-}
-
-interface AddonOption {
-  id: string;
-  name: string;
-  description?: string;
-  priceCents: number;
-  type: string;
-  maxQty?: number;
-  highlight?: boolean;
-}
-
-/** Stable empty array for ratesForSelection when no rates loaded yet (avoids new [] reference every render). */
-const EMPTY_RATES_FOR_SELECTION: CachedRateOption[] = [];
-
-/** Weekday labels: always Sunday first so headers match the calendar grid (getDay() 0 = Sunday). */
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-
 /** Session key for persisting success state so close/reopen shows receipt and booking ID. */
 const SESSION_SUCCESS_KEY = "bb_booking_success";
+/** Success snapshot is only for immediate post-booking UX; claim token remains valid longer server-side. */
+const SESSION_SUCCESS_MAX_AGE_MS = 7 * 60 * 1000;
+
+/** Prefer claim token from API; fall back to legacy receiptToken field. */
+function receiptTokenFromCompleteAfterPaymentPayload(data: {
+  receiptClaimToken?: unknown;
+  receiptToken?: unknown;
+}): string | null {
+  if (typeof data.receiptClaimToken === "string" && data.receiptClaimToken.trim()) return data.receiptClaimToken.trim();
+  if (typeof data.receiptToken === "string" && data.receiptToken.trim()) return data.receiptToken.trim();
+  return null;
+}
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
 }
 
-function BookingPaymentForm({
-  onSuccess,
-  onError,
-}: {
-  onSuccess: (paymentIntentId?: string) => void;
-  onError: (message: string) => void;
-}) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [processing, setProcessing] = useState(false);
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setProcessing(true);
-    try {
-      const { error, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
-        redirect: "if_required",
-      });
-      if (error) onError(error.message ?? "Payment failed");
-      else onSuccess(paymentIntent?.id);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Payment failed");
-    } finally {
-      setProcessing(false);
-    }
-  };
-  return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <PaymentElement />
-        <button
-        type="submit"
-        disabled={!stripe || processing}
-        className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
-      >
-        {processing ? "Processing…" : "Pay now"}
-      </button>
-    </form>
-  );
-}
-
 import type { BookingModalInitialSelection } from "@/components/site/BookingModalContext";
 import { useBookingModalData, type UseBookingModalDataSelection } from "@/components/site/useBookingModalData";
-import { useBookingPayment, type UseBookingPaymentOptions } from "@/components/site/useBookingPayment";
+import {
+  useBookingPayment,
+  type UseBookingPaymentOptions,
+  SESSION_HOLD_ID_KEY,
+  type ModalHoldRecoveryPayloadV1,
+  clearModalHoldRecoverySession,
+} from "@/components/site/useBookingPayment";
 
 type BookingModalProps = {
   open: boolean;
@@ -159,12 +80,15 @@ type BookingModalProps = {
 
 export function BookingModal({ open, onOpenChange, initialSelection, selectionKey }: BookingModalProps) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const stepRef = useRef(step);
+  stepRef.current = step;
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const today = useMemo(() => {
-    const t = new Date();
-    return { year: t.getFullYear(), month: t.getMonth() + 1 };
+    const s = getChicagoToday();
+    const [y, m] = s.split("-").map(Number);
+    return { year: y, month: m };
   }, []);
   const [viewMonthYear, setViewMonthYear] = useState(today.year);
   const [viewMonthMonth, setViewMonthMonth] = useState(today.month);
@@ -194,7 +118,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning" | "successRecoveryFailed">("form");
+  const [paymentPhase, setPaymentPhase] = useState<
+    | "form"
+    | "loading"
+    | "stripe"
+    | "completing"
+    | "completeAfterPaymentRetry"
+    | "success"
+    | "successWithWarning"
+    | "successRecoveryFailed"
+  >("form");
   const [payFullAmount, setPayFullAmount] = useState(true);
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
   const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
@@ -203,8 +136,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // Persists the last successfully-created holdId per slot across back-navigation so
   // subsequent create-hold calls for the same slot can include resumeHoldId.
   const lastHoldRef = useRef<{ slotId: string; holdId: string } | null>(null);
+  /** After hold recovery, apply `selectedBoat` once `boats` loads. */
+  const pendingRecoveryBoatIdRef = useRef<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [receiptClaimToken, setReceiptClaimToken] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   /** Server-computed deposit/total/final from create-payment-intent so step-4 summary and Stripe recap use server-authoritative values. */
   const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
@@ -214,8 +150,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [isDepositFromServer, setIsDepositFromServer] = useState<boolean | null>(null);
   /** When recovery of holdId/paymentIntentId fails after Stripe success: show fallback with this PI ID. */
   const [recoveryFailedPiId, setRecoveryFailedPiId] = useState<string | null>(null);
+  const [completeAfterRetryInFlight, setCompleteAfterRetryInFlight] = useState(false);
+  const completeAfterRetryInFlightRef = useRef(false);
+  /** While true, complete-after-payment is polling Stripe "processing" — match BookingStripeReturnHandler copy. */
+  const [stripePaymentProcessing, setStripePaymentProcessing] = useState(false);
+  const completeAfterAbortRef = useRef<AbortController | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  /** Receipt fetch failed transiently during hold recovery — session kept for retry. */
+  const [holdSessionVerifyError, setHoldSessionVerifyError] = useState<string | null>(null);
   /** Hold expiry (ISO string) from create-hold; shown during payment and used to block progression when expired. */
   const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
+  /** Shown when /api/booking/release-hold fails so the user can retry without losing hold context. */
+  const [holdReleaseWarning, setHoldReleaseWarning] = useState<string | null>(null);
   /** One-shot ref to prevent duplicate release calls from concurrent close triggers (Dialog overlay + cleanup). */
   const releaseOnCloseDoneRef = useRef(false);
   /** Captured when user clicks "Proceed to payment": true if they had selected deposit (payFullAmount was false). Used to show notice when server returns full payment. */
@@ -227,18 +174,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   paymentPhaseRef.current = paymentPhase;
   holdIdRef.current = holdId;
   releaseTokenRef.current = releaseToken;
-  useEffect(() => {
-    if (holdId) {
-      try {
-        if (typeof sessionStorage !== "undefined") sessionStorage.setItem(SESSION_STORAGE_HOLD_ID_KEY, holdId);
-      } catch (_) {}
-    } else {
-      try {
-        if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(SESSION_STORAGE_HOLD_ID_KEY);
-      } catch (_) {}
-    }
-  }, [holdId]);
-
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
   const isTicketed = selectedExperience?.pricingType === "ticketed" || (!!open && initialSelection?.pricingType === "ticketed");
   const selection: UseBookingModalDataSelection | null = open
@@ -249,6 +184,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         selectedRateIdForCalendar,
         selectedDate,
         isTicketed,
+        selectedBoatId: selectedBoat?.id ?? null,
         setSelectedExperience,
       }
     : null;
@@ -293,8 +229,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     ticketCounts,
     setTicketCounts,
     ticketCountsLoading,
+    ticketCountsError,
+    ticketCountsRetryTrigger,
+    setTicketCountsRetryTrigger,
     effectiveRateCents,
     setEffectiveRateCents,
+    effectivePriceLoading,
     viewMonthForPrefetchRef,
     ratesForSelection,
   } = useBookingModalData(open, initialSelection ?? null, selectionKey ?? 0, selection);
@@ -311,9 +251,22 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   /** Max sellable tickets (ticketed) or max guests (charter). */
   const ticketMax = isTicketed ? (selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36) : (selectedExperience?.maxGuests ?? 14);
-  /** Ticketed: cap to live availability so UI and submit stay in sync. */
-  const availableTickets = ticketCounts?.available ?? ticketMax;
-  const effectiveTicketMax = Math.min(ticketMax, availableTickets);
+  /**
+   * Ticketed: cap party/tickets to live API counts only. While loading we allow up to `ticketMax`;
+   * if counts are unavailable (error / unresolved), cap is 0 so Continue stays blocked until retry succeeds.
+   */
+  const effectiveTicketMax = isTicketed
+    ? Math.min(
+        ticketMax,
+        ticketCounts != null
+          ? ticketCounts.available
+          : ticketCountsLoading
+            ? ticketMax
+            : ticketCountsError && ticketCountsRetryTrigger > 0
+              ? ticketMax
+              : 0
+      )
+    : ticketMax;
 
   /** For ticketed experiences: format departure time from departureHour/departureMinute. */
   const departureTimeLabel = useMemo(() => {
@@ -354,8 +307,35 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => getDaysInMonth(viewMonthYear, viewMonthMonth - 1),
     [viewMonthYear, viewMonthMonth]
   );
-  /** Today's date in America/Chicago for past-date comparison in calendar (stable per mount). */
-  const chicagoTodayStr = useMemo(() => getChicagoToday(), []);
+  /** Bump once per minute so "today" in Chicago stays correct without allocating a new string every render. */
+  const [chicagoDateTick, setChicagoDateTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setChicagoDateTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    let tid: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const ms = getMsUntilNextChicagoMidnight();
+      tid = setTimeout(() => {
+        if (cancelled) return;
+        setSlotsRetryTrigger((x) => x + 1);
+        setChicagoDateTick((t) => t + 1);
+        schedule();
+      }, ms + 50);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(tid);
+    };
+  }, [setSlotsRetryTrigger]);
+  /** Today's date in America/Chicago for past-date comparison; updates each minute and at Chicago midnight. */
+  const chicagoTodayStr = useMemo(() => {
+    void chicagoDateTick;
+    return getChicagoToday();
+  }, [chicagoDateTick]);
   /** Month key YYYY-MM for deterministic indexing (no Date keys). */
   const viewMonthKey = useMemo(() => toMonthKey(viewMonthYear, viewMonthMonth), [viewMonthYear, viewMonthMonth]);
   /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when view month or date options change; calendarRenderKey forces remount when slot/price data changes. */
@@ -382,115 +362,281 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     const nextMonth1 = viewMonthMonth === 12 ? 1 : viewMonthMonth + 1;
     return isMonthInSeasonalRange(selectedExperience.seasonal, nextYear, nextMonth1);
   }, [selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
-  /** Force calendar grid to remount when month or data changes (fixes prod memo/closure not updating when slots/prices arrive). */
-  const calendarRenderKey = `${viewMonthKey}|${monthDataRangeStart ?? ""}|s:${monthSlots.length}|p:${Object.keys(datePrices).length}|r:${selectedRateIdForCalendar ?? ""}`;
 
   // Reset modal and data state when opening (useBookingModalData refetches experiences on open/selectionKey).
   useEffect(() => {
     if (!open) return;
-    // Hydrate success state from session so close/reopen shows receipt and booking ID (including payment summary for correct copy)
-    try {
-      const raw = typeof window !== "undefined" ? sessionStorage.getItem(SESSION_SUCCESS_KEY) : null;
-      if (raw) {
-        const parsed = JSON.parse(raw) as {
-          bookingId?: string;
-          receiptToken?: string | null;
-          paymentSummary?: { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number };
-        };
-        if (parsed?.bookingId) {
-          setCompletedBookingId(parsed.bookingId);
-          setCompletedReceiptToken(parsed.receiptToken ?? null);
-          if (parsed.paymentSummary) {
-            const ps = parsed.paymentSummary;
-            if (typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
-            if (typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
-            if (typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
-            if (typeof ps.isDeposit === "boolean") {
-              setPayFullAmount(!ps.isDeposit);
-              setIsDepositFromServer(ps.isDeposit);
-            } else if (typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
-              setIsDepositFromServer(true);
-              setPayFullAmount(false);
+    let cancelled = false;
+    setHoldReleaseWarning(null);
+    setHoldSessionVerifyError(null);
+    pendingRecoveryBoatIdRef.current = null;
+
+    void (async () => {
+      const skipSessionHydration = Boolean(initialSelection?.experienceId);
+
+      if (skipSessionHydration && typeof sessionStorage !== "undefined") {
+        try {
+          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
+        } catch (_) {}
+      }
+
+      // Resume Stripe payment after refresh: validate hold via receipt claim (202 pending).
+      if (!skipSessionHydration && typeof sessionStorage !== "undefined") {
+        const rawHold = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
+        if (rawHold) {
+          try {
+            const parsed = JSON.parse(rawHold) as ModalHoldRecoveryPayloadV1;
+            const expAt = parsed.holdExpiresAt ? new Date(parsed.holdExpiresAt).getTime() : NaN;
+            const expired = !Number.isNaN(expAt) && expAt <= Date.now();
+            if (expired) {
+              clearModalHoldRecoverySession();
+            } else if (
+              parsed.v === 1 &&
+              parsed.holdId &&
+              typeof parsed.clientSecret === "string" &&
+              parsed.receiptClaimToken?.trim()
+            ) {
+              let recoveryRes: Response | null = null;
+              let recoveryBody: Record<string, unknown> = {};
+              try {
+                const ac = new AbortController();
+                const tid = window.setTimeout(() => ac.abort(), 15_000);
+                recoveryRes = await fetch("/api/booking/receipt", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ receipt_token: parsed.receiptClaimToken.trim() }),
+                  signal: ac.signal,
+                });
+                clearTimeout(tid);
+                recoveryBody = (await recoveryRes.json().catch(() => ({}))) as Record<string, unknown>;
+              } catch {
+                if (!cancelled) {
+                  setHoldSessionVerifyError(
+                    "We couldn't verify your saved session. Check your connection and try again, or continue booking.",
+                  );
+                }
+                // Transient — keep SESSION_HOLD_ID_KEY for a later open.
+              }
+              if (recoveryRes && !cancelled) {
+                if (recoveryRes.status === 202 && recoveryBody?.pending === true) {
+                  setSelectedExperience(parsed.experienceSnapshot);
+                  setSelectedDate(parsed.selectedDate);
+                  setViewMonthYear(parsed.viewMonthYear);
+                  setViewMonthMonth(parsed.viewMonthMonth);
+                  setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
+                  setSelectedSlot(parsed.selectedSlot);
+                  setPartySize(parsed.partySize);
+                  setHoldId(parsed.holdId);
+                  setReleaseToken(parsed.releaseToken);
+                  setReceiptClaimToken(parsed.receiptClaimToken);
+                  setClientSecret(parsed.clientSecret);
+                  setPaymentIntentId(parsed.paymentIntentId);
+                  setHoldExpiresAt(parsed.holdExpiresAt);
+                  if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
+                  if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
+                  if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
+                  if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
+                  setPayFullAmount(parsed.payFullAmount);
+                  lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
+                  pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
+                  setStep(4);
+                  setPaymentPhase("stripe");
+                  return;
+                }
+                if (
+                  recoveryRes.ok &&
+                  recoveryRes.status === 200 &&
+                  typeof recoveryBody.bookingId === "string" &&
+                  recoveryBody.bookingId
+                ) {
+                  clearModalHoldRecoverySession();
+                  setCompletedBookingId(recoveryBody.bookingId);
+                  const rTok =
+                    (typeof recoveryBody.receiptToken === "string" && recoveryBody.receiptToken.trim()) || null;
+                  setCompletedReceiptToken(rTok);
+                  const ps = recoveryBody.paymentSummary as
+                    | { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number; mode?: string }
+                    | undefined;
+                  if (ps) {
+                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
+                    const depositCents =
+                      typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
+                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
+                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
+                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
+                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
+                    const isDeposit =
+                      ps.mode === "event_deposit" ||
+                      ps.mode === "state_fallback_deposit" ||
+                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
+                    setIsDepositFromServer(isDeposit);
+                    setPayFullAmount(!isDeposit);
+                  }
+                  setPaymentPhase("success");
+                  return;
+                }
+                if (recoveryRes.status === 429 || (recoveryRes.status >= 500 && recoveryRes.status < 600)) {
+                  if (!cancelled) {
+                    setHoldSessionVerifyError(
+                      recoveryRes.status === 429
+                        ? "Too many requests. Please wait a moment and try again."
+                        : "We couldn't verify your saved session. Try again in a moment.",
+                    );
+                  }
+                  // Transient — keep recovery payload.
+                } else if (recoveryRes.status === 401 || recoveryRes.status === 404 || recoveryRes.status === 400) {
+                  clearModalHoldRecoverySession();
+                } else if (!recoveryRes.ok) {
+                  clearModalHoldRecoverySession();
+                }
+              }
+            } else {
+              clearModalHoldRecoverySession();
             }
-          } else if (parsed.receiptToken && typeof fetch === "function") {
-            fetch(`/api/booking/receipt?receipt_token=${encodeURIComponent(parsed.receiptToken)}`)
-              .then((res) => res.ok ? res.json() : null)
-              .then((payload: { paymentSummary?: { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number }; mode?: string } | null) => {
-                if (!payload?.paymentSummary) return;
-                const ps = payload.paymentSummary;
-                const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
-                const depositCents = typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
-                const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
-                if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
-                if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
-                if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
-                const isDeposit = payload.mode === "event_deposit" || payload.mode === "state_fallback_deposit" || (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
-                setIsDepositFromServer(isDeposit);
-                setPayFullAmount(!isDeposit);
-              })
-              .catch(() => {});
+          } catch {
+            clearModalHoldRecoverySession();
           }
-          setPaymentPhase("success");
-          return;
         }
       }
-    } catch (_) {
-      // SSR or invalid JSON — ignore
-    }
-    if (initialSelection?.date) {
-      const isTicketedPreselect = initialSelection.pricingType === "ticketed";
-      setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
-    } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
-      setStep(2);
-    } else {
-      setStep(1);
-    }
-    setSelectedExperience(null);
-    setBoats([]);
-    setSelectedBoat(null);
-    setExperienceRates([]);
-    setAddons([]);
-    setSelectedDate(null);
-    const now = new Date();
-    setViewMonthYear(now.getFullYear());
-    setViewMonthMonth(now.getMonth() + 1);
-    setSelectedRateIdForCalendar(null);
-    setEffectiveRateCents(null);
-    setDatePrices({});
-    setMonthSlots([]);
-    setMonthDataRangeStart(null);
-    setSelectedSlot(null);
-    setPartySize(1);
-    setPetsCount(0);
-    setCustomerName("");
-    setCustomerEmail("");
-    setCustomerPhone("");
-    setAddonSelections({});
-    setTipChoice(null);
-    setTipLaterMessageOpen(false);
-    tipLaterIntendedRef.current = false;
-    tipLaterWasOpenRef.current = false;
-    setHowDidYouHear("");
-    setComments("");
-    setDiscountCode("");
-    setAppliedDiscount(null);
-    setAppliedDiscountError(null);
-    setMarketingOptIn(false);
-    setCancellationAck(false);
-    setPaymentPhase("form");
-    setPayFullAmount(true);
-    setCompletedBookingId(null);
-    setCompletedReceiptToken(null);
-    setHoldId(null);
-    setReleaseToken(null);
-    setPaymentIntentId(null);
-    setClientSecret(null);
-    setPaymentError(null);
-    setExperiencesLoadError(null);
-    setRatesSummary(null);
-    setRatesLoadError(null);
+
+      if (cancelled) return;
+
+      // Hydrate success state from session (skip when a new booking is started from the UI with an experience id).
+      if (!skipSessionHydration) {
+        try {
+          const raw = typeof window !== "undefined" ? sessionStorage.getItem(SESSION_SUCCESS_KEY) : null;
+          if (raw) {
+            const parsed = JSON.parse(raw) as {
+              bookingId?: string;
+              receiptClaimToken?: string | null;
+              receiptToken?: string | null;
+              paymentSummary?: { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number };
+              bookedAt?: number;
+            };
+            const stale = typeof parsed.bookedAt === "number" && Date.now() - parsed.bookedAt > SESSION_SUCCESS_MAX_AGE_MS;
+            if (stale && typeof window !== "undefined") {
+              try {
+                sessionStorage.removeItem(SESSION_SUCCESS_KEY);
+              } catch (_) {}
+            }
+            const persistedReceiptTok =
+              (typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()) ||
+              (typeof parsed.receiptToken === "string" && parsed.receiptToken.trim()) ||
+              null;
+            if (!stale && (parsed?.bookingId || persistedReceiptTok)) {
+              if (parsed.bookingId) setCompletedBookingId(parsed.bookingId);
+              setCompletedReceiptToken(persistedReceiptTok);
+              if (parsed.paymentSummary) {
+                const ps = parsed.paymentSummary;
+                if (typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
+                if (typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
+                if (typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
+                if (typeof ps.isDeposit === "boolean") {
+                  setPayFullAmount(!ps.isDeposit);
+                  setIsDepositFromServer(ps.isDeposit);
+                } else if (typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
+                  setIsDepositFromServer(true);
+                  setPayFullAmount(false);
+                }
+              } else if (persistedReceiptTok && typeof fetch === "function") {
+                fetch("/api/booking/receipt", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ receipt_token: persistedReceiptTok }),
+                })
+                  .then((res) => (res.ok ? res.json() : null))
+                  .then((payload: { paymentSummary?: { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number }; mode?: string } | null) => {
+                    if (!payload?.paymentSummary) return;
+                    const ps = payload.paymentSummary;
+                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
+                    const depositCents = typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
+                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
+                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
+                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
+                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
+                    const isDeposit =
+                      payload.mode === "event_deposit" ||
+                      payload.mode === "state_fallback_deposit" ||
+                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
+                    setIsDepositFromServer(isDeposit);
+                    setPayFullAmount(!isDeposit);
+                  })
+                  .catch(() => {});
+              }
+              setPaymentPhase("success");
+              return;
+            }
+          }
+        } catch (_) {
+          // SSR or invalid JSON — ignore
+        }
+      }
+
+      if (cancelled) return;
+
+      if (initialSelection?.date) {
+        const isTicketedPreselect = initialSelection.pricingType === "ticketed";
+        setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
+      } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
+        setStep(2);
+      } else {
+        setStep(1);
+      }
+      setSelectedExperience(null);
+      setBoats([]);
+      setSelectedBoat(null);
+      setExperienceRates([]);
+      setAddons([]);
+      setSelectedDate(null);
+      const now = new Date();
+      setViewMonthYear(now.getFullYear());
+      setViewMonthMonth(now.getMonth() + 1);
+      setSelectedRateIdForCalendar(null);
+      setEffectiveRateCents(null);
+      setDatePrices({});
+      setMonthSlots([]);
+      setMonthDataRangeStart(null);
+      setSelectedSlot(null);
+      setPartySize(1);
+      setPetsCount(0);
+      setCustomerName("");
+      setCustomerEmail("");
+      setCustomerPhone("");
+      setAddonSelections({});
+      setTipChoice(null);
+      setTipLaterMessageOpen(false);
+      tipLaterIntendedRef.current = false;
+      tipLaterWasOpenRef.current = false;
+      setHowDidYouHear("");
+      setComments("");
+      setDiscountCode("");
+      setAppliedDiscount(null);
+      setAppliedDiscountError(null);
+      setMarketingOptIn(false);
+      setCancellationAck(false);
+      setPaymentPhase("form");
+      setStripePaymentProcessing(false);
+      setPayFullAmount(true);
+      setCompletedBookingId(null);
+      setCompletedReceiptToken(null);
+      setHoldId(null);
+      setReleaseToken(null);
+      setHoldExpiresAt(null);
+      setIsHoldExpired(false);
+      setPaymentIntentId(null);
+      setClientSecret(null);
+      setReceiptClaimToken(null);
+      setPaymentError(null);
+      setExperiencesLoadError(null);
+      setRatesSummary(null);
+      setRatesLoadError(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
-  }, [open, selectionKey]);
+  }, [open, selectionKey, initialSelection?.experienceId]);
 
   // When opened with initialSelection, apply it once experiences (and boats/slots) are ready
   useEffect(() => {
@@ -522,6 +668,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [open, initialSelection, boats]);
 
   useEffect(() => {
+    if (!open || !boats.length || !pendingRecoveryBoatIdRef.current) return;
+    const id = pendingRecoveryBoatIdRef.current;
+    const boat = boats.find((b) => b.id === id);
+    if (boat) {
+      setSelectedBoat(boat);
+      pendingRecoveryBoatIdRef.current = null;
+    }
+  }, [open, boats]);
+
+  useEffect(() => {
     if (!open || !initialSelection?.slotId || !openSlotsForDate.length) return;
     const slot = openSlotsForDate.find((s) => s.id === initialSelection.slotId);
     if (slot) setSelectedSlot(slot);
@@ -547,10 +703,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!selectedDate) setSelectedSlot(null);
   }, [selectedDate]);
 
-  // When ticketed/charter mode flips, clear slot so we don't submit a charter slot as ticketed or vice versa
+  // When ticketed/charter mode flips (not on first selection from empty), clear slot so we don't mix flows
+  const prevPricingTypeRef = useRef<"charter" | "ticketed" | null | undefined>(undefined);
   useEffect(() => {
-    setSelectedSlot(null);
-  }, [isTicketed]);
+    const pt = selectedExperience?.pricingType === "ticketed" ? "ticketed" : selectedExperience ? "charter" : null;
+    if (prevPricingTypeRef.current === undefined) {
+      prevPricingTypeRef.current = pt;
+      return;
+    }
+    if (prevPricingTypeRef.current !== pt && pt != null && prevPricingTypeRef.current != null) {
+      setSelectedSlot(null);
+    }
+    prevPricingTypeRef.current = pt;
+  }, [selectedExperience?.pricingType, selectedExperience?.id]);
 
   // When experience has a booking window and current view month is outside it, snap to the start of the window
   useEffect(() => {
@@ -564,16 +729,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setViewMonthMonth(m);
       } else {
         const startMonth = seasonal.startMonth ?? 1;
-        const startYear = viewMonthYear; // may need to adjust for wrap-around; use current year as base
-        setViewMonthYear(startYear);
-        setViewMonthMonth(startMonth);
+        let startYear = viewMonthYear;
+        const chicagoToday = getChicagoToday();
+        const [todayY, todayM] = chicagoToday.split("-").map(Number);
+        if (startYear < todayY || (startYear === todayY && startMonth < todayM)) {
+          startYear += 1;
+        }
+        if (isMonthInSeasonalRange(seasonal, startYear, startMonth)) {
+          setViewMonthYear(startYear);
+          setViewMonthMonth(startMonth);
+        }
       }
     }
   }, [selectedExperience?.id, selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
 
-  // Force full payment only when deposit is explicitly disabled or when ticketed
+  // Force full payment when deposit is not explicitly enabled or when ticketed
   useEffect(() => {
-    if (selectedExperience?.allowDeposit === false || isTicketed) {
+    if (selectedExperience?.allowDeposit !== true || isTicketed) {
       setPayFullAmount(true);
     }
   }, [selectedExperience?.allowDeposit, isTicketed]);
@@ -661,6 +833,26 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     return map;
   }, [monthSlots]);
 
+  /**
+   * Advisory-only: dates that appear to have ≥1 open slot from cached `monthSlots`.
+   * May be up to STALE_MS_SLOTS ms stale (see `lib/booking/booking-data-cache`); create-hold conflict response is authoritative.
+   */
+  const availableDateSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of monthSlots) {
+      if (s.status !== "open") continue;
+      if (selectedExperience?.pricingType === "ticketed" && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) {
+        continue;
+      }
+      const day = isoToChicagoDateStr(s.startAt);
+      if (day) set.add(day);
+    }
+    return set;
+  }, [monthSlots, selectedExperience?.pricingType]);
+
+  /** Force calendar grid to remount when month or data changes (fixes prod memo/closure not updating when slots/prices arrive). */
+  const calendarRenderKey = `${viewMonthKey}|${monthDataRangeStart ?? ""}|s:${monthSlots.length}|a:${availableDateSet.size}|p:${Object.keys(datePrices).length}|r:${selectedRateIdForCalendar ?? ""}`;
+
   /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). Ticketed: only count slots with spotsRemaining > 0 so sold-out dates don't show as available. */
   const openCountByDateAndDuration = useMemo(() => {
     const map = new Map<string, Map<number, number>>();
@@ -715,6 +907,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   // Price ready for step 4: either effective rate from API or selected rate from cache (avoids $0.00 before fetch)
   const priceReady = effectiveRateCents != null || selectedRate != null;
+  /** Advisory: price may still be loading; checkout is not blocked on this alone (server confirms at create-hold). */
+  const paymentPriceBlocked =
+    effectiveRateCents == null && (datePricesLoading || effectivePriceLoading);
 
   // Add-ons to show (exclude sunscreen)
   const displayAddons = useMemo(
@@ -729,41 +924,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
   const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
 
-  // Price breakdown for step 4: rate + addons + sales tax (8.25%) + tip (20–35% when "Tip now") ± discount → total (use effective price for selected date so it matches checkout)
-  const priceSummary = useMemo(() => {
-    const unitCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
-    // Ticketed: total = per-ticket price × number of guests (always use at least 1 so total is never wrong)
-    const ticketCount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
-    const rateCents = isTicketed ? unitCents * ticketCount : unitCents;
-    const addonLines = displayAddons
-      .filter((a) => (addonSelections[a.id] ?? 0) > 0)
-      .map((a) => ({
-        name: a.name,
-        qty: addonSelections[a.id] ?? 0,
-        priceCents: a.priceCents * (addonSelections[a.id] ?? 0),
-      }));
-    const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
-    const subtotalBeforeTax = rateCents + addonsTotalCents;
-    const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
-    const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
-    const pct = Math.min(35, Math.max(20, tipPercent));
-    const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
-    const discountCents = appliedDiscount?.discountCents ?? 0;
-    const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
-    const baseLabel = selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental");
-    const rateLabel = isTicketed
-      ? `${ticketCount} ticket${ticketCount !== 1 ? "s" : ""} × $${(unitCents / 100).toFixed(0)}/ticket`
-      : baseLabel;
-    return {
-      rateLabel,
-      rateCents,
-      addonLines,
-      salesTaxCents,
-      tipCents,
-      discountCents,
-      totalCents,
-    };
-  }, [isTicketed, partySize, effectiveRateCents, selectedRate, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount]);
+  const priceSummary = usePriceSummary({
+    isTicketed,
+    partySize,
+    effectiveRateCents,
+    selectedRate,
+    displayAddons,
+    addonSelections,
+    tipChoice,
+    tipPercent,
+    appliedDiscount,
+  });
+
+  const displayDepositCents =
+    depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
+  const displayFinalCents =
+    finalCentsFromServer ??
+    (totalCentsFromServer != null
+      ? totalCentsFromServer - displayDepositCents
+      : Math.max(0, priceSummary.totalCents - displayDepositCents));
+  const depositAmountIsEstimate = depositCentsFromServer == null;
+  const finalAmountIsEstimate = finalCentsFromServer == null;
+
+  /** Hide client-estimated totals for pay-in-full until authoritative rate is known. */
+  const payFullTotalPending = paymentPriceBlocked || priceSummary.priceIsEstimate;
 
   const paymentOptions: UseBookingPaymentOptions = {
     open,
@@ -777,11 +961,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setPaymentError,
     setPaymentPhase,
     setClientSecret,
+    setReceiptClaimToken,
     setPaymentIntentId,
     setDepositCentsFromServer,
     setTotalCentsFromServer,
     setFinalCentsFromServer,
     setPayFullAmount,
+    setAppliedDiscount,
     setStep,
     setSelectedBoat,
     setSelectedDate,
@@ -805,6 +991,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     effectiveTicketMax,
     ticketMax,
     partySize,
+    setPartySize,
     petsCount,
     addonSelections,
     priceSummary,
@@ -817,21 +1004,157 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     boats,
     viewMonthStartStr,
     viewMonthEndStr,
+    viewMonthYear,
+    viewMonthMonth,
     initialSelection,
     lastHoldRef,
     releaseOnCloseDoneRef,
     holdIdRef,
     releaseTokenRef,
     paymentPhaseRef,
+    setHoldReleaseWarning,
+    stepRef,
+    clientSecret,
+    holdExpiresAt,
   };
-  const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange } = useBookingPayment(paymentOptions);
+  const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange, proceedToPaymentInFlight } =
+    useBookingPayment(paymentOptions);
 
-  // Clear or revalidate applied discount whenever price drivers change so checkout totals don't drift from server repricing.
   useEffect(() => {
-    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
+    if (!open) {
+      completeAfterAbortRef.current?.abort();
+      completeAfterAbortRef.current = null;
+    }
+  }, [open]);
+
+  const handleCompleteAfterPaymentOutcome = useCallback((outcome: CompleteAfterPaymentClientOutcome) => {
+    setStripePaymentProcessing(false);
+    if (!openRef.current) return;
+    switch (outcome.kind) {
+      case "success": {
+        const data = outcome.data;
+        const expIdForCache =
+          typeof data.experienceId === "string" && data.experienceId
+            ? data.experienceId
+            : selectedExperience?.id;
+        if (expIdForCache) bookingCache.invalidateBookingCaches(expIdForCache);
+        const bid = data.bookingId ?? null;
+        const tok = receiptTokenFromCompleteAfterPaymentPayload(data);
+        const canConfirmSuccess = Boolean(bid || tok);
+        setCompletedBookingId(bid);
+        setCompletedReceiptToken(tok);
+        const ps = data.paymentSummary;
+        if (ps && typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
+        if (ps && typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
+        if (ps && typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
+        if (ps && typeof ps.isDeposit === "boolean") {
+          setPayFullAmount(!ps.isDeposit);
+          setIsDepositFromServer(ps.isDeposit);
+        } else if (ps && typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
+          setIsDepositFromServer(true);
+          setPayFullAmount(false);
+        }
+        if (canConfirmSuccess) {
+          try {
+            if (typeof window !== "undefined") {
+              clearModalHoldRecoverySession();
+              sessionStorage.setItem(
+                SESSION_SUCCESS_KEY,
+                JSON.stringify({
+                  bookingId: data.bookingId,
+                  receiptClaimToken: tok,
+                  receiptToken: tok,
+                  paymentSummary: ps
+                    ? { isDeposit: ps.isDeposit, depositCents: ps.depositCents, totalCents: ps.totalCents, finalCents: ps.finalCents }
+                    : undefined,
+                  bookedAt: Date.now(),
+                }),
+              );
+            }
+          } catch (_) {}
+          setPaymentPhase("success");
+          setPaymentError(null);
+        } else {
+          setPaymentError(
+            (typeof data.message === "string" && data.message) ||
+              "We could not confirm your booking yet. Please try again in a moment or contact us.",
+          );
+          setPaymentPhase("successWithWarning");
+        }
+        break;
+      }
+      case "reconciliation_pending": {
+        const expIdForCache =
+          typeof outcome.experienceId === "string" && outcome.experienceId
+            ? outcome.experienceId
+            : selectedExperience?.id;
+        if (expIdForCache) bookingCache.invalidateBookingCaches(expIdForCache);
+        setPaymentError(
+          outcome.message ||
+            "Your payment is being reconciled. Please wait for email confirmation or contact us.",
+        );
+        setPaymentPhase("successWithWarning");
+        break;
+      }
+      case "terminal_error": {
+        if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
+        setPaymentError(outcome.message);
+        setPaymentPhase("successWithWarning");
+        break;
+      }
+      case "stall_timeout":
+        setPaymentError(outcome.message);
+        setPaymentPhase("successWithWarning");
+        break;
+      case "processing_timeout":
+      case "fetch_error":
+        setPaymentPhase("completeAfterPaymentRetry");
+        setPaymentError(outcome.message);
+        break;
+      case "aborted":
+        break;
+    }
+  }, [selectedExperience?.id]);
+
+  const runCompleteAfterPaymentForModal = useCallback(async () => {
+    const resolvedHoldId = holdId;
+    const resolvedPiId = paymentIntentId;
+    if (!resolvedHoldId || !resolvedPiId) return;
+    completeAfterAbortRef.current?.abort();
+    completeAfterAbortRef.current = new AbortController();
+    setPaymentPhase("completing");
+    setPaymentError(null);
+    setStripePaymentProcessing(false);
+    try {
+      const outcome = await completeAfterPaymentWithPolling({
+        paymentIntentId: resolvedPiId,
+        holdId: resolvedHoldId,
+        signal: completeAfterAbortRef.current.signal,
+        onEnteredProcessing: () => setStripePaymentProcessing(true),
+      });
+      handleCompleteAfterPaymentOutcome(outcome);
+    } catch (e) {
+      bookingError("client", "complete-after-payment unexpected failure", e, { holdId: resolvedHoldId });
+      if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
+      setPaymentPhase("completeAfterPaymentRetry");
+      setPaymentError("Request failed. Please try again.");
+    }
+  }, [holdId, paymentIntentId, handleCompleteAfterPaymentOutcome, selectedExperience?.id]);
+
+  // Clear or revalidate applied discount whenever price drivers or experience change so checkout totals don't drift from server repricing.
+  useEffect(() => {
+    if (
+      paymentPhase === "stripe" ||
+      paymentPhase === "loading" ||
+      paymentPhase === "completing" ||
+      paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "success" ||
+      paymentPhase === "successWithWarning"
+    )
+      return;
     setAppliedDiscount(null);
     setAppliedDiscountError(null);
-  }, [partySize, addonSelections, tipChoice, tipPercent, selectedRateId, selectedDate, payFullAmount]);
+  }, [partySize, addonSelections, tipChoice, tipPercent, selectedRateId, selectedDate, payFullAmount, selectedExperience?.id]);
 
   // When opened with initialSelection (slot pre-picked):
   // - Charter + boatId pre-picked → go directly to step 4
@@ -841,7 +1164,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
     if (!initialSelection?.boatId && !isTicketed) return;
     if (isTicketed && selectedExperience?.departureHour == null && boatsLoading) return; // wait for experience-detail so slot validation has correct departure
-    if (paymentPhase === "stripe" || paymentPhase === "loading" || paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
+    if (
+      paymentPhase === "stripe" ||
+      paymentPhase === "loading" ||
+      paymentPhase === "completing" ||
+      paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "success" ||
+      paymentPhase === "successWithWarning"
+    )
+      return;
     setStep(4);
     setPaymentPhase("form");
   }, [open, initialSelection?.slotId, initialSelection?.boatId, isTicketed, selectedSlot, selectedRateId, paymentPhase, selectedExperience?.departureHour, boatsLoading]);
@@ -911,7 +1242,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const isCalendarFirstFlow = !!initialSelection?.slotId;
 
   const handleBack = () => {
-    if (paymentPhase === "completing" || paymentPhase === "success" || paymentPhase === "successWithWarning") return;
+    if (proceedToPaymentInFlight) return;
+    if (
+      paymentPhase === "completing" ||
+      paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "success" ||
+      paymentPhase === "successWithWarning" ||
+      paymentPhase === "successRecoveryFailed"
+    )
+      return;
+    if (step === 4) setIsHoldExpired(false);
     if (step === 2) setStep(1);
     else if (step === 3) {
       if (isCalendarFirstFlow) onOpenChange(false);
@@ -920,19 +1260,35 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setStep(2);
       }
     } else if (step === 4) {
-      if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
-        releaseCreatedHold();
-      }
-      if (isTicketed) {
-        if (isCalendarFirstFlow) {
-          // Ticketed + pre-selected date: close modal to go back to calendar
-          onOpenChange(false);
+      const navigateFromStep4 = () => {
+        if (isTicketed) {
+          if (isCalendarFirstFlow) {
+            onOpenChange(false);
+          } else {
+            lastHoldRef.current = null;
+            setStep(2);
+            setPaymentPhase("form");
+            setClientSecret(null);
+            setReceiptClaimToken(null);
+            setHoldId(null);
+            setHoldExpiresAt(null);
+            setDepositCentsFromServer(null);
+            setTotalCentsFromServer(null);
+            setFinalCentsFromServer(null);
+            setIsDepositFromServer(null);
+            setPaymentIntentId(null);
+            setPaymentError(null);
+            setTipChoice(null);
+            setTipLaterMessageOpen(false);
+            setAppliedDiscount(null);
+            setAppliedDiscountError(null);
+          }
         } else {
-          // Ticketed + no pre-selection: go back to date picker (skip boat step)
           lastHoldRef.current = null;
-          setStep(2);
+          setStep(boats.length === 1 ? 2 : 3);
           setPaymentPhase("form");
           setClientSecret(null);
+          setReceiptClaimToken(null);
           setHoldId(null);
           setHoldExpiresAt(null);
           setDepositCentsFromServer(null);
@@ -946,24 +1302,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           setAppliedDiscount(null);
           setAppliedDiscountError(null);
         }
-      } else {
-        lastHoldRef.current = null;
-        setStep(boats.length === 1 ? 2 : 3);
-        setPaymentPhase("form");
-        setClientSecret(null);
-        setHoldId(null);
-        setHoldExpiresAt(null);
-        setDepositCentsFromServer(null);
-        setTotalCentsFromServer(null);
-        setFinalCentsFromServer(null);
-        setIsDepositFromServer(null);
-        setPaymentIntentId(null);
-        setPaymentError(null);
-        setTipChoice(null);
-        setTipLaterMessageOpen(false);
-        setAppliedDiscount(null);
-        setAppliedDiscountError(null);
+      };
+      if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
+        void releaseCreatedHold().then((ok) => {
+          if (!ok) return;
+          navigateFromStep4();
+        });
+        return;
       }
+      navigateFromStep4();
     }
   };
 
@@ -973,10 +1320,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   };
 
   /** Step 2 (date & time): continue to boat selection (charter) or directly to step 4 (ticketed). */
-  const canGoFromStep2 = !!(selectedDate && selectedSlot) &&
-    !(isTicketed && ticketCounts != null && ticketCounts.available === 0);
+  const canGoFromStep2 =
+    !!(selectedDate && selectedSlot) &&
+    (!isTicketed ||
+      (!ticketCountsLoading &&
+        (ticketCounts == null ||
+          ticketCounts.available > 0 ||
+          (ticketCountsError && ticketCountsRetryTrigger > 0))));
   const handleStep2Next = () => {
     if (!canGoFromStep2) return;
+    if (selectedExperience?.id) {
+      bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+      setSlotsRetryTrigger((prev) => prev + 1);
+    }
     if (isTicketed) {
       setStep(4);
       setPaymentPhase("form");
@@ -1010,6 +1366,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   const handleContinueToCheckout = () => {
     if (!canGoToStep4) return;
+    if (selectedExperience?.id) {
+      bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+      setSlotsRetryTrigger((prev) => prev + 1);
+    }
     setStep(4);
     setPaymentPhase("form");
   };
@@ -1039,19 +1399,29 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   // Clamp partySize when effectiveTicketMax decreases (e.g. ticketCounts load) so submitted value matches ticket select.
   useEffect(() => {
-    if (isTicketed && partySize > effectiveTicketMax) {
+    if (isTicketed && effectiveTicketMax >= 1 && partySize > effectiveTicketMax) {
       setPartySize(effectiveTicketMax);
     }
   }, [isTicketed, effectiveTicketMax, partySize]);
 
-  /** During payment phase, tick every second so we can block progression once hold has expired. */
-  const [paymentTick, setPaymentTick] = useState(0);
+  const [isHoldExpired, setIsHoldExpired] = useState(false);
   useEffect(() => {
-    if (paymentPhase !== "stripe" || !holdExpiresAt) return;
-    const t = setInterval(() => setPaymentTick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [paymentPhase, holdExpiresAt]);
-  const isHoldExpired = holdExpiresAt ? new Date(holdExpiresAt).getTime() <= Date.now() : false;
+    if (holdExpiresAt && new Date(holdExpiresAt).getTime() > Date.now()) setIsHoldExpired(false);
+    if (holdId != null) setIsHoldExpired(false);
+  }, [holdExpiresAt, holdId]);
+  const handleHoldExpired = useCallback(() => setIsHoldExpired(true), []);
+  useEffect(() => {
+    if (!isHoldExpired) return;
+    if (paymentPhase !== "stripe" && paymentPhase !== "loading") return;
+    setClientSecret(null);
+    setHoldId(null);
+    setReleaseToken(null);
+    setHoldExpiresAt(null);
+    setPaymentIntentId(null);
+    setReceiptClaimToken(null);
+    setPaymentPhase("form");
+    setPaymentError("Your hold expired. Please re-submit your payment details to reserve this slot.");
+  }, [isHoldExpired, paymentPhase]);
 
   return (
     <Dialog
@@ -1077,8 +1447,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-1 sm:mb-2" : "mb-4")}>
           <button
             type="button"
+            disabled={proceedToPaymentInFlight && paymentPhase === "loading"}
             onClick={step > 1 ? handleBack : () => handleModalOpenChange(false)}
-            className="flex items-center gap-1 rounded-lg p-2 min-h-[44px] min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors"
+            className="flex items-center gap-1 rounded-lg p-2 min-h-[44px] min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors disabled:opacity-40 disabled:pointer-events-none"
             aria-label={step > 1 ? "Back" : "Close"}
           >
             <ChevronLeft className="h-5 w-5" aria-hidden />
@@ -1113,6 +1484,47 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             >
               Dismiss
             </button>
+          </div>
+        )}
+        {holdSessionVerifyError && (
+          <div
+            className="mb-4 shrink-0 rounded-xl bg-amber-50 border border-amber-300 px-4 py-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3"
+            role="status"
+          >
+            <p className="text-sm text-amber-900">{holdSessionVerifyError}</p>
+            <button
+              type="button"
+              onClick={() => setHoldSessionVerifyError(null)}
+              className="shrink-0 text-sm font-medium text-amber-900 hover:underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {holdReleaseWarning && (
+          <div
+            className="mb-4 shrink-0 rounded-xl bg-amber-50 border border-amber-300 px-4 py-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3"
+            role="alert"
+          >
+            <p className="text-sm text-amber-900">{holdReleaseWarning}</p>
+            <div className="flex flex-wrap gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  void releaseCreatedHold();
+                }}
+                className="text-sm font-semibold text-brand-primary hover:underline focus:outline-none focus:ring-2 focus:ring-brand-primary rounded"
+              >
+                Retry release
+              </button>
+              <button
+                type="button"
+                onClick={() => setHoldReleaseWarning(null)}
+                className="text-sm text-amber-800/90 hover:underline"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -1160,7 +1572,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </p>
                 )}
                 {step === 2 && initialSelection && !selectedExperience && loading && (
-                  <p className="text-sm text-brand-muted py-3">Loading experience…</p>
+                  <div className="flex min-h-[min(48dvh,380px)] flex-col items-center justify-center gap-3 py-8">
+                    <div className="h-9 w-9 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                    <p className="text-sm text-brand-muted text-center">Loading experience…</p>
+                  </div>
                 )}
                 {step === 2 && isTicketed && boatsLoading && selectedExperience && (
                   <div className="flex items-center justify-center gap-2 py-4">
@@ -1253,10 +1668,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
                   {slotsLoadError && (
                     <p className="text-sm text-amber-700 py-3 px-2 mb-2">
-                      {slotsLoadError}
-                      <span className="block mt-1 text-xs">
-                        Check <a href="/api/health" target="_blank" rel="noopener noreferrer" className="underline">/api/health</a> on this site for details.
-                      </span>
+                      Unable to load availability. Please try again, or{" "}
+                      <a href="/contact" className="font-medium text-brand-primary underline underline-offset-2">
+                        contact us
+                      </a>{" "}
+                      if the problem persists.
                     </p>
                   )}
                   {slotsPartialData && (
@@ -1324,8 +1740,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
                             hasBookingsUrgency && !isFullyBooked && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
                             isHoliday && !isPast && !hasBookingsUrgency && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
-                            isAvailable && !isHoliday && !hasBookingsUrgency &&
+                            isAvailable && !slotsPartialData && !isHoliday && !hasBookingsUrgency &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
+                            isAvailable && slotsPartialData && !isHoliday && !hasBookingsUrgency &&
+                              "bg-amber-50/90 text-amber-950 border-amber-400/50 border-dashed hover:bg-amber-100/90 active:scale-[0.98]",
                             isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40",
                             isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5"
@@ -1396,8 +1814,31 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               </p>
                             </div>
                           )}
-                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length > 0 && !ticketCounts && (
-                            <p className="text-xs text-emerald-700 mt-1 font-medium">Available</p>
+                          {!slotsLoading &&
+                            !ticketCountsLoading &&
+                            openSlotsForDate.length > 0 &&
+                            !ticketCounts &&
+                            !ticketCountsError && (
+                              <p className="text-xs text-brand-muted mt-1">Confirming ticket availability…</p>
+                            )}
+                          {ticketCountsError && (
+                            <div className="mt-2 flex flex-col gap-2">
+                              <p className="text-sm font-medium text-amber-800">
+                                {ticketCountsError}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setTicketCountsRetryTrigger((t) => t + 1)}
+                                className="w-full rounded-lg bg-brand-primary text-white text-sm font-semibold py-2.5 px-3 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                              >
+                                Retry availability
+                              </button>
+                              {ticketCountsRetryTrigger > 0 && (
+                                <p className="text-xs text-amber-800/90">
+                                  You can still continue — final ticket availability is confirmed when you complete booking.
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -1560,13 +2001,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             </label>
                             <select
                               id="booking-party-size"
-                              value={Math.min(partySize, effectiveTicketMax)}
+                              value={Math.min(partySize, Math.max(effectiveTicketMax, 1))}
                               onChange={(e) => setPartySize(Math.min(parseInt(e.target.value, 10) || 1, effectiveTicketMax))}
                               required
-                              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
+                              disabled={
+                                isTicketed &&
+                                (!!ticketCountsError || (ticketCounts == null && ticketCountsLoading))
+                              }
+                              className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               aria-describedby="booking-party-size-hint"
                             >
-                              {Array.from({ length: effectiveTicketMax }, (_, i) => i + 1).map((n) => (
+                              {Array.from({ length: Math.max(effectiveTicketMax, 1) }, (_, i) => i + 1).map((n) => (
                                 <option key={n} value={n}>
                                   {n} {n === 1 ? "ticket" : "tickets"}
                                 </option>
@@ -1575,7 +2020,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">
                               {ticketCounts != null
                                 ? `${ticketCounts.available} of ${ticketCounts.total} tickets available`
-                                : `Max ${ticketMax} tickets`}
+                                : ticketCountsLoading
+                                  ? "Confirming availability — you can select your ticket count now."
+                                  : ticketCountsError
+                                    ? "Could not confirm availability — use Retry on the date step or go back to refresh."
+                                    : `Max ${ticketMax} tickets`}
                             </p>
                           </div>
                           {rateForCalendar && (
@@ -1588,44 +2037,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         {addonsLoading ? (
                           <p className="text-sm text-brand-muted mt-3">Loading add-ons…</p>
                         ) : displayAddons.length > 0 ? (
-                          <div className="mt-3 space-y-1.5">
-                            {displayAddons.map((addon) => {
-                              const rawQty = addonSelections[addon.id] ?? 0;
-                              const effectiveMax = addon.maxQty ?? 10;
-                              const qty = Math.min(rawQty, effectiveMax);
-                              return (
-                                <button
-                                  key={addon.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setAddonQtyModalAddon(addon);
-                                    setAddonQtyModalQty(Math.min(rawQty || 1, effectiveMax));
-                                  }}
-                                  className={cn(
-                                    "w-full flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all",
-                                    addon.highlight
-                                      ? qty > 0
-                                        ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
-                                        : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
-                                      : qty > 0
-                                        ? "border-brand-primary/40 bg-brand-primary/5"
-                                        : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
-                                  )}
-                                >
-                                  <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
-                                    {addon.name}
-                                    {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
-                                    {qty > 0 && (
-                                      <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>
-                                    )}
-                                  </span>
-                                  <span className="text-sm font-semibold text-brand-primary shrink-0">
-                                    +${(addon.priceCents / 100).toFixed(0)}{qty > 1 ? ` × ${qty}` : ""}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                          <AddonSelector
+                            displayAddons={displayAddons}
+                            addonSelections={addonSelections}
+                            onAddonClick={(addon, qty) => {
+                              setAddonQtyModalAddon(addon);
+                              setAddonQtyModalQty(qty);
+                            }}
+                          />
                         ) : null}
                       </div>
                     )}
@@ -1662,6 +2081,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           </p>
                         </div>
                         <div className="p-4 space-y-2">
+                          {paymentPriceBlocked && (
+                            <p className="text-xs text-brand-muted rounded-lg bg-brand-primary/5 border border-brand-primary/15 px-2.5 py-2">
+                              Loading exact price for your date…
+                            </p>
+                          )}
+                          {priceSummary.priceIsEstimate && !paymentPriceBlocked && (
+                            <p className="text-xs text-amber-800/90 rounded-lg bg-amber-50 border border-amber-200/80 px-2.5 py-2">
+                              Price is an estimate — exact price loading…
+                            </p>
+                          )}
                           <div className="flex justify-between items-baseline text-sm">
                           <span className="text-brand-muted">{priceSummary.rateLabel}</span>
                           {priceReady ? (
@@ -1748,7 +2177,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           {(isTicketed || payFullAmount) ? (
                             <div className="flex justify-between items-baseline">
                               <span className="text-sm font-semibold text-brand-dark">Total due now</span>
-                              {priceReady ? (
+                              {priceReady && !payFullTotalPending ? (
                                 <span className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</span>
                               ) : (
                                 <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
@@ -1759,23 +2188,22 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               <div className="flex justify-between items-baseline">
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
                                 {priceReady ? (
-                                  depositCentsFromServer != null ? (
-                                    <span className="text-xl font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
-                                  ) : (
-                                    <span className="inline-block h-7 w-24 animate-pulse rounded bg-brand-primary/20" aria-hidden />
-                                  )
+                                  <span className="text-xl font-bold text-brand-primary">
+                                    {depositAmountIsEstimate ? "~" : ""}${(displayDepositCents / 100).toFixed(2)}
+                                  </span>
                                 ) : (
                                   <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
                                 )}
                               </div>
+                              {(depositAmountIsEstimate || finalAmountIsEstimate) && priceReady && (
+                                <p className="text-[10px] text-brand-muted">Exact amount confirmed at checkout</p>
+                              )}
                               <div className="flex justify-between items-baseline text-sm">
                                 <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
                                 {priceReady ? (
-                                  depositCentsFromServer != null ? (
-                                    <span className="font-medium text-brand-dark">${(depositCentsFromServer / 100).toFixed(2)}</span>
-                                  ) : (
-                                    <span className="inline-block h-5 w-20 animate-pulse rounded bg-brand-dark/10" aria-hidden />
-                                  )
+                                  <span className="font-medium text-brand-dark">
+                                    {finalAmountIsEstimate ? "~" : ""}${(displayFinalCents / 100).toFixed(2)}
+                                  </span>
                                 ) : (
                                   <span className="h-5 w-14 animate-pulse rounded bg-brand-dark/10" aria-hidden />
                                 )}
@@ -1878,44 +2306,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     {addonsLoading ? (
                       <p className="text-sm text-brand-muted mt-3">Loading add-ons…</p>
                     ) : displayAddons.length > 0 ? (
-                      <div className="mt-3 space-y-1.5">
-                        {displayAddons.map((addon) => {
-                          const rawQty = addonSelections[addon.id] ?? 0;
-                          const effectiveMax = addon.maxQty ?? 10;
-                          const qty = Math.min(rawQty, effectiveMax);
-                          return (
-                            <button
-                              key={addon.id}
-                              type="button"
-                              onClick={() => {
-                                setAddonQtyModalAddon(addon);
-                                setAddonQtyModalQty(Math.min(rawQty || 1, effectiveMax));
-                              }}
-                              className={cn(
-                                "w-full flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all",
-                                addon.highlight
-                                  ? qty > 0
-                                    ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
-                                    : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
-                                  : qty > 0
-                                    ? "border-brand-primary/40 bg-brand-primary/5"
-                                    : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
-                              )}
-                            >
-                              <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
-                                {addon.name}
-                                {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
-                                {qty > 0 && (
-                                  <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>
-                                )}
-                              </span>
-                              <span className="text-sm font-semibold text-brand-primary shrink-0">
-                                +${(addon.priceCents / 100).toFixed(0)}{qty > 1 ? ` × ${qty}` : ""}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <AddonSelector
+                        displayAddons={displayAddons}
+                        addonSelections={addonSelections}
+                        onAddonClick={(addon, qty) => {
+                          setAddonQtyModalAddon(addon);
+                          setAddonQtyModalQty(qty);
+                        }}
+                      />
                     ) : null}
                   </div>}
 
@@ -2026,7 +2424,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   )}
 
                   {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
-                  {!isTicketed && selectedExperience?.allowDeposit !== false && (
+                  {!isTicketed && selectedExperience?.allowDeposit === true && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
@@ -2044,7 +2442,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
-                          {depositCentsFromServer != null ? `$${(depositCentsFromServer / 100).toFixed(2)} now` : "Loading…"} — we&apos;ll charge the remaining 50% 48 hours before your trip
+                          {priceReady
+                            ? `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)} now`
+                            : "Loading…"}{" "}
+                          — we&apos;ll charge the remaining 50% 48 hours before your trip
                         </span>
                       </button>
                       <button
@@ -2059,10 +2460,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         <span className="font-semibold text-brand-dark">Pay full amount</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
-                          ${(priceSummary.totalCents / 100).toFixed(2)} now — all set, no later charge
+                          {payFullTotalPending ? (
+                            <>
+                              <span className="inline-block h-4 w-[4.5rem] animate-pulse rounded bg-brand-muted/30 align-middle" aria-hidden />
+                              <span className="sr-only">Price loading</span>
+                              {" "}now — all set, no later charge
+                            </>
+                          ) : (
+                            <>${(priceSummary.totalCents / 100).toFixed(2)} now — all set, no later charge</>
+                          )}
                         </span>
                       </button>
                     </div>
+                    {depositAmountIsEstimate && priceReady && (
+                      <p className="text-[10px] text-brand-muted mt-1.5">Exact deposit amount confirmed at checkout</p>
+                    )}
                   </div>
                   )}
 
@@ -2085,16 +2497,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       />
                       <button
                         type="button"
-                        disabled={!discountCode.trim() || appliedDiscountLoading}
+                        disabled={
+                          !discountCode.trim() ||
+                          appliedDiscountLoading ||
+                          effectiveRateCents == null
+                        }
                         onClick={async () => {
                           const code = discountCode.trim();
                           if (!code) return;
+                          if (effectiveRateCents == null) return;
                           setAppliedDiscountError(null);
                           setAppliedDiscountLoading(true);
                           try {
-                            const totalBeforeDiscount = priceSummary.rateCents
-                              + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
-                              + priceSummary.salesTaxCents;
+                            const ticketCountForDiscount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
+                            const unitRateForDiscount = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
+                            const rateSubtotalCents = isTicketed
+                              ? unitRateForDiscount * ticketCountForDiscount
+                              : unitRateForDiscount;
+                            const addonSubtotalCents = displayAddons.reduce(
+                              (s, a) => s + a.priceCents * (addonSelections[a.id] ?? 0),
+                              0
+                            );
+                            const subtotalBeforeTaxDiscount = rateSubtotalCents + addonSubtotalCents;
+                            const salesTaxForDiscount = Math.round(subtotalBeforeTaxDiscount * TAX_RATE);
+                            const totalBeforeDiscount = subtotalBeforeTaxDiscount + salesTaxForDiscount;
                             const res = await fetch("/api/booking/validate-discount", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -2116,7 +2542,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         }}
                         className="shrink-0 rounded-xl border-2 border-brand-primary bg-brand-primary text-white font-semibold px-4 py-2.5 text-base min-h-[44px] touch-manipulation hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {appliedDiscountLoading ? "Checking…" : "Apply"}
+                        {appliedDiscountLoading
+                          ? "Checking…"
+                          : effectiveRateCents == null && (datePricesLoading || effectivePriceLoading)
+                            ? "Loading price…"
+                            : "Apply"}
                       </button>
                     </div>
                     {appliedDiscountError && <p className="text-xs text-red-600">{appliedDiscountError}</p>}
@@ -2168,14 +2598,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-xs sm:text-sm font-semibold text-brand-dark">
                           {(isTicketed || payFullAmount) ? "Total due" : "Deposit due"}
                         </p>
-                        {priceReady ? (
+                        {paymentPriceBlocked ? (
+                          <p className="text-sm text-brand-muted mt-1">Loading price…</p>
+                        ) : priceReady ? (
                           <p className="text-xl sm:text-2xl font-bold text-brand-primary">
                             {(isTicketed || payFullAmount)
-                              ? `$${(priceSummary.totalCents / 100).toFixed(2)}`
-                              : depositCentsFromServer != null
-                                ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                              ? payFullTotalPending ? (
+                                  <span className="inline-block h-6 w-20 sm:h-7 sm:w-24 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
+                                ) : (
+                                  `$${(priceSummary.totalCents / 100).toFixed(2)}`
+                                )
+                              : priceReady
+                                ? `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`
                                 : null}
-                            {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                            {!isTicketed && !payFullAmount && !priceReady && (
                               <span className="inline-block h-6 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
                             )}
                           </p>
@@ -2187,6 +2623,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         {!isTicketed && !payFullAmount && (
                           <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
                             Remaining 50% charged 48 hours before your trip
+                            {depositAmountIsEstimate && priceReady ? " · Exact amount confirmed at checkout" : ""}
                           </p>
                         )}
                       </div>
@@ -2196,10 +2633,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           userChoseDepositRef.current = !payFullAmount;
                           handleProceedToPayment();
                         }}
-                        disabled={!isStripeCheckoutReady || !priceReady}
+                        disabled={!isStripeCheckoutReady || !priceReady || paymentPhase !== "form"}
                         className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        Proceed to payment
+                        {paymentPriceBlocked ? "Loading price…" : "Proceed to payment"}
                       </button>
                     </div>
                     <p className="text-center text-[10px] sm:text-[11px] text-brand-muted mt-1.5 sm:mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
@@ -2208,123 +2645,83 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 </>
               )}
               {paymentPhase === "loading" && (
-                <div className="py-8 flex flex-col items-center justify-center gap-3">
-                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-                  <p className="text-sm text-brand-muted">Preparing checkout…</p>
+                <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 py-8 px-2">
+                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                  <p className="text-sm text-brand-muted text-center">Preparing checkout…</p>
                 </div>
               )}
               {paymentPhase === "completing" && (
-                <div className="py-12 flex flex-col items-center justify-center gap-4">
+                <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-4 py-10 px-2">
                   <div className="h-12 w-12 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                  <p className="text-sm font-medium text-brand-dark">Completing your booking…</p>
-                  <p className="text-xs text-brand-muted">Please don&apos;t close this window.</p>
+                  {stripePaymentProcessing ? (
+                    <>
+                      <p className="text-sm font-medium text-brand-dark text-center">Your payment is processing</p>
+                      <p className="text-xs text-brand-muted text-center max-w-[280px]">
+                        We&apos;ll send you a confirmation email shortly. No need to do anything else.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium text-brand-dark text-center">Completing your booking…</p>
+                      <p className="text-xs text-brand-muted text-center">Please don&apos;t close this window.</p>
+                    </>
+                  )}
                 </div>
               )}
-              {paymentPhase === "successRecoveryFailed" && (
-                <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
-                  <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
-                    <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
-                    <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
-                      Your payment was successful. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference.
-                    </p>
-                    {recoveryFailedPiId && (
-                      <p className="text-xs font-mono text-brand-dark/80 bg-brand-dark/5 px-2 py-1 rounded mt-2">Payment reference: {recoveryFailedPiId}</p>
-                    )}
-                    <p className="text-sm font-medium text-brand-dark mt-2">Contact us at {siteConfig.phone}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleModalOpenChange(false)}
-                    className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
-                  >
-                    Close
-                  </button>
-                </div>
-              )}
-              {paymentPhase === "successWithWarning" && (
-                <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
-                  <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
-                    <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-lg font-bold text-brand-dark">Payment received — confirmation pending</h3>
-                    <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
-                      {paymentError ?? "Your payment was successful, but we couldn't complete the booking confirmation. Please contact us with your email so we can confirm your reservation."}
-                    </p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              {paymentPhase === "completeAfterPaymentRetry" && (
+                <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-4 py-10 px-4 text-center">
+                  <p className="text-sm text-brand-dark">{paymentError ?? "We couldn't confirm your booking in time."}</p>
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (!holdId || !paymentIntentId) return;
-                        setPaymentError(null);
-                        setPaymentPhase("completing");
-                        try {
-                          const res = await fetch("/api/booking/complete-after-payment", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ holdId, paymentIntentId }),
-                          });
-                          const data = await res.json().catch(() => ({}));
-                          if (res.ok && data?.success) {
-                            const bid = data.bookingId ?? null;
-                            const tok = data.receiptToken ?? null;
-                            setCompletedBookingId(bid);
-                            setCompletedReceiptToken(tok);
-                            const ps = data.paymentSummary as { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number } | undefined;
-                            if (ps && typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
-                            if (ps && typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
-                            if (ps && typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
-                            if (ps && typeof ps.isDeposit === "boolean") {
-                              setPayFullAmount(!ps.isDeposit);
-                              setIsDepositFromServer(ps.isDeposit);
-                            } else if (ps && typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
-                              setIsDepositFromServer(true);
-                              setPayFullAmount(false);
-                            }
-                            try {
-                              if (typeof window !== "undefined") {
-                                sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({
-                                  bookingId: data.bookingId,
-                                  receiptToken: data.receiptToken ?? null,
-                                  paymentSummary: ps ? { isDeposit: ps.isDeposit, depositCents: ps.depositCents, totalCents: ps.totalCents, finalCents: ps.finalCents } : undefined,
-                                }));
-                              }
-                            } catch (_) {}
-                            setPaymentPhase("success");
-                            setPaymentError(null);
-                          } else {
-                            setPaymentError((data?.error as string) || "Please contact us to confirm your reservation.");
-                            setPaymentPhase("successWithWarning");
-                          }
-                        } catch (e) {
-                          bookingError("client", "complete-after-payment retry request failed", e, { holdId });
-                          setPaymentError("Request failed. Please contact us.");
-                          setPaymentPhase("successWithWarning");
-                        }
-                      }}
-                      className="rounded-xl border-2 border-brand-primary bg-white text-brand-primary font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/10 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
+                      onClick={() => void runCompleteAfterPaymentForModal()}
+                      className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
                       Try again
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleModalOpenChange(false)}
-                      className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0"
+                      onClick={() => {
+                        setPaymentPhase("stripe");
+                        setPaymentError(null);
+                      }}
+                      className="rounded-xl border-2 border-brand-dark/20 text-brand-dark font-semibold py-2.5 px-5 text-sm hover:bg-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
-                      Close
+                      Back to payment
                     </button>
                   </div>
                 </div>
               )}
-              {paymentPhase === "stripe" && clientSecret && stripePromise && selectedExperience && selectedSlot && selectedRate && (
+              <BookingSuccessPanel
+                paymentPhase={paymentPhase}
+                paymentError={paymentError}
+                recoveryFailedPiId={recoveryFailedPiId}
+                onClose={() => handleModalOpenChange(false)}
+                completeAfterRetryInFlight={completeAfterRetryInFlight}
+                onTryAgain={async () => {
+                  if (!holdId || !paymentIntentId) return;
+                  if (completeAfterRetryInFlightRef.current) return;
+                  completeAfterRetryInFlightRef.current = true;
+                  setCompleteAfterRetryInFlight(true);
+                  setPaymentError(null);
+                  try {
+                    await runCompleteAfterPaymentForModal();
+                  } finally {
+                    completeAfterRetryInFlightRef.current = false;
+                    setCompleteAfterRetryInFlight(false);
+                  }
+                }}
+                selectedExperience={selectedExperience}
+                isDepositFromServer={isDepositFromServer}
+                depositCentsFromServer={depositCentsFromServer}
+                totalCentsFromServer={totalCentsFromServer}
+                finalCentsFromServer={finalCentsFromServer}
+                isTicketed={isTicketed}
+                payFullAmount={payFullAmount}
+                completedBookingId={completedBookingId}
+                priceSummary={priceSummary}
+              />
+              {paymentPhase === "stripe" && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                   <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
                   {userChoseDepositRef.current && payFullAmount && !isTicketed && (
@@ -2332,17 +2729,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       This experience requires full payment at checkout. You&apos;re being charged the full amount now.
                     </p>
                   )}
+                  {totalCentsFromServer != null && Math.abs(totalCentsFromServer - priceSummary.totalCents) > 1 && (
+                    <p className="text-sm font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2" role="alert">
+                      Price updated: ${(totalCentsFromServer / 100).toFixed(2)}
+                    </p>
+                  )}
                   <div className="rounded-xl border-2 border-brand-primary/25 bg-brand-primary/8 p-4 shrink-0 space-y-3">
                     {holdExpiresAt && (
                       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                         {isHoldExpired ? (
-                          <span className="font-semibold text-amber-700">Your reservation time expired. Please start a new booking.</span>
+                          <span className="font-semibold text-amber-700" role="alert">Your reservation time expired. Please start a new booking.</span>
                         ) : (
                           <HoldCountdown
                             expiresAt={holdExpiresAt}
                             label="Complete payment in"
                             compact
                             expiredLabel="Expired"
+                            onExpired={handleHoldExpired}
                             className="font-medium text-brand-dark"
                           />
                         )}
@@ -2364,10 +2767,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-2xl font-bold text-brand-primary">
                           {(isTicketed || payFullAmount)
                             ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : depositCentsFromServer != null
-                              ? `$${(depositCentsFromServer / 100).toFixed(2)}`
-                              : null}
-                          {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                            : `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`}
+                          {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
                           )}
                         </p>
@@ -2408,43 +2809,53 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <span>
                           {(isTicketed || payFullAmount)
                             ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : depositCentsFromServer != null
-                              ? `$${(depositCentsFromServer / 100).toFixed(2)}`
-                              : null}
-                          {!isTicketed && !payFullAmount && depositCentsFromServer == null && (
+                            : `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`}
+                          {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />
                           )}
                         </span>
                       </div>
                     </div>
                   </div>
+                  {paymentPriceBlocked && (
+                    <p className="text-[11px] text-brand-muted text-center">Exact price confirmed at checkout.</p>
+                  )}
                   {isHoldExpired ? (
-                    <div className="min-h-[200px] flex flex-col justify-center gap-4 p-4 rounded-xl border-2 border-amber-200 bg-amber-50">
+                    <div className="min-h-[200px] flex flex-col justify-center gap-4 p-4 rounded-xl border-2 border-amber-200 bg-amber-50" role="alert">
                       <p className="text-sm font-medium text-amber-900">Your reservation hold has expired. Please start a new booking—your slot has been released.</p>
                       <button
                         type="button"
                         onClick={() => {
-                          releaseCreatedHold();
-                          setPaymentPhase("form");
-                          setClientSecret(null);
-                          setHoldId(null);
-                          setHoldExpiresAt(null);
-                          setPaymentIntentId(null);
-                          setPaymentError(null);
+                          void releaseCreatedHold().then((ok) => {
+                            if (!ok) return;
+                            setPaymentPhase("form");
+                            setClientSecret(null);
+                            setReceiptClaimToken(null);
+                            setHoldId(null);
+                            setHoldExpiresAt(null);
+                            setPaymentIntentId(null);
+                            setPaymentError(null);
+                          });
                         }}
                         className="rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       >
                         Start over
                       </button>
                     </div>
+                  ) : !clientSecret ? (
+                    <div className="min-h-[200px] sm:min-h-[220px] flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-brand-primary/15 bg-brand-primary/5 px-4 shrink-0" aria-busy="true">
+                      <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                      <p className="text-sm text-brand-muted text-center">Preparing secure payment…</p>
+                    </div>
                   ) : (
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
-                      <BookingPaymentForm
+                      <BookingStep4PaymentForm
+                        receiptClaimToken={receiptClaimToken}
                         onSuccess={async (paymentIntentIdFromConfirm?: string) => {
+                          setStripePaymentProcessing(false);
                           setPaymentPhase("completing");
-                          if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
-                          const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
+                          const resolvedHoldId = holdId;
                           const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
                           if (!resolvedHoldId || !resolvedPiId) {
                             bookingError("client", "complete-after-payment recovery failed: missing holdId or paymentIntentId", null, { hasHoldId: !!resolvedHoldId, hasPaymentIntentId: !!resolvedPiId });
@@ -2452,52 +2863,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             setPaymentPhase("successRecoveryFailed");
                             return;
                           }
+                          completeAfterAbortRef.current?.abort();
+                          completeAfterAbortRef.current = new AbortController();
                           try {
-                            const res = await fetch("/api/booking/complete-after-payment", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId }),
+                            const outcome = await completeAfterPaymentWithPolling({
+                              paymentIntentId: resolvedPiId,
+                              holdId: resolvedHoldId,
+                              signal: completeAfterAbortRef.current.signal,
+                              onEnteredProcessing: () => setStripePaymentProcessing(true),
                             });
-                            const data = await res.json().catch(() => ({}));
-                            if (res.ok && data?.success) {
-                              const bid = data.bookingId ?? null;
-                              const tok = data.receiptToken ?? null;
-                              setCompletedBookingId(bid);
-                              setCompletedReceiptToken(tok);
-                              const ps = data.paymentSummary as { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number } | undefined;
-                              if (ps && typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
-                              if (ps && typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
-                              if (ps && typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
-                              if (ps && typeof ps.isDeposit === "boolean") {
-                                setPayFullAmount(!ps.isDeposit);
-                                setIsDepositFromServer(ps.isDeposit);
-                              } else if (ps && typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
-                                setIsDepositFromServer(true);
-                                setPayFullAmount(false);
-                              }
-                              try {
-                                if (typeof window !== "undefined") {
-                                  const ps = data.paymentSummary as { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number } | undefined;
-                                  sessionStorage.setItem(SESSION_SUCCESS_KEY, JSON.stringify({
-                                    bookingId: data.bookingId,
-                                    receiptToken: data.receiptToken ?? null,
-                                    paymentSummary: ps ? { isDeposit: ps.isDeposit, depositCents: ps.depositCents, totalCents: ps.totalCents, finalCents: ps.finalCents } : undefined,
-                                  }));
-                                }
-                              } catch (_) {}
-                              setPaymentPhase("success");
-                            } else {
-                              bookingError("client", "complete-after-payment failed", null, { status: res.status, error: data?.error });
-                              const message = (data?.error as string) || `Payment captured but booking confirmation failed. Please contact us to confirm your reservation. Call us at ${siteConfig.phone}.`;
-                              setPaymentError(message);
-                              setPaymentPhase("successWithWarning");
-                            }
+                            handleCompleteAfterPaymentOutcome(outcome);
                           } catch (e) {
                             bookingError("client", "complete-after-payment request failed", e, { holdId: resolvedHoldId });
+                            if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
+                            setPaymentPhase("completeAfterPaymentRetry");
                             setPaymentError(
-                              `Payment captured but we couldn't confirm your booking. Please contact us with your email to confirm. Call us at ${siteConfig.phone}.`
+                              `Payment captured but we couldn't confirm your booking. Please try again or contact us at ${siteConfig.phone}.`,
                             );
-                            setPaymentPhase("successWithWarning");
                           }
                         }}
                         onError={(msg) => {
@@ -2594,69 +2976,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   Got it
                 </button>
               </Dialog>
-              {paymentPhase === "success" && (
-                <div className="py-4 sm:py-8 flex flex-col items-center gap-3 sm:gap-5 text-center">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-brand-primary/15 flex items-center justify-center shrink-0">
-                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-brand-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
-                    <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
-                      {selectedExperience && (priceSummary.totalCents > 0 || totalCentsFromServer != null) ? (
-                        (() => {
-                          // Use server-authoritative deposit flag + amount fallback so we never show "full payment" after a deposit
-                          const serverSaysDeposit = isDepositFromServer === true;
-                          const amountsShowDeposit =
-                            depositCentsFromServer != null &&
-                            totalCentsFromServer != null &&
-                            depositCentsFromServer < totalCentsFromServer;
-                          const showDeposit =
-                            serverSaysDeposit ||
-                            amountsShowDeposit ||
-                            (isDepositFromServer === null && !isTicketed && !payFullAmount);
-                          const paymentModeUnknown = isDepositFromServer === null && !amountsShowDeposit && !serverSaysDeposit;
-                          if (showDeposit) {
-                            const depositCents = depositCentsFromServer ?? Math.round(priceSummary.totalCents * 0.5);
-                            let remainingCents: number;
-                            if (typeof finalCentsFromServer === "number" && finalCentsFromServer > 0) {
-                              remainingCents = finalCentsFromServer;
-                            } else if (totalCentsFromServer != null && depositCentsFromServer != null && totalCentsFromServer > depositCentsFromServer) {
-                              remainingCents = totalCentsFromServer - depositCentsFromServer;
-                            } else {
-                              remainingCents = Math.round(priceSummary.totalCents * 0.5);
-                            }
-                            return (
-                              <>We&apos;ve received your <strong>50% deposit</strong> of <span className="font-semibold text-brand-dark">${(depositCents / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance of <span className="font-semibold text-brand-dark">${(remainingCents / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.</>
-                            );
-                          }
-                          if (paymentModeUnknown) {
-                            return <>We&apos;ve received your payment for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>;
-                          }
-                          return (
-                            <>We&apos;ve received your <strong>full payment</strong> of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
-                          );
-                        })()
-                      ) : (
-                        "We&apos;ve received your payment. Your receipt has been sent to your confirmation email."
-                      )}
-                    </p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-center">
-                    <button
-                      type="button"
-                      onClick={() => handleModalOpenChange(false)}
-                      className="w-full sm:w-auto rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  {completedBookingId != null && (
-                    <p className="text-xs text-brand-muted">Booking #{completedBookingId}</p>
-                  )}
-                </div>
-              )}
             </div>
           </div>
         </div>

@@ -3,7 +3,6 @@
 import { useCallback } from "react";
 import Link from "next/link";
 import { Hero } from "@/components/experience/Hero";
-import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { SocialProofStrip } from "@/components/experience/SocialProofStrip";
 import { ExperienceOverview } from "@/components/experience/ExperienceOverview";
@@ -13,6 +12,7 @@ import { Reviews } from "@/components/experience/Reviews";
 import { FAQ } from "@/components/experience/FAQ";
 import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
+import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
 
 const BOOKING_SECTION_ID = "booking-preview";
 
@@ -83,6 +83,10 @@ export function ExperienceListingPageContent(props) {
   const fromPrice =
     rates.length > 0 ? Math.min(...rates.map((r) => r.priceCents)) : null;
   const fromPriceDollars = fromPrice != null ? Math.round(fromPrice / 100) : null;
+  const stickyPriceDollars =
+    typeof experience.fromPriceCents === "number" && experience.fromPriceCents > 0
+      ? Math.round(experience.fromPriceCents / 100)
+      : fromPriceDollars;
 
   const scrollToBooking = useCallback(() => {
     document.getElementById(BOOKING_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
@@ -208,20 +212,12 @@ export function ExperienceListingPageContent(props) {
         className="relative -mt-12 sm:-mt-32 lg:-mt-40 z-10 max-w-7xl mx-auto px-5 sm:px-6 lg:px-8 pt-4 sm:pt-0 pb-8"
       >
         <div className="flex justify-center">
-          <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0 rounded-2xl sm:rounded-3xl border border-white/10 bg-brand-dark/80 backdrop-blur-sm p-8 sm:p-10 text-center shadow-xl">
-            <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-              Ready to book?
-            </h2>
-            <p className="mt-2 text-white/80 text-sm sm:text-base">
-              Pick your date and time in the next step — we&apos;ll hold your slot while you checkout.
-            </p>
-            <Button
-              size="lg"
-              className="mt-6 w-full rounded-xl h-14 text-base font-bold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 shadow-lg"
-              onClick={handleBookNow}
-            >
-              Book now
-            </Button>
+          <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0">
+            <BookingPreviewCard
+              sectionId={BOOKING_SECTION_ID}
+              onCheckAvailability={handleBookNow}
+              fromPriceCents={experience.fromPriceCents ?? null}
+            />
           </div>
         </div>
       </section>
@@ -271,7 +267,7 @@ export function ExperienceListingPageContent(props) {
       />
 
       <StickyMobileBar
-        price={fromPriceDollars ?? undefined}
+        price={stickyPriceDollars ?? undefined}
         onBookNow={handleBookNow}
         bookingSectionId={BOOKING_SECTION_ID}
       />

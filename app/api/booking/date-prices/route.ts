@@ -7,16 +7,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { FieldPath } from "firebase-admin/firestore";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
 
 export const dynamic = "force-dynamic";
 /** Allow longer timeout so second-month requests succeed in production (Netlify default 10s). */
 export const maxDuration = 26;
 
-import { getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
+import { getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
+import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
+import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
 import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
 
 const LEGACY_HOLDS_PAGE_SIZE = 100;
 
@@ -54,16 +58,43 @@ export async function GET(request: NextRequest) {
     if (!experienceId) {
       return NextResponse.json({ error: "experienceId required" }, { status: 400 });
     }
+    const rl = await checkRateLimitPublicRead(getClientKey(request));
+    if (!rl.allowed) {
+      const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
     const daysParam = request.nextUrl.searchParams.get("days");
     const days = Math.min(Math.max(parseInt(daysParam ?? "35", 10) || 35, 1), 90);
     const startDateParam = request.nextUrl.searchParams.get("startDate"); // YYYY-MM-DD, optional
     const rateIdParam = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
+    const boatIdParam = request.nextUrl.searchParams.get("boatId")?.trim() || null;
 
     const db = getDb();
-    const [expSnap, ratesSnap] = await Promise.all([
+    const [expSnap, ratesSnap, listingBoatsSnap] = await Promise.all([
       db.collection("experiences").doc(experienceId).get(),
       db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get(),
+      db
+        .collection("boats")
+        .where("isListingBoat", "==", true)
+        .where("active", "==", true)
+        .where("experienceIds", "array-contains", experienceId)
+        .get(),
     ]);
+    const boatTypesForCalendar = Array.from(
+      new Set(
+        listingBoatsSnap.docs
+          .map((d) => (d.data() as ListingBoat).boatType)
+          .filter((t): t is string => typeof t === "string" && t.trim() !== "")
+          .map((t) => t.trim())
+      )
+    );
+    const mergedCalendarRates =
+      boatTypesForCalendar.length > 0
+        ? await fetchMergedPricingCalendarRatesForBoatTypes(db, boatTypesForCalendar)
+        : undefined;
 
     if (!expSnap.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -109,11 +140,50 @@ export async function GET(request: NextRequest) {
     const prices: Record<string, number> = {};
     const holidayDateStrings: string[] = [];
     const dateStrs: string[] = [];
+    const useListingBoatCalendar = boatTypesForCalendar.length > 0;
+    /** Per-boat date-range price overrides (charter listing boats). */
+    let priceOverridesForCalendar: BoatPriceOverride[] | undefined;
+    if (useListingBoatCalendar) {
+      if (listingBoatsSnap.docs.length === 1) {
+        const lb = listingBoatsSnap.docs[0].data() as ListingBoat;
+        priceOverridesForCalendar = Array.isArray(lb.priceOverrides) ? lb.priceOverrides : undefined;
+      } else if (boatIdParam) {
+        const fromSnap = listingBoatsSnap.docs.find((d) => d.id === boatIdParam);
+        if (fromSnap) {
+          const lb = fromSnap.data() as ListingBoat;
+          priceOverridesForCalendar = Array.isArray(lb.priceOverrides) ? lb.priceOverrides : undefined;
+        } else {
+          const boatSnap = await db.collection("boats").doc(boatIdParam).get();
+          if (boatSnap.exists) {
+            const lb = boatSnap.data() as ListingBoat;
+            priceOverridesForCalendar = Array.isArray(lb.priceOverrides) ? lb.priceOverrides : undefined;
+          }
+        }
+      }
+      // Multi-boat listing experience with no boatId: calendar uses merged type-level rates only; per-boat
+      // priceOverrides are applied after the customer selects a boat (see create-hold / effective-price).
+    }
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
       const dateStr = toDateStrCentral(d);
       dateStrs.push(dateStr);
-      prices[dateStr] = getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
+      prices[dateStr] = useListingBoatCalendar
+        ? getEffectiveBoatRatePriceCents(
+            {
+              priceCents: rateForPricing.priceCents,
+              priceWeekendCents: rateForPricing.priceWeekendCents,
+              priceFriSunCents: rateForPricing.priceFriSunCents,
+              priceHolidayCents: rateForPricing.priceHolidayCents,
+              durationHours: chosenRate.durationHours ?? 0,
+            },
+            d,
+            holidayDates,
+            priceOverridesForCalendar,
+            mergedCalendarRates,
+            weekendDays,
+            friSunDays
+          )
+        : getEffectiveRatePriceCents(rateForPricing, d, holidayDates, weekendDays, friSunDays);
       // Mark holiday highlights for calendar (charter and ticketed)
       if (isDateInAnyHolidayRange(dateStr, holidayDates) || isDefaultUSHoliday(dateStr)) {
         holidayDateStrings.push(dateStr);
@@ -154,6 +224,7 @@ export async function GET(request: NextRequest) {
       // Cursor-based pagination for legacy holds (no startDateStr) to avoid undercounting. Long-term: backfill
       // startDateStr on holds and set DISABLE_LEGACY_HOLDS_FALLBACK=true.
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
+      if (legacyFallbackEnabled) warnIfLegacyHoldsFallbackEnabled();
       const holdsLegacySnaps = legacyFallbackEnabled
         ? await Promise.all(allExpIds.map((expId) => fetchAllLegacyHolds(db, expId)))
         : ([] as QuerySnapshot[]);

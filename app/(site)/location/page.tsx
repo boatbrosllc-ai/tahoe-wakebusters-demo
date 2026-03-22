@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { location } from "@/content/location";
 import { LOCATION_FAQ } from "@/content/location-faq";
@@ -30,7 +31,8 @@ export const metadata: Metadata = {
   },
 };
 
-function BreadcrumbJsonLd() {
+async function BreadcrumbJsonLd() {
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   const schema = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -39,10 +41,16 @@ function BreadcrumbJsonLd() {
       { "@type": "ListItem", position: 2, name: "Location", item: canonical },
     ],
   };
-  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }} />;
+  return (
+    <script
+      type="application/ld+json"
+      nonce={nonce}
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+    />
+  );
 }
 
-export default function LocationPage() {
+export default async function LocationPage() {
   return (
     <>
       <BreadcrumbJsonLd />

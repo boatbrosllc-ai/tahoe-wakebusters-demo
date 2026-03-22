@@ -6,6 +6,7 @@ import {
   getChicagoToday,
   getDaysInMonth,
   getMonthRangeWithAdjacent,
+  getMsUntilNextChicagoMidnight,
 } from "@/lib/booking/booking-date-range";
 import Image from "next/image";
 import Link from "next/link";
@@ -15,26 +16,7 @@ import { formatExperiencePriceLabel } from "@/content/experiences";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 import { bookingDebugLog } from "@/lib/booking/debug";
-
-interface ExperienceItem {
-  id: string;
-  slug: string;
-  title: string;
-  subtitle: string;
-  heroMedia: { type: "image" | "video"; url: string };
-  maxGuests: number;
-  petsMax: number;
-  fromPriceCents: number | null;
-  active: boolean;
-}
-
-interface BoatOption {
-  id: string;
-  name: string;
-  photos: string[];
-  fromPriceCents: number | null;
-  rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
-}
+import type { ExperienceItem, BoatOption } from "@/lib/booking/booking-modal-types";
 
 interface InitialSelection {
   /** experienceId or slug emitted by BookingCTA / ExperienceBookPage / LegacyBookPage */
@@ -88,6 +70,40 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
   const lastSlotsRetryForRef = useRef<string | null>(null);
+  const [chicagoDateTick, setChicagoDateTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setChicagoDateTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let tid: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const ms = getMsUntilNextChicagoMidnight();
+      tid = setTimeout(() => {
+        if (cancelled) return;
+        setSlotsRetryTrigger((x) => x + 1);
+        setChicagoDateTick((t) => t + 1);
+        schedule();
+      }, ms + 50);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(tid);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== "bb_slot_cache_version") return;
+      setSlotsRetryTrigger((t) => t + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -192,6 +208,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     setAllSlots(null);
     setSlotsLoadError(null);
     const controller = new AbortController();
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, controller.signal)
       .then((data) => {
         if (slotsRequestRangeRef.current?.start !== startDate || slotsRequestRangeRef.current?.end !== endDate) return;
@@ -200,6 +217,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         setAllSlots(slots);
         setSlotsLoadError(null);
         setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
+        const ur = (data as { unresolvedBookingCount?: number })?.unresolvedBookingCount;
+        if (typeof ur === "number" && ur > 0) {
+          bookingDebugLog("BookingPageClient", "slots API reports unresolved bookings missing boatId", { count: ur });
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
@@ -212,17 +233,33 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
         if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
-          setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+          retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
         }
       })
       .finally(() => {
         if (slotsRequestRangeRef.current?.start === startDate && slotsRequestRangeRef.current?.end === endDate) setSlotsLoading(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [selectedExperience, displayMonth.year, displayMonth.month, slotsRetryTrigger]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && selectedExperience) {
+        bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+        setSlotsRetryTrigger((t) => t + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [selectedExperience]);
 
   // Derive available dates in-memory from the cached slot dataset.
   // Switching boats re-derives this set without any API call.
+  // Advisory-only: may be up to `STALE_MS_SLOTS` ms stale (see `lib/booking/booking-data-cache`); create-hold conflict response is authoritative.
   const availableDateSet = useMemo<Set<string> | null>(() => {
     if (allSlots === null) return null;
     const available = new Set<string>();
@@ -243,7 +280,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     }
   }, [availableDateSet]);
 
-  const todayChicago = getChicagoToday();
+  const todayChicago = useMemo(() => {
+    void chicagoDateTick;
+    return getChicagoToday();
+  }, [chicagoDateTick]);
   const currentYear = parseInt(todayChicago.slice(0, 4), 10);
   const currentMonth = parseInt(todayChicago.slice(5, 7), 10) - 1; // 0-indexed
   const isAtCurrentMonth = displayMonth.year === currentYear && displayMonth.month === currentMonth;
@@ -254,6 +294,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
 
   const handleContinueToCheckout = () => {
     if (!canContinue || !selectedExperience) return;
+    bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+    setSlotsRetryTrigger((t) => t + 1);
     openWithSelection({
       experienceId: selectedExperience.id,
       experienceSlug: selectedExperience.slug,
@@ -470,6 +512,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                       const isPast = dateStr < todayChicago;
                       const isAvailable = availableDateSet !== null ? availableDateSet.has(dateStr) : true;
                       const isDisabled = isPast || (availableDateSet !== null && !isAvailable);
+                      const uncertainAvailability = slotsPartialData && !isDisabled && isAvailable;
                       return (
                         <button
                           key={dateStr}
@@ -482,6 +525,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                             isDisabled && "opacity-40 cursor-not-allowed",
                             isSelected
                               ? "border-brand-primary bg-brand-primary/10 text-brand-dark font-semibold"
+                              : !isDisabled && uncertainAvailability
+                                ? "border-amber-400/60 border-dashed bg-amber-50/90 text-amber-950 hover:border-amber-500"
                               : !isDisabled
                                 ? "border-green-400/70 bg-green-50 hover:border-green-500"
                                 : "border-brand-dark/10 bg-white"

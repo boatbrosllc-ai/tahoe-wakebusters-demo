@@ -12,6 +12,8 @@ export interface PublicBoatListItem {
   boatType?: string;
   capacity?: number;
   experienceIds: string[];
+  /** First linked active experience slug for `/booking?experience=` deep links. */
+  firstLinkedExperienceSlug?: string;
 }
 
 export interface ExperienceRef {
@@ -47,6 +49,19 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
     const rawSlug = typeof boat.slug === "string" ? boat.slug.trim() : "";
     if (!rawSlug) continue;
     const slug = rawSlug.toLowerCase();
+    const experienceIds = Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [];
+    let firstLinkedExperienceSlug: string | undefined;
+    const firstExpId = experienceIds[0];
+    if (firstExpId) {
+      const expSnap = await db.collection("experiences").doc(firstExpId).get();
+      if (expSnap.exists) {
+        const exp = expSnap.data() as Experience;
+        if (exp.active !== false && typeof exp.slug === "string") {
+          const s = exp.slug.trim();
+          if (s) firstLinkedExperienceSlug = s;
+        }
+      }
+    }
     list.push({
       id: doc.id,
       name: boat.name,
@@ -55,7 +70,8 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
       photos: Array.isArray(boat.photos) ? boat.photos.filter((x): x is string => typeof x === "string") : [],
       boatType: boat.boatType,
       capacity: boat.capacity,
-      experienceIds: Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [],
+      experienceIds,
+      ...(firstLinkedExperienceSlug ? { firstLinkedExperienceSlug } : {}),
     });
   }
   return list;

@@ -7,10 +7,13 @@ import { usePathname } from "next/navigation";
  * Thin progress bar at top of viewport during client-side navigation.
  * Shows when user clicks a same-origin link; hides when pathname has updated (new page ready).
  */
+const NAV_SAFETY_TIMEOUT_MS = 12_000;
+
 export function NavProgress() {
   const pathname = usePathname();
   const [navigating, setNavigating] = useState(false);
   const prevPathnameRef = useRef(pathname);
+  const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -21,7 +24,15 @@ export function NavProgress() {
         const url = new URL(anchor.href);
         if (url.origin !== window.location.origin) return;
         if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+        if (safetyTimeoutRef.current != null) {
+          clearTimeout(safetyTimeoutRef.current);
+          safetyTimeoutRef.current = null;
+        }
         setNavigating(true);
+        safetyTimeoutRef.current = setTimeout(() => {
+          safetyTimeoutRef.current = null;
+          setNavigating(false);
+        }, NAV_SAFETY_TIMEOUT_MS);
       } catch {
         // ignore
       }
@@ -33,6 +44,10 @@ export function NavProgress() {
   useEffect(() => {
     if (pathname !== prevPathnameRef.current) {
       prevPathnameRef.current = pathname;
+      if (safetyTimeoutRef.current != null) {
+        clearTimeout(safetyTimeoutRef.current);
+        safetyTimeoutRef.current = null;
+      }
       const t = setTimeout(() => setNavigating(false), 0);
       return () => clearTimeout(t);
     }

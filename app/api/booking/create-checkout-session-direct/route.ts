@@ -2,20 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
 import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
-import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
+import {
+  acquireCheckoutSessionCreationLock,
+  clearSessionCreationInflight,
+  persistCheckoutSessionOnHoldWithRetry,
+  rollbackCheckoutSession,
+} from "@/lib/booking/checkout-session-helpers";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
-import { getStripe, buildLineItems } from "@/lib/booking/stripe-client";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { getStripe, buildLineItems, buildLineItemsFromHoldPricing } from "@/lib/booking/stripe-client";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import { resolveHoldBookingPricing } from "@/lib/booking/hold-charge-resolver";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { bookingEnv } from "@/lib/booking/env";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
-import { generateIncidentCode } from "@/lib/booking/debug";
+import { generateIncidentCode, bookingError } from "@/lib/booking/debug";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
+import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
+import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-
-const HOLD_EXPIRY_MINUTES = 20;
+import { DIRECT_CHECKOUT_HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
 
 /** Unique placeholder per hold to avoid Stripe customer index conflicts across concurrent direct checkouts. */
 function placeholderCustomerForHold(holdId: string) {
@@ -43,6 +51,8 @@ function parseBody(body: unknown): { experienceId: string; slotId: string; boatI
 }
 
 export async function POST(request: NextRequest) {
+  let rollbackHoldId: string | undefined;
+  let rollbackHoldPayload: Record<string, unknown> | undefined;
   try {
     const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
@@ -186,8 +196,9 @@ export async function POST(request: NextRequest) {
     }
 
     const holdId = db.collection("holds").doc().id;
+    rollbackHoldId = holdId;
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
+    const expiresAt = new Date(now.getTime() + DIRECT_CHECKOUT_HOLD_EXPIRY_MINUTES * 60 * 1000);
     const holdPayload: Record<string, unknown> = {
       experienceId: input.experienceId,
       slotId: input.slotId,
@@ -202,6 +213,7 @@ export async function POST(request: NextRequest) {
       status: "active",
       expiresAt: Timestamp.fromDate(expiresAt),
       createdAt: FieldValue.serverTimestamp(),
+      paymentAttemptVersion: 1,
     };
     if (input.boatId) holdPayload.boatId = input.boatId;
     if (discountCodeApplied && discountCents > 0) {
@@ -210,6 +222,7 @@ export async function POST(request: NextRequest) {
     }
     holdPayload.pricing = { ...pricing, currency: pricing.currency ?? "usd" };
     holdPayload.effectiveRateCents = rateForPricing.priceCents;
+    rollbackHoldPayload = holdPayload;
 
     await db.runTransaction(async (tx) => {
       if (discountRef) {
@@ -281,12 +294,63 @@ export async function POST(request: NextRequest) {
     });
 
     const hold = { ...holdPayload, expiresAt: holdPayload.expiresAt };
-    const lineItems = buildLineItems({
-      pricing,
-      rate: rateForPricing,
-      addons: addonsForPricing,
-      hold: hold as unknown as import("@/lib/booking/types").Hold,
-    });
+    const holdTyped = hold as unknown as import("@/lib/booking/types").Hold;
+    let resolvedDirect: Awaited<ReturnType<typeof resolveHoldBookingPricing>>;
+    try {
+      resolvedDirect = await resolveHoldBookingPricing(db, holdTyped, { mode: "checkout" });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "RATE_NOT_FOUND" || msg === "BOAT_NOT_FOUND") {
+        await rollbackCheckoutSession(db, holdId, holdPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, { FieldValue, Timestamp });
+        return NextResponse.json({ error: "Rate not found" }, { status: 404 });
+      }
+      throw e;
+    }
+    const {
+      pricing: pricingForLineItems,
+      rateForPricing: rateForLineItems,
+      addonsForPricing: addonsForLineItems,
+      useSnapshotLineItems: useSnapLineItems,
+      ticketQtyForLineItems: ticketQtyLi,
+    } = resolvedDirect;
+    const lineItems = useSnapLineItems
+      ? buildLineItemsFromHoldPricing({
+          pricing: pricingForLineItems,
+          rate: rateForLineItems as import("@/lib/booking/types").Rate | import("@/lib/booking/types").ExperienceRate,
+          hold: holdTyped,
+          ticketQty: ticketQtyLi,
+        })
+      : buildLineItems({
+          pricing: pricingForLineItems,
+          rate: rateForLineItems as import("@/lib/booking/types").Rate | import("@/lib/booking/types").ExperienceRate,
+          addons: addonsForLineItems,
+          hold: holdTyped,
+          ticketQty: ticketQtyLi,
+        });
+    const lineItemSumCents = lineItems.reduce((acc, li) => {
+      const u = li.price_data?.unit_amount;
+      const q = typeof li.quantity === "number" && Number.isFinite(li.quantity) ? li.quantity : 1;
+      return acc + (typeof u === "number" && Number.isFinite(u) ? u * q : 0);
+    }, 0);
+    const tipCentsSanity = (holdTyped as { tipCents?: number }).tipCents ?? 0;
+    const holdDiscountCentsDirect = (holdTyped as { discountCents?: number }).discountCents ?? 0;
+    const expectedLineItemsCents = pricingForLineItems.totalCents + tipCentsSanity;
+    if (Math.abs(lineItemSumCents - expectedLineItemsCents) > 1) {
+      const diagnostic = {
+        lineItemSumCents,
+        expectedLineItemsCents,
+        pricingTotalCents: pricingForLineItems.totalCents,
+        tipCents: tipCentsSanity,
+        discountCents: holdDiscountCentsDirect,
+        holdId,
+      };
+      console.error("[create-checkout-session-direct] Line item sum mismatch; aborting Checkout Session creation", diagnostic);
+      await rollbackCheckoutSession(db, holdId, holdPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, { FieldValue, Timestamp });
+      return NextResponse.json(
+        { error: "Checkout is temporarily unavailable. Please try again." },
+        { status: 500 }
+      );
+    }
     const baseUrl = bookingEnv.appBaseUrl;
     const stripe = getStripe();
     let stripeCouponId: string | undefined;
@@ -302,19 +366,56 @@ export async function POST(request: NextRequest) {
       );
       stripeCouponId = coupon.id;
     }
+    const versionMeta = { [HOLD_PAYMENT_ATTEMPT_VERSION_META]: "1" };
     const metadata: Record<string, string> = {
       holdId,
       slotId: input.slotId,
       rateId,
       experienceId: input.experienceId,
+      ...versionMeta,
     };
     if (input.boatId) metadata.boatId = input.boatId;
-    const paymentIntentMetadata: Record<string, string> = { holdId, slotId: input.slotId, rateId, experienceId: input.experienceId };
+    const paymentIntentMetadata: Record<string, string> = {
+      holdId,
+      slotId: input.slotId,
+      rateId,
+      experienceId: input.experienceId,
+      ...versionMeta,
+    };
     const releaseToken = signReleaseToken(holdId, Math.floor(expiresAt.getTime() / 1000));
+    const receiptClaimToken = signReceiptClaimToken(holdId);
+    const holdRefDirect = db.collection("holds").doc(holdId);
+    const lockResult = await acquireCheckoutSessionCreationLock(db, holdRefDirect, Timestamp, "redirect");
+    if (lockResult.kind === "hold_inactive") {
+      await rollbackCheckoutSession(db, holdId, holdPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, { FieldValue, Timestamp });
+      return NextResponse.json({ error: "Hold expired or unavailable" }, { status: 400 });
+    }
+    if (lockResult.kind === "conflict") {
+      return NextResponse.json(
+        { error: "Checkout session is being created; please retry in a moment." },
+        { status: 409 }
+      );
+    }
+    if (lockResult.kind === "use_existing") {
+      try {
+        const existingSession = await stripe.checkout.sessions.retrieve(lockResult.checkoutSessionId);
+        if (existingSession.status === "open" && existingSession.url) {
+          return NextResponse.json({ url: existingSession.url, sessionId: existingSession.id });
+        }
+      } catch {
+        /* fall through to create */
+      }
+      return NextResponse.json(
+        { error: "Checkout session is being created; please retry in a moment." },
+        { status: 409 }
+      );
+    }
+
     let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
     try {
       session = await stripe.checkout.sessions.create({
         mode: "payment",
+        payment_method_types: ["card"],
         line_items: lineItems,
         ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
         customer_email: undefined,
@@ -324,7 +425,7 @@ export async function POST(request: NextRequest) {
         ],
         metadata,
         payment_intent_data: { metadata: paymentIntentMetadata },
-        success_url: `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${baseUrl}/booking/success?session_id={CHECKOUT_SESSION_ID}&receipt_token=${encodeURIComponent(receiptClaimToken ?? "")}`,
         cancel_url: releaseToken
           ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(holdId)}&release_token=${encodeURIComponent(releaseToken)}`
           : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(holdId)}`,
@@ -337,21 +438,97 @@ export async function POST(request: NextRequest) {
           console.error("[create-checkout-session-direct] Failed to delete orphaned coupon", stripeCouponId, delErr);
         }
       }
+      await clearSessionCreationInflight(holdRefDirect, FieldValue);
       await rollbackCheckoutSession(db, holdId, holdPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, { FieldValue, Timestamp });
       throw sessionErr;
     }
 
     if (session.url) {
-      const holdUpdate: Record<string, unknown> = { checkoutSessionId: session.id };
+      const holdUpdate: Record<string, unknown> = { checkoutSessionId: session.id, checkoutSessionMode: "redirect" as const };
       if (stripeCouponId) holdUpdate.stripeCouponId = stripeCouponId;
-      await db.collection("holds").doc(holdId).update(holdUpdate);
+      const paymentIntentIdFromSession =
+        typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null;
+      if (paymentIntentIdFromSession) {
+        holdUpdate.fullPaymentIntentId = paymentIntentIdFromSession;
+      } else {
+        try {
+          const expanded = await stripe.checkout.sessions.retrieve(session.id, { expand: ["payment_intent"] });
+          const piId = typeof expanded.payment_intent === "object" && expanded.payment_intent?.id
+            ? expanded.payment_intent.id
+            : typeof expanded.payment_intent === "string"
+              ? expanded.payment_intent
+              : null;
+          if (piId) holdUpdate.fullPaymentIntentId = piId;
+        } catch (retrieveErr) {
+          bookingError(
+            "create-checkout-session-direct",
+            "Could not persist payment intent on hold (retrieve expanded session failed)",
+            retrieveErr,
+            { holdId, sessionId: session.id }
+          );
+        }
+      }
+      const persistResult = await persistCheckoutSessionOnHoldWithRetry(
+        db,
+        holdRefDirect,
+        holdId,
+        session.id,
+        holdUpdate,
+        { FieldValue, Timestamp },
+        stripe
+      );
+      if (persistResult.ok === false && persistResult.reason === "lost_race") {
+        return NextResponse.json(
+          { error: "Checkout session is being created; please retry in a moment." },
+          { status: 409 }
+        );
+      }
+      if (persistResult.ok === false && persistResult.reason === "hold_inactive") {
+        return NextResponse.json({ error: "Hold expired or unavailable" }, { status: 400 });
+      }
+      const piIdForMeta =
+        (typeof holdUpdate.fullPaymentIntentId === "string" ? holdUpdate.fullPaymentIntentId : null) ??
+        (typeof paymentIntentIdFromSession === "string" ? paymentIntentIdFromSession : null);
+      if (piIdForMeta) {
+        try {
+          const piExisting = await stripe.paymentIntents.retrieve(piIdForMeta);
+          await stripe.paymentIntents.update(piIdForMeta, {
+            metadata: { ...piExisting.metadata, checkoutSessionId: session.id },
+          });
+        } catch (metaErr) {
+          bookingError(
+            "create-checkout-session-direct",
+            "Could not attach checkoutSessionId to PaymentIntent metadata",
+            metaErr,
+            { holdId, sessionId: session.id, paymentIntentIdPrefix: piIdForMeta.slice(0, 12) }
+          );
+        }
+      }
       return NextResponse.json({ url: session.url, sessionId: session.id });
     }
     return NextResponse.json({ error: "Checkout session failed" }, { status: 500 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Direct checkout failed";
+    if (err instanceof BlockCheckUnavailableError) {
+      return NextResponse.json(
+        { error: "Unable to verify availability. Please try again shortly.", code: "block_check_unavailable" },
+        { status: 503 }
+      );
+    }
     if (err instanceof SlotConflictError || message === "Slot no longer available" || message === "This slot is blocked") {
       return NextResponse.json({ error: message }, { status: 409 });
+    }
+    if (rollbackHoldId && rollbackHoldPayload) {
+      try {
+        const dbRollback = getDb();
+        const { FieldValue: FV, Timestamp: Ts } = getFirestoreExports();
+        await rollbackCheckoutSession(dbRollback, rollbackHoldId, rollbackHoldPayload as import("@/lib/booking/checkout-session-helpers").HoldLike, {
+          FieldValue: FV,
+          Timestamp: Ts,
+        });
+      } catch (rollbackErr) {
+        console.error("[create-checkout-session-direct] rollback after error failed", rollbackErr);
+      }
     }
     console.error("[create-checkout-session-direct]", err);
     return NextResponse.json({ error: message }, { status: 500 });

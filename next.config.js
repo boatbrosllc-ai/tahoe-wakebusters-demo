@@ -2,6 +2,8 @@ const path = require('path');
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  /** Dev-only: StrictMode double-mount + HMR can trigger Suspense/webpack "moduleId is not a function". Keep strict in prod builds. */
+  reactStrictMode: process.env.NODE_ENV !== 'development',
   // Ensure a valid unique build ID for asset versioning (env BUILD_ID or timestamp).
   generateBuildId: async () => process.env.BUILD_ID?.trim() || String(Date.now()),
   // Security headers for all routes (payment site). See https://docs.stripe.com/security/guide for CSP.
@@ -32,8 +34,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },
       { protocol: 'https', hostname: 'storage.googleapis.com' },
-      { protocol: 'https', hostname: '*.appspot.com' },
-      { protocol: 'https', hostname: '*.firebasestorage.app' },
+      { protocol: 'https', hostname: 'boat-bros-app.appspot.com' },
+      { protocol: 'https', hostname: 'boat-bros-app.firebasestorage.app' },
     ],
   },
   // Don't bundle firebase-admin; use Node require at runtime (server-only)

@@ -82,6 +82,10 @@ export async function DELETE(
 
   try {
     const db = getDb();
+    const snap = await db.collection("blocks").doc(id).get();
+    if (!snap.exists) {
+      return NextResponse.json({ error: "Block not found" }, { status: 404 });
+    }
     await db.collection("blocks").doc(id).delete();
     return NextResponse.json({ ok: true, id });
   } catch (err) {

@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
-import { getStorageBucket, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDb, getStorageBucket, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
-import { submitWaiverSigningSchema } from "@/lib/waiver/schema";
+import {
+  submitWaiverSigningSchema,
+  validateSignerRequiredFieldsForTemplate,
+  validateSubmitSignatureForTemplate,
+} from "@/lib/waiver/schema";
 import {
   getTemplateById,
   getRequestById,
-  allocateGroupSignerSlot,
-  consumeTokenIfValid,
-  updateRequestSigned,
   getBookingWaiverPointer,
   setBookingWaiverPointer,
+  getGroupTokenById,
+  getTokenById,
+  isTokenValid,
+  commitSingleUseTokenWaiverSign,
+  commitGroupTokenNewSignedRequest,
 } from "@/lib/waiver/firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
@@ -44,50 +50,76 @@ export async function POST(request: NextRequest) {
 
   const { token, groupToken, signer, initials, signatureDataUrl, typedName } = parsed.data;
 
-  const allowedImagePrefixes = ["image/png", "image/jpeg", "image/webp"];
-  const dataUrlPrefix = signatureDataUrl.slice(0, signatureDataUrl.indexOf(";"));
-  const mime = dataUrlPrefix.startsWith("data:") ? dataUrlPrefix.slice(5) : "";
-  if (!allowedImagePrefixes.includes(mime)) {
-    return NextResponse.json(
-      { error: "Signature must be a PNG, JPEG, or WebP image" },
-      { status: 400 }
-    );
-  }
-
-  if (signatureDataUrl.length > MAX_SIGNATURE_PAYLOAD_LENGTH) {
-    return NextResponse.json(
-      { error: "Signature payload too large" },
-      { status: 400 }
-    );
-  }
-
   try {
-    let req: (Awaited<ReturnType<typeof getRequestById>>) & { id: string };
-    let isGroupSign = false;
+    let bookingId: string;
+    let templateId: string;
+    let templateVersion: number;
+    let requestIdForStorage: string;
+    let isGroupSign: boolean;
 
     if (groupToken) {
-      const allocated = await allocateGroupSignerSlot(groupToken);
-      if (!allocated) {
+      const gt = await getGroupTokenById(groupToken);
+      if (!gt) {
         return NextResponse.json(
           { error: "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached." },
           { status: 400 }
         );
       }
-      req = allocated.request;
+      bookingId = gt.bookingId;
+      templateId = gt.templateId;
+      templateVersion = gt.templateVersion;
+      const db = getDb();
+      requestIdForStorage = db.collection("waiverRequests").doc().id;
       isGroupSign = true;
     } else if (token) {
-      const consumed = await consumeTokenIfValid(token);
-      if (!consumed) {
+      const tok = await getTokenById(token);
+      if (!isTokenValid(tok)) {
         return NextResponse.json({ error: "This signing link has expired or already been used" }, { status: 400 });
       }
-      req = consumed.request;
+      const reqPreview = await getRequestById(tok!.waiverRequestId);
+      if (!reqPreview || reqPreview.status !== "pending") {
+        return NextResponse.json({ error: "This signing link has expired or already been used" }, { status: 400 });
+      }
+      bookingId = reqPreview.bookingId;
+      templateId = reqPreview.templateId;
+      templateVersion = reqPreview.templateVersion;
+      requestIdForStorage = reqPreview.id;
+      isGroupSign = false;
     } else {
       return NextResponse.json({ error: "Token or group link is required" }, { status: 400 });
     }
 
-    const template = await getTemplateById(req.templateId);
+    const template = await getTemplateById(templateId);
     if (!template) {
       return NextResponse.json({ error: "Template not found" }, { status: 500 });
+    }
+
+    const signerFields = validateSignerRequiredFieldsForTemplate(template, signer);
+    if (!signerFields.ok) {
+      return NextResponse.json({ error: signerFields.message }, { status: 400 });
+    }
+
+    const sigOk = validateSubmitSignatureForTemplate(template, { signatureDataUrl, typedName });
+    if (!sigOk.ok) {
+      return NextResponse.json({ error: sigOk.message }, { status: 400 });
+    }
+
+    if (signatureDataUrl) {
+      const allowedImagePrefixes = ["image/png", "image/jpeg", "image/webp"];
+      const dataUrlPrefix = signatureDataUrl.slice(0, signatureDataUrl.indexOf(";"));
+      const mime = dataUrlPrefix.startsWith("data:") ? dataUrlPrefix.slice(5) : "";
+      if (!allowedImagePrefixes.includes(mime)) {
+        return NextResponse.json(
+          { error: "Signature must be a PNG, JPEG, or WebP image" },
+          { status: 400 }
+        );
+      }
+      if (signatureDataUrl.length > MAX_SIGNATURE_PAYLOAD_LENGTH) {
+        return NextResponse.json(
+          { error: "Signature payload too large" },
+          { status: 400 }
+        );
+      }
     }
 
     const { Timestamp } = getFirestoreExports();
@@ -97,11 +129,11 @@ export async function POST(request: NextRequest) {
     const signedPayload: WaiverSignedPayload = {
       signerName: signer.name,
       signerEmail: signer.email,
-      signerPhone: signer.phone ?? "",
+      signerPhone: signer.phone?.trim() ?? "",
       signerDob: signer.dob && signer.dob.trim() ? signer.dob.trim() : null,
       initials: initials ?? {},
-      signatureDataUrl,
-      typedName: typedName?.trim() || undefined,
+      ...(signatureDataUrl ? { signatureDataUrl } : {}),
+      typedName: typedName ?? undefined,
     };
 
     const html = buildWaiverHtml({
@@ -109,6 +141,7 @@ export async function POST(request: NextRequest) {
         title: template.title,
         termsHtml: template.termsHtml,
         clauses: template.clauses,
+        signatureMode: template.signature?.mode ?? "both",
       },
       payload: signedPayload,
       signedAtIso: nowIso,
@@ -123,13 +156,13 @@ export async function POST(request: NextRequest) {
 
     try {
       const pdfBuffer = await generateWaiverPdf(html);
-      const storagePath = `waivers/${req.id}.pdf`;
+      const storagePath = `waivers/${requestIdForStorage}.pdf`;
       const bucket = getStorageBucket();
       const file = bucket.file(storagePath);
       await file.save(pdfBuffer, {
         metadata: {
           contentType: "application/pdf",
-          metadata: { requestId: req.id, contentHash },
+          metadata: { requestId: requestIdForStorage, contentHash },
         },
       });
       const pathSegments = storagePath.split("/").map((s) => encodeURIComponent(s)).join("/");
@@ -153,16 +186,32 @@ export async function POST(request: NextRequest) {
       signedPayload: signedPayloadForFirestore,
     };
 
-    await updateRequestSigned(req.id, signed);
-    // Token was already consumed atomically in consumeTokenIfValid when using single-use token path
-    // Update booking.waiver.status to "signed" for both primary link and group signers (so admin/customer see signed)
-    const existing = await getBookingWaiverPointer(req.bookingId);
-    await setBookingWaiverPointer(req.bookingId, {
-      requestId: existing?.requestId ?? req.id,
-      status: "signed",
-      templateId: existing?.templateId ?? req.templateId,
-      templateVersion: existing?.templateVersion ?? req.templateVersion,
-    });
+    const committed = isGroupSign
+      ? await commitGroupTokenNewSignedRequest(groupToken!, requestIdForStorage, signed)
+      : await commitSingleUseTokenWaiverSign(token!, signed);
+
+    if (!committed) {
+      return NextResponse.json(
+        {
+          error: isGroupSign
+            ? "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached."
+            : "This signing link has expired or already been used",
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const existing = await getBookingWaiverPointer(bookingId);
+      await setBookingWaiverPointer(bookingId, {
+        requestId: existing?.requestId ?? requestIdForStorage,
+        status: "signed",
+        templateId: existing?.templateId ?? templateId,
+        templateVersion: existing?.templateVersion ?? templateVersion,
+      });
+    } catch (pointerErr) {
+      console.error("[waiver/submit] setBookingWaiverPointer failed (non-fatal)", pointerErr);
+    }
 
     return NextResponse.json({ success: true });
   } catch (e) {

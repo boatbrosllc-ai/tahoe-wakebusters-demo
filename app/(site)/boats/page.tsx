@@ -72,13 +72,17 @@ export default async function BoatsHubPage() {
                 const imageUrl = boat.photos[0] ? getDisplayImageUrl(boat.photos[0]) : "/photos/IMG_3160.webp";
                 const desc = shortDescription(getDisplayDescription(boat));
                 return (
-                  <Link
+                  <div
                     key={boat.id}
-                    href={`/boats/${boat.slug}`}
-                    className="group block relative rounded-xl bg-brand-dark ring-2 ring-brand-primary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-lg hover:shadow-brand-primary/20 hover:-translate-y-0.5 hover:ring-brand-primary"
-                    aria-label={`${boat.name} — view boat details`}
+                    className="group relative flex flex-col rounded-xl bg-brand-dark ring-2 ring-brand-primary/80 transition-all duration-300 hover:shadow-lg hover:shadow-brand-primary/20 hover:-translate-y-0.5 hover:ring-brand-primary"
                   >
-                    <div className="relative overflow-hidden rounded-xl aspect-[16/10] min-h-[160px] sm:min-h-[180px]">
+                    <Link
+                      href={`/boats/${boat.slug}`}
+                      className={`block relative overflow-hidden aspect-[16/10] min-h-[160px] sm:min-h-[180px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark ${
+                        boat.firstLinkedExperienceSlug ? "rounded-t-xl" : "rounded-xl"
+                      }`}
+                      aria-label={`${boat.name} — view boat details`}
+                    >
                       <Image
                         src={imageUrl}
                         alt=""
@@ -98,8 +102,18 @@ export default async function BoatsHubPage() {
                           View boat <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
                         </span>
                       </div>
-                    </div>
-                  </Link>
+                    </Link>
+                    {boat.firstLinkedExperienceSlug && (
+                      <div className="flex flex-wrap items-center justify-end gap-2 p-3 sm:p-4 pt-3 border-t border-white/10 bg-brand-dark/95 rounded-b-xl">
+                        <Link
+                          href={`/booking?experience=${encodeURIComponent(boat.firstLinkedExperienceSlug)}`}
+                          className="inline-flex items-center justify-center rounded-full min-h-[44px] px-5 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+                        >
+                          Book now
+                        </Link>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>

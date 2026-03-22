@@ -11,7 +11,6 @@ import { enforceAllowDeposit } from "../enforce-allow-deposit";
 
 const REQUIRED_SLOT_TAKEN_STATUSES = [
   "paid",
-  "deposit_paid",
   "final_due",
   "final_paid",
   "final_processing",
@@ -20,8 +19,8 @@ const REQUIRED_SLOT_TAKEN_STATUSES = [
 ] as const;
 
 describe("BOOKING_STATUSES_SLOT_TAKEN completeness", () => {
-  it("contains exactly the 7 required statuses", () => {
-    assert.strictEqual(BOOKING_STATUSES_SLOT_TAKEN.size, 7);
+  it("contains exactly the 6 required statuses", () => {
+    assert.strictEqual(BOOKING_STATUSES_SLOT_TAKEN.size, 6);
     for (const status of REQUIRED_SLOT_TAKEN_STATUSES) {
       assert.ok(BOOKING_STATUSES_SLOT_TAKEN.has(status), `missing: ${status}`);
     }
@@ -60,7 +59,7 @@ describe("startDateStr trip-date filtering", () => {
 
 describe("allowDeposit PATCH enforcement", () => {
   it("stale auto-heal: stored ticketed, payload omits both pricingType and allowDeposit → allowDeposit: false", () => {
-    const parsed = {};
+    const parsed = {} as { pricingType?: "charter" | "ticketed"; allowDeposit?: boolean };
     const storedPricingType = "ticketed";
     const result = enforceAllowDeposit(parsed, storedPricingType);
     assert.strictEqual(result.allowDeposit, false);

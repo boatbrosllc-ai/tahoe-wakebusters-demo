@@ -10,6 +10,12 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
+import {
+  buildConvertHoldInputFromSucceededPaymentIntent,
+  paymentIntentMatchesHoldForConversion,
+} from "@/lib/booking/stripe-payment-intent-convert";
+import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 function parseBody(body: unknown): { paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -34,7 +40,7 @@ export async function POST(request: NextRequest) {
     }
 
     const stripe = getStripe();
-    const pi = await stripe.paymentIntents.retrieve(input.paymentIntentId);
+    const pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
     if (pi.status !== "succeeded") {
       return NextResponse.json(
         { error: `Payment intent status is "${pi.status}", not "succeeded". Only succeeded payments can be synced.` },
@@ -51,11 +57,85 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
-    const result = await convertHoldToBooking(db, holdId, {
-      paymentIntentId: pi.id,
-      amountTotalCents: pi.amount ?? undefined,
-      currency: pi.currency ?? undefined,
-    });
+    const holdSnap = await db.collection("holds").doc(holdId).get();
+    if (!holdSnap.exists) {
+      return NextResponse.json(
+        {
+          error: "Hold not found",
+          hint: "The hold may have been deleted or was created in a different environment (e.g. local vs production).",
+        },
+        { status: 404 }
+      );
+    }
+    const holdData = holdSnap.data() as {
+      pricing?: { totalCents?: number };
+      tipCents?: number;
+      discountCents?: number;
+      depositPaymentIntentId?: string;
+      fullPaymentIntentId?: string;
+      paymentAttemptVersion?: number;
+      customerDraft?: { email?: string };
+    };
+    const holdForPricing = {
+      pricing: holdData.pricing,
+      tipCents: holdData.tipCents,
+      discountCents: holdData.discountCents,
+    };
+    const holdIntentIds = {
+      depositPaymentIntentId: holdData.depositPaymentIntentId,
+      fullPaymentIntentId: holdData.fullPaymentIntentId,
+      paymentAttemptVersion: holdData.paymentAttemptVersion,
+    };
+    if (!paymentIntentMatchesHoldForConversion(pi, holdIntentIds, holdForPricing).ok) {
+      try {
+        await upsertPendingRefundRecord(
+          db,
+          {
+            reason: "admin_sync_pi_hold_mismatch",
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+          },
+          {
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+            holdDepositPaymentIntentId: holdIntentIds.depositPaymentIntentId ?? null,
+            holdFullPaymentIntentId: holdIntentIds.fullPaymentIntentId ?? null,
+            ...(holdData.customerDraft?.email && { customerEmail: holdData.customerDraft.email }),
+          }
+        );
+      } catch (e) {
+        console.error("[admin/sync-stripe-payment] pendingRefunds write failed", e);
+      }
+      await writeOperationalAlert({
+        type: "admin_sync_payment_intent_hold_mismatch",
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+        holdDepositPaymentIntentId: holdIntentIds.depositPaymentIntentId,
+        holdFullPaymentIntentId: holdIntentIds.fullPaymentIntentId,
+        source: "admin-sync-stripe-payment",
+      });
+      return NextResponse.json(
+        {
+          error:
+            "This PaymentIntent does not match the deposit/full intent IDs stored on the hold. Conversion is blocked pending reconciliation.",
+          code: "PI_HOLD_MISMATCH",
+        },
+        { status: 409 }
+      );
+    }
+    const convertInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, holdForPricing);
+    const result = await convertHoldToBooking(db, holdId, convertInput);
+
+    if ("amountIntegrityMismatch" in result) {
+      return NextResponse.json(
+        {
+          error:
+            "The charged amount does not match current hold pricing. A refund may be pending — see pendingRefunds in Admin.",
+          code: "AMOUNT_INTEGRITY_MISMATCH",
+        },
+        { status: 409 }
+      );
+    }
 
     if ("alreadyConverted" in result) {
       return NextResponse.json({

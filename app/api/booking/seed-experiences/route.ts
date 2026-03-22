@@ -5,10 +5,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 import { runSeedExperiences } from "@/lib/booking/seed-experiences";
 
 export async function POST(request: NextRequest) {
   try {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_SEED_IN_PRODUCTION !== "true") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const seedSecret = process.env.SEED_SECRET;
     const openDev =
       process.env.SEED_OPEN_DEV === "1" &&
@@ -20,8 +24,8 @@ export async function POST(request: NextRequest) {
       if (!seedSecret) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
-      const authHeader = request.headers.get("authorization");
-      if (authHeader !== `Bearer ${seedSecret}`) {
+      const authHeader = request.headers.get("authorization") ?? "";
+      if (!timingSafeStringEqual(authHeader, `Bearer ${seedSecret}`)) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
     }

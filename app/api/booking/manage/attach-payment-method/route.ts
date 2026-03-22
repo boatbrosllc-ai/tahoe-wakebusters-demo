@@ -55,6 +55,9 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
+    if (!payload.email) {
+      return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+    }
     const rlManage = await checkRateLimit(getManageRateLimitKey(payload.bookingId));
     if (!rlManage.allowed) {
       if (rlManage.serverError) {
@@ -75,13 +78,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     }
     const booking = bookingSnap.data() as Booking;
-    if (payload.email != null) {
-      const bookingEmail = booking.customer?.email?.trim().toLowerCase();
-      if (bookingEmail !== payload.email) {
-        return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
-      }
+    const bookingEmail = booking.customer?.email?.trim().toLowerCase();
+    if (!bookingEmail || bookingEmail !== payload.email) {
+      return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
     }
-    const ACTIVE_STATUSES = ["paid", "deposit_paid", "final_due", "final_failed", "final_requires_action", "final_processing"];
+    const ACTIVE_STATUSES = ["paid", "final_due", "final_failed", "final_requires_action", "final_processing"];
     if (!ACTIVE_STATUSES.includes(booking.status)) {
       return NextResponse.json({ error: "Booking is no longer active; card updates are not allowed" }, { status: 400 });
     }

@@ -1,0 +1,67 @@
+import { createHash } from "crypto";
+import type { Firestore } from "firebase-admin/firestore";
+import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+
+export type PendingRefundStableParts = {
+  reason: string;
+  holdId?: string | null;
+  bookingId?: string | null;
+  /** Primary or duplicate PI id depending on incident */
+  paymentIntentId?: string | null;
+  sessionId?: string | null;
+  duplicatePaymentIntentId?: string | null;
+  expectedPaymentIntentId?: string | null;
+};
+
+export function pendingRefundDocumentId(parts: PendingRefundStableParts): string {
+  const segments = [
+    parts.reason,
+    parts.holdId ?? "",
+    parts.bookingId ?? "",
+    parts.paymentIntentId ?? "",
+    parts.sessionId ?? "",
+    parts.duplicatePaymentIntentId ?? "",
+    parts.expectedPaymentIntentId ?? "",
+  ];
+  const h = createHash("sha256").update(segments.join("|")).digest("hex");
+  return `pr_${h.slice(0, 48)}`;
+}
+
+/**
+ * Idempotent pending-refund row: deterministic doc id, merge fields, firstSeenAt / lastSeenAt / occurrences.
+ */
+export async function upsertPendingRefundRecord(
+  db: Firestore,
+  stable: PendingRefundStableParts,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const { FieldValue, Timestamp } = getFirestoreExports();
+  const docId = pendingRefundDocumentId(stable);
+  const ref = db.collection("pendingRefunds").doc(docId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const now = Timestamp.now();
+    if (!snap.exists) {
+      tx.set(ref, {
+        ...payload,
+        reason: stable.reason,
+        createdAt: now,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        occurrences: 1,
+        status: "pending",
+      });
+    } else {
+      tx.set(
+        ref,
+        {
+          ...payload,
+          reason: stable.reason,
+          lastSeenAt: now,
+          occurrences: FieldValue.increment(1),
+        },
+        { merge: true }
+      );
+    }
+  });
+}

@@ -11,6 +11,7 @@ import type { Booking, BookingPricing } from "../types";
 const defaultPricing: BookingPricing = { subtotalCents: 30000, taxCents: 2000, feesCents: 0, totalCents: 32000, currency: "usd" };
 
 function booking(overrides: Partial<Booking> & { status: Booking["status"]; stripe?: Booking["stripe"]; pricing: BookingPricing }): Booking {
+  const { pricing, status, stripe, ...rest } = overrides;
   return {
     experienceId: "exp1",
     slotId: "slot1",
@@ -20,11 +21,11 @@ function booking(overrides: Partial<Booking> & { status: Booking["status"]; stri
     petsCount: 0,
     answers: {},
     customer: { name: "Test", email: "t@t.com", phone: "" },
-    pricing: overrides.pricing,
-    status: overrides.status,
-    stripe: overrides.stripe ?? {},
     createdAt: { seconds: 0, nanoseconds: 0 } as any,
-    ...overrides,
+    ...rest,
+    pricing,
+    status,
+    stripe: stripe ?? {},
   } as Booking;
 }
 

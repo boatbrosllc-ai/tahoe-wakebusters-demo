@@ -19,6 +19,7 @@ type EmailLogEntry = {
   subject: string;
   bookingId: string | null;
   sentAt: string | null;
+  channel?: string;
 };
 
 export default function AdminEmailsPage() {
@@ -198,6 +199,7 @@ export default function AdminEmailsPage() {
               <thead>
                 <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">To</th>
+                  <th className="text-left py-3 px-4 font-semibold text-brand-dark">Channel</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Template</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Subject</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Booking</th>
@@ -212,6 +214,18 @@ export default function AdminEmailsPage() {
                       {entry.toName && (
                         <span className="block text-xs text-brand-muted">{entry.to}</span>
                       )}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span
+                        className={cn(
+                          "inline-flex rounded px-2 py-0.5 text-xs font-medium",
+                          (entry.channel ?? "email") === "sms"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-sky-100 text-sky-800"
+                        )}
+                      >
+                        {(entry.channel ?? "email") === "sms" ? "SMS" : "Email"}
+                      </span>
                     </td>
                     <td className="py-3 px-4 text-brand-muted">{entry.templateId}</td>
                     <td className="py-3 px-4 text-brand-dark max-w-[200px] truncate" title={entry.subject}>

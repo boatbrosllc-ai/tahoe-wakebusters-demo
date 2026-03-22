@@ -10,7 +10,7 @@
    - **Firebase:** Generate a new service account key in [Firebase Console → Project settings → Service accounts](https://console.firebase.google.com/), then revoke the old key.
    - **Stripe:** Roll the secret key in [Stripe Dashboard → Developers → API keys](https://dashboard.stripe.com/apikeys).
    - **Brevo:** Delete and recreate the API key in Brevo → SMTP & API → API Keys.
-   - **App secrets:** Regenerate `CRON_SECRET`, `SEED_SECRET`, `ADMIN_EDGE_SECRET`, and `MANAGE_BOOKING_SECRET` and set the new values in Netlify.
+   - **App secrets:** Regenerate `CRON_SECRET`, `SEED_SECRET`, `BLOCK_SECRET`, `ADMIN_EDGE_SECRET`, `MANAGE_BOOKING_SECRET`, `RECEIPT_TOKEN_SECRET`, and `RELEASE_TOKEN_SECRET` and set the new values in Netlify.
 
 2. **Confirm `.env.local` was never committed:**  
    Run: `git log --all -- .env.local`  
@@ -54,9 +54,13 @@ Required composite indexes for the booking APIs are defined in `firestore.indexe
 
 ## Rate limiting and Redis (RATE_LIMIT_FAIL_CLOSED)
 
-Booking mutation endpoints (create-hold, create-payment-intent, create-checkout-session, create-checkout-session-direct, validate-discount) are rate-limited using a shared Redis store when configured. When Redis is **unavailable** (error or timeout), the default policy is **fail-open**: requests are allowed so checkout is not a single point of failure. Set **`RATE_LIMIT_FAIL_CLOSED=1`** to reject requests with **503** when Redis is down so traffic does not bypass limits (use only if you accept that Redis outages will block checkout).
+**Production:** `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` (or `RATE_LIMIT_REDIS_REST_*`) are **required**. Without them, `NODE_ENV=production` booking endpoints that use the shared rate limiter return **503** until Redis is configured.
 
-**Behavior summary:** Missing Redis in production → fail-open (no 503). Redis configured but down → fail-open unless `RATE_LIMIT_FAIL_CLOSED=1` → then 503 with generic message and `incidentCode`. Public error responses never expose Redis/Upstash or other infrastructure details; diagnostics are in server logs and privileged health only.
+Booking mutation endpoints (create-hold, create-payment-intent, create-checkout-session, create-checkout-session-direct, receipt, manage routes, etc.) use Redis when configured. When Redis is **unavailable** (error or timeout), the default policy for most endpoints is **fail-open**: requests are allowed so checkout is not a single point of failure. Set **`RATE_LIMIT_FAIL_CLOSED=1`** to reject with **503** when Redis is down (use only if you accept that Redis outages will block checkout).
+
+**validate-discount:** On Redis errors in production, this endpoint **fails closed (503) by default** to reduce discount enumeration. Set **`RATE_LIMIT_VALIDATE_DISCOUNT_DEGRADED_FAIL_OPEN=1`** to allow the legacy fail-open behavior for that route only.
+
+**Behavior summary:** Redis configured but down → fail-open for most routes unless `RATE_LIMIT_FAIL_CLOSED=1` → then 503 with generic message and `incidentCode`. Public error responses never expose Redis/Upstash or other infrastructure details; diagnostics are in server logs and privileged health only.
 
 **Troubleshooting when customers see 503 (rate limit):**  
 1. Check server logs for the `incidentCode` returned to the client (e.g. `INC-xxxx-xxxx`) to correlate with the same request.  

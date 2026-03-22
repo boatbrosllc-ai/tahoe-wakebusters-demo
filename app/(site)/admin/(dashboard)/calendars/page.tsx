@@ -1,3 +1,7 @@
+/**
+ * Admin calendar (month grid + week view). External calendar apps can subscribe to confirmed bookings via
+ * GET /api/booking/calendar.ics (see route; requires BOOKING_CALENDAR_FEED_SECRET and query params).
+ */
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -188,6 +192,8 @@ export default function CalendarsPage() {
   const [loading, setLoading] = useState(true);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [bookingsError, setBookingsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
@@ -349,8 +355,10 @@ export default function CalendarsPage() {
   const fetchSlots = useCallback(async () => {
     if (uniqueExperienceIds.length === 0) {
       setSlots([]);
+      setSlotsError(null);
       return;
     }
+    setSlotsError(null);
     setSlotsLoading(true);
     try {
       const all = await Promise.all(
@@ -358,13 +366,20 @@ export default function CalendarsPage() {
           fetch(
             `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${dateRange.start}&endDate=${dateRange.end}`,
             { credentials: "include" }
-          ).then((res) => (res.ok ? res.json() : { slots: [] }))
+          ).then(async (res) => {
+            if (!res.ok) {
+              const data = (await res.json().catch(() => ({}))) as { error?: string };
+              throw new Error(data.error ?? `Failed to load slots (${res.status})`);
+            }
+            return res.json();
+          })
         )
       );
       const merged = all.flatMap((data) => (Array.isArray(data.slots) ? data.slots : []));
       setSlots(merged);
-    } catch {
+    } catch (e) {
       setSlots([]);
+      setSlotsError(e instanceof Error ? e.message : "Could not load calendar slots. Try again.");
     } finally {
       setSlotsLoading(false);
     }
@@ -374,25 +389,42 @@ export default function CalendarsPage() {
     fetchSlots();
   }, [fetchSlots]);
 
+  const [resultsTruncated, setResultsTruncated] = useState(false);
+
+  type RawBooking = {
+    id: string;
+    slotId?: string | null;
+    experienceId?: string | null;
+    customer?: { name?: string; email?: string };
+    boatName?: string | null;
+    pricing?: { totalCents?: number };
+    status?: string;
+  };
+
   const fetchBookings = useCallback(async () => {
+    setBookingsError(null);
     setBookingsLoading(true);
+    setResultsTruncated(false);
     try {
-      const res = await fetch(
-        `/api/admin/bookings?fromTripDate=${dateRange.start}&toTripDate=${dateRange.end}&limit=500`,
-        { credentials: "include" }
-      );
-      if (!res.ok) throw new Error("Failed to load bookings");
-      const data = await res.json();
-      type RawBooking = {
-        id: string;
-        slotId?: string | null;
-        experienceId?: string | null;
-        customer?: { name?: string; email?: string };
-        boatName?: string | null;
-        pricing?: { totalCents?: number };
-        status?: string;
-      };
-      const list = (Array.isArray(data) ? data : Array.isArray(data?.bookings) ? data.bookings : []) as RawBooking[];
+      let list: RawBooking[] = [];
+      let nextCursor: string | null = null;
+      do {
+        const params: Record<string, string> = {
+          fromTripDate: dateRange.start,
+          toTripDate: dateRange.end,
+          limit: "500",
+        };
+        if (nextCursor) params.cursor = nextCursor;
+        const res: Response = await fetch(`/api/admin/bookings?${new URLSearchParams(params)}`, { credentials: "include" });
+        if (!res.ok) throw new Error("Failed to load bookings");
+        const truncated = res.headers.get("X-Results-Truncated") === "true";
+        if (truncated) setResultsTruncated(true);
+        const data: { bookings?: RawBooking[]; nextCursor?: string } = await res.json();
+        const page = (Array.isArray(data) ? data : Array.isArray(data?.bookings) ? data.bookings : []) as RawBooking[];
+        list = nextCursor ? [...list, ...page] : page;
+        nextCursor = data?.nextCursor ?? null;
+      } while (nextCursor);
+
       const map = new Map<string, BookingSummary>();
       // Secondary map keyed by "experienceId:slotId" — avoids cross-experience false matches.
       // Only used to enrich ticketed slots whose bookingId is always null in the slot grid.
@@ -448,10 +480,11 @@ export default function CalendarsPage() {
           } catch { return []; }
         })
       );
-    } catch {
+    } catch (e) {
       setBookingsBySlotId(new Map());
       setBookingsBySlotKey(new Map());
       setSyntheticBookingSlots([]);
+      setBookingsError(e instanceof Error ? e.message : "Could not load bookings. Try again.");
     } finally {
       setBookingsLoading(false);
     }
@@ -665,7 +698,7 @@ export default function CalendarsPage() {
           ? boatList.filter((b) => b.experienceIds?.includes(experienceId) && blockDayBoatIds.has(b.id)).map((b) => b.id)
           : undefined;
         if (boatIdsPayload != null && boatIds?.length === 0) continue;
-        const res = await fetch("/api/booking/block-date", {
+        const res = await fetch("/api/admin/blocks/block-date", {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -690,7 +723,7 @@ export default function CalendarsPage() {
     setError(null);
     try {
       for (const experienceId of uniqueExperienceIds) {
-        const res = await fetch("/api/booking/block-date", {
+        const res = await fetch("/api/admin/blocks/block-date", {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -714,7 +747,7 @@ export default function CalendarsPage() {
     setBlocking(slot.id);
     setError(null);
     try {
-      const res = await fetch("/api/booking/block-slot", {
+      const res = await fetch("/api/admin/blocks/block-slot", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -736,7 +769,7 @@ export default function CalendarsPage() {
     setActionLoading(slot.id);
     setError(null);
     try {
-      const res = await fetch("/api/booking/unblock-slot", {
+      const res = await fetch("/api/admin/blocks/unblock-slot", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -817,7 +850,7 @@ export default function CalendarsPage() {
         const dateStr = toDateStr(d);
         if (dateStr < todayStr) continue;
         for (const experienceId of uniqueExperienceIds) {
-          const res = await fetch("/api/booking/block-date", {
+          const res = await fetch("/api/admin/blocks/block-date", {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
@@ -954,6 +987,36 @@ export default function CalendarsPage() {
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {error}
+        </div>
+      )}
+
+      {slotsError && (
+        <div
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2"
+          role="alert"
+        >
+          <span>{slotsError}</span>
+          <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => void fetchSlots()}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {bookingsError && (
+        <div
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex flex-wrap items-center justify-between gap-2"
+          role="alert"
+        >
+          <span>{bookingsError}</span>
+          <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => void fetchBookings()}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {resultsTruncated && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="alert">
+          More than 500 bookings match this date range. The calendar may be incomplete. Narrow the range or use the Bookings page with pagination to see all results.
         </div>
       )}
 
@@ -1299,6 +1362,7 @@ export default function CalendarsPage() {
                       ? (boatNames.get(block.boatId) ?? block.boatId)
                       : null;
                     const isDeleting = deletingBlockId === block.id;
+                    const blockTitle = block.note?.trim() || "Blocked";
                     return (
                       <div
                         key={block.id}
@@ -1310,18 +1374,16 @@ export default function CalendarsPage() {
                         )}
                       >
                         <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                        <span>{fmtBlockDate(block.startAt, block.endAt)}</span>
+                        <span>{blockTitle}</span>
+                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt)}</span>
                         {boatLabel && (
                           <span className="opacity-60">· {boatLabel}</span>
-                        )}
-                        {block.note && (
-                          <span className="opacity-60 italic">· {block.note}</span>
                         )}
                         <button
                           type="button"
                           onClick={() => deleteBlock(block.id)}
                           disabled={isDeleting}
-                          aria-label={`Unblock ${fmtBlockDate(block.startAt, block.endAt)}`}
+                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt)})`}
                           className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
                         >
                           {isDeleting ? (

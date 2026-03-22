@@ -33,6 +33,22 @@ export async function POST(
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     }
     const booking = bookingSnap.data() as Booking;
+
+    const RESENDABLE_STATUSES: Booking["status"][] = [
+      "paid",
+      "final_due",
+      "final_paid",
+      "final_requires_action",
+      "final_failed",
+      "final_processing",
+    ];
+    if (!RESENDABLE_STATUSES.includes(booking.status)) {
+      return NextResponse.json(
+        { error: `Cannot resend confirmation for booking with status "${booking.status}". Only paid or final-due bookings can receive a resend.` },
+        { status: 400 }
+      );
+    }
+
     const experienceId = booking.experienceId;
 
     let boatNameForEmail: string;
@@ -71,12 +87,19 @@ export async function POST(
     }
 
     const parsed = parseSlotId(booking.slotId ?? "");
-    const { start, end } = parsed
-      ? getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0)
-      : { start: new Date(), end: new Date() };
+    if (!parsed) {
+      return NextResponse.json(
+        {
+          error: "Invalid or missing slot ID. Repair the booking slot data before resending the confirmation.",
+          code: "INVALID_SLOT_ID",
+        },
+        { status: 400 }
+      );
+    }
+    const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
     const startAt = formatBookingDateTime(start);
     const endAt = formatBookingDateTime(end);
-    const durationHours = parsed?.durationHours ?? 3;
+    const durationHours = parsed.durationHours ?? 3;
 
     let waiverSigningUrl: string | undefined;
     let waiverGroupSigningUrl: string | undefined;

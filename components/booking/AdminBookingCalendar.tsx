@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
@@ -52,6 +52,10 @@ export function AdminBookingCalendar({
   });
 
   const todayStr = useMemo(() => getChicagoToday(), []);
+
+  useEffect(() => {
+    onMonthChange?.(currentDate.getFullYear(), currentDate.getMonth());
+  }, [currentDate, onMonthChange]);
 
   const bookingsByDate = useMemo(() => {
     const map = new Map<string, AdminBookingCalendarItem[]>();

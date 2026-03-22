@@ -534,6 +534,115 @@ export async function consumeTokenIfValid(tokenId: string): Promise<{
   return result;
 }
 
+/** Firestore fields for status signed + signer columns (matches updateRequestSigned). */
+function waiverSignedFieldsForRequestUpdate(signed: WaiverSigned): Record<string, unknown> {
+  const { signedPayload, ...rest } = signed;
+  const payloadForFirestore = { ...signedPayload };
+  delete (payloadForFirestore as Record<string, unknown>).signatureDataUrl;
+  return {
+    status: "signed" as const,
+    signed: { ...rest, signedPayload: payloadForFirestore },
+    signerName: signed.signedPayload.signerName,
+    signerEmail: signed.signedPayload.signerEmail,
+    signerPhone: signed.signedPayload.signerPhone,
+    signerDob: signed.signedPayload.signerDob ?? null,
+  };
+}
+
+/**
+ * Atomically mark token used and waiver request signed (single-use link path).
+ * Call after PDF is stored; safe to retry whole submit if this fails (token not consumed).
+ */
+export async function commitSingleUseTokenWaiverSign(
+  tokenId: string,
+  signed: WaiverSigned
+): Promise<(WaiverRequest & { id: string }) | null> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const tokenRef = db.collection(COLL.tokens).doc(tokenId);
+  const signedFields = waiverSignedFieldsForRequestUpdate(signed);
+  let out: (WaiverRequest & { id: string }) | null = null;
+  await db.runTransaction(async (tx) => {
+    const tokenSnap = await tx.get(tokenRef);
+    if (!tokenSnap.exists) return;
+    const tokenData = tokenSnap.data() as WaiverSigningToken;
+    if (tokenData.usedAt != null) return;
+    const expiresAt = tokenData.expiresAt as { seconds?: number; toDate?: () => Date };
+    const expDate = typeof expiresAt?.toDate === "function" ? expiresAt.toDate() : new Date((expiresAt?.seconds ?? 0) * 1000);
+    if (expDate.getTime() <= Date.now()) return;
+    const requestId = tokenData.waiverRequestId;
+    if (!requestId) return;
+    const requestRef = db.collection(COLL.requests).doc(requestId);
+    const requestSnap = await tx.get(requestRef);
+    if (!requestSnap.exists) return;
+    const requestData = requestSnap.data() as WaiverRequest;
+    if (requestData.status !== "pending") return;
+    tx.update(tokenRef, { usedAt: Timestamp.now() });
+    tx.update(requestRef, signedFields);
+    out = { id: requestId, ...requestData, ...signedFields } as WaiverRequest & { id: string };
+  });
+  return out;
+}
+
+/**
+ * Atomically allocates group signer capacity and creates the request doc already signed (group link path).
+ * `requestId` must be the id used for the PDF path uploaded before this call.
+ */
+export async function commitGroupTokenNewSignedRequest(
+  groupToken: string,
+  requestId: string,
+  signed: WaiverSigned
+): Promise<(WaiverRequest & { id: string }) | null> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const groupRef = db.collection(COLL.groupTokens).doc(groupToken);
+  const now = Timestamp.now();
+  const nowMs = Date.now();
+  const signedFields = waiverSignedFieldsForRequestUpdate(signed);
+  let out: (WaiverRequest & { id: string }) | null = null;
+  await db.runTransaction(async (tx) => {
+    const groupSnap = await tx.get(groupRef);
+    if (!groupSnap.exists) return;
+    const groupData = groupSnap.data() as WaiverGroupTokenDoc;
+    const expAt = groupData.expiresAt as { seconds?: number; toDate?: () => Date };
+    const expDate = typeof expAt?.toDate === "function" ? expAt.toDate() : new Date((expAt?.seconds ?? 0) * 1000);
+    if (expDate.getTime() <= nowMs) return;
+
+    const requestsSnap = await tx.get(
+      db.collection(COLL.requests).where("bookingId", "==", groupData.bookingId)
+    );
+    const activeCount = requestsSnap.docs.filter((d) => {
+      const data = d.data() as WaiverRequest & { pendingExpiresAt?: { toDate?: () => Date; seconds?: number } };
+      if (data.status === "signed") return true;
+      if (data.status !== "pending") return false;
+      const pe = data.pendingExpiresAt;
+      if (pe == null) return true;
+      const peDate = typeof pe?.toDate === "function" ? pe.toDate() : new Date((pe?.seconds ?? 0) * 1000);
+      return peDate.getTime() > nowMs;
+    }).length;
+
+    if (activeCount >= groupData.partySize) return;
+
+    const requestRef = db.collection(COLL.requests).doc(requestId);
+    const requestSnap = await tx.get(requestRef);
+    if (requestSnap.exists) return;
+
+    const doc = {
+      bookingId: groupData.bookingId,
+      templateId: groupData.templateId,
+      templateVersion: groupData.templateVersion,
+      signingTokenId: "",
+      signingUrl: "",
+      sent: { initialSentAt: null, lastSentAt: null, reminder1SentAt: null },
+      createdAt: now,
+      ...signedFields,
+    };
+    tx.set(requestRef, doc);
+    out = { id: requestId, ...(doc as unknown as WaiverRequest) };
+  });
+  return out;
+}
+
 export function isTokenValid(
   tokenDoc: (WaiverSigningToken & { id: string }) | null
 ): boolean {

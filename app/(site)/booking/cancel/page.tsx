@@ -4,7 +4,6 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState, Suspense } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { brand } from "@/content/brand";
 
 function CancelContent() {
   const searchParams = useSearchParams();
@@ -46,21 +45,22 @@ function CancelContent() {
 
   useEffect(() => {
     if (holdId && releaseToken) releaseHold(holdId, releaseToken);
-    else if (holdId) {
-      setApiError(true);
-      setReleased(false);
+    else if (holdId && !releaseToken) {
+      setReleased(null);
+      setApiError(false);
       setLoading(false);
     } else setLoading(false);
   }, [holdId, releaseToken, releaseHold]);
 
+  const noReleaseTokenMessage = "Your checkout was cancelled. No charge was made. Your reserved slot will be automatically released within a few minutes.";
   const message =
     released === true
       ? "No charge was made. Your held slot has been released so others can book it."
       : holdId && !releaseToken
-        ? "Your slot will be released automatically within 10 minutes."
+        ? noReleaseTokenMessage
         : apiError || released === false
           ? "This link is invalid or expired. If you had a held slot, it may already be released."
-          : holdId && loading
+          : holdId && releaseToken && loading
             ? "Releasing your held slot…"
             : "No charge was made.";
 

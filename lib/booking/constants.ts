@@ -5,3 +5,22 @@
 
 /** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
 export const TAX_RATE = 0.0825;
+
+/**
+ * Default deposit = this fraction of total (when deposit checkout is allowed).
+ * Must match `amountIntegrityMismatch` deposit math in `convertHoldToBooking` — keep in sync.
+ */
+export const DEPOSIT_FRACTION = 0.5;
+
+/** Hold lifetime for `create-hold` (modal / inline / embedded payment flows). */
+export const HOLD_EXPIRY_MINUTES = 10;
+
+/** Stripe PaymentIntent / Checkout Session metadata key — must match hold.paymentAttemptVersion after hold create/resume. */
+export const HOLD_PAYMENT_ATTEMPT_VERSION_META = "holdPaymentAttemptVersion";
+
+/**
+ * Hold lifetime for `create-checkout-session-direct`: one request creates the hold and the
+ * Stripe Checkout session, so the customer may need more time for redirect and payment than
+ * the in-modal flow where checkout opens immediately after the hold exists.
+ */
+export const DIRECT_CHECKOUT_HOLD_EXPIRY_MINUTES = 20;

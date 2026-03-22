@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/firebase-client";
 import { Button } from "@/components/ui/button";
+import { notifyAdminAuthChanged } from "@/lib/admin-auth-client";
+import { ADMIN_EDGE_SECRET_CONFIG_CODE } from "@/lib/admin-edge-secret";
 
 export default function AdminLoginPage() {
   const searchParams = useSearchParams();
@@ -68,12 +70,18 @@ export default function AdminLoginPage() {
           const msg = detail ? `${hint ?? (data as { error?: string }).error ?? "Invalid or expired token"}. Server: ${detail}` : (hint ?? (data as { error?: string }).error ?? "Invalid or expired token");
           setError(msg);
           if (hint) console.error("[admin login] 401 hint:", hint);
+        } else if (res.status === 503 && (data as { code?: string }).code === ADMIN_EDGE_SECRET_CONFIG_CODE) {
+          setError(
+            (hint ?? (data as { error?: string }).error) ??
+              "ADMIN_EDGE_SECRET is missing or too short in production. Set a value of at least 32 UTF-8 bytes in your host environment."
+          );
         } else {
           setError((data as { error?: string }).error ?? "Login failed");
         }
         return;
       }
       setSuccess(true);
+      notifyAdminAuthChanged();
       // Full page navigation so the session cookie is sent; replace() avoids back-button returning to login
       const redirectTo = (data as { redirect?: string }).redirect ?? "/admin";
       window.location.replace(redirectTo);

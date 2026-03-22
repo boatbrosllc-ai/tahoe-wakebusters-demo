@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { brand } from "@/content/brand";
 import { location } from "@/content/location";
 import { getExperienceBySlug } from "@/lib/booking/get-experience-by-slug";
@@ -28,7 +29,8 @@ export const metadata: Metadata = {
   },
 };
 
-function EventPageJsonLd() {
+async function EventPageJsonLd() {
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   const localBusiness = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
@@ -71,9 +73,9 @@ function EventPageJsonLd() {
   };
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(localBusiness) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(service) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
+      <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(localBusiness) }} />
+      <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(service) }} />
+      <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
     </>
   );
 }
@@ -83,12 +85,16 @@ export default async function LakeAustinBachelorettePartyBoatRentalsPage() {
   let heroImageUrl: string | null = null;
   let galleryImages: { url: string; alt?: string }[] = [];
   let overviewImageUrl: string | null = null;
+  let fromPriceCents: number | null = null;
   let socialProof: { rating?: number; ratingCount?: string; stats?: string[]; tagline?: string } | undefined;
 
   try {
     const data = await getExperienceBySlug("pontoon");
     if (data?.experience) {
       const exp = data.experience;
+      if (typeof exp.fromPriceCents === "number" && exp.fromPriceCents > 0) {
+        fromPriceCents = exp.fromPriceCents;
+      }
       if (exp.heroMedia?.url) heroImageUrl = exp.heroMedia.url;
       const gallery = exp.gallery ?? [];
       const altTexts = exp.galleryAltTexts ?? [];
@@ -133,6 +139,7 @@ export default async function LakeAustinBachelorettePartyBoatRentalsPage() {
         overviewImageUrl={overviewImageUrl ?? undefined}
         socialProof={socialProof}
         eventOverrides={eventOverrides}
+        fromPriceCents={fromPriceCents}
       />
     </>
   );

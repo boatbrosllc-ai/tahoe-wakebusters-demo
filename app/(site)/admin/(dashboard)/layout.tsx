@@ -1,14 +1,22 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
+import { getAdminSessionVerifyOutcome } from "@/lib/admin-auth-firebase";
 import { AdminShell } from "./AdminShell";
+import { AdminVerificationUnavailable } from "./AdminVerificationUnavailable";
 
 export default async function AdminDashboardLayout({ children }: { children: React.ReactNode }) {
   try {
     const headersList = await headers();
     const cookie = headersList.get("cookie");
-    const valid = await verifyAdminSessionCookie(cookie);
-    if (!valid) {
+    const outcome = await getAdminSessionVerifyOutcome(cookie);
+    if (outcome === "unavailable") {
+      return (
+        <AdminShell>
+          <AdminVerificationUnavailable />
+        </AdminShell>
+      );
+    }
+    if (outcome !== "valid") {
       redirect("/admin/login");
     }
   } catch (err) {

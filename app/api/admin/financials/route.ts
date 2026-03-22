@@ -4,6 +4,7 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
+import { totalSummaryAttributedRevenueCents } from "@/lib/booking/summary-revenue";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
@@ -69,7 +70,9 @@ export async function GET(request: NextRequest) {
       snap.docs.forEach((d) => {
         const b = d.data() as Booking;
         const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-        const totalCents = b.pricing?.totalCents ?? 0;
+        const totalCentsForRow = BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)
+          ? totalSummaryAttributedRevenueCents(b)
+          : (b.pricing?.totalCents ?? 0);
         const eid = b.experienceId ?? "";
         const inRange =
           (!fromDateVal || (createdAt && createdAt >= fromDateVal)) &&
@@ -78,7 +81,7 @@ export async function GET(request: NextRequest) {
         const include = inRange && matchesExperience;
 
         if (BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
-          const totalCentsForRevenue = b.pricing?.totalCents ?? 0;
+          const totalCentsForRevenue = totalSummaryAttributedRevenueCents(b);
           activeBookingCount += 1;
           totalRevenueCents += totalCentsForRevenue;
           if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += totalCentsForRevenue;
@@ -96,7 +99,7 @@ export async function GET(request: NextRequest) {
             id: d.id,
             createdAt: createdAt?.toISOString() ?? "",
             customerEmail: b.customer?.email ?? "",
-            totalCents,
+            totalCents: totalCentsForRow,
             status: b.status ?? "",
             experienceName: eid || "—",
           });

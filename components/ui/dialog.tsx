@@ -4,6 +4,7 @@ import { useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useId, useRef } from "react";
 
 type DialogProps = {
   open: boolean;
@@ -25,13 +26,73 @@ export function Dialog({
   fullScreenOnMobile,
 }: DialogProps) {
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+  const baseId = useId();
+  const titleId = title ? `${baseId}-title` : undefined;
+  const descId = description ? `${baseId}-desc` : undefined;
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastActiveElementRef = useRef<HTMLElement | null>(null);
+
+  const getFocusableElements = (container: HTMLElement): HTMLElement[] => {
+    const selector = [
+      "a[href]",
+      "button:not([disabled])",
+      "textarea:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      '[tabindex]:not([tabindex="-1"])',
+      '[contenteditable="true"]',
+    ].join(",");
+    return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter((el) => {
+      if (el.hasAttribute("disabled")) return false;
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      return true;
+    });
+  };
 
   useEffect(() => {
     if (!open) return;
+    lastActiveElementRef.current = document.activeElement as HTMLElement | null;
+
+    const panel = panelRef.current;
+    if (panel) {
+      const focusables = getFocusableElements(panel);
+      const initialFocus = focusables[0] ?? panel;
+      // Move focus inside immediately for keyboard users.
+      initialFocus instanceof HTMLElement && initialFocus.focus?.();
+    }
+
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
     };
+    const handleFocusTrap = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const panelNow = panelRef.current;
+      if (!panelNow) return;
+      const focusables = getFocusableElements(panelNow);
+      if (focusables.length === 0) {
+        e.preventDefault();
+        panelNow.focus?.();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      const activeInside = !!active && panelNow.contains(active);
+
+      if (e.shiftKey) {
+        if (!activeInside || active === first) {
+          e.preventDefault();
+          last.focus?.();
+        }
+      } else {
+        if (!activeInside || active === last) {
+          e.preventDefault();
+          first.focus?.();
+        }
+      }
+    };
     document.addEventListener("keydown", handleEscape);
+    document.addEventListener("keydown", handleFocusTrap);
     const scrollY = window.scrollY;
     const html = document.documentElement;
     html.style.overflow = "hidden";
@@ -42,6 +103,9 @@ export function Dialog({
     document.body.style.right = "0";
     return () => {
       document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("keydown", handleFocusTrap);
+      // Restore focus when the dialog is dismissed.
+      lastActiveElementRef.current?.focus?.();
       html.style.overflow = "";
       document.body.style.overflow = "";
       document.body.style.position = "";
@@ -64,8 +128,8 @@ export function Dialog({
       )}
       role="dialog"
       aria-modal="true"
-      aria-labelledby={title ? "dialog-title" : undefined}
-      aria-describedby={description ? "dialog-description" : undefined}
+      aria-labelledby={titleId}
+      aria-describedby={descId}
     >
       {/* Full-viewport overlay – blurs entire site (navbar + main + footer); portal ensures we're above everything */}
       <div
@@ -83,20 +147,14 @@ export function Dialog({
           className
         )}
         onClick={(e) => e.stopPropagation()}
+        ref={panelRef}
+        tabIndex={-1}
       >
         <DialogCloseButton onClose={close} />
         {(title || description) && (
           <div className="border-b border-brand-dark/10 px-4 sm:px-6 py-3 sm:py-4 pr-12 shrink-0">
-            {title && (
-              <h2 id="dialog-title" className="text-lg font-semibold text-brand-dark">
-                {title}
-              </h2>
-            )}
-            {description && (
-              <p id="dialog-description" className="mt-0.5 text-sm text-brand-muted">
-                {description}
-              </p>
-            )}
+            {title && <h2 id={titleId} className="text-lg font-semibold text-brand-dark">{title}</h2>}
+            {description && <p id={descId} className="mt-0.5 text-sm text-brand-muted">{description}</p>}
           </div>
         )}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-4 sm:px-6 py-4 sm:py-5 overflow-x-hidden">

@@ -4,11 +4,14 @@
  * hasOverlappingBlock in a consistent order. Throws SlotConflictError when a conflict is detected.
  */
 import type { Firestore } from "firebase-admin/firestore";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import type { Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
-import { bookingWarn } from "@/lib/booking/debug";
+import { warnIfLegacyBookingFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+
+export { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 
 export class SlotConflictError extends Error {
   constructor(
@@ -55,8 +58,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
   } = opts;
   const slotStartMs = slotStart.getTime();
   const slotEndMs = slotEnd.getTime();
-  const dayStart = new Date(parsed.dateStr + "T00:00:00");
-  const dayEnd = new Date(parsed.dateStr + "T23:59:59.999");
+  const { dayStart, dayEnd } = getCentralCalendarDayBounds(parsed.dateStr);
 
   if (runSameDaySlotScan) {
     if (useBoatSlots && boatId) {
@@ -94,30 +96,16 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     }
   }
 
-  let blocked: boolean;
-  try {
-    blocked = await hasOverlappingBlock({
-      db,
-      Timestamp,
-      experienceId,
-      boatId,
-      slotStart,
-      slotEnd,
-      get,
-    });
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    const message = err instanceof Error ? err.message : String(err);
-    if (code === "failed-precondition" || /index/i.test(message)) {
-      bookingWarn("slot-availability", "blocks index unavailable; skipping block check", {
-        experienceId,
-        hint: "Firestore index may still be building. Deploy firestore:indexes first.",
-      });
-      blocked = false;
-    } else {
-      throw err;
-    }
-  }
+  const blocked = await hasOverlappingBlock({
+    db,
+    Timestamp,
+    experienceId,
+    experienceIdVariants,
+    boatId,
+    slotStart,
+    slotEnd,
+    get,
+  });
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
   const paidSnaps = await Promise.all(
@@ -153,6 +141,9 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
   }
 
   if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+    warnIfLegacyBookingFallbackEnabled();
+    const parsedLimit = parseInt(process.env.LEGACY_BOOKING_SCAN_LIMIT ?? "2000", 10);
+    const LEGACY_BOOKING_LIMIT = Number.isFinite(parsedLimit) && parsedLimit >= 500 ? Math.min(parsedLimit, 50_000) : 2000;
     const legacySnaps = await Promise.all(
       experienceIdVariants.map((v) =>
         get(
@@ -160,9 +151,21 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
             .collection("bookings")
             .where("experienceId", "==", v)
             .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            .limit(LEGACY_BOOKING_LIMIT)
         )
       )
     );
+    const legacyLimitHit = legacySnaps.some((s) => s.docs.length >= LEGACY_BOOKING_LIMIT);
+    if (legacyLimitHit) {
+      await writeOperationalAlert({
+        type: "legacy_booking_fallback_limit_breach",
+        experienceId,
+        limit: LEGACY_BOOKING_LIMIT,
+        source: "slot-availability",
+        hint: "Run backfill-start-date-str and set DISABLE_LEGACY_BOOKING_FALLBACK=true; legacy scan may miss overlaps beyond this cap.",
+      });
+      throw new SlotConflictError("Slot no longer available");
+    }
     const legacySeen = new Set<string>();
     for (const snap of legacySnaps) {
       for (const doc of snap.docs) {

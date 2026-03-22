@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 type CustomerItem = {
@@ -18,21 +18,29 @@ export default function AdminCustomersPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
-  useEffect(() => {
-    fetch("/api/admin/customers", { credentials: "include" })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const msg = data.error ?? "Failed to load";
-          const hint = data.hint;
-          throw new Error(hint ? `${msg} ${hint}` : msg);
-        }
-        return data;
-      })
-      .then(setList)
-      .catch((e) => setError(e instanceof Error ? e.message : "Error"))
-      .finally(() => setLoading(false));
+  const loadCustomers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/customers", { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error ?? "Failed to load";
+        const hint = data.hint;
+        throw new Error(hint ? `${msg} ${hint}` : msg);
+      }
+      const rows = Array.isArray(data) ? data : Array.isArray(data.customers) ? data.customers : [];
+      setList(rows as CustomerItem[]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadCustomers();
+  }, [loadCustomers]);
 
   function formatDate(iso: string | null) {
     if (!iso) return "—";
@@ -72,9 +80,20 @@ export default function AdminCustomersPage() {
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
         {loading && <div className="p-6 sm:p-8 text-center text-brand-muted text-sm">Loading…</div>}
         {error && (
-          <div className="p-4 sm:p-6 text-red-600 bg-red-50 border-b border-red-200 text-sm">
-            {error}
-            <Link href="/admin/login" className="ml-2 text-brand-primary hover:underline">Sign in</Link>
+          <div className="p-4 sm:p-6 text-red-600 bg-red-50 border-b border-red-200 text-sm flex flex-wrap items-center justify-between gap-2">
+            <span>
+              {error}
+              <Link href="/admin/login" className="ml-2 text-brand-primary hover:underline">
+                Sign in
+              </Link>
+            </span>
+            <button
+              type="button"
+              onClick={() => void loadCustomers()}
+              className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-100 min-h-[44px]"
+            >
+              Retry
+            </button>
           </div>
         )}
         {!loading && !error && filtered.length === 0 && (

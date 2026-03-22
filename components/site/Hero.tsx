@@ -8,7 +8,9 @@ import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
-const HERO_VIDEO_SRC = "/Videos/Hero video.webm";
+/** Primary hero clip: `hero.webm` (matches repo’s Boat Bros asset). Optional `hero.mp4` (H.264) for older Safari — list mp4 first if you add it. */
+const HERO_VIDEO_WEBM = "/videos/hero.webm";
+const HERO_VIDEO_POSTER = "/videos/hero-poster.jpg";
 
 const bullets = [
   "Lake Austin",
@@ -21,17 +23,22 @@ export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   return (
     <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
-      {/* Background video + dark overlay so text pops */}
+      {/* Background: video when assets exist under public/videos/; gradient fallback always underneath. */}
       <div className="absolute inset-0">
+        <div
+          className="absolute inset-0 bg-gradient-to-br from-brand-dark via-[#0a1628] to-brand-dark"
+          aria-hidden
+        />
         <video
           autoPlay
           muted
           loop
           playsInline
+          poster={HERO_VIDEO_POSTER}
           className="absolute inset-0 w-full h-full object-cover"
           aria-hidden
         >
-          <source src={HERO_VIDEO_SRC} type="video/webm" />
+          <source src={HERO_VIDEO_WEBM} type="video/webm" />
         </video>
         <div className="absolute inset-0 bg-black/50 sm:bg-black/45" />
         <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/75 via-brand-dark/50 to-brand-dark/90" />

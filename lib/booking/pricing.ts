@@ -201,13 +201,22 @@ export function computePricing(params: {
 }
 
 export function buildAddonSelectionsForPricing(
-  addonSelections: { addonId: string; qty: number }[],
+  addonSelections: { addonId: string; qty: number; priceCents?: number; name?: string }[],
   addonsById: Map<string, Addon | ExperienceAddon>
 ): { addon: AddonLike; qty: number }[] {
   return addonSelections
     .map((s) => ({ ...s, qty: Math.max(0, Math.floor(Number(s.qty))) }))
     .filter((s) => s.qty > 0)
     .map((s) => {
+      if (typeof s.priceCents === "number" && Number.isFinite(s.priceCents)) {
+        const synthetic: AddonLike = {
+          name: (typeof s.name === "string" && s.name.trim() ? s.name.trim() : "Add-on") as string,
+          priceCents: Math.max(0, Math.floor(s.priceCents)),
+          type: "quantity",
+          active: true,
+        };
+        return { addon: synthetic, qty: s.qty };
+      }
       const addon = addonsById.get(s.addonId);
       if (!addon || !addon.active) return null;
       return { addon, qty: s.qty };

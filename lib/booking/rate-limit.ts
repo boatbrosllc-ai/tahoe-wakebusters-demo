@@ -10,12 +10,17 @@
  *   outages do not hard-stop checkout. Set RATE_LIMIT_FAIL_CLOSED=1 to reject
  *   with 503 when Redis is down. Optional RATE_LIMIT_DEGRADED_USE_MEMORY=1 uses
  *   in-memory fallback with stricter limit (see MAX_REQUESTS_MEMORY_FALLBACK).
- * - When Redis is not configured in production, we fail open and log once; set
- *   Upstash vars in Netlify for proper rate limiting.
+ * - When Redis is not configured in production, all rate-limited endpoints return 503 until Redis is configured.
  */
 
 const WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_REQUESTS = 30; // per window per key (Redis)
+/**
+ * Public GET availability (date-prices, slots, effective-price): separate bucket so calendar prefetch
+ * does not share the 30/min budget with checkout/hold mutations.
+ */
+const MAX_REQUESTS_PUBLIC_READ = 120;
+const MAX_REQUESTS_PUBLIC_READ_UNKNOWN = 40;
 /** Stricter limit for the shared "unknown" IP bucket (Redis) to reduce blast radius when proxy does not set IP headers. */
 const MAX_REQUESTS_UNKNOWN_BUCKET = 10;
 /** Stricter limit for validate-discount to reduce discount code enumeration via IP rotation. */
@@ -37,21 +42,19 @@ function pruneMemory(): void {
 let unknownIpWarned = false;
 
 /**
- * Derive client key from trusted platform metadata first, then x-forwarded-for
- * (leftmost IP, trimmed) as secondary fallback before "unknown", so misconfigured
- * proxies are diagnosable. When the IP resolves to "unknown", a one-time warning
- * is logged in production.
+ * Derive client key from trusted platform headers only (x-real-ip, then
+ * x-nf-client-connection-ip). Fallback is "unknown"; x-forwarded-for is not
+ * used to avoid spoofing. When the IP resolves to "unknown", a one-time
+ * warning is logged in production and MAX_REQUESTS_UNKNOWN_BUCKET applies.
  */
 export function getClientKey(request: Request): string {
   const xRealIp = request.headers.get("x-real-ip");
   const nfConnIp = request.headers.get("x-nf-client-connection-ip");
-  let forwarded = request.headers.get("x-forwarded-for");
-  const leftmostForwarded = forwarded != null ? forwarded.trim().split(",")[0]?.trim() ?? "" : "";
-  const ip = (xRealIp ?? nfConnIp ?? leftmostForwarded ?? "").trim() || "unknown";
+  const ip = (xRealIp ?? nfConnIp ?? "").trim() || "unknown";
   if (ip === "unknown" && process.env.NODE_ENV === "production") {
     if (!unknownIpWarned) {
       unknownIpWarned = true;
-      console.warn("[rate-limit] Client IP could not be determined (x-real-ip, x-nf-client-connection-ip, and x-forwarded-for missing or empty). All such clients share the same bucket; consider configuring your proxy to set a trusted IP header.");
+      console.warn("[rate-limit] Client IP could not be determined (x-real-ip and x-nf-client-connection-ip missing or empty). All such clients share the same bucket; consider configuring your proxy to set a trusted IP header.");
     }
   }
   return `booking:${ip}`;
@@ -78,13 +81,25 @@ function getRedisConfig(): { url: string; token: string } | null {
 
 /**
  * True when rate limiting is ready for production: either not in production (dev uses in-memory)
- * or Redis is configured. When Redis is missing in production we fail open so booking still works.
+ * or Redis is configured. When Redis is missing in production, requests are rejected (503).
  */
 export function isRateLimitReadyForProduction(): boolean {
   const redis = getRedisConfig();
   const isProduction = process.env.NODE_ENV === "production";
   if (!isProduction) return true;
   return redis !== null;
+}
+
+let loggedProductionRedisMissingCritical = false;
+
+function rateLimitBlockedProductionNoRedis(): RateLimitResult {
+  if (!loggedProductionRedisMissingCritical) {
+    loggedProductionRedisMissingCritical = true;
+    console.error(
+      "[rate-limit] CRITICAL: NODE_ENV=production but Redis is not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN). Booking endpoints return 503 until Redis is configured. See .env.example and SECURITY.md."
+    );
+  }
+  return { allowed: false, retryAfterMs: 60_000, serverError: true, degraded: true };
 }
 
 type RedisFailureReason = "timeout" | "error";
@@ -187,15 +202,6 @@ export type RateLimitResult = {
   degraded?: boolean;
 };
 
-/**
- * Check rate limit. When Redis config is set, uses Redis (async). Default policy:
- * - Redis configured and healthy: allow/deny by count; no degraded.
- * - Redis error or timeout: fail-open (allow) unless RATE_LIMIT_FAIL_CLOSED=1 (then 503).
- *   Optional RATE_LIMIT_DEGRADED_USE_MEMORY=1 uses in-memory fallback with stricter limit.
- * - Redis not configured in production: fail-open, degraded.
- */
-let productionNoRedisWarned = false;
-
 /** Key prefix for validate-discount endpoint so we can apply a stricter limit. */
 export const RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT = "booking:validate-discount:";
 
@@ -210,6 +216,10 @@ export async function checkRateLimitValidateDiscount(key: string): Promise<RateL
   const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
   const redisKey = redis ? `rl:${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}:${windowStart}` : null;
 
+  if (isProduction && !redis) {
+    return rateLimitBlockedProductionNoRedis();
+  }
+
   if (redis && redisKey) {
     try {
       const count = await redisIncr(redis, redisKey, Math.ceil(WINDOW_MS / 1000) + 60);
@@ -219,12 +229,14 @@ export async function checkRateLimitValidateDiscount(key: string): Promise<RateL
       return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
     } catch (err) {
       const reason = (err as Error & { redisFailureReason?: RedisFailureReason }).redisFailureReason ?? "error";
-      console.error("[rate-limit] Redis unavailable — applying degraded policy", {
+      console.error("[rate-limit] Redis unavailable — validate-discount degraded policy", {
         redisFailureReason: reason,
         urlHint: redis.url.slice(0, 40),
       });
       if (isProduction) {
-        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1";
+        /** Default fail-closed for discount enumeration when Redis errors; opt out with RATE_LIMIT_VALIDATE_DISCOUNT_DEGRADED_FAIL_OPEN=1 */
+        const allowDegradedOpen = process.env.RATE_LIMIT_VALIDATE_DISCOUNT_DEGRADED_FAIL_OPEN === "1";
+        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1" || !allowDegradedOpen;
         if (failClosed) {
           return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true, degraded: true };
         }
@@ -252,14 +264,6 @@ export async function checkRateLimitValidateDiscount(key: string): Promise<RateL
     }
   }
 
-  if (isProduction) {
-    if (!productionNoRedisWarned) {
-      productionNoRedisWarned = true;
-      console.warn("[rate-limit] Redis not configured in production — rate limiting disabled. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Netlify to enable.");
-    }
-    return { allowed: true, degraded: true };
-  }
-
   const now = Date.now();
   if (memoryStore.size > 10000) pruneMemory();
   const memKey = `${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}`;
@@ -278,17 +282,39 @@ export async function checkRateLimitValidateDiscount(key: string): Promise<RateL
   return { allowed: false, retryAfterMs: Math.max(0, entry.resetAt - now) };
 }
 
-export async function checkRateLimit(key: string): Promise<RateLimitResult> {
+/** Redis namespace so public-read limits do not share the mutation bucket. */
+const RATE_LIMIT_REDIS_PREFIX_PUBLIC_READ = "rl:pr:";
+
+type RateLimitKind = "default" | "publicRead";
+
+function limitForKey(kind: RateLimitKind, key: string): number {
+  const unknown = key.endsWith(":unknown");
+  if (kind === "publicRead") {
+    return unknown ? MAX_REQUESTS_PUBLIC_READ_UNKNOWN : MAX_REQUESTS_PUBLIC_READ;
+  }
+  return unknown ? MAX_REQUESTS_UNKNOWN_BUCKET : MAX_REQUESTS;
+}
+
+function redisKeyFor(kind: RateLimitKind, key: string, windowStart: number): string {
+  const ns = kind === "publicRead" ? RATE_LIMIT_REDIS_PREFIX_PUBLIC_READ : "rl:";
+  return `${ns}${key}:${windowStart}`;
+}
+
+async function checkRateLimitCore(kind: RateLimitKind, key: string): Promise<RateLimitResult> {
   const redis = getRedisConfig();
   const isProduction = process.env.NODE_ENV === "production";
   const useMemoryFallback = process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
   const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
-  const redisKey = redis ? `rl:${key}:${windowStart}` : null;
+  const redisKey = redis ? redisKeyFor(kind, key, windowStart) : null;
+
+  if (isProduction && !redis) {
+    return rateLimitBlockedProductionNoRedis();
+  }
 
   if (redis && redisKey) {
     try {
       const count = await redisIncr(redis, redisKey, Math.ceil(WINDOW_MS / 1000) + 60);
-      const limit = key.endsWith(":unknown") ? MAX_REQUESTS_UNKNOWN_BUCKET : MAX_REQUESTS;
+      const limit = limitForKey(kind, key);
       if (count <= limit) return { allowed: true };
       const resetAt = windowStart + WINDOW_MS;
       return { allowed: false, retryAfterMs: Math.max(0, resetAt - Date.now()) };
@@ -307,20 +333,25 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
           // Bounded local fallback with stricter threshold
           const now = Date.now();
           if (memoryStore.size > 10000) pruneMemory();
-          let entry = memoryStore.get(key);
+          const memKey = `${kind}:${key}`;
+          let entry = memoryStore.get(memKey);
           if (!entry) {
-            memoryStore.set(key, { count: 1, resetAt: now + WINDOW_MS });
+            memoryStore.set(memKey, { count: 1, resetAt: now + WINDOW_MS });
             console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50) });
             return { allowed: true, degraded: true };
           }
           if (entry.resetAt <= now) {
             entry = { count: 1, resetAt: now + WINDOW_MS };
-            memoryStore.set(key, entry);
+            memoryStore.set(memKey, entry);
             console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50) });
             return { allowed: true, degraded: true };
           }
           entry.count++;
-          if (entry.count <= MAX_REQUESTS_MEMORY_FALLBACK) {
+          const memLimit =
+            kind === "publicRead"
+              ? Math.min(MAX_REQUESTS_MEMORY_FALLBACK * 4, limitForKey(kind, key))
+              : MAX_REQUESTS_MEMORY_FALLBACK;
+          if (entry.count <= memLimit) {
             console.warn("[rate-limit] DEGRADED_ALLOW memory_fallback", { key: key.slice(0, 50), count: entry.count });
             return { allowed: true, degraded: true };
           }
@@ -335,29 +366,30 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
     }
   }
 
-  // Production with no Redis: allow requests so site works; log once
-  if (isProduction) {
-    if (!productionNoRedisWarned) {
-      productionNoRedisWarned = true;
-      console.warn("[rate-limit] Redis not configured in production — rate limiting disabled. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Netlify to enable.");
-    }
-    return { allowed: true, degraded: true };
-  }
-
   const now = Date.now();
   if (memoryStore.size > 10000) pruneMemory();
 
-  let entry = memoryStore.get(key);
+  const memKey = `${kind}:${key}`;
+  let entry = memoryStore.get(memKey);
   if (!entry) {
-    memoryStore.set(key, { count: 1, resetAt: now + WINDOW_MS });
+    memoryStore.set(memKey, { count: 1, resetAt: now + WINDOW_MS });
     return { allowed: true };
   }
   if (entry.resetAt <= now) {
     entry = { count: 1, resetAt: now + WINDOW_MS };
-    memoryStore.set(key, entry);
+    memoryStore.set(memKey, entry);
     return { allowed: true };
   }
   entry.count++;
-  if (entry.count <= MAX_REQUESTS) return { allowed: true };
+  if (entry.count <= limitForKey(kind, key)) return { allowed: true };
   return { allowed: false, retryAfterMs: Math.max(0, entry.resetAt - now) };
+}
+
+export async function checkRateLimit(key: string): Promise<RateLimitResult> {
+  return checkRateLimitCore("default", key);
+}
+
+/** Rate limit for idempotent public availability GETs (slots, date-prices, effective-price). Separate from mutation budget. */
+export async function checkRateLimitPublicRead(key: string): Promise<RateLimitResult> {
+  return checkRateLimitCore("publicRead", key);
 }

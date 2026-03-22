@@ -41,11 +41,15 @@ export function bookingDebugLog(
 export type BookingLogStep =
   | "create-hold"
   | "create-payment-intent"
+  | "create-checkout-session"
+  | "create-checkout-session-direct"
   | "complete-after-payment"
   | "convert-hold"
   | "stripe-webhook"
+  | "run-final-charges"
   | "client"
-  | "slot-availability";
+  | "slot-availability"
+  | "receipt";
 
 /** Log an info-level booking step. Suppressed in production unless BOOKING_LOG_LEVEL=verbose. */
 export function bookingLog(

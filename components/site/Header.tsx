@@ -12,12 +12,29 @@ import { analytics } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
+import { revalidateAdminSession, subscribeAdminAuthRevalidate } from "@/lib/admin-auth-client";
+
+function BookingModalChunkLoading() {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-brand-dark/40 backdrop-blur-[2px]"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading booking"
+    >
+      <div className="flex flex-col items-center gap-3 rounded-2xl bg-white px-8 py-6 shadow-lg border border-brand-dark/10">
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+        <span className="text-sm font-medium text-brand-dark">Opening booking…</span>
+      </div>
+    </div>
+  );
+}
 
 // Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
-const BookingModal = dynamic(
-  () => import("@/components/site/BookingModal"),
-  { ssr: false }
-);
+const BookingModal = dynamic(() => import("@/components/site/BookingModal"), {
+  ssr: false,
+  loading: () => <BookingModalChunkLoading />,
+});
 
 const navLinks = [
   { href: "/experiences", label: "Experiences" },
@@ -43,16 +60,19 @@ export function Header() {
 
   const handleCallClick = () => analytics.callClick("header", "global");
 
-  const checkSession = () => {
-    fetch("/api/admin/session", { method: "GET", credentials: "include" })
-      .then((res) => (res.ok ? res.json() : { signedIn: false }))
-      .then((data: { signedIn?: boolean }) => setIsAdmin(data.signedIn === true))
-      .catch(() => setIsAdmin(false));
+  const applySessionState = (s: Awaited<ReturnType<typeof revalidateAdminSession>>) => {
+    if (s.status === "unavailable") return;
+    setIsAdmin(s.status === "signed_in");
   };
 
-  // Check admin session once on mount only
   useEffect(() => {
-    checkSession();
+    void revalidateAdminSession().then(applySessionState);
+  }, []);
+
+  useEffect(() => {
+    return subscribeAdminAuthRevalidate(() => {
+      void revalidateAdminSession().then(applySessionState);
+    });
   }, []);
 
   useEffect(() => {
@@ -242,7 +262,7 @@ export function Header() {
           >
             Book now
           </Button>
-          {hasOpenedBookingModal && (
+          {(bookingModalOpen || hasOpenedBookingModal) && (
             <BookingModal
               open={bookingModalOpen}
               onOpenChange={setBookingModalOpen}

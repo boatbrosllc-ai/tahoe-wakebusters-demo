@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
 import {
   buildSlotId,
   getSlotGrid,
@@ -16,6 +16,7 @@ import {
   isSeasonalAllowed,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
@@ -31,21 +32,115 @@ const NO_STORE_HEADERS = {
   Expires: "0",
 } as const;
 
-// Set DISABLE_LEGACY_BOOKING_FALLBACK=true in all environments once startDateStr backfill is complete.
-// When true, legacy fallback queries are never run; when unset or false, legacy fallback runs when index is missing.
-// Legacy queries use .limit(2000); if a query returns 2000 docs, some bookings may be hidden and availability can be overstated.
-// Removal path: (1) Run startDateStr backfill to exhaustion (e.g. api/admin/backfill-booking-boat-ids pattern for startDateStr),
-// (2) confirm (experienceId, startDateStr) composite index is deployed in firestore.indexes.json, (3) set DISABLE_LEGACY_BOOKING_FALLBACK=true in production (e.g. Netlify env).
-const LEGACY_FALLBACK_ENABLED = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
+// Legacy fallback runs only when the windowed (experienceId, startDateStr) index is absent.
+// Set DISABLE_LEGACY_BOOKING_FALLBACK=true and DISABLE_LEGACY_HOLDS_FALLBACK=true in Netlify once startDateStr
+// backfill is complete on both bookings and holds. Hard deadline: enable these flags to avoid full-collection scans.
 const LEGACY_QUERY_LIMIT = 2000;
 
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
 
+function blockOverlapsWindowMs(
+  blockStartMs: number,
+  blockEndMs: number,
+  windowStartMs: number,
+  windowEndMs: number,
+): boolean {
+  return blockStartMs <= windowEndMs && blockEndMs >= windowStartMs;
+}
+
+/**
+ * Loads block docs overlapping [start, end]. Uses the composite query when indexed; if that fails
+ * with a missing-index error, falls back to experienceId-only queries and filters in memory so we
+ * still apply blocks without marking the response partial (calendar often looked correct before).
+ */
+async function fetchBlocksDocsOverlappingWindow(
+  db: ReturnType<typeof getDb>,
+  start: Date,
+  end: Date,
+  expIds: string[],
+): Promise<{ docs: import("firebase-admin/firestore").QueryDocumentSnapshot[]; incomplete: boolean }> {
+  const { Timestamp } = getFirestoreExports();
+  const windowStartMs = start.getTime();
+  const windowEndMs = end.getTime();
+
+  try {
+    const snaps = await Promise.all(
+      expIds.map((expId) =>
+        db
+          .collection("blocks")
+          .where("experienceId", "==", expId)
+          .where("startAt", "<=", Timestamp.fromDate(end))
+          .where("endAt", ">=", Timestamp.fromDate(start))
+          .get()
+      )
+    );
+    const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+    const seen = new Set<string>();
+    snaps.forEach((snap) => {
+      snap.docs.forEach((doc) => {
+        if (seen.has(doc.id)) return;
+        seen.add(doc.id);
+        merged.push(doc);
+      });
+    });
+    return { docs: merged, incomplete: false };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/FAILED_PRECONDITION.*index/i.test(msg)) throw err;
+    console.warn("[slots] blocks composite query failed (index); using experienceId-only fallback:", msg);
+    const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+    const seen = new Set<string>();
+    let anyFallbackFailed = false;
+    for (const expId of expIds) {
+      try {
+        const snap = await db.collection("blocks").where("experienceId", "==", expId).get();
+        snap.docs.forEach((doc) => {
+          const b = doc.data() as { startAt?: { toDate?: () => Date }; endAt?: { toDate?: () => Date } };
+          const bs = b.startAt?.toDate?.()?.getTime();
+          const be = b.endAt?.toDate?.()?.getTime();
+          if (bs == null || be == null) return;
+          if (!blockOverlapsWindowMs(bs, be, windowStartMs, windowEndMs)) return;
+          if (seen.has(doc.id)) return;
+          seen.add(doc.id);
+          merged.push(doc);
+        });
+      } catch (fallbackErr) {
+        anyFallbackFailed = true;
+        console.warn(
+          "[slots] blocks fallback query failed:",
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+        );
+      }
+    }
+    if (anyFallbackFailed) {
+      return { docs: [], incomplete: true };
+    }
+    return { docs: merged, incomplete: false };
+  }
+}
+
+/** Firestore batchGet is safest in chunks for large hold sets (avoids rare RPC limits). */
+async function getHoldSnapshotsOrdered(
+  db: ReturnType<typeof getDb>,
+  holdIds: string[],
+): Promise<import("firebase-admin/firestore").DocumentSnapshot[]> {
+  if (holdIds.length === 0) return [];
+  const CHUNK = 30;
+  const combined: import("firebase-admin/firestore").DocumentSnapshot[] = [];
+  for (let i = 0; i < holdIds.length; i += CHUNK) {
+    const slice = holdIds.slice(i, i + CHUNK);
+    const refs = slice.map((id) => db.collection("holds").doc(id));
+    const snaps = await db.getAll(...refs);
+    combined.push(...snaps);
+  }
+  return combined;
+}
+
 /** Returns true if the slot date is within the experience's seasonal window (specific dates or month range). Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used. */
 export async function GET(request: NextRequest) {
   try {
-    const rl = await checkRateLimit(getClientKey(request));
+    const rl = await checkRateLimitPublicRead(getClientKey(request));
     if (!rl.allowed) {
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
       return NextResponse.json(
@@ -74,6 +169,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "boatId or experienceId, startDate, endDate required (YYYY-MM-DD)" }, { status: 400 });
     }
     // Parse as UTC so range validation is identical in all server timezones (avoids production-only rejections).
+    // UTC noon is used intentionally so that when converted to America/Chicago (UTC-5 to UTC-6), the timestamp
+    // still falls on the same calendar day (noon UTC = 6–7 AM Chicago). Do not change to T00:00:00Z — UTC midnight
+    // maps to 6–7 PM Chicago the previous calendar day.
     const start = new Date(startDate + "T12:00:00.000Z");
     const end = new Date(endDate + "T23:59:59.999Z");
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
@@ -215,6 +313,8 @@ export async function GET(request: NextRequest) {
         const tSeenBookingIds = new Set<string>();
         let tWindowedIndexReady = true;
         let legacyQueryHitLimit = false;
+        let legacyHoldsScanCapHit = false;
+        let holdsQueryFailed = false;
         try {
           const tWindowedBookingSnaps = await Promise.all(
             tAllExpIds.map(expId =>
@@ -241,9 +341,9 @@ export async function GET(request: NextRequest) {
             throw tWindowedErr;
           }
         }
-        // Legacy fallback: only runs when the windowed index is absent or DISABLE_LEGACY_BOOKING_FALLBACK is not true.
-        // Set DISABLE_LEGACY_BOOKING_FALLBACK=true once startDateStr is backfilled so this broad scan is never executed.
-        if (!tWindowedIndexReady || LEGACY_FALLBACK_ENABLED) {
+        // Legacy fallback: only runs when the windowed index is absent.
+        // Set DISABLE_LEGACY_BOOKING_FALLBACK=true in Netlify once startDateStr backfill is complete to document that legacy path is no longer needed.
+        if (!tWindowedIndexReady) {
           try {
             const tLegacyBookingSnaps = await Promise.all(
               tAllExpIds.map(expId =>
@@ -314,15 +414,15 @@ export async function GET(request: NextRequest) {
               processHoldForCapacity(doc);
             })
           );
-          // Legacy holds fallback: only runs when DISABLE_LEGACY_BOOKING_FALLBACK is not true.
-          if (LEGACY_FALLBACK_ENABLED) {
+          // Legacy holds fallback: only runs when windowed holds index is absent (same as bookings).
+          // Proxy date filter on expiresAt limits scan to recently active holds (holds expired before window start are irrelevant).
+          if (!tWindowedIndexReady) {
             const tHoldsLegacySnaps = await Promise.all(
               tAllExpIds.map(expId =>
                 db.collection("holds")
                   .where("experienceId", "==", expId)
                   .where("status", "==", "active")
-                  .where("startDateStr", ">=", startDate)
-                  .where("startDateStr", "<=", endDate)
+                  .where("expiresAt", ">=", Timestamp.fromDate(start))
                   .limit(LEGACY_QUERY_LIMIT)
                   .get()
               )
@@ -330,39 +430,47 @@ export async function GET(request: NextRequest) {
             tHoldsLegacySnaps.forEach((snap, idx) => {
               if (snap.size >= LEGACY_QUERY_LIMIT) {
                 legacyQueryHitLimit = true;
+                legacyHoldsScanCapHit = true;
                 console.warn("[slots] legacy holds query hit limit, some holds may be hidden", { experienceId, variant: tAllExpIds[idx], count: snap.size });
               }
               snap.docs.forEach(doc => {
                 if (tSeenHoldIds.has(doc.id)) return;
-                const d = doc.data() as { startDateStr?: string };
+                const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
                 if (d.startDateStr) return; // already covered by windowed query
+                const slotIdRaw = d.slotId ?? d.slot_id;
+                const parsed = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
+                const dateStr = parsed?.dateStr ?? (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
+                if (!dateStr || dateStr < startDate || dateStr > endDate) return;
                 tSeenHoldIds.add(doc.id);
                 processHoldForCapacity(doc);
               });
             });
           }
         } catch (tHoldsErr) {
+          holdsQueryFailed = true;
           console.warn("[slots] ticketed holds query failed:", tHoldsErr instanceof Error ? tHoldsErr.message : tHoldsErr);
         }
 
-        // Query blocks for this experience
+        // Query blocks for all experience ID variants (slug-based or legacy)
+        const { docs: ticketedBlockDocs, incomplete: blocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
+          db,
+          start,
+          end,
+          tAllExpIds,
+        );
+        const blocksQueryFailed = blocksIncomplete;
         const tBlockRanges: { start: number; end: number }[] = [];
-        try {
-          const tBlocksSnap = await db
-            .collection("blocks")
-            .where("experienceId", "==", experienceId)
-            .where("startAt", "<=", Timestamp.fromDate(end))
-            .get();
-          tBlocksSnap.docs.forEach((doc) => {
-            const b = doc.data() as { startAt: { toDate(): Date }; endAt: { toDate(): Date } };
-            const blockStart = b.startAt?.toDate?.()?.getTime();
-            const blockEnd = b.endAt?.toDate?.()?.getTime();
-            if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
-            tBlockRanges.push({ start: blockStart, end: blockEnd });
-          });
-        } catch (tBlocksErr) {
-          console.warn("[slots] ticketed blocks query failed:", tBlocksErr instanceof Error ? tBlocksErr.message : tBlocksErr);
-        }
+        const tBlockRangesSeen = new Set<string>();
+        ticketedBlockDocs.forEach((doc) => {
+          const b = doc.data() as { startAt: { toDate(): Date }; endAt: { toDate(): Date } };
+          const blockStart = b.startAt?.toDate?.()?.getTime();
+          const blockEnd = b.endAt?.toDate?.()?.getTime();
+          if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+          const key = `${blockStart}:${blockEnd}`;
+          if (tBlockRangesSeen.has(key)) return;
+          tBlockRangesSeen.add(key);
+          tBlockRanges.push({ start: blockStart, end: blockEnd });
+        });
 
         // Build enriched slot rows
         type TicketedSlotRow = SlotRow & {
@@ -405,8 +513,24 @@ export async function GET(request: NextRequest) {
           });
         }
         tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
-        const ticketedHeaders = { ...NO_STORE_HEADERS, ...(legacyQueryHitLimit ? { "X-Slots-Partial-Data": "true" } : {}) };
-        return NextResponse.json({ slots: tSlots }, { headers: ticketedHeaders });
+        const ticketedPartial =
+          legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed;
+        if (legacyHoldsScanCapHit) {
+          void writeOperationalAlert({
+            type: "legacy_holds_scan_cap_hit",
+            source: "app/api/booking/slots",
+            experienceId,
+            hint: "Legacy holds scan hit LEGACY_QUERY_LIMIT; complete startDateStr backfill and set DISABLE_LEGACY_HOLDS_FALLBACK=true.",
+          }).catch(() => {});
+        }
+        const ticketedHeaders = {
+          ...NO_STORE_HEADERS,
+          ...(ticketedPartial ? { "X-Slots-Partial-Data": "true" } : {}),
+        };
+        return NextResponse.json(
+          { slots: tSlots, ...(ticketedPartial ? { partialData: true } : {}) },
+          { headers: ticketedHeaders },
+        );
       }
       // --- End ticketed branch ---
 
@@ -551,6 +675,7 @@ export async function GET(request: NextRequest) {
       const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
       const seenBookingIds = new Set<string>();
       let legacyQueryHitLimitCharter = false;
+      let charterHoldsResolutionFailed = false;
 
       const addBookingDoc = (doc: { id: string; data: () => Record<string, unknown> }) => {
         if (seenBookingIds.has(doc.id)) return;
@@ -586,17 +711,15 @@ export async function GET(request: NextRequest) {
           throw windowedErr;
         }
       }
-      // Legacy fallback: only runs when the windowed index is absent or DISABLE_LEGACY_BOOKING_FALLBACK is not true.
-      // Set DISABLE_LEGACY_BOOKING_FALLBACK=true once startDateStr is backfilled on all historical bookings.
-      if (!windowedIndexReady || LEGACY_FALLBACK_ENABLED) {
+      // Legacy fallback: only runs when the windowed index is absent.
+      // Query by experienceId and status only so we can catch docs without startDateStr; filter in memory.
+      if (!windowedIndexReady) {
         try {
           const legacySnaps = await Promise.all(
             allExpIds.map(expId =>
               db.collection("bookings")
                 .where("experienceId", "==", expId)
                 .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-                .where("startDateStr", ">=", startDate)
-                .where("startDateStr", "<=", endDate)
                 .limit(LEGACY_QUERY_LIMIT)
                 .get()
             )
@@ -608,9 +731,13 @@ export async function GET(request: NextRequest) {
             }
             snap.docs.forEach(doc => {
               if (seenBookingIds.has(doc.id)) return;
-              const d = doc.data() as { startDateStr?: string };
-              // Skip docs already covered by the windowed query.
-              if (windowedIndexReady && d.startDateStr) return;
+              const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
+              // Only include docs without startDateStr (legacy); then filter by date range via slotId.
+              if (d.startDateStr) return;
+              const slotIdRaw = d.slotId ?? d.slot_id;
+              const parsed = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
+              const dateStr = parsed?.dateStr ?? (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
+              if (!dateStr || dateStr < startDate || dateStr > endDate) return;
               addBookingDoc(doc);
             });
           });
@@ -634,6 +761,13 @@ export async function GET(request: NextRequest) {
           bookingIds: uniqueUnresolved.slice(0, 100),
           experienceId,
         });
+        void writeOperationalAlert({
+          type: "slots_unresolved_booking_missing_boat_id",
+          source: "app/api/booking/slots",
+          experienceId,
+          count: uniqueUnresolved.length,
+          hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids).",
+        }).catch(() => {});
       }
 
       /** Map (boatId:normalizedSlotId) -> booking doc id so slot docs can resolve correct bookingId when they store a different id (e.g. Stripe). */
@@ -663,16 +797,8 @@ export async function GET(request: NextRequest) {
         return null;
       };
 
-      // Start blocks query in parallel with slot docs — it only needs experienceId and end date.
-      const blocksSnapPromise = db
-        .collection("blocks")
-        .where("experienceId", "==", experienceId)
-        .where("startAt", "<=", Timestamp.fromDate(end))
-        .get()
-        .catch((blocksErr: unknown) => {
-          console.warn("[slots] blocks query failed (index may be building):", blocksErr instanceof Error ? blocksErr.message : blocksErr);
-          return null;
-        });
+      // Query blocks for all experience ID variants (slug-based or legacy); merge and dedupe.
+      const blocksResultPromise = fetchBlocksDocsOverlappingWindow(db, start, end, allExpIds);
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -741,26 +867,25 @@ export async function GET(request: NextRequest) {
         gridByBoatId.set(bid, grid);
       }
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
-      const blocksSnap = await blocksSnapPromise; // already running since before slot docs
-      if (blocksSnap) {
-        blocksSnap.docs.forEach((doc) => {
-          const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
-          const blockStart = b.startAt?.toDate?.()?.getTime();
-          const blockEnd = b.endAt?.toDate?.()?.getTime();
-          if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
-          const range = { start: blockStart, end: blockEnd };
-          const boatId = typeof b.boatId === "string" ? b.boatId : null;
-          if (boatId) {
-            if (!blockRangesByBoat.has(boatId)) blockRangesByBoat.set(boatId, []);
-            blockRangesByBoat.get(boatId)!.push(range);
-          } else {
-            boatIds.forEach((bid) => {
-              if (!blockRangesByBoat.has(bid)) blockRangesByBoat.set(bid, []);
-              blockRangesByBoat.get(bid)!.push(range);
-            });
-          }
-        });
-      }
+      const blocksResult = await blocksResultPromise; // started in parallel with slot doc loads
+      const charterBlocksQueryFailed = blocksResult.incomplete;
+      blocksResult.docs.forEach((doc) => {
+        const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
+        const blockStart = b.startAt?.toDate?.()?.getTime();
+        const blockEnd = b.endAt?.toDate?.()?.getTime();
+        if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+        const range = { start: blockStart, end: blockEnd };
+        const boatId = typeof b.boatId === "string" ? b.boatId : null;
+        if (boatId) {
+          if (!blockRangesByBoat.has(boatId)) blockRangesByBoat.set(boatId, []);
+          blockRangesByBoat.get(boatId)!.push(range);
+        } else {
+          boatIds.forEach((bid) => {
+            if (!blockRangesByBoat.has(bid)) blockRangesByBoat.set(bid, []);
+            blockRangesByBoat.get(bid)!.push(range);
+          });
+        }
+      });
       const slots: SlotRow[] = [];
       for (const bid of boatIds) {
         const grid = gridByBoatId.get(bid) ?? [];
@@ -810,8 +935,13 @@ export async function GET(request: NextRequest) {
       const heldHoldIds = Array.from(new Set(slots.filter((s) => s.status === "held" && s.holdId).map((s) => s.holdId!)));
       const holdIdsToRelease = new Set<string>(); // held slots whose hold is missing, inactive, or expired → show as open
       if (heldHoldIds.length > 0) {
-        const holdRefs = heldHoldIds.map((id) => db.collection("holds").doc(id));
-        const holdSnap = await db.getAll(...holdRefs);
+        let holdSnap: import("firebase-admin").firestore.DocumentSnapshot[] = [];
+        try {
+          holdSnap = await getHoldSnapshotsOrdered(db, heldHoldIds);
+        } catch (holdResolveErr) {
+          charterHoldsResolutionFailed = true;
+          console.warn("[slots] charter held-slot hold docs fetch failed:", holdResolveErr instanceof Error ? holdResolveErr.message : holdResolveErr);
+        }
         const now = new Date();
         holdSnap.forEach((doc, i) => {
           const hid = heldHoldIds[i];
@@ -859,16 +989,22 @@ export async function GET(request: NextRequest) {
             return byDate;
           })()
         : undefined;
+      const charterPartial =
+        legacyQueryHitLimitCharter ||
+        charterBlocksQueryFailed ||
+        charterHoldsResolutionFailed;
       const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
       if (unresolvedBookingIds.length > 0) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
       }
-      if (legacyQueryHitLimitCharter) {
+      if (charterPartial) {
         responseHeaders["X-Slots-Partial-Data"] = "true";
       }
       return NextResponse.json(
-        debugByDate != null ? { slots: slotsToReturn, byDate: debugByDate } : { slots: slotsToReturn },
-        { headers: responseHeaders }
+        debugByDate != null
+          ? { slots: slotsToReturn, byDate: debugByDate, ...(charterPartial ? { partialData: true } : {}) }
+          : { slots: slotsToReturn, ...(charterPartial ? { partialData: true } : {}) },
+        { headers: responseHeaders },
       );
     }
 

@@ -31,7 +31,7 @@ export default function WaiverSignPage() {
       })
       .catch(() => setInvalid("Could not load waiver. Please try again."))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [token, group]);
 
   if (loading) {
     return (
@@ -57,7 +57,7 @@ export default function WaiverSignPage() {
 
   return (
     <div className="container mx-auto px-4 py-6 sm:py-8 max-w-lg">
-      <WaiverSigningWizard data={data} />
+      <WaiverSigningWizard data={data} token={token} />
     </div>
   );
 }

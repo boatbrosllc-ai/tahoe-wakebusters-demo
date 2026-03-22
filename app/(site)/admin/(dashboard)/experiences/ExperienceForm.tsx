@@ -485,7 +485,8 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Basics</h2>
-          <button type="button" onClick={() => toggleSection("basics")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("basics")}>
+          {/* Section toggles: aria-expanded uses a dynamic boolean; rendered HTML has correct true/false for accessibility. */}
+          <button type="button" onClick={() => toggleSection("basics")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("basics") ? "false" : "true"}>
             {collapsedSections.has("basics") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -550,7 +551,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Display &amp; SEO</h2>
-          <button type="button" onClick={() => toggleSection("seo")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("seo")}>
+          <button type="button" onClick={() => toggleSection("seo")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("seo") ? "false" : "true"}>
             {collapsedSections.has("seo") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -635,7 +636,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Location</h2>
-          <button type="button" onClick={() => toggleSection("location")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("location")}>
+          <button type="button" onClick={() => toggleSection("location")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("location") ? "false" : "true"}>
             {collapsedSections.has("location") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -658,7 +659,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Capacity &amp; rules</h2>
-          <button type="button" onClick={() => toggleSection("capacity")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("capacity")}>
+          <button type="button" onClick={() => toggleSection("capacity")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("capacity") ? "false" : "true"}>
             {collapsedSections.has("capacity") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -706,7 +707,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Cancellation policy</h2>
-          <button type="button" onClick={() => toggleSection("cancellation")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("cancellation")}>
+          <button type="button" onClick={() => toggleSection("cancellation")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("cancellation") ? "false" : "true"}>
             {collapsedSections.has("cancellation") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -740,7 +741,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">FAQs</h2>
-          <button type="button" onClick={() => toggleSection("faqs")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("faqs")}>
+          <button type="button" onClick={() => toggleSection("faqs")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("faqs") ? "false" : "true"}>
             {collapsedSections.has("faqs") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -764,7 +765,7 @@ export function ExperienceForm({
             <h2 className="text-lg font-semibold text-brand-dark">Availability &amp; status</h2>
             <p className="text-sm text-brand-muted mt-0.5">Control when this experience can be booked and whether it appears on the site.</p>
           </div>
-          <button type="button" onClick={() => toggleSection("seasonal")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("seasonal")}>
+          <button type="button" onClick={() => toggleSection("seasonal")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("seasonal") ? "false" : "true"}>
             {collapsedSections.has("seasonal") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -832,7 +833,7 @@ export function ExperienceForm({
             <h2 className="text-lg font-semibold text-brand-dark">Booking type</h2>
             <p className="text-sm text-brand-muted mt-1">Choose how customers book and pay for this experience.</p>
           </div>
-          <button type="button" onClick={() => toggleSection("bookingType")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("bookingType")}>
+          <button type="button" onClick={() => toggleSection("bookingType")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("bookingType") ? "false" : "true"}>
             {collapsedSections.has("bookingType") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -1049,7 +1050,7 @@ export function ExperienceForm({
                 : "Choose which days count as weekend, add your charter lengths and prices, then add holidays or special dates. The calendar at the bottom shows how each day is priced."}
             </p>
           </div>
-          <button type="button" onClick={() => toggleSection("rates")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark shrink-0" aria-expanded={!collapsedSections.has("rates")}>
+          <button type="button" onClick={() => toggleSection("rates")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark shrink-0" aria-expanded={collapsedSections.has("rates") ? "false" : "true"}>
             {collapsedSections.has("rates") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>
@@ -1071,7 +1072,7 @@ export function ExperienceForm({
       <section className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 sm:p-6 lg:p-8 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-brand-dark">Add-ons</h2>
-          <button type="button" onClick={() => toggleSection("addons")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={!collapsedSections.has("addons")}>
+          <button type="button" onClick={() => toggleSection("addons")} className="lg:hidden flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark" aria-expanded={collapsedSections.has("addons") ? "false" : "true"}>
             {collapsedSections.has("addons") ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </button>
         </div>

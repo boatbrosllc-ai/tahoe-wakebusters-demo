@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
         subject: data.subject ?? "",
         bookingId: data.bookingId ?? null,
         sentAt: toIso(data.sentAt),
+        channel: data.channel ?? "email",
       };
     });
     if (templateFilter) docs = docs.filter((d) => d.templateId === templateFilter);

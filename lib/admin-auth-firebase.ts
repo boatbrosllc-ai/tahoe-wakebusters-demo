@@ -7,8 +7,11 @@
 
 import "server-only";
 import { extractAdminSessionCookieValue } from "./admin-cookie-parse";
+import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE } from "@/lib/admin-auth-constants";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin"; // same app used for Firestore
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
+
+export { ADMIN_AUTH_VERIFICATION_UNAVAILABLE };
 
 const COOKIE_NAME = "admin_session";
 const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
@@ -38,24 +41,72 @@ export async function createAdminSessionCookie(idToken: string): Promise<string>
  * Exported for unit tests. */
 export { extractAdminSessionCookieValue } from "./admin-cookie-parse";
 
-/** Verify the admin session cookie and that the user is an allowed admin email. Returns true if valid. */
-export async function verifyAdminSessionCookie(cookieHeader: string | null): Promise<boolean> {
+const INVALID_SESSION_FIREBASE_CODES = new Set([
+  "auth/invalid-session-cookie",
+  "auth/session-cookie-expired",
+  "auth/session-cookie-revoked",
+  "auth/argument-error",
+  "auth/user-disabled",
+  "auth/user-not-found",
+]);
+
+const OPERATIONAL_FIREBASE_AUTH_CODES = new Set([
+  "auth/internal-error",
+  "auth/network-request-failed",
+  "unavailable",
+  "deadline-exceeded",
+]);
+
+function firebaseAuthErrorCode(err: unknown): string {
+  if (!err || typeof err !== "object") return "";
+  const o = err as { code?: string; errorInfo?: { code?: string } };
+  return (o.code ?? o.errorInfo?.code ?? "").trim();
+}
+
+/** True when verification failed due to backend/network issues, not an invalid or revoked session. */
+export function isFirebaseAuthOperationalVerificationFailure(err: unknown): boolean {
+  const code = firebaseAuthErrorCode(err);
+  if (code && OPERATIONAL_FIREBASE_AUTH_CODES.has(code)) return true;
+  if (code && INVALID_SESSION_FIREBASE_CODES.has(code)) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  if (/econnreset|etimedout|socket hang up|fetch failed|network|unavailable|503|502|504|deadline/i.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+export type AdminSessionVerifyOutcome = "valid" | "invalid" | "unavailable";
+
+/**
+ * Verify admin session cookie with explicit outcome: invalid/revoked vs operational failure.
+ * Does not throw; use for GET /api/admin/session and admin layout.
+ */
+export async function getAdminSessionVerifyOutcome(cookieHeader: string | null): Promise<AdminSessionVerifyOutcome> {
   const allowed = getAllowedAdminEmails();
-  if (allowed.length === 0) return false;
+  if (allowed.length === 0) return "invalid";
   const sessionCookie = extractAdminSessionCookieValue(cookieHeader);
-  if (!sessionCookie) return false;
+  if (!sessionCookie) return "invalid";
+  if (!safeHasFirebaseConfig()) return "invalid";
   try {
     const app = getFirebaseApp();
     const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
     const email = decoded.email?.trim().toLowerCase();
-    return !!email && allowed.includes(email);
+    if (!email || !allowed.includes(email)) return "invalid";
+    return "valid";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (process.env.NODE_ENV === "development") {
-      console.warn("[admin auth] Session cookie invalid:", msg);
+      console.warn("[admin auth] Session verify error:", firebaseAuthErrorCode(err) || msg);
     }
-    return false;
+    if (isFirebaseAuthOperationalVerificationFailure(err)) return "unavailable";
+    return "invalid";
   }
+}
+
+/** Verify the admin session cookie and that the user is an allowed admin email. Returns true if valid. */
+export async function verifyAdminSessionCookie(cookieHeader: string | null): Promise<boolean> {
+  return (await getAdminSessionVerifyOutcome(cookieHeader)) === "valid";
 }
 
 export function getAdminSessionCookieName(): string {
@@ -86,8 +137,18 @@ export async function requireAdminSession(cookieHeader: string | null): Promise<
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
-  const valid = await verifyAdminSessionCookie(cookieHeader);
-  if (valid) return null;
+  const outcome = await getAdminSessionVerifyOutcome(cookieHeader);
+  if (outcome === "valid") return null;
+  if (outcome === "unavailable") {
+    return new Response(
+      JSON.stringify({
+        error: "Session verification temporarily unavailable",
+        code: ADMIN_AUTH_VERIFICATION_UNAVAILABLE,
+        hint: "Try again in a moment. If this continues, check Firebase or Google Cloud status.",
+      }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
+    );
+  }
   const hasCookie = !!extractAdminSessionCookieValue(cookieHeader);
   const hint = hasCookie
     ? "Session expired or invalid. Sign in again at /admin/login. In dev, check the server console for [admin auth]."

@@ -4,9 +4,12 @@ import React, { useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 interface SignaturePadProps {
+  /** Draw-only, typed-only, or both (canvas + optional/required typed name per props). */
+  mode?: "draw" | "type" | "both";
   onDataUrlChange?: (dataUrl: string | null) => void;
   typedName?: string;
   onTypedNameChange?: (value: string) => void;
+  /** When the typed name field is shown, whether it is required (asterisk + validation). */
   requireTypedName?: boolean;
   /** Shown below the signature canvas when signature is required but missing */
   signatureError?: string | null;
@@ -16,6 +19,7 @@ interface SignaturePadProps {
 }
 
 export function SignaturePad({
+  mode = "both",
   onDataUrlChange,
   typedName = "",
   onTypedNameChange,
@@ -112,43 +116,57 @@ export function SignaturePad({
     ctx.lineJoin = "round";
   }, []);
 
+  const showCanvas = mode !== "type";
+  const showTyped =
+    mode === "type" || mode === "both" || (mode === "draw" && requireTypedName);
+
   return (
     <div className={cn("space-y-3", className)}>
-      <p className="text-sm text-brand-muted">
-        Use your finger or mouse to sign in the box below.
-      </p>
-      <div className={cn("border-2 rounded-xl overflow-hidden bg-white touch-none", signatureError ? "border-red-500" : "border-brand-dark/20")}>
-        <canvas
-          ref={canvasRef}
-          className="w-full block touch-none"
-          style={{ width: "100%", height: "clamp(10rem, 40vw, 12rem)", minHeight: "160px" }}
-          onMouseDown={start}
-          onMouseMove={move}
-          onMouseUp={end}
-          onMouseLeave={end}
-          onTouchStart={start}
-          onTouchMove={move}
-          onTouchEnd={end}
-          aria-label="Sign here with your finger or mouse"
-          aria-invalid={signatureError ? "true" : undefined}
-        />
-      </div>
-      {signatureError && (
-        <p className="text-sm text-red-600 font-medium" role="alert">{signatureError}</p>
+      {mode === "type" && (
+        <p className="text-sm text-brand-muted">
+          Type your full legal name below to sign this waiver electronically.
+        </p>
       )}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={clear}
-          className="min-h-[44px] px-3 text-sm text-brand-muted hover:text-brand-dark underline touch-manipulation"
-        >
-          Clear
-        </button>
-      </div>
-      {onTypedNameChange && (
+      {showCanvas && (
+        <>
+          <p className="text-sm text-brand-muted">
+            Use your finger or mouse to sign in the box below.
+          </p>
+          <div className={cn("border-2 rounded-xl overflow-hidden bg-white touch-none", signatureError ? "border-red-500" : "border-brand-dark/20")}>
+            <canvas
+              ref={canvasRef}
+              className="w-full block touch-none"
+              style={{ width: "100%", height: "clamp(10rem, 40vw, 12rem)", minHeight: "160px" }}
+              onMouseDown={start}
+              onMouseMove={move}
+              onMouseUp={end}
+              onMouseLeave={end}
+              onTouchStart={start}
+              onTouchMove={move}
+              onTouchEnd={end}
+              aria-label="Sign here with your finger or mouse"
+              aria-invalid={signatureError ? "true" : undefined}
+            />
+          </div>
+          {signatureError && (
+            <p className="text-sm text-red-600 font-medium" role="alert">{signatureError}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clear}
+              className="min-h-[44px] px-3 text-sm text-brand-muted hover:text-brand-dark underline touch-manipulation"
+            >
+              Clear
+            </button>
+          </div>
+        </>
+      )}
+      {showTyped && onTypedNameChange && (
         <div>
           <label className="block text-sm font-medium text-brand-dark mb-1.5">
-            Printed name {requireTypedName && <span className="text-red-600">*</span>}
+            {mode === "type" ? "Full name (signature)" : "Printed name"}{" "}
+            {(mode === "type" || requireTypedName) && <span className="text-red-600">*</span>}
           </label>
           <input
             type="text"
@@ -159,6 +177,7 @@ export function SignaturePad({
               typedNameError ? "border-red-500 focus:border-red-500 focus:ring-red-500/20" : "border-brand-dark/20 focus:border-brand-primary focus:ring-brand-primary/20"
             )}
             placeholder="Type your full name"
+            autoComplete="name"
             aria-invalid={typedNameError ? "true" : undefined}
             aria-describedby={typedNameError ? "typed-name-error" : undefined}
           />

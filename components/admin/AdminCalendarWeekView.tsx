@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -73,19 +73,9 @@ type PositionedEvent = CalendarEvent & {
   numCols: number;
 };
 
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function formatTime(iso: string): string {
   return formatBookingTimeFromIso(iso);
-}
-
-function getWeekStart(d: Date): Date {
-  const date = new Date(d);
-  date.setDate(date.getDate() - date.getDay());
-  date.setHours(0, 0, 0, 0);
-  return date;
 }
 
 function isToday(d: Date): boolean {
@@ -154,6 +144,7 @@ export function AdminCalendarWeekView({
       : experienceId
       ? [experienceId]
       : [];
+  const effectiveExpId = experienceId ?? resolvedExperienceIds[0];
 
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -170,8 +161,8 @@ export function AdminCalendarWeekView({
 
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
-  const fromStr = toDateStr(weekStart);
-  const toStr = toDateStr(new Date(weekEnd.getTime() - 1));
+  const fromStr = isoToChicagoDateStr(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate(), 12, 0, 0).toISOString());
+  const toStr = isoToChicagoDateStr(new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate() - 1, 12, 0, 0).toISOString());
 
   const resolvedIdsKey = resolvedExperienceIds.join(",");
   const fetchEvents = useCallback(() => {
@@ -209,6 +200,17 @@ export function AdminCalendarWeekView({
 
   useEffect(() => {
     fetchEvents();
+    const intervalId = setInterval(() => fetchEvents(), 30_000);
+    return () => clearInterval(intervalId);
+  }, [fetchEvents]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") fetchEvents();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [fetchEvents]);
 
   const days = Array.from({ length: 7 }, (_, i) => {
@@ -231,29 +233,38 @@ export function AdminCalendarWeekView({
     return events.filter((ev) => !ev.boatId || selectedBoatIds.includes(ev.boatId));
   }, [events, selectedBoatIds]);
 
-  /** Group events by day index (0-6) */
+  /** Day keys (YYYY-MM-DD) for the week in America/Chicago, so events group to the correct column. */
+  const weekDayKeys = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      return isoToChicagoDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0).toISOString());
+    });
+  }, [weekStart]);
+
+  /** Group events by day index (0-6) using Chicago date so Central-timezone slots appear on the correct day. */
   const eventsByDay = useMemo<PositionedEvent[][]>(() => {
     const byDay: CalendarEvent[][] = [[], [], [], [], [], [], []];
     for (const ev of filteredEvents) {
-      const s = new Date(ev.startAt);
-      const idx = Math.floor((s.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
+      const eventDateStr = isoToChicagoDateStr(ev.startAt);
+      const idx = weekDayKeys.indexOf(eventDateStr);
       if (idx >= 0 && idx < 7) byDay[idx].push(ev);
     }
     return byDay.map(resolveOverlaps);
-  }, [filteredEvents, weekStart]);
+  }, [filteredEvents, weekDayKeys]);
 
   const handleCellClick = (dayIndex: number, hour: number) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + dayIndex);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const dateStr = `${year}-${month}-${day}`;
+    if (effectiveExpId == null) {
+      setBlockError("No experience selected. Select an experience or use a calendar that has an experience.");
+      return;
+    }
+    const dateStr = weekDayKeys[dayIndex] ?? isoToChicagoDateStr(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + dayIndex, 12, 0, 0).toISOString());
     const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, hour, 1, 0);
     setNewBlockStart(toCentralDatetimeLocal(slotStart));
     setNewBlockEnd(toCentralDatetimeLocal(slotEnd));
     setNewBlockBoatId(boatList[0]?.id ?? "");
     setNewBlockNote("");
+    setBlockError(null);
     setNewBlockOpen(true);
   };
 
@@ -270,7 +281,7 @@ export function AdminCalendarWeekView({
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          experienceId,
+          experienceId: effectiveExpId,
           startAt: startDate.toISOString(),
           endAt: endDate.toISOString(),
           boatId: newBlockBoatId || undefined,

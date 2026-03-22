@@ -86,6 +86,7 @@ export default function AdminBlogPage() {
   }, [statusFilter, sort, debouncedSearch]);
 
   useEffect(() => {
+    setLoading(true);
     setError(null);
     fetchPosts()
       .catch((e) => setError(e instanceof Error ? e.message : "Error"))

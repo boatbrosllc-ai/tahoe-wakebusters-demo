@@ -3,13 +3,15 @@
  * Used for PDF generation and contentHash (sha256) for audit.
  */
 
-import type { WaiverTemplate, WaiverClause, WaiverSignedPayload } from "./types";
+import type { WaiverClause, WaiverSignedPayload, WaiverSignatureMode } from "./types";
 
 export interface BuildWaiverHtmlInput {
   template: {
     title: string;
     termsHtml: string;
     clauses: WaiverClause[];
+    /** Used for PDF signature block labeling (typed-only vs drawn). */
+    signatureMode?: WaiverSignatureMode;
   };
   payload: WaiverSignedPayload;
   signedAtIso: string;
@@ -33,6 +35,7 @@ function escapeHtml(s: string): string {
  */
 export function buildWaiverHtml(input: BuildWaiverHtmlInput): string {
   const { template, payload, signedAtIso } = input;
+  const signatureMode = template.signatureMode ?? "both";
   const clausesSection =
     template.clauses.length > 0
       ? `
@@ -54,16 +57,27 @@ export function buildWaiverHtml(input: BuildWaiverHtmlInput): string {
     <h3 style="font-size:14px;margin-bottom:8px;">Signer</h3>
     <p><strong>Name:</strong> ${escapeHtml(payload.signerName)}</p>
     <p><strong>Email:</strong> ${escapeHtml(payload.signerEmail)}</p>
-    <p><strong>Phone:</strong> ${escapeHtml(payload.signerPhone)}</p>
+    ${payload.signerPhone?.trim() ? `<p><strong>Phone:</strong> ${escapeHtml(payload.signerPhone.trim())}</p>` : ""}
     ${payload.signerDob ? `<p><strong>Date of birth:</strong> ${escapeHtml(payload.signerDob)}</p>` : ""}
     <p><strong>Signed at:</strong> ${escapeHtml(signedAtIso)}</p>
   </section>`;
 
+  const drawnDataUrl =
+    payload.signatureDataUrl && payload.signatureDataUrl.startsWith("data:")
+      ? payload.signatureDataUrl
+      : null;
+  const hasDrawn = drawnDataUrl != null;
+  const typedLabel =
+    signatureMode === "type" || (!hasDrawn && payload.typedName)
+      ? "Typed signature"
+      : "Printed name";
+
   const signatureSection = `
   <section style="margin-top:24px;">
     <h3 style="font-size:14px;margin-bottom:8px;">Signature</h3>
-    ${payload.signatureDataUrl && payload.signatureDataUrl.startsWith("data:") ? `<img src="${payload.signatureDataUrl}" alt="Signature" style="max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px;" />` : ""}
-    ${payload.typedName ? `<p style="margin-top:8px;"><strong>Printed name:</strong> ${escapeHtml(payload.typedName)}</p>` : ""}
+    ${drawnDataUrl ? `<img src="${drawnDataUrl}" alt="Signature" style="max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px;" />` : ""}
+    ${payload.typedName ? `<p style="margin-top:8px;"><strong>${typedLabel}:</strong> ${escapeHtml(payload.typedName)}</p>` : ""}
+    ${!hasDrawn && !payload.typedName ? `<p style="color:#666;font-size:14px;">Electronic signature on file.</p>` : ""}
   </section>`;
 
   const html = `<!DOCTYPE html>

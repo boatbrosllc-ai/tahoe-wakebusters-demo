@@ -11,6 +11,7 @@ import {
 import { generateSigningToken, createTokenExpiresAt, getDefaultTokenExpiryDays } from "@/lib/waiver/tokens";
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { logNotificationSent } from "@/lib/booking/email-log";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
@@ -100,6 +101,15 @@ export async function POST(
       signingUrl,
       bookingSummary: { experienceName, tripDate, startTime, endTime, partySize },
     });
+    await logNotificationSent({
+      channel: "email",
+      to: toEmail,
+      toName,
+      templateId: "waiver_invite",
+      subject: "Sign your waiver – Boat Bros ATX",
+      bookingId: req.bookingId,
+      eventSubtype: "waiver_invite",
+    }).catch((err) => console.error("[waiver-requests/send] logNotificationSent failed", err));
 
     const now = Timestamp.now();
     const sent = {

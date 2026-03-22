@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback, Fragment } from "react";
+import { useEffect, useState, useCallback, Fragment, useRef, useMemo } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
+import { getMonthRange } from "@/lib/booking/booking-date-range";
+import { formatTripDateYyyyMmDd, formatTripDateYyyyMmDdShort } from "@/lib/booking/format-booking-datetime";
 import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet, Mail, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
+import { AdminSessionRedirectError, subscribeAdminAuthRevalidate, throwIfAdminApiError } from "@/lib/admin-auth-client";
 
 type StripeEventItem = {
   id: string;
@@ -79,10 +81,77 @@ type BookingItem = {
   waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
 };
 
+function mergeBookingLists(prev: BookingItem[], fresh: BookingItem[], order: "trip" | "created"): BookingItem[] {
+  const byId = new Map(prev.map((b) => [b.id, b]));
+  for (const b of fresh) byId.set(b.id, b);
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => {
+    if (order === "trip") {
+      const da = a.startDate ?? "";
+      const db = b.startDate ?? "";
+      const c = db.localeCompare(da);
+      if (c !== 0) return c;
+    } else {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+    }
+    return b.id.localeCompare(a.id);
+  });
+  return merged;
+}
+
+function intersectMonthWithTripFilters(
+  year: number,
+  month0: number,
+  fromTrip: string,
+  toTrip: string
+): { start: string; end: string } | null {
+  const { start: mStart, end: mEnd } = getMonthRange(year, month0);
+  let start = mStart;
+  let end = mEnd;
+  if (fromTrip && fromTrip > start) start = fromTrip;
+  if (toTrip && toTrip < end) end = toTrip;
+  if (start > end) return null;
+  return { start, end };
+}
+
+type CalendarEventApi = {
+  type: string;
+  id: string;
+  bookingId?: string;
+  experienceName?: string;
+  customer?: { name: string; email: string; phone: string };
+  partySize?: number | null;
+  pricing?: { totalCents: number; currency: string };
+  status?: string;
+  createdAt?: string | null;
+  startDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+};
+
+function mapCalendarEventToItem(e: CalendarEventApi): AdminBookingCalendarItem | null {
+  if (e.type !== "booking" || !e.bookingId) return null;
+  return {
+    id: e.bookingId,
+    experienceName: e.experienceName ?? "—",
+    customer: e.customer ?? { name: "", email: "", phone: "" },
+    partySize: e.partySize ?? undefined,
+    pricing: e.pricing ?? { totalCents: 0, currency: "usd" },
+    status: e.status ?? "",
+    createdAt: e.createdAt ?? null,
+    startDate: e.startDate ?? null,
+    startTime: e.startTime ?? null,
+    endTime: e.endTime ?? null,
+  };
+}
+
 export default function AdminBookingsPage() {
   const [list, setList] = useState<BookingItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
@@ -94,6 +163,8 @@ export default function AdminBookingsPage() {
   const [webhookEventsOpen, setWebhookEventsOpen] = useState(false);
   const [webhookEvents, setWebhookEvents] = useState<StripeEventItem[]>([]);
   const [webhookEventsLoading, setWebhookEventsLoading] = useState(false);
+  const [webhookEventsError, setWebhookEventsError] = useState<string | null>(null);
+  const [webhookEventsRefreshKey, setWebhookEventsRefreshKey] = useState(0);
   const [addBookingOpen, setAddBookingOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -103,6 +174,26 @@ export default function AdminBookingsPage() {
   const [cancelRefund, setCancelRefund] = useState(true);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
+  const [resendFinalLoading, setResendFinalLoading] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const n = new Date();
+    return { year: n.getFullYear(), month: n.getMonth() };
+  });
+  const [calendarEvents, setCalendarEvents] = useState<AdminBookingCalendarItem[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarPollTick, setCalendarPollTick] = useState(0);
+
+  const listFetchGenRef = useRef(0);
+  const loadMoreGenRef = useRef(0);
+  const calendarFetchGenRef = useRef(0);
+
+  useEffect(() => {
+    return subscribeAdminAuthRevalidate(() => {
+      setRefreshKey((k) => k + 1);
+      setCalendarPollTick((t) => t + 1);
+    });
+  }, []);
 
   const buildParams = useCallback((cursor?: string | null) => {
     const params = new URLSearchParams();
@@ -116,58 +207,195 @@ export default function AdminBookingsPage() {
     return params.toString();
   }, [statusFilter, fromDate, toDate, fromTripDate, toTripDate]);
 
+  const hasTripFilter = Boolean(fromTripDate || toTripDate);
+  const listOrder: "trip" | "created" = hasTripFilter ? "trip" : "created";
+
+  const silentMergeFirstPage = useCallback(async () => {
+    const genSnapshot = listFetchGenRef.current;
+    setLoadError(null);
+    setLoadMoreError(null);
+    try {
+      const qs = buildParams();
+      const url = qs ? `/api/admin/bookings?${qs}` : "/api/admin/bookings";
+      const res = await fetch(url, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throwIfAdminApiError(res, data);
+      if (genSnapshot !== listFetchGenRef.current) return;
+      const fresh = Array.isArray(data) ? data : (data.bookings ?? []);
+      setList((prev) => mergeBookingLists(prev, fresh, listOrder));
+      setNextCursor(data.nextCursor ?? null);
+      setLoadError(null);
+    } catch (e) {
+      if (e instanceof AdminSessionRedirectError) return;
+      if (genSnapshot !== listFetchGenRef.current) return;
+      setLoadError(e instanceof Error ? e.message : "Error");
+    }
+  }, [buildParams, listOrder]);
+
   useEffect(() => {
+    const gen = ++listFetchGenRef.current;
+    loadMoreGenRef.current += 1;
+    const ac = new AbortController();
+    setLoadError(null);
+    setLoadMoreError(null);
     setLoading(true);
     setNextCursor(null);
     const qs = buildParams();
     const url = qs ? `/api/admin/bookings?${qs}` : "/api/admin/bookings";
-    fetch(url, { credentials: "include" })
+    fetch(url, { credentials: "include", signal: ac.signal })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const msg = data.error ?? "Failed to load";
-          const hint = data.hint;
-          throw new Error(hint ? `${msg} ${hint}` : msg);
-        }
+        if (!res.ok) throwIfAdminApiError(res, data);
         return data;
       })
       .then((data) => {
+        if (gen !== listFetchGenRef.current) return;
         setList(Array.isArray(data) ? data : (data.bookings ?? []));
         setNextCursor(data.nextCursor ?? null);
+        setLoadError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Error"))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (e instanceof AdminSessionRedirectError) return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        if (gen !== listFetchGenRef.current) return;
+        setLoadError(e instanceof Error ? e.message : "Error");
+      })
+      .finally(() => {
+        if (gen === listFetchGenRef.current) setLoading(false);
+      });
+    return () => ac.abort();
   }, [buildParams, refreshKey]);
 
   const loadMore = useCallback(() => {
     if (!nextCursor || loadingMore) return;
+    const gen = ++loadMoreGenRef.current;
+    const ac = new AbortController();
+    setLoadMoreError(null);
     setLoadingMore(true);
     const qs = buildParams(nextCursor);
     const url = `/api/admin/bookings?${qs}`;
-    fetch(url, { credentials: "include" })
+    fetch(url, { credentials: "include", signal: ac.signal })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error ?? "Failed to load more");
+        if (!res.ok) throwIfAdminApiError(res, data, "Failed to load more");
         return data;
       })
       .then((data) => {
+        if (gen !== loadMoreGenRef.current) return;
         setList((prev) => [...prev, ...(Array.isArray(data) ? data : (data.bookings ?? []))]);
         setNextCursor(data.nextCursor ?? null);
+        setLoadMoreError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Error"))
-      .finally(() => setLoadingMore(false));
+      .catch((e) => {
+        if (e instanceof AdminSessionRedirectError) return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        if (gen !== loadMoreGenRef.current) return;
+        setLoadMoreError(e instanceof Error ? e.message : "Error");
+      })
+      .finally(() => {
+        if (gen === loadMoreGenRef.current) setLoadingMore(false);
+      });
   }, [nextCursor, loadingMore, buildParams]);
+
+  const handleCalendarMonthChange = useCallback((year: number, month: number) => {
+    setCalendarMonth({ year, month });
+  }, []);
+
+  useEffect(() => {
+    if (viewMode !== "calendar") return;
+    const gen = ++calendarFetchGenRef.current;
+    const ac = new AbortController();
+    setCalendarError(null);
+    setCalendarLoading(true);
+    const range = intersectMonthWithTripFilters(calendarMonth.year, calendarMonth.month, fromTripDate, toTripDate);
+    if (!range) {
+      setCalendarEvents([]);
+      setCalendarLoading(false);
+      return;
+    }
+    const params = new URLSearchParams({ from: range.start, to: range.end });
+    if (statusFilter) params.set("status", statusFilter);
+    const url = `/api/admin/calendar-events?${params.toString()}`;
+    fetch(url, { credentials: "include", signal: ac.signal })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throwIfAdminApiError(res, data, "Failed to load calendar");
+        return data;
+      })
+      .then((data) => {
+        if (gen !== calendarFetchGenRef.current) return;
+        const raw = (data.events ?? []) as CalendarEventApi[];
+        const items = raw.map(mapCalendarEventToItem).filter(Boolean) as AdminBookingCalendarItem[];
+        setCalendarEvents(items);
+        setCalendarError(null);
+      })
+      .catch((e) => {
+        if (e instanceof AdminSessionRedirectError) return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        if (gen !== calendarFetchGenRef.current) return;
+        setCalendarError(e instanceof Error ? e.message : "Error");
+      })
+      .finally(() => {
+        if (gen === calendarFetchGenRef.current) setCalendarLoading(false);
+      });
+    return () => ac.abort();
+  }, [viewMode, calendarMonth, fromTripDate, toTripDate, statusFilter, calendarPollTick]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void silentMergeFirstPage();
+      setCalendarPollTick((t) => t + 1);
+    }, 90_000);
+    return () => clearInterval(id);
+  }, [silentMergeFirstPage]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState !== "visible") return;
+      void silentMergeFirstPage();
+      setCalendarPollTick((t) => t + 1);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [silentMergeFirstPage]);
 
   useEffect(() => {
     if (!webhookEventsOpen) return;
+    const endpoint = "/api/admin/stripe-events?limit=50";
     setWebhookEventsLoading(true);
-    fetch("/api/admin/stripe-events?limit=50", { credentials: "include" })
-      .then((res) => res.json())
-      .then((data) => (Array.isArray(data) ? data : []))
-      .then(setWebhookEvents)
-      .catch(() => setWebhookEvents([]))
+    setWebhookEventsError(null);
+    fetch(endpoint, { credentials: "include" })
+      .then(async (res) => {
+        const data: unknown = await res.json().catch(() => null);
+        if (!res.ok) {
+          try {
+            throwIfAdminApiError(res, data, `Failed to load webhook diagnostics (${res.status})`);
+          } catch (e) {
+            if (e instanceof AdminSessionRedirectError) return;
+            console.error("[admin] stripe-events diagnostics fetch failed", {
+              endpoint,
+              httpStatus: res.status,
+              response: data,
+            });
+            setWebhookEventsError(e instanceof Error ? e.message : "Error");
+            return;
+          }
+        }
+        const list = Array.isArray(data) ? (data as StripeEventItem[]) : [];
+        setWebhookEvents(list);
+        setWebhookEventsError(null);
+      })
+      .catch((e) => {
+        console.error("[admin] stripe-events diagnostics fetch failed", {
+          endpoint,
+          httpStatus: "network",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        setWebhookEventsError(e instanceof Error ? e.message : "Network error");
+      })
       .finally(() => setWebhookEventsLoading(false));
-  }, [webhookEventsOpen]);
+  }, [webhookEventsOpen, webhookEventsRefreshKey]);
 
   function exportCsv() {
     const headers = ["Date", "Trip date", "Experience", "Party (guests)", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
@@ -277,12 +505,26 @@ export default function AdminBookingsPage() {
     return "bg-gray-100 text-gray-800";
   }
 
-  const handleBookingClick = (booking: AdminBookingCalendarItem) => {
-    setSelectedBooking(list.find((b) => b.id === booking.id) ?? null);
-    setDetailOpen(true);
+  const handleBookingClick = async (booking: AdminBookingCalendarItem) => {
+    const fromList = list.find((b) => b.id === booking.id);
+    if (fromList) {
+      setSelectedBooking(fromList);
+      setDetailOpen(true);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/bookings/${booking.id}`, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throwIfAdminApiError(res, data, "Failed to load booking");
+      setSelectedBooking(data as BookingItem);
+      setDetailOpen(true);
+    } catch (e) {
+      if (e instanceof AdminSessionRedirectError) return;
+      setLoadError(e instanceof Error ? e.message : "Failed to open booking");
+    }
   };
 
-  const filteredList = (() => {
+  const filteredList = useMemo(() => {
     const q = customerSearch.trim().toLowerCase();
     if (!q) return list;
     return list.filter((b) => {
@@ -292,25 +534,22 @@ export default function AdminBookingsPage() {
       const qNorm = q.replace(/\D/g, "");
       return name.includes(q) || email.includes(q) || phone.includes(qNorm) || (qNorm.length >= 4 && phone.includes(qNorm));
     });
-  })();
+  }, [list, customerSearch]);
 
-  // Calendar shows only confirmed bookings (paid, deposit_paid, final_due, final_paid, final_processing).
-  // Excludes canceled, refunded, final_failed, final_requires_action so the calendar isn’t cluttered with non-trips.
-  const confirmedForCalendar = filteredList.filter((b) =>
-    BOOKING_STATUSES_SLOT_TAKEN.has(b.status as BookingStatus)
-  );
-  const calendarBookings: AdminBookingCalendarItem[] = confirmedForCalendar.map((b) => ({
-    id: b.id,
-    experienceName: b.experienceName,
-    customer: b.customer,
-    partySize: b.partySize ?? undefined,
-    pricing: b.pricing,
-    status: b.status,
-    createdAt: b.createdAt ?? null,
-    startDate: b.startDate ?? null,
-    startTime: b.startTime ?? null,
-    endTime: b.endTime ?? null,
-  }));
+  const filteredCalendarEvents = useMemo(() => {
+    const q = customerSearch.trim().toLowerCase();
+    if (!q) return calendarEvents;
+    return calendarEvents.filter((b) => {
+      const name = (b.customer?.name ?? "").toLowerCase();
+      const email = (b.customer?.email ?? "").toLowerCase();
+      const phone = (b.customer?.phone ?? "").replace(/\D/g, "");
+      const qNorm = q.replace(/\D/g, "");
+      return name.includes(q) || email.includes(q) || phone.includes(qNorm) || (qNorm.length >= 4 && phone.includes(qNorm));
+    });
+  }, [calendarEvents, customerSearch]);
+
+  const showInitialLoading = loading && list.length === 0;
+  const showFatalBlock = loadError && list.length === 0 && !loading;
 
   const inputClass =
     "rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary min-h-[40px] sm:min-h-[36px] transition-colors duration-200";
@@ -451,6 +690,10 @@ export default function AdminBookingsPage() {
                 aria-label="Filter to date (trip start)"
               />
             </div>
+            <p className="w-full text-xs text-brand-muted max-w-2xl leading-relaxed">
+              <strong>Booking date</strong> filters when the reservation was created. <strong>Trip date</strong> filters when the charter starts; you can set only &quot;from&quot;, only &quot;to&quot;, or both.
+              If both booking-date and trip-date filters are set, a booking must match <em>both</em> (trip range is queried first, then booking created date is applied). The &quot;By day&quot; calendar loads by trip month and status; it does not use booking-date filters.
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 ml-auto">
             <Button type="button" variant="outline" size="sm" onClick={exportCsv} disabled={list.length === 0} className="transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]">
@@ -464,20 +707,33 @@ export default function AdminBookingsPage() {
         </div>
       </div>
 
-      {error && (
+      {loadError && list.length > 0 && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {error}
+          {loadError}
           <Link href="/admin/login" className="ml-2 text-brand-primary hover:underline">Sign in</Link>
         </div>
       )}
 
-      {loading && (
+      {loadMoreError && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {loadMoreError}
+        </div>
+      )}
+
+      {showFatalBlock && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {loadError}
+          <Link href="/admin/login" className="ml-2 text-brand-primary hover:underline">Sign in</Link>
+        </div>
+      )}
+
+      {showInitialLoading && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center text-brand-muted text-sm">
           Loading…
         </div>
       )}
 
-      {!loading && !error && list.length === 0 && (
+      {!loading && !loadError && list.length === 0 && viewMode === "list" && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
           <p className="text-brand-muted text-sm">No bookings yet.</p>
           <p className="mt-2 text-brand-muted text-xs max-w-md mx-auto">
@@ -489,14 +745,14 @@ export default function AdminBookingsPage() {
         </div>
       )}
 
-      {!loading && !error && list.length > 0 && filteredList.length === 0 && (
+      {!loading && !loadError && list.length > 0 && filteredList.length === 0 && viewMode === "list" && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
           <p className="text-brand-muted text-sm">No bookings match your customer search.</p>
           <p className="mt-1 text-brand-muted text-xs">Try a different name, email, or phone number, or clear the search box.</p>
         </div>
       )}
 
-      {!loading && !error && list.length > 0 && filteredList.length > 0 && viewMode === "list" && (
+      {!loading && !loadError && list.length > 0 && filteredList.length > 0 && viewMode === "list" && (
         <>
           {/* Desktop table */}
           <div className="hidden md:block rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
@@ -529,9 +785,7 @@ export default function AdminBookingsPage() {
                       className="border-b border-brand-dark/5 hover:bg-brand-primary/5 cursor-pointer transition-all duration-200 ease-out hover:shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
                     >
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark whitespace-nowrap">
-                        {b.startDate
-                          ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                          : "—"}
+                        {formatTripDateYyyyMmDdShort(b.startDate ?? null)}
                         {(b.startTime ?? b.endTime) && (
                           <span className="block text-brand-muted text-xs mt-0.5">
                             {[b.startTime, b.endTime].filter(Boolean).join(" – ")}
@@ -595,9 +849,7 @@ export default function AdminBookingsPage() {
                   </span>
                 </div>
                 <div className="text-xs text-brand-muted">
-                  {b.startDate
-                    ? new Date(b.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                    : "—"}
+                  {formatTripDateYyyyMmDdShort(b.startDate ?? null)}
                   {(b.startTime ?? b.endTime) && ` · ${[b.startTime, b.endTime].filter(Boolean).join(" – ")}`}
                   {" · "}{b.experienceName}
                 </div>
@@ -610,7 +862,7 @@ export default function AdminBookingsPage() {
         </>
       )}
 
-      {!loading && !error && nextCursor && viewMode === "list" && (
+      {!loading && !loadError && nextCursor && viewMode === "list" && (
         <div className="flex justify-center">
           <Button
             type="button"
@@ -634,16 +886,34 @@ export default function AdminBookingsPage() {
         </div>
       )}
 
-      {!loading && !error && list.length > 0 && viewMode === "calendar" && (
+      {!loadError && viewMode === "calendar" && (
         <div className="space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-brand-dark">Bookings by day</h2>
-            <p className="text-sm text-brand-muted mt-0.5">View reservations on a calendar. Click any booking to open details (customer, party, payment).</p>
+            <p className="text-sm text-brand-muted mt-0.5">
+              Loaded for the visible month from the server (not limited to the list page size). Trip date and status filters apply; booking-date filters do not. Click any booking to open details.
+            </p>
           </div>
-          <AdminBookingCalendar
-            bookings={calendarBookings}
-            onBookingClick={handleBookingClick}
-          />
+          {calendarError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{calendarError}</div>
+          )}
+          {calendarLoading && calendarEvents.length === 0 && (
+            <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-6 text-center text-brand-muted text-sm">
+              Loading calendar…
+            </div>
+          )}
+          {!calendarError && (calendarEvents.length > 0 || !calendarLoading) && (
+            <>
+              {calendarEvents.length > 0 && filteredCalendarEvents.length === 0 && customerSearch.trim() && (
+                <p className="text-sm text-brand-muted">No bookings match your customer search for this month.</p>
+              )}
+              <AdminBookingCalendar
+                bookings={filteredCalendarEvents}
+                onBookingClick={handleBookingClick}
+                onMonthChange={handleCalendarMonthChange}
+              />
+            </>
+          )}
         </div>
       )}
 
@@ -666,7 +936,23 @@ export default function AdminBookingsPage() {
             {webhookEventsLoading && (
               <p className="text-sm text-brand-muted py-2">Loading…</p>
             )}
-            {!webhookEventsLoading && webhookEvents.length === 0 && (
+            {webhookEventsError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 mb-4" role="alert">
+                <p className="font-medium">Could not load webhook events</p>
+                <p className="mt-1">{webhookEventsError}</p>
+                <button
+                  type="button"
+                  className="mt-3 text-sm font-semibold text-brand-primary hover:underline"
+                  onClick={() => {
+                    setWebhookEventsError(null);
+                    setWebhookEventsRefreshKey((k) => k + 1);
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {!webhookEventsLoading && !webhookEventsError && webhookEvents.length === 0 && (
               <p className="text-sm text-brand-muted py-2">No webhook events recorded yet. Complete a test payment to see events here.</p>
             )}
             {!webhookEventsLoading && webhookEvents.length > 0 && (
@@ -720,7 +1006,14 @@ export default function AdminBookingsPage() {
         )}
       </section>
 
-      <AddBookingModal open={addBookingOpen} onOpenChange={setAddBookingOpen} onSuccess={() => setRefreshKey((k) => k + 1)} />
+      <AddBookingModal
+        open={addBookingOpen}
+        onOpenChange={setAddBookingOpen}
+        onSuccess={() => {
+          setRefreshKey((k) => k + 1);
+          setCalendarPollTick((t) => t + 1);
+        }}
+      />
 
       {/* Booking detail modal */}
       <Dialog
@@ -731,6 +1024,8 @@ export default function AdminBookingsPage() {
             setSelectedBooking(null);
             setCancelConfirmOpen(false);
             setCancelRefund(true);
+            void silentMergeFirstPage();
+            setCalendarPollTick((t) => t + 1);
           }
         }}
         title={selectedBooking ? `Booking — ${selectedBooking.customer?.name ?? "Customer"}` : undefined}
@@ -762,14 +1057,7 @@ export default function AdminBookingsPage() {
                 </dd>
                 <dt className="text-brand-muted">Date & time</dt>
                 <dd className="text-brand-dark">
-                  {selectedBooking.startDate
-                    ? new Date(selectedBooking.startDate).toLocaleDateString("en-US", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })
-                    : "—"}
+                  {formatTripDateYyyyMmDd(selectedBooking.startDate ?? null)}
                   {(selectedBooking.startTime ?? selectedBooking.endTime) && (
                     <span className="block text-brand-muted text-xs mt-0.5">
                       {[selectedBooking.startTime, selectedBooking.endTime].filter(Boolean).join(" – ")}
@@ -989,12 +1277,12 @@ export default function AdminBookingsPage() {
                       });
                       const data = await res.json().catch(() => ({}));
                       if (!res.ok) throw new Error(data.error ?? "Failed to send");
-                      setError(null);
+                      setLoadError(null);
                       setDetailOpen(false);
                       setSelectedBooking(null);
                       setRefreshKey((k) => k + 1);
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : "Failed to resend email");
+                      setLoadError(e instanceof Error ? e.message : "Failed to resend email");
                     } finally {
                       setResendLoading(false);
                     }
@@ -1004,6 +1292,39 @@ export default function AdminBookingsPage() {
                   <Mail className="w-4 h-4" aria-hidden />
                   {resendLoading ? "Sending…" : "Resend confirmation email"}
                 </Button>
+                {["final_due", "final_requires_action", "final_failed"].includes(selectedBooking.status) &&
+                  (selectedBooking.stripe?.finalAmountCents ?? 0) > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={resendFinalLoading}
+                    onClick={async () => {
+                      if (!selectedBooking?.id) return;
+                      setResendFinalLoading(true);
+                      try {
+                        const res = await fetch(`/api/admin/bookings/${selectedBooking.id}/resend-final-payment-request`, {
+                          method: "POST",
+                          credentials: "include",
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.error ?? "Failed to send");
+                        setLoadError(null);
+                        setDetailOpen(false);
+                        setSelectedBooking(null);
+                        setRefreshKey((k) => k + 1);
+                      } catch (e) {
+                        setLoadError(e instanceof Error ? e.message : "Failed to resend final payment request");
+                      } finally {
+                        setResendFinalLoading(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5"
+                  >
+                    <Mail className="w-4 h-4" aria-hidden />
+                    {resendFinalLoading ? "Sending…" : "Resend final payment request"}
+                  </Button>
+                )}
                 {selectedBooking.status !== "canceled" && selectedBooking.status !== "refunded" && (
                   <Button
                     type="button"
@@ -1075,14 +1396,14 @@ export default function AdminBookingsPage() {
                     });
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.error ?? "Failed to cancel");
-                    setError(null);
+                    setLoadError(null);
                     setCancelConfirmOpen(false);
                     setDetailOpen(false);
                     setSelectedBooking(null);
                     setCancelRefund(true);
                     setRefreshKey((k) => k + 1);
                   } catch (e) {
-                    setError(e instanceof Error ? e.message : "Failed to cancel booking");
+                    setLoadError(e instanceof Error ? e.message : "Failed to cancel booking");
                   } finally {
                     setCancelLoading(false);
                   }

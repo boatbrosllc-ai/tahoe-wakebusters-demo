@@ -103,6 +103,7 @@ Create **`.env.local`** (see **`.env.example`**):
 | `BREVO_MARKETING_LIST_ID` | No | Brevo list ID for marketing opt-in |
 | `APP_BASE_URL` | Yes | Base URL (e.g. `http://localhost:3000`) |
 | `SEED_SECRET` / `CRON_SECRET` | No | Optional; protect seed and cleanup-holds with `Authorization: Bearer <secret>` |
+| `ADMIN_EDGE_SECRET` | Yes (production) | Required in production. HMAC secret for admin Edge/middleware guard; when unset, admin paths return 503. Set in Netlify. See `docs/BOOKING_SETUP.md`. |
 
 **Local dev – Stripe webhooks:** Forward events to your app:
 

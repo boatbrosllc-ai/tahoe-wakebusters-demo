@@ -13,11 +13,9 @@ const SEP = ".";
 const INNER_SEP = "\x00";
 const PREFIX = "rel"; // release
 
-/** Optional secret for release tokens. Falls back to MANAGE_BOOKING_SECRET for backward compat when RELEASE_TOKEN_SECRET is unset. */
+/** Release tokens use RELEASE_TOKEN_SECRET only (no fallback — key isolation). */
 function getReleaseSecret(): string | null {
-  const v =
-    process.env.RELEASE_TOKEN_SECRET?.trim() ||
-    process.env.MANAGE_BOOKING_SECRET?.trim();
+  const v = process.env.RELEASE_TOKEN_SECRET?.trim();
   return v && v !== "" ? v : null;
 }
 
@@ -43,7 +41,7 @@ export interface ReleaseTokenPayload {
 
 /**
  * Sign a release token for a hold. Exp should match hold expiry or a short window.
- * Returns "" when RELEASE_TOKEN_SECRET (or MANAGE_BOOKING_SECRET fallback) is not set.
+ * Returns "" when RELEASE_TOKEN_SECRET is not set.
  */
 export function signReleaseToken(holdId: string, exp: number): string {
   const secret = getReleaseSecret();

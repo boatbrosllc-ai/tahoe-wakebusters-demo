@@ -7,83 +7,17 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 import { bookingError } from "@/lib/booking/debug";
+import type {
+  ExperienceItem,
+  BoatOption,
+  SlotDto,
+  RateOption,
+  AddonOption,
+  BookingModalInitialSelection,
+} from "@/lib/booking/booking-modal-types";
+import type { ExperienceSeasonal } from "@/lib/booking/types";
 
-/** Booking window: when enabled, only dates within startDate–endDate (or startMonth–endMonth) are bookable. */
-export interface ExperienceSeasonalConfig {
-  enabled?: boolean;
-  startMonth?: number;
-  endMonth?: number;
-  startDate?: string;
-  endDate?: string;
-}
-
-export interface ExperienceItem {
-  id: string;
-  slug: string;
-  title: string;
-  subtitle: string;
-  heroMedia: { type: "image" | "video"; url: string };
-  maxGuests: number;
-  petsMax: number;
-  fromPriceCents: number | null;
-  active: boolean;
-  pricingType?: "charter" | "ticketed";
-  maxCapacity?: number;
-  departureHour?: number;
-  departureMinute?: number;
-  allowDeposit?: boolean;
-  allowTipNow?: boolean;
-  allowTipLater?: boolean;
-  seasonal?: ExperienceSeasonalConfig;
-}
-
-export interface BoatOption {
-  id: string;
-  name: string;
-  slug?: string;
-  photos: string[];
-  fromPriceCents: number | null;
-  rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
-}
-
-export interface SlotDto {
-  id: string;
-  startAt: string;
-  endAt: string;
-  status: string;
-  boatId?: string;
-  spotsBooked?: number;
-  spotsRemaining?: number;
-}
-
-export interface RateOption {
-  id: string;
-  durationHours: number;
-  displayName: string;
-  priceCents: number;
-}
-
-export interface AddonOption {
-  id: string;
-  name: string;
-  description?: string;
-  priceCents: number;
-  type: string;
-  maxQty?: number;
-  highlight?: boolean;
-}
-
-export interface BookingModalInitialSelection {
-  experienceId?: string;
-  experienceSlug?: string;
-  boatId?: string;
-  date?: string;
-  slotId?: string;
-  pricingType?: "charter" | "ticketed";
-  bookingMode?: "shared" | "charter";
-  departureHour?: number;
-  departureMinute?: number;
-}
+export type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption, BookingModalInitialSelection };
 
 const EMPTY_RATES: bookingCache.CachedRateOption[] = [];
 
@@ -94,6 +28,8 @@ export type UseBookingModalDataSelection = {
   selectedRateIdForCalendar: string | null;
   selectedDate: string | null;
   isTicketed: boolean;
+  /** Listing boat id for calendar/effective pricing when the experience has boats. */
+  selectedBoatId: string | null;
   setSelectedExperience: React.Dispatch<React.SetStateAction<ExperienceItem | null>>;
 };
 
@@ -124,9 +60,14 @@ export function useBookingModalData(
   const [ratesLoadError, setRatesLoadError] = useState<string | null>(null);
   const [monthDataRangeStart, setMonthDataRangeStart] = useState<string | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
+  const [boatsRetryTrigger, setBoatsRetryTrigger] = useState(0);
   const [ticketCounts, setTicketCounts] = useState<{ total: number; sold: number; onHold: number; available: number } | null>(null);
   const [ticketCountsLoading, setTicketCountsLoading] = useState(false);
+  const [ticketCountsError, setTicketCountsError] = useState<string | null>(null);
+  const [ticketCountsRetryTrigger, setTicketCountsRetryTrigger] = useState(0);
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
+  /** True while fetching `/api/booking/effective-price` for the selected date (cache miss for that date). */
+  const [effectivePriceLoading, setEffectivePriceLoading] = useState(false);
 
   const viewMonthForPrefetchRef = useRef<{ viewMonthStartStr: string; daysInViewMonth: number } | null>(null);
   const inFlightKeyRef = useRef<string | null>(null);
@@ -169,9 +110,11 @@ export function useBookingModalData(
     setRatesLoadError(null);
     setDatePrices({});
     setDatePricesLoading(false);
+    setEffectivePriceLoading(false);
     setTicketsAvailableByDate({});
     setTicketCounts(null);
     setTicketCountsLoading(false);
+    setTicketCountsError(null);
   }, [open]);
 
   // Experiences fetch (on open/selectionKey)
@@ -219,7 +162,7 @@ export function useBookingModalData(
         setBoats(boatList);
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
-        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceSeasonalConfig };
+        const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceSeasonal };
         if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null || detail?.allowTipNow != null || detail?.allowTipLater != null || detail?.seasonal != null) {
           selection?.setSelectedExperience((prev) =>
             prev
@@ -252,7 +195,7 @@ export function useBookingModalData(
         setAddonsLoading(false);
       });
     return () => controller.abort();
-  }, [selection?.selectedExperience?.id, selection?.setSelectedExperience]);
+  }, [selection?.selectedExperience?.id, selection?.setSelectedExperience, boatsRetryTrigger]);
 
   // Rates summary (early fetch for duration/date-prices)
   useEffect(() => {
@@ -278,7 +221,7 @@ export function useBookingModalData(
             viewMonth.viewMonthStartStr,
             viewMonth.daysInViewMonth,
             allRateIds,
-            controller.signal
+            undefined
           );
         }
       })
@@ -335,7 +278,7 @@ export function useBookingModalData(
         const otherRateIds = ratesForSelection
           .map((r) => r.id)
           .filter((id) => id !== selection.selectedRateIdForCalendar);
-        bookingCache.prefetchDatePrices(exp.id, viewMonthStartStr, daysInViewMonth, otherRateIds, controller.signal);
+        bookingCache.prefetchDatePrices(exp.id, viewMonthStartStr, daysInViewMonth, otherRateIds, undefined);
         const nextYear = selection.viewMonthMonth === 12 ? selection.viewMonthYear + 1 : selection.viewMonthYear;
         const nextMonth0 = selection.viewMonthMonth === 12 ? 0 : selection.viewMonthMonth;
         const { start: nextStart } = getMonthRange(nextYear, nextMonth0);
@@ -345,7 +288,7 @@ export function useBookingModalData(
           ? [...otherRateIds, selId]
           : selId ? [selId] : [];
         if (allRateIdsForAdjacentMonth.length > 0) {
-          bookingCache.prefetchDatePrices(exp.id, nextStart, daysInNextMonth, allRateIdsForAdjacentMonth, controller.signal);
+          bookingCache.prefetchDatePrices(exp.id, nextStart, daysInNextMonth, allRateIdsForAdjacentMonth, undefined);
         }
       })
       .catch((err: unknown) => {
@@ -364,7 +307,7 @@ export function useBookingModalData(
       });
     return () => {
       controller.abort();
-      inFlightKeyRef.current = null;
+      if (inFlightKeyRef.current === key) inFlightKeyRef.current = null;
     };
   }, [selection?.selectedExperience?.id, selection?.viewMonthYear, selection?.viewMonthMonth, viewMonthStartStr, daysInViewMonth, selection?.selectedRateIdForCalendar, ratesForSelection]);
 
@@ -378,6 +321,7 @@ export function useBookingModalData(
       setSlotsPartialData(false);
       return;
     }
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const viewYear = selection?.viewMonthYear ?? new Date().getFullYear();
     const viewMonth = selection?.viewMonthMonth ?? new Date().getMonth() + 1;
     const rangeKey = `${viewMonthStartStr}|${viewMonthEndStr}`;
@@ -401,6 +345,13 @@ export function useBookingModalData(
         if (!refMatch) return;
         setSlotsLoadError(null);
         setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
+        const ur = (data as { unresolvedBookingCount?: number })?.unresolvedBookingCount;
+        if (typeof ur === "number" && ur > 0) {
+          bookingError("client", "slots API reports bookings missing boatId — verify backfill", null, {
+            experienceId: exp.id,
+            unresolvedBookingCount: ur,
+          });
+        }
         const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {
@@ -437,70 +388,188 @@ export function useBookingModalData(
         setSlotsLoadError(parts.join(" "));
         if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
-          setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+          retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
         }
       })
       .finally(() => {
         if (slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr) setSlotsLoading(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [selection?.selectedExperience?.id, selection?.viewMonthYear, selection?.viewMonthMonth, viewMonthStartStr, viewMonthEndStr, slotsRetryTrigger]);
 
-  // Ticket counts (ticketed only)
+  // When tab becomes visible after inactivity, refresh slots and boats/experience-detail so the grid and options are not stale.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && selection?.selectedExperience?.id) {
+        const experienceId = selection.selectedExperience.id;
+        bookingCache.invalidate(`slots|${experienceId}|`);
+        bookingCache.invalidate(`boats|${experienceId}`);
+        bookingCache.invalidate(`experience-detail|${experienceId}`);
+        setSlotsRetryTrigger((t) => t + 1);
+        setBoatsRetryTrigger((t) => t + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [selection?.selectedExperience?.id]);
+
+  // Ticket counts (ticketed only) — one automatic retry after 3s; on failure leave ticketCounts null and show error (no synthetic capacity).
   useEffect(() => {
     const exp = selection?.selectedExperience;
     const selectedDate = selection?.selectedDate;
     if (!selection?.isTicketed || !selectedDate || !exp?.id) {
       setTicketCounts(null);
+      setTicketCountsError(null);
       return;
     }
     if (ticketsAvailableByDateRef.current[selectedDate] === 0) {
       setTicketCounts({ total: 0, sold: 0, onHold: 0, available: 0 });
+      setTicketCountsError(null);
       return;
     }
     setTicketCountsLoading(true);
     setTicketCounts(null);
+    setTicketCountsError(null);
     const controller = new AbortController();
-    fetch(
-      `/api/booking/ticket-availability?experienceId=${encodeURIComponent(exp.id)}&date=${encodeURIComponent(selectedDate)}`,
-      { signal: controller.signal, cache: "no-store" }
-    )
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && typeof data.total === "number") setTicketCounts(data);
-      })
-      .catch(() => {})
-      .finally(() => setTicketCountsLoading(false));
-    return () => controller.abort();
-  }, [selection?.isTicketed, selection?.selectedDate, selection?.selectedExperience?.id]);
 
-  // Effective rate cents (for selected date)
+    const parseCounts = (body: Record<string, unknown>) => {
+      if (
+        typeof body.total === "number" &&
+        typeof body.sold === "number" &&
+        typeof body.onHold === "number" &&
+        typeof body.available === "number"
+      ) {
+        return {
+          total: body.total,
+          sold: body.sold,
+          onHold: body.onHold,
+          available: body.available,
+        };
+      }
+      return null;
+    };
+
+    (async () => {
+      try {
+        const fetchOnce = async () => {
+          const res = await fetch(
+            `/api/booking/ticket-availability?experienceId=${encodeURIComponent(exp.id)}&date=${encodeURIComponent(selectedDate)}`,
+            { signal: controller.signal, cache: "no-store" }
+          );
+          let body: Record<string, unknown> = {};
+          try {
+            body = (await res.json()) as Record<string, unknown>;
+          } catch {
+            /* non-JSON */
+          }
+          return { res, body };
+        };
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (controller.signal.aborted) return;
+          if (attempt > 0) {
+            await new Promise((r) => setTimeout(r, 3000));
+            if (controller.signal.aborted) return;
+          }
+          const { res, body } = await fetchOnce();
+          if (res.ok) {
+            const counts = parseCounts(body);
+            if (counts) {
+              setTicketCounts(counts);
+              setTicketCountsError(null);
+              return;
+            }
+            bookingError("client", "ticket-availability invalid response", null, {
+              keys: Object.keys(body),
+              experienceId: exp.id,
+              date: selectedDate,
+            });
+          } else {
+            bookingError("client", "ticket-availability fetch failed", null, {
+              status: res.status,
+              error: body.error,
+              hint: body.hint,
+              experienceId: exp.id,
+              date: selectedDate,
+            });
+          }
+        }
+        if (controller.signal.aborted) return;
+        setTicketCounts(null);
+        setTicketCountsError("We couldn’t load ticket availability. Tap Retry to try again.");
+      } catch (err: unknown) {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        bookingError("client", "ticket-availability fetch threw", err, {
+          experienceId: exp.id,
+          date: selectedDate,
+        });
+        setTicketCounts(null);
+        setTicketCountsError(err instanceof Error ? err.message : "Could not load ticket availability");
+      }
+    })().finally(() => {
+      if (!controller.signal.aborted) setTicketCountsLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [selection?.isTicketed, selection?.selectedDate, selection?.selectedExperience?.id, ticketCountsRetryTrigger]);
+
+  // Effective rate for selected date: use month cache when present; otherwise fetch `/api/booking/effective-price`
+  // directly (cache: no-store, not `fetchCached`) so payment-time price stays server-authoritative.
   useEffect(() => {
     const exp = selection?.selectedExperience;
     const selectedRateId = selection?.selectedRateIdForCalendar;
     const selectedDate = selection?.selectedDate;
     if (!exp?.id || !selectedRateId || !selectedDate) {
       setEffectiveRateCents(null);
+      setEffectivePriceLoading(false);
       return;
     }
     const cachedPrice = datePrices[selectedDate];
     if (typeof cachedPrice === "number") {
       setEffectiveRateCents(cachedPrice);
+      setEffectivePriceLoading(false);
       return;
     }
     const controller = new AbortController();
-    const effectivePriceUrl = `/api/booking/effective-price?experienceId=${encodeURIComponent(exp.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}`;
-    fetch(effectivePriceUrl, { signal: controller.signal })
-      .then((res) => res.json())
-      .then((data) => {
-        if (typeof data?.priceCents === "number") setEffectiveRateCents(data.priceCents);
-        else setEffectiveRateCents(null);
-      })
-      .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setEffectiveRateCents(null);
-      });
-    return () => controller.abort();
-  }, [selection?.selectedExperience?.id, selection?.selectedRateIdForCalendar, selection?.selectedDate, datePrices]);
+    let cancelled = false;
+    setEffectivePriceLoading(true);
+    const boatIdParam =
+      selection.selectedBoatId && selection.selectedBoatId.trim()
+        ? `&boatId=${encodeURIComponent(selection.selectedBoatId.trim())}`
+        : "";
+    const effectivePriceUrl = `/api/booking/effective-price?experienceId=${encodeURIComponent(exp.id)}&rateId=${encodeURIComponent(selectedRateId)}&date=${encodeURIComponent(selectedDate)}${boatIdParam}`;
+
+    (async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (cancelled || controller.signal.aborted) return;
+        try {
+          const res = await fetch(effectivePriceUrl, { signal: controller.signal, cache: "no-store" });
+          const data = (await res.json()) as { priceCents?: unknown };
+          if (cancelled) return;
+          if (typeof data?.priceCents === "number") {
+            setEffectiveRateCents(data.priceCents);
+            setEffectivePriceLoading(false);
+            return;
+          }
+        } catch (err: unknown) {
+          if ((err as { name?: string })?.name === "AbortError") return;
+        }
+      }
+      if (!cancelled) {
+        setEffectiveRateCents(null);
+        setEffectivePriceLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [selection?.selectedExperience?.id, selection?.selectedRateIdForCalendar, selection?.selectedDate, selection?.selectedBoatId, datePrices]);
 
   return {
     experiences,
@@ -541,11 +610,18 @@ export function useBookingModalData(
     setMonthDataRangeStart,
     slotsRetryTrigger,
     setSlotsRetryTrigger,
+    boatsRetryTrigger,
+    setBoatsRetryTrigger,
     ticketCounts,
     setTicketCounts,
     ticketCountsLoading,
+    ticketCountsError,
+    setTicketCountsError,
+    ticketCountsRetryTrigger,
+    setTicketCountsRetryTrigger,
     effectiveRateCents,
     setEffectiveRateCents,
+    effectivePriceLoading,
     viewMonthForPrefetchRef,
     ratesForSelection,
   };

@@ -22,9 +22,13 @@ type DashboardStats = {
   totalRevenueCents: number;
   revenueThisMonthCents: number;
   revenueLastMonthCents: number;
-  bookingCount: number;
-  customerCount: number;
+  bookingCountTotal: number;
+  uniqueCustomerCount: number;
   listingCount: number;
+  /** Booking confirmation emails stuck in notification outbox (dead letter). Resend via booking admin. */
+  confirmationDeadLetterCount?: number;
+  /** Last-500-bookings sample: slot-taken statuses with missing boatId (drive to zero; see docs/BOOKING_AVAILABILITY.md). */
+  recentBookingsMissingBoatId?: number;
   recentBookings: {
     id: string;
     createdAt: string;
@@ -177,8 +181,18 @@ export default function AdminHomePage() {
         </button>
       </div>
       {healthResult != null && (
-        <div className="rounded-2xl border border-brand-dark/10 bg-white p-4 font-mono text-xs text-brand-dark overflow-x-auto">
-          <pre className="whitespace-pre-wrap break-words">{JSON.stringify(healthResult, null, 2)}</pre>
+        <div className="space-y-3">
+          {(healthResult as Record<string, unknown>).manageBookingSecret === "not_configured" && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900" role="alert">
+              <p className="font-semibold">MANAGE_BOOKING_SECRET not set</p>
+              <p className="mt-1 text-sm">
+                Receipt links, manage-booking links, and release-token signing are degraded or unavailable. Set MANAGE_BOOKING_SECRET in your environment so confirmation emails and customer links work correctly.
+              </p>
+            </div>
+          )}
+          <div className="rounded-2xl border border-brand-dark/10 bg-white p-4 font-mono text-xs text-brand-dark overflow-x-auto">
+            <pre className="whitespace-pre-wrap break-words">{JSON.stringify(healthResult, null, 2)}</pre>
+          </div>
         </div>
       )}
 
@@ -223,6 +237,37 @@ export default function AdminHomePage() {
 
       {!loading && stats && (
         <>
+          {(stats.confirmationDeadLetterCount ?? 0) > 0 && (
+            <div
+              className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 sm:px-5 sm:py-4"
+              role="status"
+            >
+              <p className="font-semibold">Confirmation emails need attention</p>
+              <p className="mt-1 text-sm text-amber-900/95">
+                {stats.confirmationDeadLetterCount} booking confirmation
+                {stats.confirmationDeadLetterCount === 1 ? " is" : "s are"} in a failed queue (dead letter). Open the
+                booking in{" "}
+                <Link href="/admin/bookings" className="font-medium text-amber-950 underline underline-offset-2">
+                  Bookings
+                </Link>{" "}
+                and use resend confirmation, or check operational alerts in Firestore.
+              </p>
+            </div>
+          )}
+          {(stats.recentBookingsMissingBoatId ?? 0) > 0 && (
+            <div
+              className="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-950 sm:px-5 sm:py-4"
+              role="alert"
+            >
+              <p className="font-semibold">Bookings missing boat ID</p>
+              <p className="mt-1 text-sm text-red-900/95">
+                {stats.recentBookingsMissingBoatId} of the last 500 bookings (by creation time) have a paid/trip status but no{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code>. Calendar occupancy for those boats may be wrong until you run the backfill (
+                <code className="rounded bg-red-100/80 px-1">POST /api/admin/backfill-booking-boat-ids</code> with{" "}
+                <code className="rounded bg-red-100/80 px-1">dryRun: false</code>). See docs/BOOKING_AVAILABILITY.md.
+              </p>
+            </div>
+          )}
           {/* KPI row */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
@@ -242,13 +287,13 @@ export default function AdminHomePage() {
             <StatCard
               href="/admin/bookings"
               label="Bookings"
-              value={stats.bookingCount}
+              value={stats.bookingCountTotal}
               icon={BookOpen}
             />
             <StatCard
               href="/admin/customers"
-              label="Customers"
-              value={stats.customerCount}
+              label="Recent customers (last 500 bookings, unique by email)"
+              value={stats.uniqueCustomerCount}
               icon={Users}
             />
           </div>

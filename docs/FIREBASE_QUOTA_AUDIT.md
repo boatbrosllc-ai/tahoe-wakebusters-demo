@@ -14,8 +14,8 @@
 | **.get()** | `app/api/admin/customers/route.ts` | 18 | bookings limit 500 |
 | **.get()** + N **.get()** | `app/api/admin/bookings/route.ts` | 21, 33–34 | bookings limit*2, then one get per experienceId |
 | **.get()** | `app/api/booking/slots/route.ts` | 31–46, 83–88 | exp + rates + slots by date range (no cap on slot count) |
-| **.get() / batch.set()** | `app/api/booking/block-date/route.ts` | 37–55 | rates + slots batch |
-| **.get() / .set()** | `app/api/booking/block-slot/route.ts` | 35–37 | single slot |
+| **.get() / batch.set()** | `app/api/admin/blocks/block-date/route.ts` | 37–55 | rates + slots batch |
+| **.get() / .set()** | `app/api/admin/blocks/block-slot/route.ts` | 35–37 | single slot |
 | **.get() / runTransaction** | `app/api/booking/create-hold/route.ts` | 76–165, 185–215 | multiple gets + one tx |
 | **.get()** | `app/api/booking/cleanup-holds/route.ts` | 19, 28–40 | holds query + tx per doc |
 | **.get() / .set()** | `app/api/booking/receipt/route.ts` | 19–40 | booking + experience/slot/rate/boat |

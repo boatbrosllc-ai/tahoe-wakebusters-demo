@@ -190,8 +190,6 @@ export function ExperienceCalendarSection({
   const [slotRefetchTrigger, setSlotRefetchTrigger] = useState(0);
   /** Month keys we've already auto-retried once (first response was 0 slots); avoid infinite retry loop. */
   const autoRetriedMonthKeysRef = useRef<Set<string>>(new Set());
-  /** Month keys we've already retried once after AbortError (e.g. Strict Mode); avoid infinite loop. */
-  const abortRetriedMonthKeysRef = useRef<Set<string>>(new Set());
   /** When onOpenInModal: 0=duration, 1=date, 2=time, 3=boat, 4=details. Each step slides on page. Ticketed starts at 1 (skips duration step). */
   const [inlineStepIndex, setInlineStepIndex] = useState(() => (pricingTypeProp === "ticketed" ? 1 : 0));
   const [inlineBoats, setInlineBoats] = useState<BoatOption[]>([]);
@@ -349,7 +347,6 @@ export function ExperienceCalendarSection({
     fetchedMonthKeysRef.current = new Set();
     prefetchedMonthKeysRef.current = new Set();
     autoRetriedMonthKeysRef.current = new Set();
-    abortRetriedMonthKeysRef.current = new Set();
   }, [experienceId]);
 
   // Fetch slots for the visible month only. Merges into existing state so already-seen months
@@ -384,16 +381,8 @@ export function ExperienceCalendarSection({
         }
       })
       .catch((err: unknown) => {
-        const name = (err as { name?: string })?.name;
-        const isAbort = name === "AbortError";
-        if (isAbort) {
-          if (!abortRetriedMonthKeysRef.current.has(monthKey)) {
-            abortRetriedMonthKeysRef.current.add(monthKey);
-            window.setTimeout(() => setRetryCount((c) => c + 1), 150);
-          }
-        } else {
-          setMonthFetchErrors((prev) => ({ ...prev, [monthKey]: true }));
-        }
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setMonthFetchErrors((prev) => ({ ...prev, [monthKey]: true }));
       })
       .finally(() => {
         if (currentCalendarMonthKeyRef.current === monthKey) setLoading(false);

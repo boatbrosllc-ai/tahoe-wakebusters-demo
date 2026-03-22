@@ -86,6 +86,8 @@ export interface BookingEmailContext {
   finalChargeAt?: string;
   /** Signed manage-booking URL (deposit flow) or receipt URL. */
   manageLink?: string;
+  /** Deep link to view receipt (e.g. /booking/success?receipt_token=...). Include in confirmation email so customer has a working receipt link. */
+  receiptLink?: string;
   /** Waiver signing URL to include in confirmation (when template has includeInConfirmationEmail). */
   waiverSigningUrl?: string;
   /** Shareable waiver link for other party members (when partySize > 1). */
@@ -173,6 +175,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           isDeposit: isDepositForTemplate,
           waiverSigningUrl: waiverSigningUrl ?? "",
           manageLink: "", // Intentionally empty so Brevo template does not show "Manage booking"
+          receiptLink: context.receiptLink ?? "",
         },
       }
     : {
@@ -200,6 +203,88 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
 const BUSINESS_EMAIL = process.env.CONTACT_EMAIL?.trim() || "boatbrosllc@gmail.com";
 
 /**
+ * Send customer email when discount code hit its usage limit at conversion; customer was charged and a partial refund will be issued.
+ */
+export async function sendDiscountLimitExceededCustomerEmail(params: {
+  to: string;
+  customerName: string;
+  experienceName: string;
+  tripDate?: string;
+}): Promise<void> {
+  const { to, customerName, experienceName, tripDate } = params;
+  const subject = "Your discount could not be applied – partial refund – Boat Bros ATX";
+  const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p>Hi ${customerName.replace(/</g, "&lt;")},</p>
+  <p>Your booking was completed successfully. However, the discount code you used had reached its usage limit, so we were unable to apply it to your booking.</p>
+  <p><strong>Experience:</strong> ${experienceName.replace(/</g, "&lt;")}</p>
+  ${tripLine}
+  <p><strong>A partial refund will be processed within 1–2 business days</strong> and credited to your original payment method.</p>
+  <p>If you have any questions, please reply to this email or contact us.</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
+</body></html>`;
+  try {
+    const res = await sendWithRetry(
+      `${BREVO_API_BASE}/smtp/email`,
+      {
+        sender: getSender(),
+        to: [{ email: to.trim(), name: customerName.trim() || undefined }],
+        subject,
+        htmlContent: html,
+      } as Record<string, unknown>
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[brevo] sendDiscountLimitExceededCustomerEmail", res.status, text);
+    }
+  } catch (err) {
+    console.error("[brevo] sendDiscountLimitExceededCustomerEmail", err);
+  }
+}
+
+/**
+ * Send business alert when discount limit was exceeded at conversion so the team can process the refund promptly.
+ */
+export async function sendDiscountLimitExceededBusinessAlert(params: {
+  bookingId: string;
+  customerEmail: string;
+  customerName: string;
+  experienceName: string;
+  tripDate?: string;
+}): Promise<void> {
+  const { bookingId, customerEmail, customerName, experienceName, tripDate } = params;
+  const subject = `[Action] Discount limit exceeded – booking ${bookingId} – process partial refund`;
+  const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p><strong>Discount limit exceeded at conversion.</strong> Customer was charged full amount; a partial refund must be processed.</p>
+  <p><strong>Booking ID:</strong> ${bookingId.replace(/</g, "&lt;")}</p>
+  <p><strong>Customer:</strong> ${customerName.replace(/</g, "&lt;")} &lt;${customerEmail.replace(/</g, "&lt;")}&gt;</p>
+  <p><strong>Experience:</strong> ${experienceName.replace(/</g, "&lt;")}</p>
+  ${tripLine}
+  <p>Process the refund in Stripe and mark the pendingRefunds record as resolved.</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros booking system</p>
+</body></html>`;
+  try {
+    const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+      sender: getSender(),
+      to: [{ email: BUSINESS_EMAIL }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[brevo] sendDiscountLimitExceededBusinessAlert", res.status, text);
+    }
+  } catch (err) {
+    console.error("[brevo] sendDiscountLimitExceededBusinessAlert", err);
+  }
+}
+
+/**
  * Send a copy of the booking confirmation to the business (boatbrosllc@gmail.com) so they know they have a new booking.
  * Same HTML as customer; subject indicates new booking. Does not throw so customer flow is not blocked.
  */
@@ -209,17 +294,12 @@ export async function sendBookingConfirmationCopyToBusiness(booking: Booking, co
   const { boatName, startAt } = context;
   const subject = `New booking: ${boatName} – ${startAt} – ${customerName}`;
   try {
-    const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({
-        sender: getSender(),
-        to: [{ email: BUSINESS_EMAIL }],
-        subject,
-        htmlContent: html,
-      }),
-      ...fetchOpts(),
-    });
+    const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+      sender: getSender(),
+      to: [{ email: BUSINESS_EMAIL }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>);
     if (!res.ok) {
       const text = await res.text();
       console.error("[brevo] sendBookingConfirmationCopyToBusiness", res.status, text);
@@ -277,6 +357,44 @@ export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestPa
  * Send "final charge failed" or "action required" email. When manageLink is provided,
  * includes a prominent CTA button to update card and pay; otherwise asks guest to contact us.
  */
+export interface FinalChargeSuccessEmailParams {
+  to: string;
+  customerName: string;
+  experienceName: string;
+  tripDate: string;
+  startTime: string;
+  amountFormatted: string;
+}
+
+/**
+ * Receipt email after the final balance PaymentIntent succeeds (deposit flow).
+ */
+export async function sendFinalChargeSuccessEmail(params: FinalChargeSuccessEmailParams): Promise<void> {
+  const subject = `Payment received — ${params.experienceName} – Boat Bros ATX`;
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px; max-width: 560px;">
+  <p>Hi ${params.customerName.replace(/</g, "&lt;")},</p>
+  <p>We&apos;ve successfully charged <strong>${params.amountFormatted.replace(/</g, "&lt;")}</strong> for the remaining balance on your upcoming trip.</p>
+  <p><strong>${params.experienceName.replace(/</g, "&lt;")}</strong><br />
+  ${params.tripDate.replace(/</g, "&lt;")} at ${params.startTime.replace(/</g, "&lt;")}</p>
+  <p>Thank you — you&apos;re all set. We&apos;ll see you on the water!</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
+</body></html>`;
+  const reqBody = {
+    sender: getSender(),
+    to: [{ email: params.to.trim(), name: params.customerName.trim() || undefined }],
+    subject,
+    htmlContent: html,
+  };
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, reqBody);
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("[brevo] sendFinalChargeSuccessEmail final failure", res.status, text);
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+}
+
 export async function sendFinalChargeFailedEmail(
   toEmail: string,
   toName: string,
@@ -341,17 +459,12 @@ export async function sendWaiverTemplateMissingAlert(
   <p style="margin-top: 24px;">No active waiver template was found at booking creation time. Please create an active waiver template and send the waiver to this customer manually before their trip date.</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX (automated alert)</p>
 </body></html>`;
-    const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({
-        sender: getSender(),
-        to: [{ email: BUSINESS_EMAIL }],
-        subject,
-        htmlContent: html,
-      }),
-      ...fetchOpts(),
-    });
+    const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+      sender: getSender(),
+      to: [{ email: BUSINESS_EMAIL }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>);
     if (!res.ok) {
       const text = await res.text();
       console.error("[brevo] sendWaiverTemplateMissingAlert", res.status, text);
@@ -406,17 +519,12 @@ export async function sendBookingCancellationEmail(params: {
   <p>If you have any questions, please reply to this email or contact us.</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
-  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      sender: getSender(),
-      to: [{ email: to.trim(), name: customerName.trim() || undefined }],
-      subject,
-      htmlContent: html,
-    }),
-    ...fetchOpts(),
-  });
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: to.trim(), name: customerName.trim() || undefined }],
+    subject,
+    htmlContent: html,
+  } as Record<string, unknown>);
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendBookingCancellationEmail", res.status, text);
@@ -444,18 +552,13 @@ export async function sendContactFormEmail(name: string, email: string, message:
   <p style="white-space: pre-wrap;">${escapedMessage}</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from Boat Bros contact form</p>
 </body></html>`;
-  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      sender: getSender(),
-      to: [{ email: toEmail }],
-      replyTo: email.trim(),
-      subject,
-      htmlContent: html,
-    }),
-    ...fetchOpts(),
-  });
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: toEmail }],
+    replyTo: email.trim(),
+    subject,
+    htmlContent: html,
+  } as Record<string, unknown>);
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendContactFormEmail", res.status, text);
@@ -480,18 +583,13 @@ export async function sendLeadNotificationEmail(email: string, source: string): 
   <p><strong>Source:</strong> ${escapedSource}</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from Boat Bros lead capture</p>
 </body></html>`;
-  const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      sender: getSender(),
-      to: [{ email: toEmail }],
-      replyTo: email.trim(),
-      subject,
-      htmlContent: html,
-    }),
-    ...fetchOpts(),
-  });
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: toEmail }],
+    replyTo: email.trim(),
+    subject,
+    htmlContent: html,
+  } as Record<string, unknown>);
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendLeadNotificationEmail", res.status, text);
@@ -509,17 +607,12 @@ export async function upsertBrevoContact(
   listId?: number
 ): Promise<void> {
   const listIds = listId != null ? [listId] : [];
-  const res = await fetch(`${BREVO_API_BASE}/contacts`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      email,
-      attributes: { FIRSTNAME: name.split(" ")[0] ?? name, LASTNAME: name.split(" ").slice(1).join(" ") || "", SMS: phone },
-      listIds,
-      updateEnabled: true,
-    }),
-    ...fetchOpts(),
-  });
+  const res = await sendWithRetry(`${BREVO_API_BASE}/contacts`, {
+    email,
+    attributes: { FIRSTNAME: name.split(" ")[0] ?? name, LASTNAME: name.split(" ").slice(1).join(" ") || "", SMS: phone },
+    listIds,
+    updateEnabled: true,
+  } as Record<string, unknown>);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Brevo contact upsert failed: ${res.status} ${text}`);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 
 type PendingRefundRow = {
   id: string;
@@ -36,6 +37,7 @@ export function PendingRefundsPanel() {
   const [refunds, setRefunds] = useState<PendingRefundRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/pending-refunds", { credentials: "include" })
@@ -73,6 +75,28 @@ export function PendingRefundsPanel() {
     );
   }
 
+  async function markResolved(id: string) {
+    setResolvingId(id);
+    try {
+      const res = await fetch(`/api/admin/pending-refunds/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "resolved" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Failed to mark resolved");
+        return;
+      }
+      setRefunds((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to mark resolved");
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
   const count = refunds.length;
   return (
     <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
@@ -102,6 +126,9 @@ export function PendingRefundsPanel() {
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">
                     Payment Intent ID
                   </th>
+                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark w-[1%] whitespace-nowrap">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -117,6 +144,18 @@ export function PendingRefundsPanel() {
                     <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark break-all font-mono text-xs">
                       {r.duplicatePaymentIntentId ?? r.paymentIntentId ?? "—"}
                     </td>
+                    <td className="px-3 py-3 sm:px-4 sm:py-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        disabled={resolvingId === r.id}
+                        onClick={() => markResolved(r.id)}
+                      >
+                        {resolvingId === r.id ? "…" : "Mark resolved"}
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -124,7 +163,7 @@ export function PendingRefundsPanel() {
           </div>
           <div className="md:hidden divide-y divide-brand-dark/5">
             {refunds.map((r) => (
-              <div key={r.id} className="px-4 py-3 space-y-1">
+              <div key={r.id} className="px-4 py-3 space-y-2">
                 <p className="text-xs text-brand-muted">{formatDate(r.createdAt)}</p>
                 <p className="font-semibold text-brand-dark text-sm">{formatReason(r.reason)}</p>
                 <p className="text-xs text-brand-muted">
@@ -133,6 +172,16 @@ export function PendingRefundsPanel() {
                 <p className="text-xs text-brand-muted break-all font-mono">
                   {r.duplicatePaymentIntentId ?? r.paymentIntentId ?? "—"}
                 </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs w-full"
+                  disabled={resolvingId === r.id}
+                  onClick={() => markResolved(r.id)}
+                >
+                  {resolvingId === r.id ? "…" : "Mark resolved"}
+                </Button>
               </div>
             ))}
           </div>

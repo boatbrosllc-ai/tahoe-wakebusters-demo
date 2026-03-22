@@ -3,24 +3,39 @@
  * so both use consistent month boundaries and can browse/fetch any month.
  */
 
-/** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. */
+/** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. Uses Intl.formatToParts so the result is deterministic and does not depend on server locale. */
+/** Calendar date (YYYY-MM-DD) in America/Chicago for an arbitrary UTC instant. */
+export function getChicagoDateStringForInstant(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year")?.value ?? "";
+  const m = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+  return `${y}-${m}-${day}`;
+}
+
 export function getChicagoToday(): string {
-  try {
-    const s = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
-    // en-CA can be "YYYY-MM-DD" or "DD/MM/YYYY" depending on env; normalize to YYYY-MM-DD
-    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) return s;
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  } catch {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+  return getChicagoDateStringForInstant(new Date());
+}
+
+/**
+ * Milliseconds until the next calendar midnight in America/Chicago (when the Chicago date rolls over).
+ * Used to refresh slot fetches after the local business day boundary.
+ */
+export function getMsUntilNextChicagoMidnight(now: Date = new Date()): number {
+  const todayStr = getChicagoDateStringForInstant(now);
+  let lo = now.getTime();
+  let hi = now.getTime() + 49 * 3600 * 1000;
+  while (hi - lo > 1000) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (getChicagoDateStringForInstant(new Date(mid)) === todayStr) lo = mid + 1;
+    else hi = mid;
   }
+  return Math.max(0, lo - now.getTime());
 }
 
 /** YYYY-MM-DD from a Date's calendar parts (for month boundaries). */

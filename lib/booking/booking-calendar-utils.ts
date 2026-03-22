@@ -3,9 +3,11 @@
  * Kept in lib for reuse and unit testing.
  */
 
-/** Local YYYY-MM-DD (avoids timezone skew from toISOString). */
+import { getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
+
+/** Calendar date (YYYY-MM-DD) for `d` in the business timezone (America/Chicago), not the browser's local zone. */
 export function toLocalDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return getDateStrInSlotTimezone(d);
 }
 
 /** Day key YYYY-MM-DD from (year, month 1-based, day). Deterministic, no Date keys. */

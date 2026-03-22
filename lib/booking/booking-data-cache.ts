@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Shared booking data layer: stale-time caching + in-flight request deduplication.
  *
@@ -10,10 +12,12 @@
  * 2. In-flight dedup – concurrent calls for the same key attach to one fetch instead
  *    of firing N parallel requests.
  *
- * Abort handling: the underlying fetch is never cancelled (letting it complete keeps
- * the cached result available for the next mount). Each caller receives a per-caller
- * race against its own AbortSignal, so state updates are skipped when a component
- * unmounts or its deps change.
+ * Abort handling: each caller may pass an AbortSignal so state updates are skipped when a
+ * component unmounts or deps change. The in-flight dedup layer applies a bounded timeout
+ * (see `FETCH_TIMEOUT_MS`) so a stalled network request cannot block subsequent callers;
+ * when the timeout fires the in-flight entry is cleared and the promise rejects — the
+ * underlying `fetch` is intentionally not aborted so a late response can still populate
+ * the cache for a later read.
  *
  * Production: when NEXT_PUBLIC_SITE_URL (or NEXT_PUBLIC_APP_URL) is set and valid and
  * matches the current origin, API requests use it; otherwise the cache falls back to
@@ -73,17 +77,46 @@ function getApiBaseUrl(): string {
   return envOrigin;
 }
 
+/** Exported for UI copy: client calendar hints may lag this long behind server truth. */
+export const STALE_MS_SLOTS = 3_500;
+
 const STALE_MS = {
   experiences: 60_000,
-  slots: 15_000,
+  /** Short TTL for high-traffic windows; create-hold is authoritative for conflicts. */
+  slots: STALE_MS_SLOTS,
   /** Shorter TTL for ticketed experiences so departure/slot config changes are picked up quickly. */
-  slotsTicketed: 5_000,
-  datePrices: 60_000,
+  slotsTicketed: 1_000,
+  /** Display lag for admin pricing calendar changes; payment-time price is authoritative via create-payment-intent. */
+  datePrices: 12_000,
   experienceDetail: 60_000,
   experienceBySlug: 60_000,
-  experienceRates: 3_600_000, // 1 hour — rates are static during booking
+  experienceRates: 60_000, // 1 min — consistent with other booking-critical data; reduce stale prices during session
   boats: 60_000,
 } as const;
+
+const FETCH_TIMEOUT_MS = 20_000;
+
+const SLOT_CACHE_VERSION_KEY = "bb_slot_cache_version";
+
+/** Returns a cache-bust version so slot/date-price fetches bypass in-memory cache across tabs after a booking. */
+function getSlotCacheVersion(): string {
+  if (typeof window === "undefined") return "0";
+  try {
+    return localStorage.getItem(SLOT_CACHE_VERSION_KEY) ?? "0";
+  } catch {
+    return "0";
+  }
+}
+
+/** Bump slot/date-price cache version so next fetch in any tab uses a new key and refetches. */
+function setSlotCacheVersion(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(SLOT_CACHE_VERSION_KEY, String(Date.now()));
+  } catch {
+    // ignore
+  }
+}
 
 /** Maximum number of resolved entries kept in memory at once. Oldest is evicted when exceeded. */
 const MAX_CACHE_SIZE = 120;
@@ -103,12 +136,21 @@ function evictOldestIfNeeded(): void {
   if (firstKey !== undefined) dataCache.delete(firstKey);
 }
 
+/**
+ * Cached GET with stale-while-revalidate and in-flight deduplication.
+ * The underlying fetch is not tied to the caller's AbortSignal so late responses can still
+ * warm the cache; callers that pass `signal` only skip applying the result when aborted.
+ * A shared timeout clears stuck `inFlight` entries without aborting the fetch (see module header).
+ */
 function fetchCached<T>(
   key: string,
   url: string,
   staleMs: number,
   signal?: AbortSignal,
 ): Promise<T> {
+  if (typeof window === "undefined") {
+    return fetch(url, { cache: "no-store" }).then((r) => r.json() as Promise<T>);
+  }
   if (signal?.aborted) return Promise.reject(new DOMException("", "AbortError"));
 
   const cached = dataCache.get(key);
@@ -133,7 +175,20 @@ function fetchCached<T>(
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
       const startMs = Date.now();
-      const p = fetch(fullUrl, fetchOpts)
+      const rawFetchPromise = fetch(fullUrl, fetchOpts);
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          inFlight.delete(key);
+          const err = new Error(`[booking-data-cache] fetch timeout after ${FETCH_TIMEOUT_MS}ms: ${key}`);
+          (err as Error & { name?: string }).name = "TimeoutError";
+          reject(err);
+        }, FETCH_TIMEOUT_MS);
+      });
+      const p = Promise.race([rawFetchPromise, timeoutPromise])
+        .finally(() => {
+          if (timeoutId != null) clearTimeout(timeoutId);
+        })
         .then(async (res) => {
           if (!res.ok) {
             let body: { error?: string; hint?: string; code?: string } = {};
@@ -147,10 +202,20 @@ function fetchCached<T>(
             (e as Error & { status?: number }).status = res.status;
             throw e;
           }
-          const partialData = res.headers.get("X-Slots-Partial-Data") === "true";
           const data = (await res.json()) as T;
-          if (partialData && data && typeof data === "object" && !Array.isArray(data)) {
-            (data as T & { partialData?: boolean }).partialData = true;
+          const partialHeader = res.headers.get("X-Slots-Partial-Data") === "true";
+          const unresolvedHeader = res.headers.get("X-Unresolved-Booking-Count");
+          const partialBody =
+            data &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            (data as { partialData?: boolean }).partialData === true;
+          const partialData = partialHeader || partialBody;
+          if (data && typeof data === "object" && !Array.isArray(data)) {
+            const o = data as T & { partialData?: boolean; unresolvedBookingCount?: number };
+            if (partialData) o.partialData = true;
+            const ur = unresolvedHeader != null && unresolvedHeader !== "" ? Number(unresolvedHeader) : 0;
+            if (Number.isFinite(ur) && ur > 0) o.unresolvedBookingCount = ur;
           }
           return data;
         })
@@ -166,6 +231,11 @@ function fetchCached<T>(
           const durationMs = Date.now() - startMs;
           const isAbort = (err as { name?: string })?.name === "AbortError";
           if (isAbort) throw err;
+          const isTimeout = (err as { name?: string })?.name === "TimeoutError";
+          if (isTimeout) {
+            console.error("[booking] API request timed out (in-flight dedup cleared)", { key, url, durationMs });
+            throw err;
+          }
           // Always log failed API requests to dev console (HTTP errors and network/timeout failures).
           const status = (err as { status?: number }).status;
           const apiBody = (err as { apiBody?: { error?: string; hint?: string; firebaseDetail?: { summary?: string } } }).apiBody;
@@ -319,8 +389,9 @@ export function fetchSlots(
   signal?: AbortSignal,
   options?: { ticketed?: boolean },
 ): Promise<{ slots: CachedSlotDto[]; partialData?: boolean }> {
-  const key = `slots|${experienceId}|${startDate}|${endDate}`;
-  const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}`;
+  const v = getSlotCacheVersion();
+  const key = `slots|${experienceId}|${startDate}|${endDate}|${v}`;
+  const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}&v=${encodeURIComponent(v)}`;
   const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;
   return fetchCached(key, url, staleMs, signal);
 }
@@ -332,9 +403,10 @@ export function fetchDatePrices(
   rateId: string | undefined,
   signal?: AbortSignal,
 ): Promise<DatePricesResult> {
+  const v = getSlotCacheVersion();
   const rateQ = rateId ? `&rateId=${encodeURIComponent(rateId)}` : "";
-  const key = `date-prices|${experienceId}|${startDate}|${days}|${rateId ?? ""}`;
-  const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&days=${days}${rateQ}`;
+  const key = `date-prices|${experienceId}|${startDate}|${days}|${rateId ?? ""}|${v}`;
+  const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&days=${days}${rateQ}&v=${encodeURIComponent(v)}`;
   return fetchCached(key, url, STALE_MS.datePrices, signal);
 }
 
@@ -356,10 +428,11 @@ function drainPrefetchQueue(): void {
   while (prefetchRunning < PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
     const task = prefetchQueue.shift()!;
     if (task.signal?.aborted) continue;
-    const key = `date-prices|${task.experienceId}|${task.startDate}|${task.days}|${task.rateId}`;
+    const v = getSlotCacheVersion();
+    const key = `date-prices|${task.experienceId}|${task.startDate}|${task.days}|${task.rateId}|${v}`;
     if (dataCache.get(key)) continue;
     prefetchRunning++;
-    const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(task.experienceId)}&startDate=${task.startDate}&days=${task.days}&rateId=${encodeURIComponent(task.rateId)}`;
+    const url = `/api/booking/date-prices?experienceId=${encodeURIComponent(task.experienceId)}&startDate=${task.startDate}&days=${task.days}&rateId=${encodeURIComponent(task.rateId)}&v=${encodeURIComponent(v)}`;
     fetchCached(key, url, STALE_MS.datePrices, task.signal)
       .catch(() => {})
       .finally(() => {
@@ -433,8 +506,30 @@ export function invalidate(prefix: string): void {
 /**
  * Call this after a booking is confirmed to flush stale slot and price data for
  * the relevant experience so the next view fetches fresh availability.
+ * Also bumps the slot cache version (localStorage) so fetchSlots/fetchDatePrices
+ * use a new key and bypass in-memory cache across tabs.
  */
 export function invalidateBookingCaches(experienceId: string): void {
   invalidate(`slots|${experienceId}|`);
   invalidate(`date-prices|${experienceId}|`);
+  invalidate(`boats|${experienceId}`);
+  invalidate(`experience-detail|${experienceId}`);
+  invalidate(`experience-rates|${experienceId}`);
+  setSlotCacheVersion();
+}
+
+let crossTabInvalidationRegistered = false;
+
+/**
+ * When another tab bumps `bb_slot_cache_version` (via booking confirmation), drop in-memory
+ * slot and date-price entries so this tab refetches on the next read.
+ */
+export function initCrossTabInvalidation(): void {
+  if (typeof window === "undefined" || crossTabInvalidationRegistered) return;
+  crossTabInvalidationRegistered = true;
+  window.addEventListener("storage", (e: StorageEvent) => {
+    if (e.key !== SLOT_CACHE_VERSION_KEY) return;
+    invalidate("slots|");
+    invalidate("date-prices|");
+  });
 }

@@ -73,7 +73,7 @@ function localBusinessJsonLd() {
   };
 }
 
-export default function SiteLayout({
+export default async function SiteLayout({
   children,
 }: {
   children: React.ReactNode;

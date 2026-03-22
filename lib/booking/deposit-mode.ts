@@ -6,9 +6,8 @@
 
 import type { Booking, BookingStatus } from "./types";
 
-/** Statuses that indicate deposit flow (deposit paid or final balance due/paid). */
+/** Statuses that indicate deposit flow (final balance due/paid). At runtime only final_due, final_processing, final_paid, final_requires_action, final_failed are assigned; deposit_paid is not used. */
 const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
-  "deposit_paid",
   "final_due",
   "final_processing",
   "final_paid",

@@ -11,6 +11,8 @@ interface HoldCountdownProps {
   compact?: boolean;
   /** When time expires, show this instead of hiding (e.g. "Expired") */
   expiredLabel?: string;
+  /** Called once when the countdown reaches zero */
+  onExpired?: () => void;
   className?: string;
 }
 
@@ -27,6 +29,7 @@ export function HoldCountdown({
   label = "Complete payment in",
   compact = false,
   expiredLabel,
+  onExpired,
   className = "",
 }: HoldCountdownProps) {
   const [remaining, setRemaining] = useState<{ minutes: number; seconds: number } | null>(() =>
@@ -34,14 +37,22 @@ export function HoldCountdown({
   );
 
   useEffect(() => {
-    setRemaining(getRemaining(expiresAt));
+    const r0 = getRemaining(expiresAt);
+    setRemaining(r0);
+    if (!r0) {
+      onExpired?.();
+      return;
+    }
     const t = setInterval(() => {
       const r = getRemaining(expiresAt);
       setRemaining(r);
-      if (!r) clearInterval(t);
+      if (!r) {
+        clearInterval(t);
+        onExpired?.();
+      }
     }, 1000);
     return () => clearInterval(t);
-  }, [expiresAt]);
+  }, [expiresAt, onExpired]);
 
   if (remaining === null) {
     if (expiredLabel) {
@@ -49,7 +60,7 @@ export function HoldCountdown({
         <span className={className}>
           <span>{expiredLabel}</span>
           <span className="sr-only" aria-live="assertive" aria-atomic="true">
-            Time expired
+            Time expired. Your checkout reservation has expired. Please start over to book again.
           </span>
         </span>
       );
@@ -62,13 +73,15 @@ export function HoldCountdown({
     ? `${minutes}:${seconds.toString().padStart(2, "0")}`
     : `${minutes} min ${seconds} sec`;
 
-  // Announce notable milestones to screen readers only (e.g. 2 min, 1 min).
+  // Announce notable milestones to screen readers (2 min, 1 min, 30 sec).
   const milestone =
     minutes === 2 && seconds === 0
       ? "2 minutes remaining"
       : minutes === 1 && seconds === 0
         ? "1 minute remaining"
-        : null;
+        : minutes === 0 && seconds === 30
+          ? "30 seconds remaining"
+          : null;
 
   return (
     <span className={className}>

@@ -147,6 +147,9 @@ Bookings that have a slot-taken status but missing or empty `boatId` are no long
 2. **Monitor**  
    Use the slots API response header `X-Unresolved-Booking-Count` and server logs (`unresolved_booking_no_boat_id` telemetry) until the count is zero. Re-run the backfill after fixing any bookings that could not be inferred automatically (e.g. set `boatId` manually in Firestore or via admin).
 
+3. **Production deploy runbook**  
+   After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Do not use `ENABLE_BLOCK_CHECK_FAIL_OPEN` as a substitute for deploying Firestore indexes for **blocks** — that flag skips block checks and can allow holds during maintenance blocks.
+
 ## Checkout consistency (site + mobile)
 
 - **Experience ID required**: BookingModal and CalendarModal **never** call the slots, boats, rates, addons, or date-prices APIs with an undefined experience id. All effects that use `experienceId` are guarded on `selectedExperience?.id`. If the experience is resolved by slug only (e.g. FALLBACK_EXPERIENCES in CalendarModal), we fetch `/api/experiences/{slug}` first to get the doc and set `id`, then fetch slots. This avoids `experienceId=undefined` requests that would return wrong or empty data and cause boats to appear greyed out when they are available.

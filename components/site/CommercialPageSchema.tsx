@@ -1,6 +1,4 @@
-"use client";
-
-import { usePathname } from "next/navigation";
+import { headers } from "next/headers";
 
 /** Paths that are commercial (service/booking) and should have LocalBusiness + OfferCatalog schema. */
 const COMMERCIAL_PATHS = new Set([
@@ -25,9 +23,20 @@ function isCommercialPath(pathname: string | null): boolean {
 /**
  * Renders LocalBusiness + OfferCatalog JSON-LD only on commercial pages.
  * Informational pages (location, faqs, our-story, menu, blog) do not get this schema.
+ *
+ * Server-only so the CSP nonce matches between SSR and hydration (client components + nonce can warn).
  */
-export function CommercialPageSchema({ jsonLd }: { jsonLd: string }) {
-  const pathname = usePathname();
+export async function CommercialPageSchema({ jsonLd }: { jsonLd: string }) {
+  const h = await headers();
+  const pathname = h.get("x-pathname");
+  const nonce = h.get("x-nonce") ?? undefined;
   if (!isCommercialPath(pathname)) return null;
-  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />;
+  return (
+    <script
+      type="application/ld+json"
+      suppressHydrationWarning
+      {...(nonce ? { nonce } : {})}
+      dangerouslySetInnerHTML={{ __html: jsonLd }}
+    />
+  );
 }

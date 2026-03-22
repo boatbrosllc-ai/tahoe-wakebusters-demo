@@ -9,10 +9,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
-import { convertHoldToBooking, type ConvertHoldInput, type ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
-import { signReceiptToken } from "@/lib/booking/receiptToken";
-import type { BookingCardDisplay } from "@/lib/booking/types";
+import {
+  convertHoldToBooking,
+  isConvertHoldInputDeposit,
+  type ConvertHoldInput,
+  type ConvertHoldInputDeposit,
+} from "@/lib/booking/convert-hold-to-booking";
+import {
+  buildConvertHoldInputFromSucceededPaymentIntent,
+  paymentIntentMatchesHoldForConversion,
+} from "@/lib/booking/stripe-payment-intent-convert";
+import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
+import type { Booking, Hold } from "@/lib/booking/types";
+import type Stripe from "stripe";
+import type { Firestore } from "firebase-admin/firestore";
 
 function parseBody(body: unknown): { holdId: string | null; paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -23,7 +36,57 @@ function parseBody(body: unknown): { holdId: string | null; paymentIntentId: str
   return { holdId, paymentIntentId };
 }
 
+async function resolveBookingIdFromPaymentSignals(
+  db: Firestore,
+  paymentIntentId: string,
+  pi: Stripe.PaymentIntent
+): Promise<string | null> {
+  const byFull = await db.collection("bookings").where("stripe.paymentIntentId", "==", paymentIntentId).limit(1).get();
+  if (!byFull.empty) return byFull.docs[0].id;
+  const byDep = await db.collection("bookings").where("stripe.depositPaymentIntentId", "==", paymentIntentId).limit(1).get();
+  if (!byDep.empty) return byDep.docs[0].id;
+  const checkoutMeta =
+    typeof pi.metadata?.checkoutSessionId === "string"
+      ? pi.metadata.checkoutSessionId
+      : typeof pi.metadata?.checkout_session_id === "string"
+        ? pi.metadata.checkout_session_id
+        : undefined;
+  if (checkoutMeta) {
+    const byCs = await db.collection("bookings").where("stripe.checkoutSessionId", "==", checkoutMeta).limit(1).get();
+    if (!byCs.empty) {
+      const doc = byCs.docs[0];
+      const b = doc.data() as Booking;
+      const s = b.stripe;
+      if (
+        s?.paymentIntentId === paymentIntentId ||
+        s?.depositPaymentIntentId === paymentIntentId ||
+        s?.checkoutSessionId === checkoutMeta
+      ) {
+        return doc.id;
+      }
+    }
+  }
+  return null;
+}
+
+async function resolveBookingIdAfterConversion(
+  db: Firestore,
+  holdBookingId: string | undefined,
+  holdId: string,
+  paymentIntentId: string,
+  pi: Stripe.PaymentIntent
+): Promise<string | null> {
+  if (holdBookingId) {
+    const snap = await db.collection("bookings").doc(holdBookingId).get();
+    if (snap.exists) return holdBookingId;
+    bookingWarn("complete-after-payment", "hold.bookingId points to missing booking document", { holdId, holdBookingId });
+  }
+  return resolveBookingIdFromPaymentSignals(db, paymentIntentId, pi);
+}
+
 export async function POST(request: NextRequest) {
+  let holdIdForAlert: string | null = null;
+  let paymentIntentIdForAlert: string | null = null;
   try {
     const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {
@@ -65,8 +128,17 @@ export async function POST(request: NextRequest) {
     if (pi.status !== "succeeded") {
       if (pi.status === "processing") {
         bookingLog("complete-after-payment", "payment still processing, returning 202", { holdId });
+        const pmType =
+          typeof pi.payment_method === "object" && pi.payment_method && "type" in pi.payment_method
+            ? (pi.payment_method as { type?: string }).type
+            : undefined;
         return NextResponse.json(
-          { processing: true, message: "Payment is processing. Your booking will be confirmed shortly." },
+          {
+            processing: true,
+            message: "Payment is processing. Your booking will be confirmed shortly.",
+            pollHardTimeoutMs: 300_000,
+            ...(pmType ? { paymentMethodType: pmType } : {}),
+          },
           { status: 202 }
         );
       }
@@ -88,74 +160,120 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const paymentStage = (pi.metadata?.payment_stage ?? "") as string;
-    const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
-    const pm = pi.payment_method as { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | null;
-    let card: BookingCardDisplay | undefined;
-    if (pm?.card) {
-      card = { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year };
-    }
-    const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-    const amountCharged = pi.amount ?? 0;
-    const depositCentsFromMeta = parseInt(pi.metadata?.depositCents ?? "0", 10) || 0;
-    // Treat as deposit when: metadata says "deposit", or amount charged is less than full total (fallback for missing metadata)
-    const isDepositByStage = paymentStage === "deposit";
     const db = getDb();
     const holdRef = db.collection("holds").doc(holdId);
     const holdSnap = await holdRef.get();
-    const hold = holdSnap.exists ? (holdSnap.data() as { pricing?: { totalCents?: number }; tipCents?: number; discountCents?: number }) : null;
-    // When metadata total is missing/0, use hold pricing so we don't treat deposit amount as full total (which would make remaining = 0)
-    let totalCents: number;
-    if (totalCentsFromMeta > 0) {
-      totalCents = totalCentsFromMeta;
-    } else if (hold?.pricing && typeof hold.pricing.totalCents === "number") {
-      const tipCents = typeof hold.tipCents === "number" ? hold.tipCents : 0;
-      const discountCents = typeof hold.discountCents === "number" ? hold.discountCents : 0;
-      totalCents = Math.max(0, hold.pricing.totalCents + tipCents - discountCents);
-      bookingLog("complete-after-payment", "using hold pricing for total (metadata total missing)", { totalCents, amountCharged });
-    } else {
-      totalCents = amountCharged;
+    if (!holdSnap.exists) {
+      bookingWarn("complete-after-payment", "hold not found; reconciling by payment intent / checkout session", {
+        holdId,
+        paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
+      });
+      let recoveredBookingId: string | null = null;
+      try {
+        recoveredBookingId = await resolveBookingIdFromPaymentSignals(db, input.paymentIntentId, pi);
+      } catch (reconErr) {
+        bookingWarn("complete-after-payment", "hold-missing booking reconciliation query failed", { holdId, err: reconErr });
+      }
+      if (recoveredBookingId) {
+        const bSnap = await db.collection("bookings").doc(recoveredBookingId).get();
+        const holdIdForToken =
+          bSnap.exists && typeof (bSnap.data() as Booking).holdId === "string"
+            ? ((bSnap.data() as Booking).holdId as string)
+            : holdId;
+        const receiptClaimToken = signReceiptClaimToken(holdIdForToken) ?? undefined;
+        if (!receiptClaimToken) {
+          bookingWarn("complete-after-payment", "receipt claim token unavailable after hold-missing recovery", {
+            holdId,
+            recoveredBookingId,
+          });
+        }
+        bookingLog("complete-after-payment", "booking recovered without hold document", { holdId, recoveredBookingId });
+        const ciRecover = buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
+        const useDepRecover = isConvertHoldInputDeposit(ciRecover);
+        const amtRecover = pi.amount ?? 0;
+        const totRecover = useDepRecover
+          ? (ciRecover as ConvertHoldInputDeposit).stripe.totalCents
+          : (() => {
+              const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+              return fromMeta > 0 ? fromMeta : amtRecover;
+            })();
+        const paymentSummaryRecovered = {
+          isDeposit: useDepRecover,
+          depositCents: useDepRecover ? amtRecover : totRecover,
+          totalCents: totRecover,
+          finalCents: useDepRecover ? Math.max(0, totRecover - amtRecover) : 0,
+        };
+        const recoveredExp =
+          bSnap.exists && typeof (bSnap.data() as Booking).experienceId === "string"
+            ? (bSnap.data() as Booking).experienceId
+            : undefined;
+        return NextResponse.json({
+          success: true,
+          alreadyConverted: true,
+          bookingId: recoveredBookingId,
+          ...(receiptClaimToken ? { receiptClaimToken } : {}),
+          paymentSummary: paymentSummaryRecovered,
+          ...(recoveredExp ? { experienceId: recoveredExp } : {}),
+        });
+      }
+      await writeOperationalAlert({
+        type: "complete_after_payment_hold_missing_no_booking",
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+        source: "complete-after-payment",
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          reconciliationPending: true,
+          holdNotFound: true,
+          bookingConfirmed: false,
+          message:
+            "We could not match this payment to an active reservation. Our team has been notified—please contact us with your email and payment details.",
+        },
+        { status: 200 }
+      );
     }
-    const depositCents = depositCentsFromMeta || (isDepositByStage ? amountCharged : totalCents);
-    const finalCentsFromMeta = parseInt(pi.metadata?.finalCents ?? "0", 10) || 0;
-    const finalCents = finalCentsFromMeta > 0 ? finalCentsFromMeta : Math.max(0, totalCents - amountCharged);
-    const isDepositByAmount = totalCents > 0 && amountCharged > 0 && amountCharged < totalCents;
-    // Decide deposit vs full from metadata and amount; do NOT require customerId so we never show "full payment" for a deposit
-    const useDepositInput = isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
+    const holdExperienceId =
+      typeof (holdSnap.data() as Hold).experienceId === "string"
+        ? (holdSnap.data() as Hold).experienceId!.trim()
+        : undefined;
+    const holdStripeIds = holdSnap.data() as {
+      depositPaymentIntentId?: string;
+      fullPaymentIntentId?: string;
+      paymentAttemptVersion?: number;
+      pricing?: { totalCents?: number };
+      tipCents?: number;
+      discountCents?: number;
+    };
+    const holdForPricing = holdSnap.data() as {
+      pricing?: { totalCents?: number };
+      tipCents?: number;
+      discountCents?: number;
+    };
+    const convertInput: ConvertHoldInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, holdForPricing);
+    const useDepositInput = isConvertHoldInputDeposit(convertInput);
+    const amountCharged = pi.amount ?? 0;
+    const totalCents = useDepositInput
+      ? (convertInput as ConvertHoldInputDeposit).stripe.totalCents
+      : (() => {
+          const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+          if (fromMeta > 0) return fromMeta;
+          if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
+            const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
+            const discountCents =
+              typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
+            return Math.max(0, holdForPricing.pricing.totalCents + tipCents - discountCents);
+          }
+          return amountCharged;
+        })();
     bookingLog("complete-after-payment", "PI metadata and convert decision", {
       holdId,
-      paymentStage: paymentStage ?? null,
-      totalCentsFromMeta,
+      paymentStage: (pi.metadata?.payment_stage ?? null) as string | null,
       totalCents,
       amountCharged,
-      depositCentsFromMeta,
-      finalCents,
-      isDepositByStage,
-      isDepositByAmount,
       useDepositInput,
     });
-
-    const convertInput: ConvertHoldInput =
-      useDepositInput
-        ? ({
-            paymentStage: "deposit",
-            paymentIntentId: pi.id,
-            amountTotalCents: amountCharged,
-            currency: pi.currency ?? undefined,
-            stripe: {
-              ...(customerId && { customerId }),
-              ...(pm?.id && { paymentMethodId: pm.id }),
-              ...(card && { card }),
-              totalCents,
-              depositCents: amountCharged,
-              finalCents: Math.max(0, totalCents - amountCharged),
-            },
-          } as ConvertHoldInputDeposit)
-        : {
-            paymentIntentId: pi.id,
-            amountTotalCents: pi.amount ?? undefined,
-            currency: pi.currency ?? undefined,
-          };
 
     const paymentSummaryForClient = {
       isDeposit: useDepositInput,
@@ -163,55 +281,165 @@ export async function POST(request: NextRequest) {
       totalCents,
       finalCents: useDepositInput ? Math.max(0, totalCents - amountCharged) : 0,
     };
+
+    const piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+    if (!piMatchesHold) {
+      let recoveredBookingId: string | null = null;
+      try {
+        recoveredBookingId = await resolveBookingIdFromPaymentSignals(db, input.paymentIntentId, pi);
+      } catch (lookupErr) {
+        bookingWarn("complete-after-payment", "secondary booking lookup failed", { holdId, err: lookupErr });
+      }
+      if (recoveredBookingId) {
+        bookingLog("complete-after-payment", "recovered booking via PI/checkoutSessionId (hold missing PI id)", {
+          holdId,
+          recoveredBookingId,
+        });
+        const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
+        if (!receiptClaimToken) {
+          bookingWarn("complete-after-payment", "receipt claim token unavailable after recovery lookup", { holdId, recoveredBookingId });
+        }
+        const bSnapRec = await db.collection("bookings").doc(recoveredBookingId).get();
+        const recoveredExp =
+          bSnapRec.exists && typeof (bSnapRec.data() as Booking).experienceId === "string"
+            ? (bSnapRec.data() as Booking).experienceId
+            : undefined;
+        return NextResponse.json({
+          success: true,
+          alreadyConverted: true,
+          bookingId: recoveredBookingId,
+          ...(receiptClaimToken ? { receiptClaimToken } : {}),
+          paymentSummary: paymentSummaryForClient,
+          ...(recoveredExp ? { experienceId: recoveredExp } : {}),
+        });
+      }
+      bookingError("complete-after-payment", "payment intent not recorded on hold", null, {
+        holdId,
+        paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24),
+      });
+      try {
+        const holdRow = holdSnap.data() as Hold;
+        await upsertPendingRefundRecord(
+          db,
+          {
+            reason: "pi_mismatch_in_complete_after_payment",
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+          },
+          {
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+            holdDepositPaymentIntentId: holdStripeIds.depositPaymentIntentId ?? null,
+            holdFullPaymentIntentId: holdStripeIds.fullPaymentIntentId ?? null,
+            ...(holdRow.customerDraft?.email && { customerEmail: holdRow.customerDraft.email }),
+          }
+        );
+      } catch (prErr) {
+        console.error("[complete-after-payment] pendingRefunds pi mismatch", prErr);
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          reconciliationPending: true,
+          bookingConfirmed: false,
+          message:
+            "We are confirming your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+        },
+        { status: 200 }
+      );
+    }
+
     bookingLog("complete-after-payment", "calling convertHoldToBooking", {
       holdId: input.holdId,
       paymentStage: useDepositInput ? "deposit" : "full",
     });
+    holdIdForAlert = holdId;
+    paymentIntentIdForAlert = input.paymentIntentId;
     const result = await convertHoldToBooking(db, holdId, convertInput);
+
+    if ("amountIntegrityMismatch" in result) {
+      bookingWarn("complete-after-payment", "amount integrity mismatch — conversion blocked", { holdId });
+      return NextResponse.json(
+        {
+          success: false,
+          reconciliationPending: true,
+          bookingConfirmed: false,
+          amountMismatch: true,
+          message:
+            "We are confirming your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+        },
+        { status: 200 }
+      );
+    }
 
     if ("alreadyConverted" in result) {
       bookingLog("complete-after-payment", "hold already converted (idempotent)", { holdId });
-      let bookingId: string | undefined;
+      const holdRow = holdSnap.data() as Hold;
+      let resolvedBookingId: string | null = null;
       try {
-        const byFull = await db.collection("bookings").where("stripe.paymentIntentId", "==", input.paymentIntentId).limit(1).get();
-        if (!byFull.empty) {
-          bookingId = byFull.docs[0].id;
-        } else {
-          const byDeposit = await db.collection("bookings").where("stripe.depositPaymentIntentId", "==", input.paymentIntentId).limit(1).get();
-          if (!byDeposit.empty) bookingId = byDeposit.docs[0].id;
-        }
+        resolvedBookingId = await resolveBookingIdAfterConversion(
+          db,
+          holdRow.bookingId,
+          holdId,
+          input.paymentIntentId,
+          pi
+        );
       } catch (lookupErr) {
-        bookingWarn("complete-after-payment", "alreadyConverted: booking lookup failed (non-fatal)", { holdId, err: lookupErr });
+        bookingWarn("complete-after-payment", "alreadyConverted: booking resolution failed", { holdId, err: lookupErr });
       }
-      let receiptToken: string | undefined;
-      if (bookingId) {
-        try {
-          receiptToken = signReceiptToken(bookingId);
-        } catch (tokenErr) {
-          bookingWarn("complete-after-payment", "receipt token failed (non-fatal)", { bookingId, err: tokenErr });
-        }
+      if (!resolvedBookingId) {
+        bookingWarn("complete-after-payment", "alreadyConverted:no_resolvable_booking", {
+          holdId,
+          paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
+        });
+        await writeOperationalAlert({
+          type: "complete_after_payment_already_converted_no_booking",
+          holdId,
+          paymentIntentId: input.paymentIntentId,
+          source: "complete-after-payment",
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            reconciliationPending: true,
+            bookingConfirmed: false,
+            message:
+              "Your payment is recorded but we could not confirm your booking in our system yet. Please wait a few minutes for email confirmation, or contact us if nothing arrives.",
+            paymentSummary: paymentSummaryForClient,
+          },
+          { status: 200 }
+        );
+      }
+      const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
+      if (!receiptClaimToken) {
+        bookingWarn("complete-after-payment", "receipt claim token unavailable (receipt signing secret not set)", {
+          bookingId: resolvedBookingId,
+          holdId,
+        });
       }
       return NextResponse.json({
         success: true,
         alreadyConverted: true,
-        ...(bookingId ? { bookingId } : {}),
-        ...(receiptToken ? { receiptToken } : {}),
+        bookingId: resolvedBookingId,
+        ...(receiptClaimToken ? { receiptClaimToken } : {}),
         paymentSummary: paymentSummaryForClient,
+        ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
       });
     }
     bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId });
-    let receiptToken: string | undefined;
-    try {
-      receiptToken = signReceiptToken(result.bookingId);
-    } catch (tokenErr) {
-      bookingWarn("complete-after-payment", "receipt token failed (non-fatal)", { bookingId: result.bookingId, err: tokenErr });
+    const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
+    if (!receiptClaimToken) {
+      bookingWarn("complete-after-payment", "receipt claim token unavailable (receipt signing secret not set)", {
+        bookingId: result.bookingId,
+        holdId,
+      });
     }
     return NextResponse.json({
       success: true,
       bookingId: result.bookingId,
-      ...(receiptToken ? { receiptToken } : {}),
-      ...(result.discountLimitExceeded && { discountLimitExceeded: true }),
+      ...(receiptClaimToken ? { receiptClaimToken } : {}),
       paymentSummary: paymentSummaryForClient,
+      ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
@@ -224,8 +452,51 @@ export async function POST(request: NextRequest) {
 
     if (message === "Hold has expired") {
       bookingWarn("complete-after-payment", "hold expired", { holdId: (err as { holdId?: string }).holdId });
+      try {
+        if (holdIdForAlert && paymentIntentIdForAlert) {
+          const dbAlert = getDb();
+          let customerEmail: string | undefined;
+          try {
+            const hs = await dbAlert.collection("holds").doc(holdIdForAlert).get();
+            if (hs.exists) {
+              customerEmail = (hs.data() as Hold)?.customerDraft?.email;
+            }
+          } catch {
+            // non-fatal
+          }
+          try {
+            await upsertPendingRefundRecord(
+              dbAlert,
+              {
+                reason: "hold_expired_after_payment",
+                holdId: holdIdForAlert,
+                paymentIntentId: paymentIntentIdForAlert,
+              },
+              {
+                holdId: holdIdForAlert,
+                paymentIntentId: paymentIntentIdForAlert,
+                ...(customerEmail && { customerEmail }),
+              }
+            );
+          } catch (prErr) {
+            console.error("[complete-after-payment] pendingRefunds hold expired after payment", prErr);
+          }
+          await writeOperationalAlert({
+            type: "hold_expired_after_payment",
+            holdId: holdIdForAlert,
+            paymentIntentId: paymentIntentIdForAlert,
+            source: "complete-after-payment",
+          });
+        }
+      } catch {
+        // non-fatal
+      }
       return NextResponse.json(
-        { error: "Your booking hold has expired. Please start a new booking.", holdExpired: true },
+        {
+          error:
+            "We've received your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+          holdExpired: true,
+        },
         { status: 409 }
       );
     }

@@ -88,7 +88,7 @@ End-to-end review of the Boat Bros booking engine, from customer journey through
 
 ### 2.3 Calendars
 - **Page:** `/admin/calendars` — experience switcher, month view, day cells with **slot counts by status** (Open, Held, Booked, Blocked) as small tiles; click day → modal with “Block entire day” or “Block slot” (for open slots).
-- **APIs:** `GET /api/booking/slots?experienceId=&startDate=&endDate=` (read); `POST /api/booking/block-date` (experienceId, date); `POST /api/booking/block-slot` (experienceId, slotId). Both block APIs require admin session or Bearer BLOCK_SECRET/SEED_SECRET.
+- **APIs:** `GET /api/booking/slots?experienceId=&startDate=&endDate=` (read); `POST /api/admin/blocks/block-date` (experienceId, date); `POST /api/admin/blocks/block-slot` (experienceId, slotId). Both block APIs require admin session or Bearer BLOCK_SECRET (middleware protects /api/admin/*).
 - **Visuals:** Matches reference calendar UX: fixed-height day cards, rounded cells, today highlight, hover, legend.
 
 **Strengths:** Clear availability view; block day or single slot; auth on write.  

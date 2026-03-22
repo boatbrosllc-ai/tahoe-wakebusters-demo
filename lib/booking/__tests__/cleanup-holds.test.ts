@@ -5,7 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { getCleanupHoldSlotAction } from "../cleanup-holds-logic";
+import { getCleanupHoldSlotAction } from "../cleanup-holds-slot-action";
 
 describe("cleanup-holds replaced slot hold reference", () => {
   it("when slot.holdId matches hold doc id, action is release_slot_and_expire", () => {

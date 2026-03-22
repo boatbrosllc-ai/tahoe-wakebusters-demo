@@ -1,20 +1,9 @@
 "use client";
 
 import { createContext, useCallback, useContext, useRef, useState } from "react";
+import type { BookingModalInitialSelection } from "@/lib/booking/booking-modal-types";
 
-export interface BookingModalInitialSelection {
-  experienceId?: string;
-  experienceSlug?: string;
-  boatId?: string;
-  date?: string;
-  slotId?: string;
-  pricingType?: "charter" | "ticketed";
-  /** When set, modal uses this for ticketed flows instead of hardcoded 'shared' (e.g. after auto-switch to charter on calendar). */
-  bookingMode?: "shared" | "charter";
-  /** From calendar/slug fetch so modal can validate slot before hold creation. */
-  departureHour?: number;
-  departureMinute?: number;
-}
+export type { BookingModalInitialSelection };
 
 type BookingModalContextValue = {
   open: boolean;

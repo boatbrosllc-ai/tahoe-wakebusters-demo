@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
+import { notifyAdminAuthChanged } from "@/lib/admin-auth-client";
 
 const navGroups: { label: string; links: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[] }[] = [
   {
@@ -167,15 +168,26 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <NavLinks pathname={pathname} onLinkClick={() => setSidebarOpen(false)} />
           </nav>
           <div className="mt-auto border-t border-white/10 p-4 shrink-0">
-            <form action="/api/admin/logout" method="POST">
-              <button
-                type="submit"
-                className="w-full rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white text-left min-h-[44px] flex items-center gap-3 transition-colors"
-              >
-                <LogOut className="h-5 w-5 shrink-0 text-white/60" aria-hidden />
-                Sign out
-              </button>
-            </form>
+            <button
+              type="button"
+              className="w-full rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white text-left min-h-[44px] flex items-center gap-3 transition-colors"
+              onClick={async () => {
+                try {
+                  await fetch("/api/admin/logout", {
+                    method: "POST",
+                    credentials: "include",
+                    redirect: "manual",
+                  });
+                } catch {
+                  // still clear UI in other tabs
+                }
+                notifyAdminAuthChanged();
+                window.location.href = "/admin/login";
+              }}
+            >
+              <LogOut className="h-5 w-5 shrink-0 text-white/60" aria-hidden />
+              Sign out
+            </button>
           </div>
         </aside>
 

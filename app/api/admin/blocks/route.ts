@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Block } from "@/lib/booking/types";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
@@ -9,7 +11,7 @@ function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   return null;
 }
 
-/** GET: list blocks in range. Query: experienceId, from (YYYY-MM-DD or ISO), to (YYYY-MM-DD or ISO), boatId (optional). */
+/** GET: list blocks in range. Query: experienceId, from (YYYY-MM-DD or ISO), to (YYYY-MM-DD or ISO), boatId (optional). Includes slug variants so blocks created under a variant experienceId are returned. */
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -22,22 +24,43 @@ export async function GET(request: NextRequest) {
     if (!experienceId || !fromParam || !toParam) {
       return NextResponse.json({ error: "experienceId, from, to required" }, { status: 400 });
     }
-    const rangeStart = new Date(fromParam.includes("T") ? fromParam : fromParam + "T00:00:00");
-    const rangeEnd = new Date(toParam.includes("T") ? toParam : toParam + "T23:59:59.999");
-    if (isNaN(rangeStart.getTime()) || isNaN(rangeEnd.getTime())) {
+    const fromStr = fromParam.slice(0, 10);
+    const toStr = toParam.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
       return NextResponse.json({ error: "Invalid from/to dates" }, { status: 400 });
     }
+    const { start: rangeStart } = getSlotStartEnd(fromStr, 0, 0, 0);
+    const { end: rangeEnd } = getSlotStartEnd(toStr, 23, 1, 59);
 
     const db = getDb();
     const { Timestamp } = getFirestoreExports();
-    let q = db
-      .collection("blocks")
-      .where("experienceId", "==", experienceId)
-      .where("startAt", ">=", Timestamp.fromDate(rangeStart))
-      .where("startAt", "<=", Timestamp.fromDate(rangeEnd));
-    const snap = await q.get();
 
-    const blocks = snap.docs
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    const experienceSlug = expSnap.exists && typeof (expSnap.data() as { slug?: string })?.slug === "string"
+      ? (expSnap.data() as { slug: string }).slug.trim()
+      : "";
+    const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
+
+    const blocksSnaps = await Promise.all(
+      variantIds.map((variantId) =>
+        db
+          .collection("blocks")
+          .where("experienceId", "==", variantId)
+          .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
+          .get()
+      )
+    );
+    const seenBlockIds = new Set<string>();
+    const docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+    for (const snap of blocksSnaps) {
+      for (const doc of snap.docs) {
+        if (seenBlockIds.has(doc.id)) continue;
+        seenBlockIds.add(doc.id);
+        docs.push(doc);
+      }
+    }
+
+    const blocks = docs
       .map((doc) => {
         const b = doc.data() as Block & { startAt: { toDate(): Date }; endAt: { toDate(): Date }; createdAt: { toDate(): Date } };
         const startAt = b.startAt?.toDate?.();

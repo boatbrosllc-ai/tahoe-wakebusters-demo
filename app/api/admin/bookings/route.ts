@@ -4,12 +4,14 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection, Slot, Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
-import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, buildSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, getCentralCalendarDayBounds, buildSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -49,6 +51,10 @@ export async function GET(request: NextRequest) {
     const toDateVal = toParam ? new Date(toParam) : null;
     const fromTripDate = fromTripParam && /^\d{4}-\d{2}-\d{2}$/.test(fromTripParam) ? fromTripParam : null;
     const toTripDate = toTripParam && /^\d{4}-\d{2}-\d{2}$/.test(toTripParam) ? toTripParam : null;
+    if (fromTripDate && toTripDate && fromTripDate > toTripDate) {
+      return NextResponse.json({ error: "fromTripDate must be on or before toTripDate" }, { status: 400 });
+    }
+    const hasTripFilter = !!(fromTripDate || toTripDate);
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
@@ -75,13 +81,13 @@ export async function GET(request: NextRequest) {
 
     let query = db.collection("bookings") as FirebaseFirestore.Query;
 
-    if (fromTripDate && toTripDate) {
+    /** Trip filters use startDateStr; open-ended supported. When booking-date filters are also set, they are ANDed in memory after the trip query (see list filter below). */
+    if (hasTripFilter) {
       if (experienceIdInValues) query = query.where("experienceId", "in", experienceIdInValues);
       if (statusFilter) query = query.where("status", "==", statusFilter);
-      query = query
-        .where("startDateStr", ">=", fromTripDate)
-        .where("startDateStr", "<=", toTripDate)
-        .orderBy("startDateStr", "desc");
+      if (fromTripDate) query = query.where("startDateStr", ">=", fromTripDate);
+      if (toTripDate) query = query.where("startDateStr", "<=", toTripDate);
+      query = query.orderBy("startDateStr", "desc");
     } else {
       if (experienceIdInValues) query = query.where("experienceId", "in", experienceIdInValues);
       if (statusFilter) query = query.where("status", "==", statusFilter);
@@ -215,6 +221,17 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    if (hasTripFilter && (fromDateVal || toDateVal)) {
+      list = list.filter((row) => {
+        const ca = row.createdAt;
+        if (!ca) return false;
+        const created = new Date(ca);
+        if (fromDateVal && created < fromDateVal) return false;
+        if (toDateVal && created > endOfDay(toDateVal)) return false;
+        return true;
+      });
+    }
+
     return NextResponse.json({ bookings: list, nextCursor }, { headers });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -322,7 +339,10 @@ export async function POST(request: NextRequest) {
       currency: "usd",
     };
 
-    const booking: Omit<Booking, "createdAt"> & { createdAt: ReturnType<typeof Timestamp.now> } = {
+    const booking: Omit<Booking, "createdAt"> & {
+      createdAt: ReturnType<typeof Timestamp.now>;
+      summaryCountersApplied?: boolean;
+    } = {
       ...(boatId && { boatId }),
       experienceId,
       slotId,
@@ -337,7 +357,9 @@ export async function POST(request: NextRequest) {
       pricing,
       status: "paid",
       stripe: {},
-      ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "shared" as const }),
+      ...(totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
+      // Manual bookings do not reserve shared-departure inventory; use charter or leave unset so cancel does not release capacity that was never held.
+      ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "charter" as const }),
       ...(hasBilling && billingAddress && { billingAddress }),
       ...(hasCard && cardDisplay && { card: cardDisplay }),
       createdAt: Timestamp.now(),
@@ -351,11 +373,32 @@ export async function POST(request: NextRequest) {
     const { start: slotStart, end: slotEnd } = getSlotStartEnd(tripDate, startHour, durationHours, 0);
     const slotStartMs = slotStart.getTime();
     const slotEndMs = slotEnd.getTime();
-    const dayStart = new Date(tripDate + "T00:00:00");
-    const dayEnd = new Date(tripDate + "T23:59:59.999");
+    const { dayStart, dayEnd } = getCentralCalendarDayBounds(tripDate);
     const now = new Date();
+    const experienceIdVariantsForBlocks = getExperienceIdVariants(
+      experienceId,
+      typeof exp.slug === "string" ? exp.slug.trim() : ""
+    );
 
     await db.runTransaction(async (tx) => {
+      const blocked = await hasOverlappingBlock({
+        db,
+        Timestamp,
+        experienceId,
+        experienceIdVariants: experienceIdVariantsForBlocks,
+        boatId: boatId ?? undefined,
+        slotStart,
+        slotEnd,
+        get: (q) => tx.get(q),
+      });
+      if (blocked) {
+        throw Object.assign(
+          new Error(
+            "This time falls within an admin-blocked period. Remove the block in Admin → Calendars (or Blocks) first, or pick another time."
+          ),
+          { code: "BLOCK_CONFLICT" }
+        );
+      }
       // Ticketed capacity check inside transaction to prevent over-selling under concurrency.
       if (exp.pricingType === "ticketed" && inventoryRef !== null) {
         const slugVariants = getExperienceIdVariants(experienceId, exp.slug ?? "");
@@ -370,9 +413,10 @@ export async function POST(request: NextRequest) {
           for (const doc of snap.docs) {
             if (seen.has(doc.id)) continue;
             seen.add(doc.id);
-            const b = doc.data() as { partySize?: number; status?: string };
+            const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
             if (typeof b.partySize !== "number") continue;
             if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            if (b.bookingMode === "charter") throw Object.assign(new Error("This departure is reserved as a private charter"), { code: "SLOT_CONFLICT" });
             sold += b.partySize;
           }
         }
@@ -459,6 +503,29 @@ export async function POST(request: NextRequest) {
       }
 
       tx.set(bookingRef, booking);
+      addConfirmationOutboxInTransaction(tx, db, bookingId);
+      if (totalCents > 0) {
+        const summaryRef = db.collection("summaries").doc("revenue");
+        tx.set(
+          summaryRef,
+          {
+            totalRevenueCents: FieldValue.increment(totalCents),
+            bookingCount: FieldValue.increment(1),
+            customerCount: FieldValue.increment(1),
+          },
+          { merge: true }
+        );
+        const now = new Date();
+        const monthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
+        tx.set(
+          db.collection("summaries").doc(monthKey),
+          {
+            revenueCents: FieldValue.increment(totalCents),
+            bookingCount: FieldValue.increment(1),
+          },
+          { merge: true }
+        );
+      }
       tx.set(slotRef, {
         status: "booked",
         bookingId,
@@ -481,45 +548,11 @@ export async function POST(request: NextRequest) {
     } catch (waiverErr) {
       console.error("[admin/bookings] waiver creation failed", waiverErr);
     }
-    try {
-      const { sendBookingConfirmationEmail, sendBookingConfirmationCopyToBusiness } = await import("@/lib/booking/brevo");
-      const { formatSlotDateTime } = await import("@/lib/booking/format-booking-datetime");
-      const locationText = exp.location?.addressText ?? "We'll send exact meeting point after booking.";
-      const cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
-      const experienceName = exp.title ?? experienceId;
-      const addonsById = new Map<string, { name?: string }>();
-      const addonsSnap = await db.collection("experiences").doc(experienceId).collection("addons").get();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as { name?: string }));
-      const addonsSummary =
-        (booking.addonSelections?.length ?? 0) > 0
-          ? (booking.addonSelections ?? [])
-              .map((sel) => `${addonsById.get(sel.addonId)?.name ?? sel.addonId}: qty ${sel.qty}`)
-              .join(", ")
-          : "None";
-      const emailContext = {
-        boatName: experienceName,
-        startAt: formatSlotDateTime({ toDate: () => slotStart }),
-        endAt: formatSlotDateTime({ toDate: () => slotEnd }),
-        durationHours, // use admin-specified value, not the rate's duration
-        locationText,
-        cancellationPolicyText,
-        isDeposit: false,
-        manageLink: undefined,
-        waiverSigningUrl: undefined,
-        waiverGroupSigningUrl: undefined,
-        pricingType: exp.pricingType,
-        addonsSummary,
-      };
-      const bookingForEmail = { ...booking, id: bookingId } as Booking;
-      await sendBookingConfirmationEmail(bookingForEmail, emailContext);
-      await sendBookingConfirmationCopyToBusiness(bookingForEmail, emailContext);
-    } catch (emailErr) {
-      console.error("[admin/bookings] confirmation email failed", emailErr);
-    }
+    // Confirmation email (+ SMS) is sent by the process-confirmation-outbox cron
     return NextResponse.json({ id: bookingId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if ((err as { code?: string }).code === "SLOT_CONFLICT") {
+    if ((err as { code?: string }).code === "SLOT_CONFLICT" || (err as { code?: string }).code === "BLOCK_CONFLICT") {
       return NextResponse.json({ error: message }, { status: 409 });
     }
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

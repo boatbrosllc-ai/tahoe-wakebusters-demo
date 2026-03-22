@@ -33,11 +33,12 @@ Create a `.env.local` (or set in your host) with:
 | `BREVO_SENDER_EMAIL` | No | Sender email for transactional emails (default: `noreply@boatbrosatx.com`). **Must be verified in Brevo** (Senders & IP → Senders). |
 | `BREVO_SENDER_NAME` | No | Sender display name (default: `Boat Bros ATX`) |
 | `APP_BASE_URL` | Yes | Base URL of the app (e.g. `http://localhost:3000` or `https://boatbrosatx.com`) |
-| `CRON_SECRET` | No | Secret for cleanup-holds and seed (Bearer token) |
+| `CRON_SECRET` | **Yes (production)** | Secret for admin cron endpoints (cleanup-holds, run-final-charges, reminder crons). Use 32+ random bytes (e.g. `openssl rand -base64 32`). Set in Netlify; scheduled functions call `/api/admin/cron/*` with `Authorization: Bearer <CRON_SECRET>`. |
 | `SEED_SECRET` | No | Same as CRON_SECRET for seeding |
-| `RATE_LIMIT_REDIS_REST_URL` | Recommended (production) | Redis REST URL for rate limiting (e.g. Upstash). Without it in production we fail open (no rate limiting). See [Rate limiting](#rate-limiting). |
-| `RATE_LIMIT_REDIS_REST_TOKEN` | Recommended (production) | Redis REST token. Or use `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. |
+| `RATE_LIMIT_REDIS_REST_URL` | **Yes (production)** | Redis REST URL for rate limiting (e.g. Upstash). **Required for production**; without it rate limiting is disabled (fail-open). Or use `UPSTASH_REDIS_REST_URL`. See [Rate limiting](#rate-limiting). |
+| `RATE_LIMIT_REDIS_REST_TOKEN` | **Yes (production)** | Redis REST token. **Required for production.** Or use `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. |
 | `ADMIN_EMAIL` | No | Comma-separated emails allowed to access admin (e.g. `boatbrosllc@gmail.com` or `a@x.com,b@x.com`). If unset, admin routes stay open (dev only). For production checklist see [Admin login in production](./ADMIN_LOGIN_PRODUCTION.md). |
+| `ADMIN_EDGE_SECRET` | **Yes (production)** | **Required in production.** HMAC secret for admin Edge/middleware session verification. When unset in production, admin routes and `/api/admin/*` return 503 "Service misconfigured". Set in Netlify → Site → Environment variables. |
 | `NEXT_PUBLIC_FIREBASE_API_KEY` | Yes** | Firebase Web API key (from Firebase Console → Project settings → Your apps → Web app). Required for admin login when `ADMIN_EMAIL` is set. |
 | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Yes** | Auth domain (e.g. `your-project.firebaseapp.com`). |
 | `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Yes** | Firebase project ID (same as Firestore). |
@@ -45,6 +46,18 @@ Create a `.env.local` (or set in your host) with:
 **Required when using admin sign-in (when `ADMIN_EMAIL` is set).
 
 See `.env.example` for a template.
+
+## Booking index migration (`startDateStr` and legacy fallbacks)
+
+Slot and conflict checks query bookings by `startDateStr` for efficient same-day overlap detection. Older documents may lack this field; the engine can fall back to a capped legacy scan (default **2,000** documents per query variant) until data is backfilled.
+
+**Required migration (production):**
+
+1. Run the admin **`/api/admin/backfill-start-date-str`** endpoint against **all** existing holds and bookings until the job reports complete (use a valid admin session or the documented admin auth for that route).
+2. After backfill is verified, set **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** and **`DISABLE_LEGACY_HOLDS_FALLBACK=true`** in the deployment environment so the app does not rely on the legacy scan path.
+3. Until backfill finishes, you may raise the scan cap with **`LEGACY_BOOKING_SCAN_LIMIT`** (integer, min 500, max 50,000; default 2000) if you have large historical datasets—prefer completing the backfill over relying on a high limit.
+
+If the legacy cap is hit, an operational alert is written; treat that as a signal to finish backfill or increase the limit temporarily.
 
 ## Stripe webhook (required for bookings and confirmation email)
 
@@ -100,6 +113,8 @@ If booking works locally but fails in production, check:
 3. **Stripe Webhook** — In Stripe Dashboard → Webhooks, the endpoint URL must be `https://YOUR_PRODUCTION_DOMAIN/api/stripe/webhook`. Use the same `STRIPE_WEBHOOK_SECRET` from that endpoint in your production env.
 4. **APP_BASE_URL** — Must be your production URL (e.g. `https://boatbrosatx.com`), no trailing slash. Used for success/cancel redirects and emails.
 5. **Experience slug in Firestore** — Each experience document should have a correct `slug` field (`pontoon`, `watersports`, `sunset`, `holiday`). If `slug` is missing or wrong, boat filtering can show the wrong boats (e.g. pontoon for watersports). Re-run setup or edit the experience in Admin to fix.
+
+6. **Legacy booking fallback** — After running the `startDateStr` backfill to exhaustion (use `GET/POST /api/admin/backfill-start-date-str?collection=bookings` with cursor until `missingCount` is zero), set **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** in the Netlify environment. This avoids unbounded Firestore scans on every availability request. See the backfill endpoint and Rate limiting section for details.
 
 When config is missing, the booking UI now shows the API error and hint (e.g. “Booking is not configured. Set FIREBASE_* in your deployment.”). Check the message and the host’s env/logs.
 
@@ -225,7 +240,7 @@ When the user cancels Stripe Checkout, they are redirected to `/booking/cancel?h
 
 The booking endpoints `POST /api/booking/create-hold`, `POST /api/booking/create-payment-intent`, `POST /api/booking/create-checkout-session`, `POST /api/booking/create-checkout-session-direct`, and `POST /api/booking/validate-discount` are rate-limited in code (see `lib/booking/rate-limit.ts`). **In production, a shared Redis store is recommended.** When Redis is not configured in production, the rate limiter **fails open** (requests are allowed) so the site keeps working; set Redis for proper rate limiting. When Redis is configured but unavailable (error or timeout), policy is controlled by env: default is fail-open; set `RATE_LIMIT_FAIL_CLOSED=1` to reject requests with **503** (not 429) so Redis outages do not silently bypass limits. In development, when Redis is not set, an in-memory store is used (resets on cold start).
 
-### Production: Redis recommended
+### Production: Redis required
 
 Set **one** of the following in your production environment:
 
@@ -237,7 +252,7 @@ Set **one** of the following in your production environment:
 | `UPSTASH_REDIS_REST_URL` | Same as above (alternative names) |
 | `UPSTASH_REDIS_REST_TOKEN` | Same as above |
 
-Without these, in production the rate limiter **fails open** (no 429); booking works but rate limiting is disabled. When Redis is configured but **unavailable** and `RATE_LIMIT_FAIL_CLOSED=1`, rate-limited booking endpoints return **503** with a generic message and an `incidentCode` for support correlation; see SECURITY.md for runbook. The health endpoint reports status: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is missing or unhealthy in production; use a privileged health request (see docs) for `rateLimitDetail`. **Before release, ensure `/api/health` returns 200**; if it returns 503 due to `rateLimit: degraded`, configure Redis or deployment checks should block release.
+**In production, `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` (or the `RATE_LIMIT_*` equivalents) are required** for rate limiting. Without these, the rate limiter fails open (no 429); booking works but rate limiting is disabled and the health check reports `rateLimitReady: false`. Run `scripts/check-production-env.js` before deploy to ensure Redis vars are set. When Redis is configured but **unavailable** and `RATE_LIMIT_FAIL_CLOSED=1`, rate-limited booking endpoints return **503** with a generic message and an `incidentCode` for support correlation; see SECURITY.md for runbook. The health endpoint reports status: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is missing or unhealthy in production; use a privileged health request (see docs) for `rateLimitDetail`. **Before release, ensure `/api/health` returns 200**; if it returns 503 due to `rateLimit: degraded`, configure Redis or deployment checks should block release.
 
 For a quick setup, use [Upstash Redis](https://upstash.com/) (REST API), create a database, and set `RATE_LIMIT_REDIS_REST_URL` and `RATE_LIMIT_REDIS_REST_TOKEN` (or the `UPSTASH_REDIS_*` equivalents) in your host's environment variables.
 
@@ -329,7 +344,7 @@ The slots API queries `startAt` with a range and `orderBy("startAt")`. If Firest
 | POST | `/api/booking/create-checkout-session` | Create Stripe Checkout Session (body: holdId) |
 | GET | `/api/booking/receipt?session_id=` | Get booking by Stripe session (for success page; returns experienceName when experienceId) |
 | POST | `/api/stripe/webhook` | Stripe webhook (signature verified; finalizes booking, sends Brevo email, optional marketing list) |
-| POST | `/api/booking/cleanup-holds` | Expire old holds and release slots (cron; supports boatId and experienceId) |
+| POST | `/api/admin/cron/cleanup-holds` | Expire old holds and release slots (cron; Bearer CRON_SECRET) |
 | POST | `/api/booking/seed` | Seed boats (legacy; optional `Authorization: Bearer SEED_SECRET`) |
 | POST | `/api/booking/seed-experiences` | Seed 4 experiences + rates + addons + 60 days slots (optional `Authorization: Bearer SEED_SECRET`) |
 | POST | `/api/admin/session` | Admin sign-in (body: `token` = Firebase ID token); verifies token, sets session cookie, returns redirect |
@@ -353,13 +368,13 @@ The slots API queries `startAt` with a range and `orderBy("startAt")`. If Firest
 
 ## Cleanup cron
 
-To release expired holds periodically, call `POST /api/booking/cleanup-holds` with `Authorization: Bearer CRON_SECRET` on a schedule (e.g. every 5–10 minutes via Vercel Cron, GitHub Actions, or a cron job).
+To release expired holds periodically, call `POST /api/admin/cron/cleanup-holds` with `Authorization: Bearer CRON_SECRET` on a schedule (e.g. every 5–10 minutes via Netlify Scheduled Functions or a cron job).
 
 ## 50/50 deposit flow (Payment Element only)
 
 - **Deposit:** Customer pays 50% via Payment Element; card is saved for off-session use. Booking is created with status `final_due` and `finalChargeAt` = trip start − 48 hours.
-- **Final charge cron:** Call `POST /api/booking/run-final-charges` with `Authorization: Bearer CRON_SECRET` (e.g. every 15–30 minutes). It attempts off-session final charge for bookings where `status === "final_due"` and `finalChargeAt <= now`. Webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) marks the booking `final_paid`.
-- **Final payment request email (48h before trip):** Call `POST /api/booking/final-payment-reminder-cron` with `Authorization: Bearer CRON_SECRET` (e.g. hourly). Finds `final_due` bookings whose trip is in 46–50 hours, sends one email per booking with a secure “Pay now” link to `/booking/manage?token=...`. After they pay on that page, the Stripe webhook marks the booking `final_paid`. Requires `MANAGE_BOOKING_SECRET` and `APP_BASE_URL`. Tracks `finalPaymentRequestSentAt` on the booking so each customer gets only one email.
+- **Final charge cron:** Call `POST /api/admin/cron/run-final-charges` with `Authorization: Bearer CRON_SECRET` (e.g. every 15–30 minutes). It attempts off-session final charge for bookings where `status === "final_due"` and `finalChargeAt <= now`. Webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) marks the booking `final_paid`.
+- **Final payment request email (48h before trip):** Call `POST /api/admin/cron/final-payment-reminder-cron` with `Authorization: Bearer CRON_SECRET` (e.g. hourly). Finds `final_due` bookings whose trip is in 46–50 hours, sends one email per booking with a secure “Pay now” link to `/booking/manage?token=...`. After they pay on that page, the Stripe webhook marks the booking `final_paid`. Requires `MANAGE_BOOKING_SECRET` and `APP_BASE_URL`. Tracks `finalPaymentRequestSentAt` on the booking so each customer gets only one email.
 - **Manage booking:** Set `MANAGE_BOOKING_SECRET` in env. Confirmation email includes a signed link to `/booking/manage?token=...` where the customer can update card or pay remaining balance.
 - **Firestore index:** For `run-final-charges` you may need a composite index on `bookings`: `status` (Ascending) + `finalChargeAt` (Ascending). If the query fails, use the link in the error to create the index in Firebase Console.
 

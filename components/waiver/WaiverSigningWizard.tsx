@@ -17,10 +17,11 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface WaiverSigningWizardProps {
   data: WaiverValidateResponse;
+  token?: string;
   onSuccess?: () => void;
 }
 
-export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProps) {
+export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: WaiverSigningWizardProps) {
   const [step, setStep] = useState(0);
   const [signer, setSigner] = useState({
     name: "",
@@ -52,23 +53,28 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
 
   const { template, bookingSummary } = data;
   const clausesWithInitials = template.clauses.filter((c) => c.requiresInitials);
-  /** All info fields are required to move forward. */
-  const requirePhone = true;
-  const requireDob = true;
+  const requirePhone = template.requiredFields.phone;
+  const requireDob = template.requiredFields.dob;
+  const sigMode = template.signature.mode;
+  const requireTypedSig = template.signature.requireTypedName;
+  /** Typed-name field shown for type-only, draw+typed, or both (optional typed when not required). */
+  const showTypedField =
+    sigMode === "type" || sigMode === "both" || (sigMode === "draw" && requireTypedSig);
 
   const canProceedFromInfo =
     signer.name.trim().length > 0 &&
     signer.email.trim().length > 0 &&
     EMAIL_REGEX.test(signer.email.trim()) &&
-    signer.phone.trim().length > 0 &&
-    signer.dob.trim().length > 0;
+    (!requirePhone || signer.phone.trim().length > 0) &&
+    (!requireDob || signer.dob.trim().length > 0);
   const canProceedFromTerms =
     termsAccepted &&
     (clausesWithInitials.length === 0 ||
       clausesWithInitials.every((c) => (initials[c.id] ?? "").trim().length > 0));
-  const requireTyped = template.signature.requireTypedName;
   const canProceedFromSign =
-    !!signatureDataUrl && (!requireTyped || typedName.trim().length > 0);
+    sigMode === "type"
+      ? typedName.trim().length > 0
+      : !!signatureDataUrl && (!requireTypedSig || typedName.trim().length > 0);
 
   /** Disable Next until all required fields for the current step are valid; allow click on step 0/1 to show validation errors. */
   const nextDisabled =
@@ -77,14 +83,14 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
     (step === 1 && !canProceedFromTerms) ||
     (step === 2 && !canProceedFromSign);
 
-  /** Validate step 0 and return first error field id for focus. All fields are required. */
+  /** Validate step 0 and return first error field id for focus. */
   function validateStep0(): keyof typeof fieldErrors | null {
     const err: typeof fieldErrors = {};
     if (!signer.name.trim()) err.name = "Full name is required.";
     if (!signer.email.trim()) err.email = "Email is required.";
     else if (!EMAIL_REGEX.test(signer.email.trim())) err.email = "Please enter a valid email address.";
-    if (!signer.phone.trim()) err.phone = "Phone number is required.";
-    if (!signer.dob.trim()) err.dob = "Date of birth is required.";
+    if (requirePhone && !signer.phone.trim()) err.phone = "Phone number is required.";
+    if (requireDob && !signer.dob.trim()) err.dob = "Date of birth is required.";
     setFieldErrors(err);
     if (err.name) return "name";
     if (err.email) return "email";
@@ -128,15 +134,23 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
     }
 
     if (step === 2) {
-      if (!signatureDataUrl) {
-        setStep2Error("Please sign in the box above before submitting.");
-        stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        return;
-      }
-      if (requireTyped && !typedName.trim()) {
-        setStep2Error("Please type your full name to confirm your signature.");
-        stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        return;
+      if (sigMode === "type") {
+        if (!typedName.trim()) {
+          setStep2Error("Please type your full name to sign.");
+          stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+      } else {
+        if (!signatureDataUrl) {
+          setStep2Error("Please sign in the box above before submitting.");
+          stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        if (requireTypedSig && !typedName.trim()) {
+          setStep2Error("Please type your full name to confirm your signature.");
+          stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
       }
     }
 
@@ -144,25 +158,35 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
     if (isLastStep) {
       setSubmitting(true);
       try {
-        const url = typeof window !== "undefined" ? window.location.href : "";
-        const params = typeof window !== "undefined" ? new URL(url).searchParams : null;
-        const token = params?.get("token") ?? "";
+        const token = tokenProp ?? "";
         const groupToken = data.isGroupSigning && data.groupToken ? data.groupToken : undefined;
+        const submitSigner: {
+          name: string;
+          email: string;
+          phone?: string;
+          dob?: string;
+        } = {
+          name: signer.name.trim(),
+          email: signer.email.trim(),
+          ...(signer.phone.trim() ? { phone: signer.phone.trim() } : {}),
+          ...(signer.dob.trim() ? { dob: signer.dob.trim() } : {}),
+        };
+        const submitBody: Record<string, unknown> = {
+          ...(groupToken ? { groupToken } : { token }),
+          signer: submitSigner,
+          initials,
+        };
+        if (sigMode !== "type" && signatureDataUrl) {
+          submitBody.signatureDataUrl = signatureDataUrl;
+        }
+        if (typedName.trim()) {
+          submitBody.typedName = typedName.trim();
+        }
+
         const res = await fetch("/api/waiver/signing/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...(groupToken ? { groupToken } : { token }),
-            signer: {
-              name: signer.name.trim(),
-              email: signer.email.trim(),
-              phone: signer.phone.trim() || undefined,
-              dob: signer.dob.trim() || undefined,
-            },
-            initials,
-            signatureDataUrl: signatureDataUrl ?? "",
-            typedName: typedName.trim() || undefined,
-          }),
+          body: JSON.stringify(submitBody),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -190,10 +214,14 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
     clausesWithInitials,
     signatureDataUrl,
     typedName,
-    requireTyped,
+    sigMode,
+    requireTypedSig,
     data.isGroupSigning,
     data.groupToken,
+    tokenProp,
     onSuccess,
+    requirePhone,
+    requireDob,
   ]);
 
   const handleBack = useCallback(() => {
@@ -247,7 +275,7 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                   onBlur={() => { if (!signer.name.trim()) setFieldErrors((prev) => ({ ...prev, name: "Full name is required." })); }}
                   className={cn(inputClass, fieldErrors.name && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                   placeholder="Your full name"
-                  aria-invalid={fieldErrors.name ? "true" : undefined}
+                  aria-invalid={fieldErrors.name ? "true" : "false"}
                   aria-describedby={fieldErrors.name ? "waiver-name-error" : undefined}
                 />
                 {fieldErrors.name && <p id="waiver-name-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.name}</p>}
@@ -267,44 +295,52 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                   }}
                   className={cn(inputClass, fieldErrors.email && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                   placeholder="you@example.com"
-                  aria-invalid={fieldErrors.email ? "true" : undefined}
+                  aria-invalid={fieldErrors.email ? "true" : "false"}
                   aria-describedby={fieldErrors.email ? "waiver-email-error" : undefined}
                 />
                 {fieldErrors.email && <p id="waiver-email-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.email}</p>}
               </div>
-              <div>
-                <label htmlFor="waiver-phone" className={labelClass}>Phone <span className="text-red-600" aria-hidden>*</span></label>
-                <input
-                  ref={phoneRef}
-                  id="waiver-phone"
-                  type="tel"
-                  autoComplete="tel"
-                  value={signer.phone}
-                  onChange={(e) => { setSigner((s) => ({ ...s, phone: e.target.value })); setFieldErrors((prev) => (prev.phone ? { ...prev, phone: undefined } : prev)); }}
-                  onBlur={() => { if (!signer.phone.trim()) setFieldErrors((prev) => ({ ...prev, phone: "Phone number is required." })); }}
-                  className={cn(inputClass, fieldErrors.phone && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
-                  placeholder="(555) 123-4567"
-                  aria-invalid={fieldErrors.phone ? "true" : undefined}
-                  aria-describedby={fieldErrors.phone ? "waiver-phone-error" : undefined}
-                />
-                {fieldErrors.phone && <p id="waiver-phone-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.phone}</p>}
-              </div>
-              <div className="min-w-0 w-full">
-                <label htmlFor="waiver-dob" className={labelClass}>Date of birth <span className="text-red-600" aria-hidden>*</span></label>
-                <input
-                  ref={dobRef}
-                  id="waiver-dob"
-                  type="date"
-                  value={signer.dob}
-                  onChange={(e) => { setSigner((s) => ({ ...s, dob: e.target.value })); setFieldErrors((prev) => (prev.dob ? { ...prev, dob: undefined } : prev)); }}
-                  onBlur={() => { if (!signer.dob.trim()) setFieldErrors((prev) => ({ ...prev, dob: "Date of birth is required." })); }}
-                  className={cn(inputClass, "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border", fieldErrors.dob && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
-                  aria-label="Date of birth"
-                  aria-invalid={fieldErrors.dob ? "true" : undefined}
-                  aria-describedby={fieldErrors.dob ? "waiver-dob-error" : undefined}
-                />
-                {fieldErrors.dob && <p id="waiver-dob-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.dob}</p>}
-              </div>
+              {requirePhone && (
+                <div>
+                  <label htmlFor="waiver-phone" className={labelClass}>
+                    Phone <span className="text-red-600" aria-hidden>*</span>
+                  </label>
+                  <input
+                    ref={phoneRef}
+                    id="waiver-phone"
+                    type="tel"
+                    autoComplete="tel"
+                    value={signer.phone}
+                    onChange={(e) => { setSigner((s) => ({ ...s, phone: e.target.value })); setFieldErrors((prev) => (prev.phone ? { ...prev, phone: undefined } : prev)); }}
+                    onBlur={() => { if (!signer.phone.trim()) setFieldErrors((prev) => ({ ...prev, phone: "Phone number is required." })); }}
+                    className={cn(inputClass, fieldErrors.phone && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
+                    placeholder="(555) 123-4567"
+                    aria-invalid={fieldErrors.phone ? "true" : "false"}
+                    aria-describedby={fieldErrors.phone ? "waiver-phone-error" : undefined}
+                  />
+                  {fieldErrors.phone && <p id="waiver-phone-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.phone}</p>}
+                </div>
+              )}
+              {requireDob && (
+                <div className="min-w-0 w-full">
+                  <label htmlFor="waiver-dob" className={labelClass}>
+                    Date of birth <span className="text-red-600" aria-hidden>*</span>
+                  </label>
+                  <input
+                    ref={dobRef}
+                    id="waiver-dob"
+                    type="date"
+                    value={signer.dob}
+                    onChange={(e) => { setSigner((s) => ({ ...s, dob: e.target.value })); setFieldErrors((prev) => (prev.dob ? { ...prev, dob: undefined } : prev)); }}
+                    onBlur={() => { if (!signer.dob.trim()) setFieldErrors((prev) => ({ ...prev, dob: "Date of birth is required." })); }}
+                    className={cn(inputClass, "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border", fieldErrors.dob && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
+                    aria-label="Date of birth"
+                    aria-invalid={fieldErrors.dob ? "true" : "false"}
+                    aria-describedby={fieldErrors.dob ? "waiver-dob-error" : undefined}
+                  />
+                  {fieldErrors.dob && <p id="waiver-dob-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.dob}</p>}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -345,7 +381,7 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
                       )}
                       placeholder="XX"
                       maxLength={4}
-                      aria-invalid={step1InitialsError && !(initials[c.id] ?? "").trim() ? "true" : undefined}
+                      aria-invalid={step1InitialsError && !(initials[c.id] ?? "").trim() ? "true" : "false"}
                     />
                   </div>
                 ))}
@@ -363,12 +399,39 @@ export function WaiverSigningWizard({ data, onSuccess }: WaiverSigningWizardProp
               </div>
             )}
             <SignaturePad
-              onDataUrlChange={(url) => { setSignatureDataUrl(url); if (url) setStep2Error(null); }}
+              mode={sigMode}
+              onDataUrlChange={
+                sigMode !== "type"
+                  ? (url) => {
+                      setSignatureDataUrl(url);
+                      if (url) setStep2Error(null);
+                    }
+                  : undefined
+              }
               typedName={typedName}
-              onTypedNameChange={(v) => { setTypedName(v); if (v.trim()) setStep2Error(null); }}
-              requireTypedName={template.signature.requireTypedName}
-              signatureError={step2Error && !signatureDataUrl ? "Please sign in the box above before submitting." : null}
-              typedNameError={step2Error && requireTyped && !typedName.trim() ? "Please type your full name to confirm your signature." : null}
+              onTypedNameChange={
+                showTypedField
+                  ? (v) => {
+                      setTypedName(v);
+                      if (v.trim()) setStep2Error(null);
+                    }
+                  : undefined
+              }
+              requireTypedName={sigMode === "type" ? true : requireTypedSig}
+              signatureError={
+                step2Error && sigMode !== "type" && !signatureDataUrl
+                  ? "Please sign in the box above before submitting."
+                  : null
+              }
+              typedNameError={
+                step2Error &&
+                (sigMode === "type" || requireTypedSig) &&
+                !typedName.trim()
+                  ? sigMode === "type"
+                    ? "Please type your full name to sign."
+                    : "Please type your full name to confirm your signature."
+                  : null
+              }
             />
             <p className="text-sm text-brand-muted">
               Submitting as <strong className="text-brand-dark">{signer.name}</strong> ({signer.email}).

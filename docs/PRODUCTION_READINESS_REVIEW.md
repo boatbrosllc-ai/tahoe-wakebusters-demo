@@ -51,7 +51,7 @@ The booking flow is well-architected with:
 ### 1.3 50/50 deposit and final charge
 
 - Deposit: Payment Element charges 50%; booking created with `status: final_due`, `finalChargeAt` = trip − 48h.
-- Cron: `GET /api/booking/run-final-charges` with `Authorization: Bearer CRON_SECRET` creates PaymentIntent (idempotency key `final_charge_{bookingId}`), confirms off-session; webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) sets `final_paid`.
+- Cron: `POST /api/admin/cron/run-final-charges` with `Authorization: Bearer CRON_SECRET` creates PaymentIntent (idempotency key `final_charge_{bookingId}`), confirms off-session; webhook `payment_intent.succeeded` (metadata `payment_stage: "final"`) sets `final_paid`.
 - Lock: `finalChargeLockAt` prevents duplicate attempts within 10 minutes; existing PI status `succeeded` → reconcile booking to `final_paid` without recharging.
 - Final charge failure → status `final_requires_action` or `final_failed`, customer emailed (manage link if `MANAGE_BOOKING_SECRET` set).
 
@@ -71,17 +71,14 @@ The booking flow is well-architected with:
 
 **Production note (Netlify etc.):** Do **not** use `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` unless the file is present at runtime. Use `FIREBASE_PRIVATE_KEY` as a **single line** with literal `\n` for newlines (no surrounding quotes). The app normalizes and validates; truncated key throws a clear error.
 
-### 2.2 Rate limiting (Redis recommended in production)
+### 2.2 Rate limiting (Redis required in production)
 
-Without Redis in production, the rate limiter **fails open** (requests allowed; no rate limiting). To enable rate limiting, set:
+Redis is **required** for production launch. Without Redis, the rate limiter fails open (no rate limiting) and `GET /api/health` returns **503** (deployment is degraded). Before launch:
 
-- `RATE_LIMIT_REDIS_REST_URL` + `RATE_LIMIT_REDIS_REST_TOKEN`  
-  **or**  
-- `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
+- Create an Upstash Redis instance and set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in the Netlify environment (or `RATE_LIMIT_REDIS_REST_URL` + `RATE_LIMIT_REDIS_REST_TOKEN`).
+- After deploying, call `GET /api/health` on production; it must return HTTP 200 with `rateLimit: 'ok'`.
 
-When Redis is configured but **unavailable**, default is fail-open. Set `RATE_LIMIT_FAIL_CLOSED=1` to reject requests with **503** (generic message + `incidentCode`). See SECURITY.md for runbook.
-
-Health: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is missing or unhealthy in production.
+When Redis is configured but **unavailable**, default is fail-open. Set `RATE_LIMIT_FAIL_CLOSED=1` so that if Redis becomes unavailable after launch, checkout returns 503 with an `incidentCode` rather than silently dropping rate limits. See SECURITY.md for runbook.
 
 ### 2.3 Recommended for production
 
@@ -119,7 +116,7 @@ Health: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is
 
 ## 4. Stripe webhook
 
-- **Production:** In Stripe Dashboard add endpoint `https://YOUR_DOMAIN/api/stripe/webhook`. Events: `payment_intent.succeeded`, `checkout.session.completed`. Set the signing secret as `STRIPE_WEBHOOK_SECRET` in production env and redeploy.
+- **Production:** In Stripe Dashboard add endpoint `https://YOUR_DOMAIN/api/stripe/webhook`. Events: `payment_intent.succeeded`, `checkout.session.completed`, `payment_intent.payment_failed`. Set the signing secret as `STRIPE_WEBHOOK_SECRET` in production env and redeploy.
 - **Idempotency:** Each event id claimed in `stripeEvents` with a processing lease (5 min); completed events skipped; retries on 500 so Stripe can retry safely.
 - **Outcomes:** Written to `stripeEvents` (completed / failed_retryable) for debugging; duplicate/expired cases marked completed with outcome text.
 
@@ -145,11 +142,11 @@ Health: `GET /api/health` returns 503 with `rateLimit: "degraded"` when Redis is
 
 | Job | Netlify function / route | Schedule (example) | Purpose |
 |-----|---------------------------|--------------------|---------|
-| Cleanup holds | `netlify/functions/cleanup-holds.mts` → `GET /api/booking/cleanup-holds` | e.g. every 30 min | Expire active holds past `expiresAt`, release slots and shared capacity. |
-| Run final charges | `POST /api/booking/run-final-charges` | Every 30 min | Charge remaining balance for `final_due` bookings at/after `finalChargeAt`. |
-| Final payment reminder | `GET /api/booking/final-payment-reminder-cron` | e.g. hourly | Email 48h before trip with “Pay now” link. |
-| Booking reminder | `GET /api/booking/reminder-cron` | As desired | Trip reminder emails. |
-| Waiver reminder | `POST /api/waiver/reminder-cron` | As desired | Waiver signing reminders. |
+| Cleanup holds | `netlify/functions/cleanup-holds.mts` → `POST /api/admin/cron/cleanup-holds` | e.g. every 30 min | Expire active holds past `expiresAt`, release slots and shared capacity. |
+| Run final charges | `POST /api/admin/cron/run-final-charges` | Every 30 min | Charge remaining balance for `final_due` bookings at/after `finalChargeAt`. |
+| Final payment reminder | `POST /api/admin/cron/final-payment-reminder-cron` | e.g. hourly | Email 48h before trip with “Pay now” link. |
+| Booking reminder | `POST /api/admin/cron/reminder-cron` | As desired | Trip reminder emails. |
+| Waiver reminder | `POST /api/admin/cron/waiver-reminder` | As desired | Waiver signing reminders. |
 
 All require `Authorization: Bearer CRON_SECRET`. Netlify scheduled functions call the app with this header.
 
@@ -158,15 +155,17 @@ All require `Authorization: Bearer CRON_SECRET`. Netlify scheduled functions cal
 ## 8. Pre-launch checklist
 
 - [ ] **Env in production:** Firebase (project id, client email, private key single-line with `\n`), Stripe (secret + webhook secret), Brevo (API key, verified sender), `APP_BASE_URL`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`.
-- [ ] **Rate limit:** Redis (Upstash or similar) configured; `RATE_LIMIT_REDIS_REST_URL` + `RATE_LIMIT_REDIS_REST_TOKEN` (or `UPSTASH_*`) set. Health returns 200 (no rateLimit degraded).
-- [ ] **Stripe webhook:** Endpoint URL = `https://YOUR_DOMAIN/api/stripe/webhook`; events `payment_intent.succeeded`, `checkout.session.completed`; `STRIPE_WEBHOOK_SECRET` set and redeployed.
-- [ ] **Admin:** `ADMIN_EMAIL` set; Firebase Auth enabled; admin user created; `NEXT_PUBLIC_FIREBASE_*` and (if used) `FIREBASE_PRIVATE_KEY` for server verification. `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` identical.
+- [ ] **Rate limit (required for launch):** Create an Upstash Redis instance; set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in Netlify. After deploy, `GET /api/health` must return 200 with `rateLimit: 'ok'` (503 otherwise). Optionally set `RATE_LIMIT_FAIL_CLOSED=1` so checkout returns 503 when Redis is down instead of failing open.
+- [ ] **Stripe webhook:** Endpoint URL = `https://YOUR_DOMAIN/api/stripe/webhook`; events `payment_intent.succeeded`, `checkout.session.completed`, `payment_intent.payment_failed`; `STRIPE_WEBHOOK_SECRET` set and redeployed.
+- [ ] **Admin:** `ADMIN_EMAIL` set; Firebase Auth enabled; admin user created; `NEXT_PUBLIC_FIREBASE_*` and (if used) `FIREBASE_PRIVATE_KEY` for server verification. `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` identical. `ADMIN_EDGE_SECRET` set in Netlify (required for admin edge guard; without it the guard is silently disabled — verify before first deploy).
 - [ ] **Health:** `GET /api/health` returns 200. If privileged health used, `HEALTH_INTERNAL_SECRET` set.
 - [ ] **Cron:** `CRON_SECRET` set; Netlify (or other) scheduled functions call cleanup-holds, run-final-charges, final-payment-reminder with Bearer token.
 - [ ] **50/50 and manage:** `MANAGE_BOOKING_SECRET` set for manage links and final charge emails. Optional: `RELEASE_TOKEN_SECRET` for cancel-page release link.
 - [ ] **Firestore index:** Composite index on `bookings`: `status` + `finalChargeAt` if using run-final-charges (create via link in error if needed).
 - [ ] **Legacy fallback:** Set `DISABLE_LEGACY_BOOKING_FALLBACK=true` and `DISABLE_LEGACY_HOLDS_FALLBACK=true` in Netlify from day one (required-in-production; `npm run check-env` fails if missing). This disables O(n) legacy Firestore scans; ensure Firestore indexes are deployed and, if migrating existing data, run startDateStr backfill before or immediately after first deployment.
 - [ ] **Smoke test:** Create hold → pay (test card) → confirm booking appears in Admin, confirmation email received, success page shows receipt. Cancel flow: create hold → cancel → slot released. If using 50/50: deposit → booking `final_due` → after finalChargeAt run cron (or wait) → webhook sets `final_paid`.
+
+**Post-setup (after first deployment):** After Firestore setup is confirmed working, unset `SEED_SECRET` in the Netlify environment so the seed endpoints return 401 with no secret. The seed routes also return 404 in production unless `ALLOW_SEED_IN_PRODUCTION=true` is set (defense in depth).
 
 ---
 

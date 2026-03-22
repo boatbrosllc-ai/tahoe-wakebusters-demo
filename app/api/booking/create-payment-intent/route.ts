@@ -2,35 +2,41 @@ import type { Firestore } from "firebase-admin/firestore";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
-import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
-import type { Hold, Rate, Addon, Experience } from "@/lib/booking/types";
-import type { ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
+import type { Hold, Experience } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, redactEmail, generateIncidentCode } from "@/lib/booking/debug";
+import { hasReleaseTokenSecret, verifyReleaseToken } from "@/lib/booking/releaseToken";
+import { resolveHoldBookingPricing } from "@/lib/booking/hold-charge-resolver";
+import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
+import { DEPOSIT_FRACTION, HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
 
 /** Extend hold by this many minutes when creating payment intent so card-entry/SCA time does not invalidate conversion. */
-const HOLD_EXPIRY_EXTENSION_MINUTES = 10;
+const HOLD_EXPIRY_EXTENSION_MINUTES = 30;
+/** Must match create-hold `HOLD_EXPIRY_MINUTES` — caps absolute hold wall time when combining initial hold + one PI extension. */
+const HOLD_INITIAL_EXPIRY_MINUTES = 10;
+const MAX_HOLD_LIFETIME_FROM_CREATED_MS =
+  (HOLD_INITIAL_EXPIRY_MINUTES + HOLD_EXPIRY_EXTENSION_MINUTES) * 60 * 1000;
 
-function parseBody(body: unknown): { holdId: string; payFullAmount: boolean } | null {
+function parseBody(body: unknown): { holdId: string; payFullAmount: boolean; release_token?: string } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   if (!holdId) return null;
   // Default to deposit (false): only charge full when client explicitly sends payFullAmount: true
   const payFullAmount = o.payFullAmount === true;
-  return { holdId, payFullAmount };
+  const release_token = typeof o.release_token === "string" ? o.release_token.trim() : undefined;
+  return { holdId, payFullAmount, ...(release_token ? { release_token } : {}) };
 }
 
 /** Ensure Stripe Customer exists; use stripeCustomerIndex by email (no Stripe list by email).
  * Uses Firestore document create() as compare-and-set so exactly one stripe.customers.create() runs per email under concurrency.
  * Self-healing: pending records use a lease/expiry; stale or recoverable-error entries are cleared so retries can proceed.
- * PENDING_LOCK_LEASE_SEC is short (15–20s) so lock takeover completes within a single request; polling uses more iterations
- * with shorter delays and ~3s max so the loop is more likely to see the lock expire and take over instead of surfacing 503. */
-const PENDING_LOCK_LEASE_SEC = 18;
-const POLL_MAX_ITERATIONS = 6;
+ * PENDING_LOCK_LEASE_SEC bounds how long another request may hold the index lock; polling must run at least that long
+ * so we do not return 503 while the lock is still legitimately held. */
+const PENDING_LOCK_LEASE_SEC = 10;
+const POLL_MAX_ITERATIONS = 30;
 const POLL_BASE_DELAY_MS = 200;
-const POLL_MAX_ELAPSED_MS = 3000;
+const POLL_MAX_ELAPSED_MS = PENDING_LOCK_LEASE_SEC * 1000;
 
 type TakeoverResult = { action: "done"; customerId: string } | { action: "tookOver" } | { action: "retry" };
 
@@ -76,11 +82,6 @@ async function getOrCreateStripeCustomer(
     const pollStart = Date.now();
     let tookOver = false;
     for (let i = 0; i < POLL_MAX_ITERATIONS; i++) {
-      if (Date.now() - pollStart > POLL_MAX_ELAPSED_MS) {
-        const retriable = new Error("Stripe customer index poll timeout") as Error & { retriable?: boolean };
-        retriable.retriable = true;
-        throw retriable;
-      }
       const result = await db.runTransaction(async (tx): Promise<TakeoverResult> => {
         const snap = await tx.get(indexRef);
         const data = snap.exists
@@ -116,7 +117,17 @@ async function getOrCreateStripeCustomer(
         tookOver = true;
         break;
       }
-      await new Promise((r) => setTimeout(r, POLL_BASE_DELAY_MS * (i + 1)));
+      const remaining = POLL_MAX_ELAPSED_MS - (Date.now() - pollStart);
+      const delay = Math.min(
+        POLL_BASE_DELAY_MS * (1 << i) + Math.random() * 100,
+        Math.max(0, remaining),
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      if (Date.now() - pollStart > POLL_MAX_ELAPSED_MS) {
+        const retriable = new Error("Stripe customer index poll timeout") as Error & { retriable?: boolean };
+        retriable.retriable = true;
+        throw retriable;
+      }
     }
 
     if (!tookOver) {
@@ -137,11 +148,12 @@ async function getOrCreateStripeCustomer(
   if (reData?.customerId) return reData.customerId;
 
   try {
+    const displayEmail = email.trim();
     const customer = await stripe.customers.create({
-      email: email.trim(),
+      email: email.trim().toLowerCase(),
       name: name.trim() || undefined,
       phone: phone.trim() || undefined,
-      metadata: { emailLower },
+      metadata: { emailLower, displayEmail },
     });
     await indexRef.update({
       customerId: customer.id,
@@ -210,6 +222,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Hold not found" }, { status: 404 });
     }
     const hold = holdSnap.data() as Hold;
+    if (hasReleaseTokenSecret()) {
+      if (!input.release_token) {
+        return NextResponse.json(
+          { error: "release_token required (returned from create-hold with this hold)" },
+          { status: 401 }
+        );
+      }
+      const rel = verifyReleaseToken(input.release_token);
+      if (!rel || rel.holdId !== input.holdId) {
+        return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+      }
+    }
     if (hold.status !== "active") {
       bookingLog("create-payment-intent", "hold not active", { holdId: input.holdId, status: hold.status });
       return NextResponse.json({ error: "Hold expired or already used" }, { status: 400 });
@@ -219,62 +243,20 @@ export async function POST(request: NextRequest) {
       bookingLog("create-payment-intent", "hold expired", { holdId: input.holdId, expiresAt: expiresAt.toDate().toISOString() });
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
-    // Extend hold expiry atomically so card-entry/SCA time does not invalidate conversion.
-    const { Timestamp } = getFirestoreExports();
-    const newExpiresAt = new Date(Date.now() + HOLD_EXPIRY_EXTENSION_MINUTES * 60 * 1000);
-    await holdRef.update({ expiresAt: Timestamp.fromDate(newExpiresAt) });
-    bookingLog("create-payment-intent", "hold expiry extended", { holdId: input.holdId, newExpiresAt: newExpiresAt.toISOString() });
-    const hasExperience = !!hold.experienceId;
-    const hasBoat = !!hold.boatId;
-    const isListingBoatFlow = hasExperience && hasBoat;
-    const isSharedTicketed = (hold as { bookingMode?: string }).bookingMode === "shared";
-    // Use hold's stored pricing when available (charter or shared ticketed). For shared ticketed, the hold was
-    // created with the correct party size, so using hold.pricing avoids recomputation bugs (e.g. partySize type/read).
     let pricing: import("@/lib/booking/types").BookingPricing;
-    if (hold.pricing) {
-      pricing = hold.pricing as import("@/lib/booking/types").BookingPricing;
-    } else {
-      let rate: Rate | ExperienceRate | BoatRate;
-      const addonsById = new Map<string, Addon | ExperienceAddon>();
-      if (isListingBoatFlow || hasExperience) {
-        const rateSnap = await db.collection("experiences").doc(hold.experienceId!).collection("rates").doc(hold.rateId).get();
-        if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-        rate = rateSnap.data() as ExperienceRate;
-        const addonsSnap = await db.collection("experiences").doc(hold.experienceId!).collection("addons").get();
-        addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
-      } else {
-        const boatSnap = await db.collection("boats").doc(hold.boatId!).get();
-        if (!boatSnap.exists) return NextResponse.json({ error: "Boat not found" }, { status: 404 });
-        const rateSnap = await db.collection("boats").doc(hold.boatId!).collection("rates").doc(hold.rateId).get();
-        if (!rateSnap.exists) return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-        rate = rateSnap.data() as Rate;
-        const addonsSnap = await db.collection("boats").doc(hold.boatId!).collection("addons").get();
-        addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
-      }
-      const addonsForPricing = buildAddonSelectionsForPricing(hold.addonSelections, addonsById);
-      let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
-      if (hasExperience && "priceCents" in rate) {
-        const parsed = parseSlotId(hold.slotId);
-        if (parsed) {
-          const slotStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0).start;
-          const expDoc = await db.collection("experiences").doc(hold.experienceId!).get();
-          const experience = expDoc.exists ? (expDoc.data() as Experience) : null;
-          if (experience) {
-            rateForPricing = { ...rate, priceCents: getEffectiveRatePriceCents(rate as { priceCents: number; priceWeekendCents?: number; priceFriSunCents?: number; priceHolidayCents?: number }, slotStart, experience.holidayDates, experience.weekendDays, experience.friSunDays) };
-          }
-        }
-      }
-      // Ticketed (shared) experiences: price is per ticket, so multiply by partySize.
-      const ticketQty =
-        (hold as { bookingMode?: string }).bookingMode === "shared"
-          ? Math.max(1, Math.floor(Number(hold.partySize ?? 1)))
-          : 1;
-      pricing = computePricing({ rate: rateForPricing, addons: addonsForPricing, currency: "usd", qty: ticketQty });
+    try {
+      const resolved = await resolveHoldBookingPricing(db, hold, { mode: "payment_intent" });
+      pricing = resolved.pricing;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "RATE_NOT_FOUND") return NextResponse.json({ error: "Rate not found" }, { status: 404 });
+      if (msg === "BOAT_NOT_FOUND") return NextResponse.json({ error: "Boat not found" }, { status: 404 });
+      throw e;
     }
     const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
     const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
     const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);
-    const depositCents = Math.round(totalCents * 0.5);
+    const depositCents = Math.round(totalCents * DEPOSIT_FRACTION);
     const finalCents = totalCents - depositCents;
     // Shared ticketed experiences always charge full — no deposit option.
     let payFullAmount: boolean;
@@ -303,12 +285,113 @@ export async function POST(request: NextRequest) {
       payFullAmount = input.payFullAmount;
     }
     const chargeCents = payFullAmount ? totalCents : depositCents;
+    const isOneTimeTicketed = (hold as { bookingMode?: string }).bookingMode === "shared" && payFullAmount === true;
     bookingLog("create-payment-intent", "pricing", {
       holdId: input.holdId,
       payFullAmount,
     });
 
+    const { Timestamp, FieldValue } = getFirestoreExports();
+    type MergeTxResult =
+      | { ok: false; code: "not_found" | "inactive" | "expired" }
+      | {
+          ok: true;
+          effectiveExpiresAt: Date;
+          holdExtendedForPayment: boolean;
+          otherIdToCancel?: string;
+        };
+
+    const mergeOutcome: MergeTxResult = await db.runTransaction(async (tx): Promise<MergeTxResult> => {
+      const snap = await tx.get(holdRef);
+      if (!snap.exists) return { ok: false, code: "not_found" };
+      const h = snap.data() as Hold & {
+        paymentIntentExpiryExtendedAt?: { toDate(): Date };
+        depositPaymentIntentId?: string;
+        fullPaymentIntentId?: string;
+      };
+      if (h.status !== "active") return { ok: false, code: "inactive" };
+      const exp = (h.expiresAt as { toDate(): Date }).toDate();
+      const now = new Date();
+      if (exp < now) return { ok: false, code: "expired" };
+
+      const otherField = payFullAmount ? "depositPaymentIntentId" : "fullPaymentIntentId";
+      const otherIdRaw = (payFullAmount ? h.depositPaymentIntentId : h.fullPaymentIntentId)?.trim();
+
+      const alreadyExtended = h.paymentIntentExpiryExtendedAt != null;
+      let effectiveExpiresAt = exp;
+      let holdExtendedForPayment = false;
+      const updates: Record<string, unknown> = {};
+
+      if (!alreadyExtended) {
+        const createdRaw = h.createdAt as { toDate(): Date } | undefined;
+        const createdMs = createdRaw && typeof createdRaw.toDate === "function" ? createdRaw.toDate().getTime() : now.getTime();
+        const maxEnd = new Date(createdMs + MAX_HOLD_LIFETIME_FROM_CREATED_MS);
+        let next = new Date(now.getTime() + HOLD_EXPIRY_EXTENSION_MINUTES * 60 * 1000);
+        if (next > maxEnd) next = maxEnd;
+        if (next <= now) return { ok: false, code: "expired" };
+        effectiveExpiresAt = next;
+        holdExtendedForPayment = true;
+        updates.expiresAt = Timestamp.fromDate(next);
+        updates.paymentIntentExpiryExtendedAt = Timestamp.now();
+      }
+      if (otherIdRaw) {
+        updates[otherField] = FieldValue.delete();
+      }
+      if (Object.keys(updates).length > 0) {
+        tx.update(holdRef, updates);
+      }
+      return { ok: true, effectiveExpiresAt, holdExtendedForPayment, otherIdToCancel: otherIdRaw };
+    });
+
+    if (!mergeOutcome.ok) {
+      if (mergeOutcome.code === "not_found") {
+        return NextResponse.json({ error: "Hold not found" }, { status: 404 });
+      }
+      bookingLog("create-payment-intent", "hold no longer valid in extension transaction", {
+        holdId: input.holdId,
+        code: mergeOutcome.code,
+      });
+      return NextResponse.json(
+        { error: mergeOutcome.code === "expired" ? "Hold expired" : "Hold expired or already used" },
+        { status: 400 }
+      );
+    }
+
+    const newExpiresAt = mergeOutcome.effectiveExpiresAt;
+    const holdExtendedForPayment = mergeOutcome.holdExtendedForPayment;
+    if (holdExtendedForPayment) {
+      bookingLog("create-payment-intent", "hold expiry extended (first PI extension)", {
+        holdId: input.holdId,
+        newExpiresAt: newExpiresAt.toISOString(),
+      });
+    } else {
+      bookingLog("create-payment-intent", "hold expiry not extended (PI retry; already extended once)", {
+        holdId: input.holdId,
+        effectiveExpiresAt: newExpiresAt.toISOString(),
+      });
+    }
+
+    const receiptClaimToken = signReceiptClaimToken(input.holdId) ?? undefined;
+
     const stripe = getStripe();
+    if (mergeOutcome.otherIdToCancel) {
+      try {
+        const otherPi = await stripe.paymentIntents.retrieve(mergeOutcome.otherIdToCancel);
+        if (otherPi.status !== "succeeded" && otherPi.status !== "canceled") {
+          await stripe.paymentIntents.cancel(mergeOutcome.otherIdToCancel).catch(() => {});
+        }
+        bookingLog("create-payment-intent", "canceled opposite preconversion PI (field cleared in hold transaction)", {
+          holdId: input.holdId,
+          payFullAmount,
+        });
+      } catch (oppErr) {
+        bookingWarn("create-payment-intent", "failed to cancel opposite preconversion PI (continuing)", {
+          holdId: input.holdId,
+          err: oppErr,
+        });
+      }
+    }
+
     const customerId = await getOrCreateStripeCustomer(
       db,
       stripe,
@@ -317,14 +400,50 @@ export async function POST(request: NextRequest) {
       hold.customerDraft.phone
     );
 
+    const holdSnapAfterOpposite = await holdRef.get();
+    const holdForPi = holdSnapAfterOpposite.exists ? (holdSnapAfterOpposite.data() as Hold) : hold;
+    const holdPaymentAttemptVersion =
+      typeof holdForPi.paymentAttemptVersion === "number" ? holdForPi.paymentAttemptVersion : 1;
+
     // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
     // Validate amount matches current chargeCents; if not, cancel/replace and persist new id so we never charge a stale amount.
-    const existingPiId = payFullAmount ? hold.fullPaymentIntentId : hold.depositPaymentIntentId;
+    const existingPiId = payFullAmount ? holdForPi.fullPaymentIntentId : holdForPi.depositPaymentIntentId;
     if (existingPiId) {
       try {
         bookingLog("create-payment-intent", "checking existing PI", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8), payFullAmount });
         const existing = await stripe.paymentIntents.retrieve(existingPiId);
         if (existing.status !== "canceled" && existing.status !== "succeeded") {
+          const expectedStage = payFullAmount ? "full" : "deposit";
+          const metaStage = existing.metadata?.payment_stage;
+          if (metaStage && metaStage !== expectedStage) {
+            bookingLog("create-payment-intent", "existing PI payment_stage mismatch, canceling", {
+              holdId: input.holdId,
+              metaStage,
+              expectedStage,
+            });
+            if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
+              await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+            }
+            const { FieldValue } = getFirestoreExports();
+            await holdRef.update(
+              payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+            );
+          } else {
+          const metaVer = existing.metadata?.[HOLD_PAYMENT_ATTEMPT_VERSION_META];
+          if (metaVer !== String(holdPaymentAttemptVersion)) {
+            bookingLog("create-payment-intent", "existing PI payment attempt version mismatch, canceling", {
+              holdId: input.holdId,
+              metaVer: metaVer ?? null,
+              holdPaymentAttemptVersion,
+            });
+            if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
+              await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+            }
+            const { FieldValue } = getFirestoreExports();
+            await holdRef.update(
+              payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+            );
+          } else {
           const existingAmount = existing.amount;
           if (existingAmount === chargeCents && existing.client_secret) {
             bookingLog("create-payment-intent", "reusing existing PI", { holdId: input.holdId, paymentIntentIdPrefix: existing.id.slice(0, 8) });
@@ -336,6 +455,15 @@ export async function POST(request: NextRequest) {
               totalCents,
               payFullAmount,
               expiresAt: newExpiresAt.toISOString(),
+              holdExtendedForPayment,
+              ...(!holdExtendedForPayment
+                ? {
+                    holdExpiryNote:
+                      "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
+                  }
+                : {}),
+              ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
+              ...(receiptClaimToken ? { receiptClaimToken } : {}),
             });
           }
           // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
@@ -350,6 +478,8 @@ export async function POST(request: NextRequest) {
           await holdRef.update(
             payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
           );
+          }
+          }
         }
       } catch (piErr) {
         bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8) });
@@ -364,6 +494,7 @@ export async function POST(request: NextRequest) {
       totalCents: String(totalCents),
       depositCents: String(depositCents),
       finalCents: String(finalCents),
+      [HOLD_PAYMENT_ATTEMPT_VERSION_META]: String(holdPaymentAttemptVersion),
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
@@ -375,15 +506,24 @@ export async function POST(request: NextRequest) {
       holdId: input.holdId,
       payFullAmount,
     });
+    const paymentIntentParams: Parameters<typeof stripe.paymentIntents.create>[0] = {
+      amount: chargeCents,
+      currency: "usd",
+      customer: customerId,
+      metadata,
+    };
+    if (isOneTimeTicketed) {
+      paymentIntentParams.automatic_payment_methods = { enabled: true };
+    } else if (payFullAmount === false) {
+      // Deposit: save card for off-session use.
+      paymentIntentParams.payment_method_types = ["card"];
+      paymentIntentParams.setup_future_usage = "off_session";
+    } else {
+      // Full-payment charter: accept Apple Pay / Google Pay and do not retain card.
+      paymentIntentParams.automatic_payment_methods = { enabled: true };
+    }
     const paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount: chargeCents,
-        currency: "usd",
-        customer: customerId,
-        payment_method_types: ["card"],
-        setup_future_usage: "off_session",
-        metadata,
-      },
+      paymentIntentParams,
       { idempotencyKey }
     );
     if (!paymentIntent.client_secret) {
@@ -407,6 +547,15 @@ export async function POST(request: NextRequest) {
       totalCents,
       payFullAmount,
       expiresAt: newExpiresAt.toISOString(),
+      holdExtendedForPayment,
+      ...(!holdExtendedForPayment
+        ? {
+            holdExpiryNote:
+              "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
+          }
+        : {}),
+      ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
+      ...(receiptClaimToken ? { receiptClaimToken } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";

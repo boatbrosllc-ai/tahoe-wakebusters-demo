@@ -14,6 +14,8 @@ export interface SetupStatus {
   stripeConfigured: boolean;
   brevoConfigured: boolean;
   appBaseUrlConfigured: boolean;
+  /** When false, receipt tokens, manage links, and release tokens are degraded or unavailable. */
+  manageBookingSecretConfigured: boolean;
   ready: boolean;
 }
 
@@ -54,6 +56,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   const stripeConfigured = env("STRIPE_SECRET_KEY") && env("STRIPE_WEBHOOK_SECRET");
   const brevoConfigured = env("BREVO_API_KEY");
   const appBaseUrlConfigured = env("APP_BASE_URL");
+  const manageBookingSecretConfigured = env("MANAGE_BOOKING_SECRET");
 
   const ready =
     firebaseConfigured &&
@@ -61,7 +64,8 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     experienceCount > 0 &&
     stripeConfigured &&
     brevoConfigured &&
-    appBaseUrlConfigured;
+    appBaseUrlConfigured &&
+    manageBookingSecretConfigured;
 
   return {
     firebaseConfigured,
@@ -71,6 +75,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     stripeConfigured,
     brevoConfigured,
     appBaseUrlConfigured,
+    manageBookingSecretConfigured,
     ready,
   };
 }

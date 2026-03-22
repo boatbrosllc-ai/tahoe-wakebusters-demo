@@ -30,8 +30,9 @@ export function BookingStep1Category({
       )}
     >
       {loading ? (
-        <div className="py-12 flex justify-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
+        <div className="flex flex-1 min-h-[min(52dvh,420px)] flex-col items-center justify-center gap-3 py-8">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+          <p className="text-sm text-brand-muted">Loading experiences…</p>
         </div>
       ) : experiences && experiences.length > 0 ? (
         <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-4 md:gap-5 flex-1 min-h-0">
@@ -79,7 +80,9 @@ export function BookingStep1Category({
       ) : (
         <p className="text-sm text-brand-muted py-8">No experiences available.</p>
       )}
-      <p className="text-center text-xs text-brand-muted mt-4">Select a category to continue</p>
+      {!loading && (
+        <p className="text-center text-xs text-brand-muted mt-4">Select a category to continue</p>
+      )}
     </div>
   );
 }

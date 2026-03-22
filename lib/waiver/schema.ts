@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import type { WaiverTemplate } from "./types";
 
 // ---------------------------------------------------------------------------
 // Template
@@ -75,20 +76,34 @@ export const signerSchema = z.object({
   dob: z.string().optional(), // YYYY-MM-DD or empty
 });
 
+const optionalSignatureDataUrlSchema = z
+  .union([z.undefined(), z.null(), z.string()])
+  .transform((v) => {
+    if (v == null || typeof v !== "string") return undefined;
+    const t = v.trim();
+    return t.length > 0 ? t : undefined;
+  })
+  .refine(
+    (v) => v === undefined || (v.startsWith("data:image/") && v.includes(";base64,")),
+    { message: "Signature must be a valid image data URL when provided (data:image/...;base64,...)" }
+  );
+
+const optionalTrimmedStringSchema = z
+  .union([z.undefined(), z.null(), z.string()])
+  .transform((v) => {
+    if (v == null || typeof v !== "string") return undefined;
+    const t = v.trim();
+    return t.length > 0 ? t : undefined;
+  });
+
 export const submitWaiverSigningSchema = z
   .object({
     token: z.string().optional(),
     groupToken: z.string().optional(),
     signer: signerSchema,
     initials: z.record(z.string(), z.string()).default({}),
-    signatureDataUrl: z
-      .string()
-      .min(1, "Signature is required")
-      .refine(
-        (v) => v.startsWith("data:image/") && v.includes(";base64,"),
-        { message: "Signature must be a valid image data URL (data:image/...;base64,...)" }
-      ),
-    typedName: z.string().optional(),
+    signatureDataUrl: optionalSignatureDataUrlSchema,
+    typedName: optionalTrimmedStringSchema,
   })
   .refine((data) => (data.token?.length ?? 0) > 0 || (data.groupToken?.length ?? 0) > 0, {
     message: "Either token or groupToken is required",
@@ -96,6 +111,50 @@ export const submitWaiverSigningSchema = z
   });
 
 export type SubmitWaiverSigningInput = z.infer<typeof submitWaiverSigningSchema>;
+
+/** After loading the waiver template, enforce signature rules for the template’s mode. */
+export function validateSubmitSignatureForTemplate(
+  template: Pick<WaiverTemplate, "signature">,
+  input: { signatureDataUrl?: string; typedName?: string }
+): { ok: true } | { ok: false; message: string } {
+  const sig = template.signature;
+  const mode = sig?.mode ?? "both";
+  const requireTypedName = sig?.requireTypedName ?? true;
+  const url = input.signatureDataUrl;
+  const typed = input.typedName;
+  const hasDraw = !!url && url.length > 0;
+  const hasTyped = !!typed && typed.length > 0;
+
+  if (mode === "type") {
+    if (!hasTyped) {
+      return { ok: false, message: "Typed full name is required to sign this waiver." };
+    }
+    return { ok: true };
+  }
+  if (!hasDraw) {
+    return { ok: false, message: "Please draw your signature in the box before submitting." };
+  }
+  if (requireTypedName && !hasTyped) {
+    return { ok: false, message: "Please type your full name to confirm your signature." };
+  }
+  return { ok: true };
+}
+
+/** Enforce template.requiredFields for phone and DOB on submit (API cannot be weaker than the template). */
+export function validateSignerRequiredFieldsForTemplate(
+  template: Pick<WaiverTemplate, "requiredFields">,
+  signer: { phone?: string; dob?: string }
+): { ok: true } | { ok: false; message: string } {
+  const rf = template.requiredFields;
+  if (!rf) return { ok: true };
+  if (rf.phone && !signer.phone?.trim()) {
+    return { ok: false, message: "Phone number is required." };
+  }
+  if (rf.dob && !signer.dob?.trim()) {
+    return { ok: false, message: "Date of birth is required." };
+  }
+  return { ok: true };
+}
 
 // ---------------------------------------------------------------------------
 // Admin request list query

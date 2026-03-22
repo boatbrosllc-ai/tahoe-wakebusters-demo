@@ -23,13 +23,14 @@ async function enrichWithBookingSummary(
       if (d.exists) bookingMap.set(d.id, d.data() as { slotId?: string; startDateStr?: string; experienceId?: string; partySize?: number });
     });
   }
+  const allBookingReqs = await Promise.all(bookingIds.map((bid) => listRequestsByBookingId(bid)));
   const signedCountByBooking = new Map<string, { signed: number; partySize: number }>();
-  for (const bid of bookingIds) {
-    const bookingReqs = await listRequestsByBookingId(bid);
+  bookingIds.forEach((bid, i) => {
+    const bookingReqs = allBookingReqs[i] ?? [];
     const signed = bookingReqs.filter((r) => r.status === "signed").length;
     const partySize = bookingMap.get(bid)?.partySize ?? 0;
     signedCountByBooking.set(bid, { signed, partySize });
-  }
+  });
   const experienceIds = Array.from(new Set(Array.from(bookingMap.values()).map((b) => b.experienceId).filter(Boolean) as string[]));
   const experienceMap = new Map<string, string>();
   for (const ids of chunk(experienceIds, 10)) {

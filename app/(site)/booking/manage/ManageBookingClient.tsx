@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import Link from "next/link";
@@ -32,6 +32,32 @@ function setStoredManageToken(token: string | null): void {
   }
 }
 
+/** Only clear the stored token when the server proves the link is wrong — not on network/5xx blips. */
+function shouldClearStoredManageToken(status: number, errorMessage: string): boolean {
+  if (status === 401 || status === 403 || status === 404) return true;
+  if (status === 400 && errorMessage.toLowerCase().includes("missing token")) return true;
+  return false;
+}
+
+/** Decode base64url payload (first segment of token) to get exp. UX pre-check only; server remains authoritative. */
+function getExpFromTokenPayload(payloadB64: string): number | null {
+  try {
+    const padded = payloadB64.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - (padded.length % 4)) % 4;
+    const base64 = padded + "=".repeat(pad);
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const str = new TextDecoder().decode(bytes);
+    const segments = str.split("\x00");
+    const expStr = segments.length >= 3 ? segments[2] : segments[1];
+    const exp = parseInt(expStr, 10);
+    return Number.isNaN(exp) ? null : exp;
+  } catch {
+    return null;
+  }
+}
+
 function getManageReturnUrl(token?: string): string {
   if (typeof window === "undefined") return "";
   const base = `${window.location.origin}${MANAGE_RETURN_PATH}`;
@@ -50,6 +76,7 @@ type ManageData = {
   totalCents: number;
   card: { brand?: string; last4?: string; expMonth?: number; expYear?: number } | null;
   canPayRemaining: boolean;
+  paymentMethodOnFile?: boolean;
 };
 
 function UpdateCardForm({
@@ -78,7 +105,7 @@ function UpdateCardForm({
       const result = (await stripe.confirmSetup({
         elements,
         clientSecret,
-        confirmParams: { return_url: getManageReturnUrl() },
+        confirmParams: { return_url: getManageReturnUrl(token) },
       })) as { error?: { message?: string }; setupIntent?: { payment_method?: string | { id?: string } } };
       if (result.error) {
         setError(result.error.message ?? "Setup failed");
@@ -167,7 +194,7 @@ function PayRemainingForm({
       const { error: confirmError } = await stripe.confirmPayment({
         elements,
         clientSecret,
-        confirmParams: { return_url: getManageReturnUrl() },
+        confirmParams: { return_url: getManageReturnUrl(token) },
       });
       if (confirmError) {
         setError(confirmError.message ?? "Payment failed");
@@ -214,8 +241,9 @@ export function ManageBookingClient() {
   const searchParams = useSearchParams();
   const [token, setToken] = useState<string | null>(null);
   const [data, setData] = useState<ManageData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tokenExpired, setTokenExpired] = useState(false);
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null);
   const [payClientSecret, setPayClientSecret] = useState<string | null>(null);
   const [setupLoading, setSetupLoading] = useState(false);
@@ -223,69 +251,215 @@ export function ManageBookingClient() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [payProcessingMessage, setPayProcessingMessage] = useState<string | null>(null);
+  const [verifyingFinalPayment, setVerifyingFinalPayment] = useState(false);
+  const [finalPaymentVerifyMessage, setFinalPaymentVerifyMessage] = useState<string | null>(null);
+  const [pendingStripeReturnVerify, setPendingStripeReturnVerify] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const redirectStatus = searchParams.get("redirect_status");
+    const paymentIntentUrl = searchParams.get("payment_intent");
+    const stripeReturnVerify =
+      redirectStatus === "succeeded" &&
+      typeof paymentIntentUrl === "string" &&
+      paymentIntentUrl.length > 0;
+
     const urlToken = searchParams.get("token");
-    if (urlToken) {
-      setToken(urlToken);
-      setStoredManageToken(urlToken);
+    const raw = urlToken ?? getStoredManageToken();
+    if (raw) {
+      const parts = raw.split(".");
+      const exp = parts.length >= 1 ? getExpFromTokenPayload(parts[0]) : null;
+      if (exp !== null && Date.now() / 1000 > exp) {
+        setStoredManageToken(null);
+        setToken(null);
+        setTokenExpired(true);
+        setLoading(false);
+        return;
+      }
+      setTokenExpired(false);
+      setToken(raw);
+      if (urlToken) {
+        setStoredManageToken(urlToken);
+      }
+      if (stripeReturnVerify) {
+        setPendingStripeReturnVerify(true);
+      }
       if (typeof window !== "undefined") {
-        window.history.replaceState({}, "", MANAGE_RETURN_PATH);
+        const u = new URL(window.location.href);
+        u.searchParams.delete("token");
+        u.searchParams.delete("redirect_status");
+        u.searchParams.delete("payment_intent");
+        u.searchParams.delete("payment_intent_client_secret");
+        const next = u.pathname + (u.search && u.search !== "?" ? u.search : "");
+        window.history.replaceState({}, "", next || MANAGE_RETURN_PATH);
       }
       setLoading(true);
       return;
     }
-    const stored = getStoredManageToken();
-    if (stored) {
-      setToken(stored);
-      setLoading(true);
-      return;
-    }
-    if (!token) setLoading(false);
+    setToken(null);
+    setLoading(false);
   }, [searchParams]);
 
-  const fetchBooking = useCallback(() => {
-    if (!token) return;
-    setLoading(true);
-    setError(null);
-    fetch("/api/booking/manage/get", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    })
-      .then(async (res) => {
+  const fetchBooking = useCallback(
+    async (opts?: { silent?: boolean }): Promise<ManageData | null> => {
+      if (!token) return null;
+      if (!opts?.silent) setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/booking/manage/get", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
         let body: Record<string, unknown> = {};
         try {
           body = await res.json();
-        } catch {}
+        } catch {
+          /* ignore */
+        }
+        const errText = typeof body.error === "string" ? body.error : "";
         if (!res.ok) {
-          setError((body.error as string) ?? `Server error ${res.status}`);
+          const msg = errText || `Server error (${res.status})`;
+          setError(msg);
           setData(null);
-          setStoredManageToken(null);
-          return;
+          if (shouldClearStoredManageToken(res.status, msg)) {
+            setStoredManageToken(null);
+          }
+          return null;
         }
         const d = body as { error?: string } & ManageData;
         if (d.error) {
           setError(d.error);
           setData(null);
-          setStoredManageToken(null);
-        } else {
-          setData(d as ManageData);
+          if (/invalid|expired|not found|not valid for this booking/i.test(d.error)) {
+            setStoredManageToken(null);
+          }
+          return null;
         }
-      })
-      .catch(() => {
-        setError("Failed to load booking");
+        setData(d as ManageData);
+        return d as ManageData;
+      } catch {
+        setError("Failed to load booking. Check your connection and try again.");
         setData(null);
-        setStoredManageToken(null);
-      })
-      .finally(() => setLoading(false));
-  }, [token]);
+        return null;
+      } finally {
+        if (!opts?.silent) setLoading(false);
+      }
+    },
+    [token]
+  );
+
+  const startFinalPaidPoll = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setVerifyingFinalPayment(true);
+    setFinalPaymentVerifyMessage("Payment received! Verifying your booking status…");
+    let elapsedSec = 0;
+    const tick = async () => {
+      const d = await fetchBooking({ silent: true });
+      if (d?.status === "final_paid") {
+        setVerifyingFinalPayment(false);
+        setFinalPaymentVerifyMessage(null);
+        return;
+      }
+      elapsedSec += 3;
+      if (elapsedSec >= 30) {
+        setVerifyingFinalPayment(false);
+        setFinalPaymentVerifyMessage(
+          "Your payment was received. Your booking status will be updated shortly."
+        );
+        return;
+      }
+      pollTimerRef.current = setTimeout(() => void tick(), 3000);
+    };
+    void tick();
+  }, [fetchBooking]);
+
+  const requestPayRemaining = useCallback(
+    async (skipSavedPaymentMethod: boolean) => {
+      if (!token) return;
+      setPayError(null);
+      setPayProcessingMessage(null);
+      setPayLoading(true);
+      try {
+        const res = await fetch("/api/booking/manage/pay-remaining", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, skipSavedPaymentMethod }),
+        });
+        const d = await res.json().catch(() => ({})) as {
+          clientSecret?: string;
+          status?: string;
+          error?: string;
+          message?: string;
+        };
+        if (!res.ok) {
+          setPayError(d.error ?? `Server error ${res.status}`);
+          return;
+        }
+        if (d.status === "succeeded") {
+          void fetchBooking({ silent: true });
+          startFinalPaidPoll();
+          return;
+        }
+        if (d.status === "processing") {
+          setPayProcessingMessage(
+            d.message ??
+              "Your payment is still processing. Please wait a moment and refresh the page to check status."
+          );
+          return;
+        }
+        if (d.clientSecret) {
+          setPayClientSecret(d.clientSecret);
+        } else {
+          setPayError(d.error ?? "No payment form available");
+        }
+      } catch (e) {
+        setPayError(e instanceof Error ? e.message : "Failed");
+      } finally {
+        setPayLoading(false);
+      }
+    },
+    [token, fetchBooking, startFinalPaidPoll]
+  );
 
   useEffect(() => {
-    if (token) fetchBooking();
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (token) void fetchBooking();
   }, [token, fetchBooking]);
 
-  if (!token) {
+  useEffect(() => {
+    if (!pendingStripeReturnVerify || !data || !token) return;
+    if (data.status === "final_paid") {
+      setPendingStripeReturnVerify(false);
+      return;
+    }
+    setPendingStripeReturnVerify(false);
+    startFinalPaidPoll();
+  }, [data, pendingStripeReturnVerify, token, startFinalPaidPoll]);
+
+  if (tokenExpired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-brand-bg/30">
+        <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
+          <h1 className="text-xl font-bold text-brand-dark mb-2">Link expired</h1>
+          <p className="text-brand-muted mb-6">This manage link has expired. Please use the latest link from your email or contact us.</p>
+          <Link href="/experiences" className="text-brand-primary font-medium hover:underline">
+            Back to experiences
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!token && !loading) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-brand-bg/30">
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
@@ -312,17 +486,34 @@ export function ManageBookingClient() {
       <div className="min-h-screen flex items-center justify-center p-6 bg-brand-bg/30">
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Unable to load booking</h1>
-          <p className="text-brand-muted mb-6">{error ?? "Invalid or expired link."}</p>
-          <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
-            Back to experiences
-          </Link>
+          <p className="text-brand-muted mb-6">{error ?? "Invalid link or server error."}</p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+            <button
+              type="button"
+              onClick={() => void fetchBooking()}
+              className={cn(
+                "rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-4",
+                "hover:bg-brand-primary/90"
+              )}
+            >
+              Retry
+            </button>
+            <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
+              Back to experiences
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
+  if (!token) return null;
+
+  const isDepositFlow = ["final_due", "final_processing", "final_paid", "final_requires_action", "final_failed"].includes(
+    data.status
+  );
+
   const statusLabel: Record<string, string> = {
-    deposit_paid: "Deposit paid",
     final_due: "Final payment due",
     final_processing: "Final payment processing",
     final_paid: "Fully paid",
@@ -332,20 +523,56 @@ export function ManageBookingClient() {
   };
   const cardLabel = data.card ? `${data.card.brand ?? "Card"} •••• ${data.card.last4 ?? ""}` : "No card on file";
 
+  const ACTIVE_STATUSES = ["paid", "final_due", "final_failed", "final_requires_action", "final_processing"];
+  const showUpdateCardSection = ACTIVE_STATUSES.includes(data.status);
+  const isFullyPaid = data.status === "final_paid";
+  const hideCardSection = data.status === "canceled" || data.status === "refunded";
+
   return (
     <div className="min-h-screen p-6 bg-brand-bg/30">
       <div className="max-w-lg mx-auto rounded-2xl border border-brand-dark/10 bg-white p-6 sm:p-8 shadow-soft">
         <h1 className="text-xl font-bold text-brand-dark mb-1">Manage booking</h1>
         <p className="text-sm text-brand-muted mb-6">Hi {data.customerName ?? "there"}.</p>
 
+        {(verifyingFinalPayment || finalPaymentVerifyMessage) && (
+          <div
+            className={cn(
+              "mb-6 rounded-xl border px-4 py-3 text-sm",
+              verifyingFinalPayment
+                ? "border-brand-primary/30 bg-brand-primary/5 text-brand-dark"
+                : "border-amber-200 bg-amber-50 text-amber-900"
+            )}
+            role="status"
+            aria-live="polite"
+          >
+            {verifyingFinalPayment && (
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                <span>{finalPaymentVerifyMessage ?? "Verifying…"}</span>
+              </div>
+            )}
+            {!verifyingFinalPayment && finalPaymentVerifyMessage && <p>{finalPaymentVerifyMessage}</p>}
+          </div>
+        )}
+
         <div className="space-y-4 mb-8">
           <p><strong>Trip date</strong> {data.startDateStr ?? "—"}</p>
           <p><strong>Status</strong> {statusLabel[data.status] ?? data.status}</p>
-          <p><strong>Total</strong> ${(data.totalCents / 100).toFixed(2)} (deposit ${(data.depositCents / 100).toFixed(2)} paid)</p>
+          <p>
+            <strong>Total</strong> ${(data.totalCents / 100).toFixed(2)}
+            {data.status === "paid"
+              ? null
+              : isDepositFlow && data.depositCents > 0
+                ? ` (deposit $${(data.depositCents / 100).toFixed(2)} paid)`
+                : null}
+          </p>
           <p><strong>Card on file</strong> {cardLabel}</p>
         </div>
 
+        {!hideCardSection && (
         <section className="mb-8">
+          {showUpdateCardSection ? (
+          <>
           <h2 className="text-sm font-semibold text-brand-dark mb-3">Update card</h2>
           {!stripePromise ? (
             <p className="text-sm text-brand-muted">Stripe is not configured.</p>
@@ -354,7 +581,7 @@ export function ManageBookingClient() {
               <UpdateCardForm
                 token={token}
                 clientSecret={setupClientSecret}
-                onSuccess={() => { setSetupClientSecret(null); fetchBooking(); }}
+                onSuccess={() => { setSetupClientSecret(null); void fetchBooking(); }}
                 onCancel={() => setSetupClientSecret(null)}
               />
             </Elements>
@@ -398,7 +625,12 @@ export function ManageBookingClient() {
               {setupError && <p className="mt-2 text-sm text-red-600">{setupError}</p>}
             </div>
           )}
+          </>
+          ) : isFullyPaid ? (
+            <p className="text-sm text-brand-muted">Your booking is fully paid — no card update needed.</p>
+          ) : null}
         </section>
+        )}
 
         {data.canPayRemaining && (
           <section>
@@ -412,58 +644,59 @@ export function ManageBookingClient() {
                   token={token}
                   finalCents={data.finalCents}
                   clientSecret={payClientSecret}
-                  onSuccess={() => { setPayClientSecret(null); fetchBooking(); }}
+                  onSuccess={() => {
+                    setPayClientSecret(null);
+                    startFinalPaidPoll();
+                  }}
                   onCancel={() => setPayClientSecret(null)}
                 />
               </Elements>
             ) : (
               <div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setPayError(null);
-                    setPayProcessingMessage(null);
-                    setPayLoading(true);
-                    try {
-                      const res = await fetch("/api/booking/manage/pay-remaining", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ token }),
-                      });
-                      const d = await res.json().catch(() => ({})) as { clientSecret?: string; status?: string; error?: string; message?: string };
-                      if (!res.ok) {
-                        setPayError(d.error ?? `Server error ${res.status}`);
-                        return;
-                      }
-                      if (d.status === "processing") {
-                        setPayProcessingMessage(d.message ?? "Your payment is still processing. Please wait a moment and refresh the page to check status.");
-                        return;
-                      }
-                      if (d.clientSecret) {
-                        setPayClientSecret(d.clientSecret);
-                      } else {
-                        setPayError(d.error ?? "No payment form available");
-                      }
-                    } catch (e) {
-                      setPayError(e instanceof Error ? e.message : "Failed");
-                    } finally {
-                      setPayLoading(false);
-                    }
-                  }}
-                  disabled={payLoading}
-                  className={cn(
-                    "rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-4",
-                    "hover:bg-brand-primary/90 disabled:opacity-60"
-                  )}
-                >
-                  {payLoading ? "Loading…" : `Pay remaining $${(data.finalCents / 100).toFixed(2)}`}
-                </button>
+                {data.paymentMethodOnFile ? (
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <button
+                      type="button"
+                      onClick={() => void requestPayRemaining(false)}
+                      disabled={payLoading}
+                      className={cn(
+                        "rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-4",
+                        "hover:bg-brand-primary/90 disabled:opacity-60"
+                      )}
+                    >
+                      {payLoading ? "Loading…" : "Charge my saved card"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void requestPayRemaining(true)}
+                      disabled={payLoading}
+                      className="rounded-xl border border-brand-dark/20 px-4 py-2.5 font-medium text-brand-dark hover:bg-brand-dark/5 disabled:opacity-60"
+                    >
+                      Use a different card
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void requestPayRemaining(false)}
+                    disabled={payLoading}
+                    className={cn(
+                      "rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-4",
+                      "hover:bg-brand-primary/90 disabled:opacity-60"
+                    )}
+                  >
+                    {payLoading ? "Loading…" : `Pay remaining $${(data.finalCents / 100).toFixed(2)}`}
+                  </button>
+                )}
                 {payProcessingMessage && (
                   <p className="mt-2 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
                     {payProcessingMessage}
                     <button
                       type="button"
-                      onClick={() => { setPayProcessingMessage(null); fetchBooking(); }}
+                      onClick={() => {
+                        setPayProcessingMessage(null);
+                        void fetchBooking();
+                      }}
                       className="ml-2 font-medium text-amber-800 hover:underline"
                     >
                       Refresh status

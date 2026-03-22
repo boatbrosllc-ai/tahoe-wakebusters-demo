@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
-import { runCreateHoldAndPaymentIntent, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
+import { runCreateHold, runCreatePaymentIntentForHold, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
+import {
+  postCompleteAfterPaymentWithTimeout,
+  retryCompleteAfterPaymentOnce,
+  COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
+} from "@/lib/booking/complete-after-payment-client";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { cn } from "@/lib/utils";
@@ -12,7 +17,7 @@ import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime"
 import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
 import { siteConfig } from "@/config/site";
-import { TAX_RATE } from "@/lib/booking/constants";
+import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -77,12 +82,15 @@ function PaymentFormInner({
     if (!stripe || !elements) return;
     setProcessing(true);
     try {
-      const { error, paymentIntent } = await stripe.confirmPayment({
+      const returnUrl = typeof window !== "undefined" ? `${window.location.origin}/booking/success` : "";
+      const result = await stripe.confirmPayment({
         elements,
-        confirmParams: { return_url: typeof window !== "undefined" ? window.location.href : "" },
+        confirmParams: { return_url: returnUrl },
         redirect: "if_required",
       });
-      if (error) onError(error.message ?? "Payment failed");
+      const err = result.error;
+      const paymentIntent = "paymentIntent" in result ? (result.paymentIntent as { id?: string } | undefined) : undefined;
+      if (err) onError(err.message ?? "Payment failed");
       else onSuccess(paymentIntent?.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
@@ -152,10 +160,13 @@ export function InlineBookingDetailsStep({
 }: InlineBookingDetailsStepProps) {
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [priceLoading, setPriceLoading] = useState(true);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [priceRetryTrigger, setPriceRetryTrigger] = useState(0);
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [partySize, setPartySize] = useState(1);
+  const [petsCount, setPetsCount] = useState(0);
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
   const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
   const [tipPercent, setTipPercent] = useState(20);
@@ -177,17 +188,89 @@ export function InlineBookingDetailsStep({
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   /** Server-computed deposit amount (from create-payment-intent) so display matches Stripe charge when discounts/tips apply. */
   const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
+  /** Server-computed total (from create-hold/create-payment-intent) for price divergence banner. */
+  const [totalCentsFromServer, setTotalCentsFromServer] = useState<number | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   /** When complete-after-payment fails: error message for successWithWarning view. */
   const [completeAfterPaymentError, setCompleteAfterPaymentError] = useState<string | null>(null);
   /** When recovery of holdId/paymentIntentId fails after Stripe success: show fallback with this PI ID. */
   const [recoveryFailedPiId, setRecoveryFailedPiId] = useState<string | null>(null);
 
+  const holdFlowInFlightRef = useRef(false);
+  const [holdSubmitInFlight, setHoldSubmitInFlight] = useState(false);
+  const holdRequestIdRef = useRef<string | null>(null);
+  /** Filled after create-hold succeeds so retries send resumeHoldId if payment-intent fails. */
+  const holdResumeRef = useRef<{ slotId: string; holdId: string } | null>(null);
+  const userChoseDepositRef = useRef(false);
+  const [showDepositCoercionBanner, setShowDepositCoercionBanner] = useState(false);
+  const completeAfterRetryInFlightRef = useRef(false);
+  const [completeAfterRetryBusy, setCompleteAfterRetryBusy] = useState(false);
+  const paymentIntentFetchGenRef = useRef(0);
+
   const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
   useEffect(() => {
-    if (bookingMode !== "shared" && allowDeposit === false) setCharterPayFull(true);
+    if (bookingMode !== "shared" && allowDeposit !== true) setCharterPayFull(true);
   }, [bookingMode, allowDeposit]);
+
+  const addonKeyForAttempt = useMemo(
+    () =>
+      JSON.stringify(
+        Object.entries(addonSelections)
+          .filter(([, q]) => q > 0)
+          .sort(([a], [b]) => a.localeCompare(b))
+      ),
+    [addonSelections]
+  );
+  const bookingAttemptKey = useMemo(
+    () =>
+      [
+        experienceId,
+        boatId ?? "",
+        slot.id,
+        rateId,
+        String(partySize),
+        String(petsCount),
+        bookingMode ?? "charter",
+        String(payFullAmount),
+        tipChoice ?? "",
+        String(tipPercent),
+        (appliedDiscount?.code ?? discountCode.trim()).toUpperCase(),
+        addonKeyForAttempt,
+        customerName.trim(),
+        customerEmail.trim().toLowerCase(),
+        customerPhone.trim().replace(/\s+/g, ""),
+        howDidYouHear.trim(),
+        comments.trim(),
+      ].join("\0"),
+    [
+      experienceId,
+      boatId,
+      slot.id,
+      rateId,
+      partySize,
+      petsCount,
+      bookingMode,
+      payFullAmount,
+      tipChoice,
+      tipPercent,
+      appliedDiscount?.code,
+      discountCode,
+      addonKeyForAttempt,
+      customerName,
+      customerEmail,
+      customerPhone,
+      howDidYouHear,
+      comments,
+    ]
+  );
+  const prevBookingAttemptKeyRef = useRef(bookingAttemptKey);
+  useEffect(() => {
+    if (prevBookingAttemptKeyRef.current !== bookingAttemptKey) {
+      prevBookingAttemptKeyRef.current = bookingAttemptKey;
+      holdRequestIdRef.current = null;
+    }
+  }, [bookingAttemptKey]);
 
   const tipSectionRequired = allowTipNow || allowTipLater;
   useEffect(() => {
@@ -200,6 +283,10 @@ export function InlineBookingDetailsStep({
     ? Math.min(experienceMaxGuests, spotsRemaining)
     : experienceMaxGuests;
 
+  useEffect(() => {
+    if (petsCount > experiencePetsMax) setPetsCount(experiencePetsMax);
+  }, [experiencePetsMax, petsCount]);
+
   const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()), [customerEmail]);
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
@@ -207,21 +294,42 @@ export function InlineBookingDetailsStep({
 
   useEffect(() => {
     const controller = new AbortController();
+    setPriceError(null);
     setPriceLoading(true);
-    // fetchDatePrices uses the shared module-level cache, so if the calendar section already
-    // loaded prices for this month the result comes back instantly without a network round-trip.
-    bookingCache.fetchDatePrices(experienceId, selectedDate, 1, rateId, controller.signal)
-      .then((data) => {
-        const price = data?.prices?.[selectedDate];
-        if (typeof price === "number") setEffectiveRateCents(price);
-        else setEffectiveRateCents(null);
-      })
-      .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setEffectiveRateCents(null);
-      })
-      .finally(() => setPriceLoading(false));
-    return () => controller.abort();
-  }, [experienceId, rateId, selectedDate]);
+    let cancelled = false;
+    (async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (cancelled || controller.signal.aborted) return;
+        try {
+          const data = await bookingCache.fetchDatePrices(
+            experienceId,
+            selectedDate,
+            1,
+            rateId,
+            controller.signal
+          );
+          if (cancelled) return;
+          const price = data?.prices?.[selectedDate];
+          if (typeof price === "number") {
+            setEffectiveRateCents(price);
+            setPriceLoading(false);
+            return;
+          }
+        } catch (err: unknown) {
+          if ((err as { name?: string })?.name === "AbortError") return;
+        }
+      }
+      if (!cancelled) {
+        setEffectiveRateCents(null);
+        setPriceError("Could not load pricing — please try again.");
+        setPriceLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [experienceId, rateId, selectedDate, priceRetryTrigger]);
 
   /** Best-effort release of current hold; used when leaving Stripe step (onBack) or when create-payment-intent fails. */
   const releaseCreatedHold = useCallback(
@@ -269,7 +377,7 @@ export function InlineBookingDetailsStep({
   }, [effectiveRateCents, rateDisplayName, displayAddons, addonSelections, tipChoice, tipPercent, appliedDiscount, isTicketed, partySize]);
 
   const handleProceedToPayment = async () => {
-    if (effectiveRateCents === null || priceLoading) return;
+    if (holdFlowInFlightRef.current || paymentPhase !== "form") return;
     if (!customerName.trim()) {
       setPaymentError("Please enter your full name.");
       return;
@@ -303,21 +411,32 @@ export function InlineBookingDetailsStep({
       return;
     }
     setPaymentError(null);
+    setClientSecret(null);
+    userChoseDepositRef.current = bookingMode !== "shared" && !payFullAmount;
+    setShowDepositCoercionBanner(false);
+    holdFlowInFlightRef.current = true;
+    setHoldSubmitInFlight(true);
     setPaymentPhase("loading");
     const addonList = Object.entries(addonSelections)
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
+    if (!holdRequestIdRef.current) {
+      holdRequestIdRef.current =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `hr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+    }
     try {
       bookingLog("client", "InlineBookingDetailsStep create-hold request", { experienceId, boatId: boatId ?? undefined, slotId: slot.id, rateId, partySize });
-      const result = await runCreateHoldAndPaymentIntent(
+      const result = await runCreateHold(
         {
           experienceId,
           boatId: boatId ?? undefined,
           slotId: slot.id,
           rateId,
           partySize,
-          petsCount: 0,
+          petsCount: experiencePetsMax > 0 ? petsCount : 0,
           addonSelections: addonList,
           customerDraft: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           marketingOptIn,
@@ -325,14 +444,17 @@ export function InlineBookingDetailsStep({
           tipCents: tipCentsToSend > 0 ? tipCentsToSend : undefined,
           discountCode: (appliedDiscount?.code ?? discountCode.trim()) || undefined,
           bookingMode: bookingMode ?? "charter",
-          resumeHoldId: holdId || undefined,
+          resumeHoldId:
+            holdResumeRef.current?.slotId === slot.id ? holdResumeRef.current.holdId : holdId ?? undefined,
+          holdRequestId: holdRequestIdRef.current,
         },
-        payFullAmount
+        { persistHoldForResume: holdResumeRef }
       );
       if (!result.ok) {
         const rawError = result.error;
+        const ref = result.incidentId ? ` Reference: ${result.incidentId}.` : "";
         const hint = result.hint ? ` ${result.hint}` : "";
-        bookingLog("client", "InlineBookingDetailsStep create-hold/create-payment failed", { status: result.status, error: result.error });
+        bookingLog("client", "InlineBookingDetailsStep create-hold failed", { status: result.status, error: result.error });
         const availabilityErrors = [
           "Slot is not valid for this experience",
           "Slot is outside the allowed booking window",
@@ -344,33 +466,35 @@ export function InlineBookingDetailsStep({
           (typeof rawError === "string" && availabilityErrors.some((e) => rawError.includes(e) || rawError === e));
         const displayError = isAvailabilityError
           ? "This time slot is no longer available. Please go back and choose a different date or time."
-          : `${rawError}${hint}`;
+          : `${rawError}${ref}${hint}`;
         setPaymentError(displayError);
         setPaymentPhase("form");
-        if (result.holdId) releaseHold(result.holdId, result.releaseToken ?? null);
+        if (result.holdId) {
+          void (async () => {
+            await releaseHold(result.holdId!, result.releaseToken ?? null);
+            if (holdResumeRef.current?.holdId === result.holdId) holdResumeRef.current = null;
+          })();
+        }
         if (isAvailabilityError) {
           bookingCache.invalidateBookingCaches(experienceId);
-          setTimeout(() => onBack(), 2500);
         }
         return;
       }
-      if (typeof result.payFullAmount === "boolean") setCharterPayFull(result.payFullAmount);
       setHoldId(result.holdId);
       try {
         if (typeof sessionStorage !== "undefined") sessionStorage.setItem(SESSION_STORAGE_HOLD_ID_KEY, result.holdId);
       } catch (_) {}
       setReleaseToken(result.releaseToken);
+      setPaymentIntentId(null);
+      if (typeof result.holdDiscountCents === "number") {
+        const code = result.holdDiscountCode ?? appliedDiscount?.code ?? discountCode.trim();
+        if (code && result.holdDiscountCents > 0) {
+          setAppliedDiscount({ discountCents: result.holdDiscountCents, code });
+        }
+      }
       if (!STRIPE_PUBLISHABLE_KEY) {
         releaseHold(result.holdId, result.releaseToken);
         setPaymentError("Stripe not configured.");
-        setPaymentPhase("form");
-        return;
-      }
-      setClientSecret(result.clientSecret);
-      setPaymentIntentId(result.paymentIntentId ?? null);
-      if (typeof result.depositCents === "number") setDepositCentsFromServer(result.depositCents);
-      if (!payFullAmount && typeof result.depositCents !== "number") {
-        setPaymentError("Could not get deposit amount. Please try again.");
         setPaymentPhase("form");
         return;
       }
@@ -379,13 +503,62 @@ export function InlineBookingDetailsStep({
       bookingError("client", "InlineBookingDetailsStep create-hold or create-payment-intent threw", err, {});
       setPaymentError(err instanceof Error ? err.message : "Something went wrong");
       setPaymentPhase("form");
+    } finally {
+      holdFlowInFlightRef.current = false;
+      setHoldSubmitInFlight(false);
     }
   };
+
+  useEffect(() => {
+    if (paymentPhase !== "stripe" || !holdId || clientSecret) return;
+    if (!STRIPE_PUBLISHABLE_KEY) return;
+    const gen = ++paymentIntentFetchGenRef.current;
+    let cancelled = false;
+    const pf = bookingMode === "shared" ? true : payFullAmount;
+    void (async () => {
+      const pi = await runCreatePaymentIntentForHold({
+        holdId,
+        payFullAmount: pf,
+        releaseToken,
+      });
+      if (cancelled || gen !== paymentIntentFetchGenRef.current) return;
+      if (!pi.ok) {
+        setPaymentPhase("form");
+        const ref = pi.incidentId ? ` Reference: ${pi.incidentId}.` : "";
+        const hint = pi.hint ? ` ${pi.hint}` : "";
+        setPaymentError(`${pi.error ?? "Failed to start payment"}${ref}${hint}`);
+        if (pi.holdId) {
+          void releaseHold(pi.holdId, pi.releaseToken ?? null).then(() => {
+            if (holdResumeRef.current?.holdId === pi.holdId) holdResumeRef.current = null;
+          });
+        }
+        return;
+      }
+      if (typeof pi.payFullAmount === "boolean") setCharterPayFull(pi.payFullAmount);
+      if (pi.payFullAmount === true && userChoseDepositRef.current) {
+        setShowDepositCoercionBanner(true);
+      }
+      setClientSecret(pi.clientSecret);
+      setPaymentIntentId(pi.paymentIntentId ?? null);
+      if (typeof pi.depositCents === "number") setDepositCentsFromServer(pi.depositCents);
+      if (typeof pi.totalCents === "number") setTotalCentsFromServer(pi.totalCents);
+      const effectivePayFull = bookingMode === "shared" ? true : pi.payFullAmount ?? payFullAmount;
+      if (!effectivePayFull && typeof pi.depositCents !== "number") {
+        setPaymentError("Could not get deposit amount. Please try again.");
+        setPaymentPhase("form");
+        setClientSecret(null);
+        void releaseHold(pi.holdId, pi.releaseToken ?? null);
+        return;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentPhase, holdId, clientSecret, releaseToken, payFullAmount, bookingMode]);
 
   const handlePaymentSuccess = async (paymentIntentIdFromConfirm?: string) => {
     setPaymentPhase("completing");
     setCompleteAfterPaymentError(null);
-    bookingCache.invalidateBookingCaches(experienceId);
     const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
     const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
     if (!resolvedHoldId || !resolvedPiId) {
@@ -397,23 +570,28 @@ export function InlineBookingDetailsStep({
     }
     try {
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment request", { holdId: resolvedHoldId, paymentIntentIdPrefix: resolvedPiId.slice(0, 24) + "..." });
-      const res = await fetch("/api/booking/complete-after-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId }),
-      });
+      const res = await postCompleteAfterPaymentWithTimeout({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId });
       const data = await res.json().catch(() => ({}));
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment response", { status: res.status, ok: res.ok, success: data?.success, bookingId: data?.bookingId });
       if (!res.ok) {
+        const expIdErr = (data as { experienceId?: string }).experienceId ?? experienceId;
+        if (expIdErr) bookingCache.invalidateBookingCaches(expIdErr);
         const message = (data?.error as string) || "Confirmation failed";
         setCompleteAfterPaymentError(message);
         setPaymentPhase("successWithWarning");
         return;
       }
+      const expIdOk = (data as { experienceId?: string }).experienceId ?? experienceId;
+      if (expIdOk) bookingCache.invalidateBookingCaches(expIdOk);
+      holdRequestIdRef.current = null;
       setPaymentPhase("success");
     } catch (e) {
       bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId: resolvedHoldId });
-      setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
+      if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
+        setCompleteAfterPaymentError(COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE);
+      } else {
+        setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
+      }
       setPaymentPhase("successWithWarning");
     }
   };
@@ -421,22 +599,33 @@ export function InlineBookingDetailsStep({
   const handleRetryCompleteAfterPayment = async () => {
     const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
     if (!resolvedHoldId || !paymentIntentId) return;
+    if (completeAfterRetryInFlightRef.current) return;
+    completeAfterRetryInFlightRef.current = true;
+    setCompleteAfterRetryBusy(true);
     setCompleteAfterPaymentError(null);
-    setPaymentPhase("completing");
     try {
-      const res = await fetch("/api/booking/complete-after-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdId: resolvedHoldId, paymentIntentId }),
-      });
-      const data = await res.json().catch(() => ({}));
+      const out = await retryCompleteAfterPaymentOnce({ holdId: resolvedHoldId, paymentIntentId });
+      if (!out.ok) {
+        if (out.stallTimeout) {
+          setCompleteAfterPaymentError(out.message);
+        } else {
+          setCompleteAfterPaymentError(out.error);
+        }
+        setPaymentPhase("successWithWarning");
+        return;
+      }
+      const { res, data } = out;
       if (res.ok) {
+        const expIdRetry = (data as { experienceId?: string }).experienceId ?? experienceId;
+        if (expIdRetry) bookingCache.invalidateBookingCaches(expIdRetry);
+        holdRequestIdRef.current = null;
         setPaymentPhase("success");
       } else {
         setCompleteAfterPaymentError((data?.error as string) || "Confirmation failed");
       }
-    } catch (e) {
-      setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
+    } finally {
+      completeAfterRetryInFlightRef.current = false;
+      setCompleteAfterRetryBusy(false);
     }
   };
 
@@ -512,10 +701,11 @@ export function InlineBookingDetailsStep({
         <div className="flex flex-wrap gap-2 justify-center">
           <button
             type="button"
-            onClick={handleRetryCompleteAfterPayment}
-            className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90"
+            onClick={() => void handleRetryCompleteAfterPayment()}
+            disabled={completeAfterRetryBusy}
+            className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 disabled:pointer-events-none"
           >
-            Try again
+            {completeAfterRetryBusy ? "Retrying…" : "Try again"}
           </button>
           <button
             type="button"
@@ -540,9 +730,20 @@ export function InlineBookingDetailsStep({
     );
   }
 
-  if (paymentPhase === "stripe" && clientSecret && stripePromise) {
+  if (paymentPhase === "stripe" && stripePromise) {
+    const priceDivergence = totalCentsFromServer != null && Math.abs(totalCentsFromServer - priceSummary.totalCents) > 1;
     return (
       <div className="flex flex-col gap-4 overflow-x-hidden">
+        {showDepositCoercionBanner && (
+          <p className="text-sm font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2" role="alert">
+            This experience requires full payment at checkout. You&apos;re being charged the full amount now.
+          </p>
+        )}
+        {priceDivergence && (
+          <p className="text-sm font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2" role="alert">
+            Price updated: ${(totalCentsFromServer / 100).toFixed(2)}
+          </p>
+        )}
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
@@ -562,7 +763,7 @@ export function InlineBookingDetailsStep({
           </p>
           <p className="text-xl font-bold text-brand-primary mt-2">
             {payFullAmount
-              ? `$${(priceSummary.totalCents / 100).toFixed(2)}`
+              ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
               : depositCentsFromServer != null
                 ? `$${(depositCentsFromServer / 100).toFixed(2)}`
                 : null}
@@ -572,9 +773,16 @@ export function InlineBookingDetailsStep({
           </p>
         </div>
         <div className="min-h-[200px]">
-          <Elements stripe={stripePromise} options={{ clientSecret }}>
-            <PaymentFormInner onSuccess={handlePaymentSuccess} onError={setPaymentError} />
-          </Elements>
+          {!clientSecret ? (
+            <div className="min-h-[200px] flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-brand-primary/15 bg-brand-primary/5 px-4" aria-busy="true">
+              <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+              <p className="text-sm text-brand-muted text-center">Preparing secure payment…</p>
+            </div>
+          ) : (
+            <Elements stripe={stripePromise} options={{ clientSecret }}>
+              <PaymentFormInner onSuccess={handlePaymentSuccess} onError={setPaymentError} />
+            </Elements>
+          )}
         </div>
         {paymentError && <p className="text-sm text-red-600">{paymentError}</p>}
       </div>
@@ -593,9 +801,22 @@ export function InlineBookingDetailsStep({
       </div>
 
       {paymentError && (
-        <div className="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex items-center justify-between gap-2">
+        <div className="mb-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <span>{paymentError}</span>
-          <button type="button" onClick={() => setPaymentError(null)} className="text-red-600 underline text-xs">Dismiss</button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {paymentError.includes("no longer available") && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="rounded-lg bg-brand-primary text-white font-semibold px-3 py-2 min-h-[44px] text-sm touch-manipulation hover:bg-brand-primary/90"
+              >
+                Go back and choose another time
+              </button>
+            )}
+            <button type="button" onClick={() => setPaymentError(null)} className="text-red-600 underline text-xs min-h-[44px] px-1">
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -606,6 +827,14 @@ export function InlineBookingDetailsStep({
           <h3 className="font-bold text-brand-dark text-base">{experienceTitle}</h3>
           {boatName && <p className="text-sm text-brand-dark/80 mt-0.5">{boatName}</p>}
           <p className="text-sm text-brand-muted mt-2">{dateLabel} · {formatTime(slot.startAt)} · {rateDurationHours} hr</p>
+          {priceLoading && (
+            <p className="text-xs text-brand-muted mt-2 rounded-lg bg-brand-primary/5 border border-brand-primary/15 px-2.5 py-2">
+              Loading exact price for your date…
+            </p>
+          )}
+          {(priceLoading || effectiveRateCents === null) && (
+            <p className="text-xs text-brand-muted mt-2">Exact price confirmed at checkout.</p>
+          )}
           <div className="mt-3 pt-3 border-t border-brand-dark/10 space-y-1.5 text-sm">
             <div className="flex justify-between">
               <span className="text-brand-muted">{rateDisplayName}</span>
@@ -637,6 +866,21 @@ export function InlineBookingDetailsStep({
               <div className="flex justify-between text-emerald-600">
                 <span>Discount</span>
                 <span>−${(priceSummary.discountCents / 100).toFixed(2)}</span>
+              </div>
+            )}
+            {priceError && !priceLoading && (
+              <div className="rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-xs text-red-800 flex flex-wrap items-center justify-between gap-2">
+                <span>{priceError}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPriceLoading(true);
+                    setPriceRetryTrigger((n) => n + 1);
+                  }}
+                  className="font-semibold text-brand-primary hover:underline min-h-[44px] px-1"
+                >
+                  Retry
+                </button>
               </div>
             )}
             <div className="flex justify-between font-semibold pt-2 border-t border-brand-dark/10">
@@ -737,6 +981,29 @@ export function InlineBookingDetailsStep({
                   : `Max ${effectiveMaxGuests} guests`}
               </p>
             </div>
+            {experiencePetsMax > 0 ? (
+              <div>
+                <label htmlFor="inline-booking-pets-count" className="block text-xs font-medium text-brand-dark mb-1">Pets</label>
+                <input
+                  id="inline-booking-pets-count"
+                  type="number"
+                  min={0}
+                  max={experiencePetsMax}
+                  value={petsCount}
+                  onChange={(e) => {
+                    const raw = parseInt(e.target.value, 10);
+                    if (Number.isNaN(raw)) {
+                      setPetsCount(0);
+                      return;
+                    }
+                    setPetsCount(Math.min(experiencePetsMax, Math.max(0, raw)));
+                  }}
+                  className="w-full rounded-lg border border-brand-dark/15 px-3 py-2.5 min-h-[44px] text-base touch-manipulation"
+                  aria-label="Number of pets"
+                />
+                <p className="text-[11px] text-brand-muted mt-0.5">Max {experiencePetsMax} pet{experiencePetsMax === 1 ? "" : "s"}</p>
+              </div>
+            ) : null}
           </div>
           {displayAddons.length > 0 && (
             <div className="mt-2 space-y-1">
@@ -827,8 +1094,8 @@ export function InlineBookingDetailsStep({
         </div>
         )}
 
-        {/* Payment amount — deposit option hidden only when experience disables it (allowDeposit === false) */}
-        {bookingMode !== "shared" && allowDeposit !== false ? (
+        {/* Payment amount — deposit only when experience explicitly enables it */}
+        {bookingMode !== "shared" && allowDeposit === true ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="flex flex-col gap-2">
@@ -979,8 +1246,14 @@ export function InlineBookingDetailsStep({
           </div>
           <button
             type="button"
-            onClick={handleProceedToPayment}
-            disabled={priceLoading || effectiveRateCents === null || (!payFullAmount && depositCentsFromServer == null)}
+            onClick={() => void handleProceedToPayment()}
+            disabled={
+              priceLoading ||
+              effectiveRateCents === null ||
+              (!payFullAmount && depositCentsFromServer == null) ||
+              paymentPhase !== "form" ||
+              holdSubmitInFlight
+            }
             className="w-full sm:w-auto sm:shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 disabled:pointer-events-none"
           >
             Proceed to payment

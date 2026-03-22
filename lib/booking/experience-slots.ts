@@ -182,6 +182,16 @@ export function getSlotStartEnd(dateStr: string, startHour: number, durationHour
 }
 
 /**
+ * Central-timezone calendar day bounds for dateStr (YYYY-MM-DD). Matches admin block-date and slot startAt storage.
+ * Use for same-day Firestore queries instead of `new Date(dateStr + "T00:00:00")` (ambiguous vs UTC servers).
+ */
+export function getCentralCalendarDayBounds(dateStr: string): { dayStart: Date; dayEnd: Date } {
+  const { start: dayStart } = getSlotStartEnd(dateStr, 0, 0, 0);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { dayStart, dayEnd };
+}
+
+/**
  * Latest start hour: 7pm (19) is the final departure time. Any duration can depart at 7pm.
  */
 export function getLatestStartHourForDuration(_durationHours: number): number {

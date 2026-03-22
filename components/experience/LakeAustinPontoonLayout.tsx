@@ -2,7 +2,6 @@
 
 import { useCallback } from "react";
 import { Hero } from "@/components/experience/Hero";
-import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { SocialProofStrip } from "@/components/experience/SocialProofStrip";
 import { ExperienceOverview } from "@/components/experience/ExperienceOverview";
@@ -12,6 +11,7 @@ import { Reviews } from "@/components/experience/Reviews";
 import { FAQ } from "@/components/experience/FAQ";
 import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
+import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
 import { HERO, PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
 
 const BOOKING_SECTION_ID = "booking-preview";
@@ -49,6 +49,8 @@ export interface LakeAustinPontoonLayoutProps {
   socialProof?: SocialProofFromExperience;
   /** Event-specific overrides (e.g. bachelorette/bachelor landing pages). When set, overrides default hero, overview, FAQ, final CTA. */
   eventOverrides?: LakeAustinPontoonLayoutEventOverrides;
+  /** From Firestore experience `fromPriceCents` (denormalized starting price). */
+  fromPriceCents?: number | null;
 }
 
 /**
@@ -56,7 +58,14 @@ export interface LakeAustinPontoonLayoutProps {
  * Used by both /experiences/pontoon and /experiences/lake-austin-pontoon.
  * When heroImageUrl / galleryImages are provided (from admin listing), those are used.
  */
-export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewImageUrl, socialProof, eventOverrides }: LakeAustinPontoonLayoutProps = {}) {
+export function LakeAustinPontoonLayout({
+  heroImageUrl,
+  galleryImages,
+  overviewImageUrl,
+  socialProof,
+  eventOverrides,
+  fromPriceCents,
+}: LakeAustinPontoonLayoutProps = {}) {
   const { openWithSelection } = useBookingModal();
   const scrollToBooking = useCallback(() => {
     document.getElementById(BOOKING_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
@@ -80,21 +89,12 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
         className="relative -mt-12 sm:-mt-32 lg:-mt-40 z-10 max-w-7xl mx-auto px-5 sm:px-6 lg:px-8 pt-4 sm:pt-0 pb-8"
       >
         <div className="flex justify-center">
-          <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0 rounded-2xl sm:rounded-3xl border border-white/10 bg-brand-dark/80 backdrop-blur-sm p-8 sm:p-10 text-center shadow-xl">
-            <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-              Ready to book?
-            </h2>
-            <p className="mt-2 text-white/80 text-sm sm:text-base">
-              Pick your date and time in the next step — we&apos;ll hold your slot while you checkout.
-            </p>
-            <Button
-              variant="secondary"
-              size="lg"
-              className="mt-6 w-full rounded-xl h-14 text-base font-bold shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation"
-              onClick={handleBookNow}
-            >
-              Book now
-            </Button>
+          <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0">
+            <BookingPreviewCard
+              sectionId={BOOKING_SECTION_ID}
+              onCheckAvailability={handleBookNow}
+              fromPriceCents={fromPriceCents ?? null}
+            />
           </div>
         </div>
       </section>
@@ -121,7 +121,11 @@ export function LakeAustinPontoonLayout({ heroImageUrl, galleryImages, overviewI
       />
 
       <StickyMobileBar
-        price={PRICING_MAP[4]}
+        price={
+          fromPriceCents != null && fromPriceCents > 0
+            ? Math.round(fromPriceCents / 100)
+            : PRICING_MAP[4]
+        }
         onBookNow={handleBookNow}
         bookingSectionId={BOOKING_SECTION_ID}
       />

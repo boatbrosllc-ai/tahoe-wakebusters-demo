@@ -9,18 +9,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
-import { parseSlotId } from "@/lib/booking/experience-slots";
-import { getCleanupHoldSlotAction } from "@/lib/booking/cleanup-holds-logic";
+import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
+import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 const PAGE_SIZE = 100;
 const BATCH_SIZE = 10;
 
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get("authorization");
+    const authHeader = request.headers.get("authorization") ?? "";
     const cronSecret = process.env.CRON_SECRET;
-    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const db = getDb();
@@ -33,52 +33,8 @@ export async function POST(request: NextRequest) {
     let failed = 0;
 
     const releaseHold = async (doc: QueryDocumentSnapshot<DocumentData>): Promise<"processed" | "skipped" | "failed"> => {
-      const hold = doc.data();
-      const boatId = hold.boatId as string | undefined;
-      const experienceId = hold.experienceId as string | undefined;
-      const slotId = hold.slotId as string;
-      if (!slotId || (!boatId && !experienceId)) return "skipped";
-      const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
-      const dateStr =
-        (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(slotId)?.dateStr ?? "";
-      const slotRef = boatId
-        ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
-        : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
-      let didUpdate = false;
-      try {
-        await db.runTransaction(async (tx) => {
-          const slotSnap = await tx.get(slotRef);
-          if (!slotSnap.exists) {
-            if (isSharedHold && experienceId && dateStr) {
-              const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-              await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
-            }
-            tx.update(doc.ref, { status: "expired" });
-            didUpdate = true;
-            return;
-          }
-          const slot = slotSnap.data();
-          const action = getCleanupHoldSlotAction(slot?.holdId, doc.id);
-          if (action === "release_slot_and_expire") {
-            tx.update(slotRef, {
-              status: "open",
-              holdId: FieldValue.delete(),
-              updatedAt: FieldValue.serverTimestamp(),
-            });
-          } else {
-            // expire_only: slot was reassigned to another hold; still expire this hold and release shared capacity.
-            if (isSharedHold && experienceId && dateStr) {
-              const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-              await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
-            }
-          }
-          tx.update(doc.ref, { status: "expired" });
-          didUpdate = true;
-        });
-        return didUpdate ? "processed" : "skipped";
-      } catch {
-        return "failed";
-      }
+      const result = await runExpiredHoldReleaseTransaction(db, FieldValue, doc).catch(() => "failed" as const);
+      return result;
     };
 
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
@@ -110,6 +66,17 @@ export async function POST(request: NextRequest) {
 
       if (holdsSnap.size < PAGE_SIZE) break;
       cursor = holdsSnap.docs[holdsSnap.docs.length - 1];
+    }
+
+    if (failed > 0) {
+      await writeOperationalAlert({
+        type: "cleanup_holds_failures",
+        source: "api/booking/cleanup-holds",
+        failed,
+        matched,
+        processed,
+        skipped,
+      });
     }
 
     return NextResponse.json({ ok: true, matched, processed, skipped, failed });
