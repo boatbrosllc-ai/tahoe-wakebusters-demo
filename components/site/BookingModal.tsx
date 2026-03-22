@@ -556,14 +556,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
    * Only considers slots with the SAME duration as selectedSlot so we don't show boats that have
    * a different duration open (e.g. 2hr open but 3hr held). Matches the duration-filtered time list. */
   const ticketedForSlot = selectedExperience?.pricingType === "ticketed";
-  const { availableBoatIdsForSelectedSlot, unavailableBoatIdsForSelectedSlot, bookedBoatIdsForSelectedSlot } = useMemo(() => {
+  const {
+    availableBoatIdsForSelectedSlot,
+    unavailableBoatIdsForSelectedSlot,
+    bookedBoatIdsForSelectedSlot,
+    heldBoatIdsForSelectedSlot,
+    blockedBoatIdsForSelectedSlot,
+  } = useMemo(() => {
     const empty = new Set<string>();
-    if (!selectedSlot?.startAt) return { availableBoatIdsForSelectedSlot: empty, unavailableBoatIdsForSelectedSlot: empty, bookedBoatIdsForSelectedSlot: empty };
+    if (!selectedSlot?.startAt) {
+      return {
+        availableBoatIdsForSelectedSlot: empty,
+        unavailableBoatIdsForSelectedSlot: empty,
+        bookedBoatIdsForSelectedSlot: empty,
+        heldBoatIdsForSelectedSlot: empty,
+        blockedBoatIdsForSelectedSlot: empty,
+      };
+    }
     const selectedStartMs = new Date(selectedSlot.startAt).getTime();
     const selectedDurationHours = parseSlotId(selectedSlot.id)?.durationHours ?? null;
     const available = new Set<string>();
     const unavailable = new Set<string>();
     const booked = new Set<string>();
+    const held = new Set<string>();
+    const blocked = new Set<string>();
     for (const s of monthSlots) {
       const boatKey = s.boatId && s.boatId.trim() ? s.boatId : ticketedForSlot ? "_ticketed" : null;
       if (boatKey === null) continue;
@@ -573,11 +589,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       if (s.status === "open") available.add(boatKey);
       else {
         unavailable.add(boatKey);
-        booked.add(boatKey);
+        if (s.status === "booked") booked.add(boatKey);
+        else if (s.status === "held") held.add(boatKey);
+        else blocked.add(boatKey);
       }
     }
     if (available.size === 0 && selectedSlot.boatId) available.add(selectedSlot.boatId);
-    return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };
+    return {
+      availableBoatIdsForSelectedSlot: available,
+      unavailableBoatIdsForSelectedSlot: unavailable,
+      bookedBoatIdsForSelectedSlot: booked,
+      heldBoatIdsForSelectedSlot: held,
+      blockedBoatIdsForSelectedSlot: blocked,
+    };
   }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots, ticketedForSlot]);
   const slotsByDate = useMemo(
     () => aggregateSlotsByDate(monthSlots, selectedExperience?.pricingType === "ticketed"),
@@ -2154,7 +2178,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     const isAvailable =
                       availableBoatIdsForSelectedSlot.has(boat.id) &&
                       !unavailableBoatIdsForSelectedSlot.has(boat.id);
-                    const isBooked = !isAvailable && bookedBoatIdsForSelectedSlot.has(boat.id);
+                    /** Match calendar `aggregateSlotsByDate`: only `booked` rows count as "Booked"; held/blocked are separate. */
+                    const isBooked = bookedBoatIdsForSelectedSlot.has(boat.id);
+                    const isHeld = heldBoatIdsForSelectedSlot.has(boat.id);
+                    const isBlocked = blockedBoatIdsForSelectedSlot.has(boat.id);
+                    const unavailableOverlay =
+                      isBooked ? { label: "Booked" as const, suffix: " (Booked)" as const }
+                      : isHeld ? { label: "On hold" as const, suffix: " (On hold)" as const }
+                      : isBlocked ? { label: "Unavailable" as const, suffix: " (Unavailable)" as const }
+                      : null;
                     const isSelected = selectedBoat?.id === boat.id;
                     const thumb = boat.photos?.[0];
                     return (
@@ -2169,8 +2201,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           "touch-manipulation",
                           isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
                           !isAvailable && "cursor-not-allowed",
-                          isBooked && "border-brand-dark/25 bg-brand-dark/5",
-                          !isAvailable && !isBooked && "opacity-60 bg-brand-dark/5 border-brand-dark/20"
+                          unavailableOverlay && "border-brand-dark/25 bg-brand-dark/5",
+                          !isAvailable && !unavailableOverlay && "opacity-60 bg-brand-dark/5 border-brand-dark/20"
                         )}
                       >
                         <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t-[6px] sm:rounded-t-[10px]">
@@ -2180,14 +2212,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                           )}
                         </div>
-                        {isBooked && (
+                        {unavailableOverlay && (
                           <div className="absolute inset-0 flex items-center justify-center rounded-lg sm:rounded-xl bg-slate-500/70 pointer-events-none z-10" aria-hidden>
-                            <span className="text-sm sm:text-base font-bold text-white uppercase tracking-wider drop-shadow-md px-4 py-2 rounded-lg bg-slate-800/90 border border-white/30">Booked</span>
+                            <span className="text-sm sm:text-base font-bold text-white uppercase tracking-wider drop-shadow-md px-4 py-2 rounded-lg bg-slate-800/90 border border-white/30">{unavailableOverlay.label}</span>
                           </div>
                         )}
-                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", isBooked && "relative z-0")}>
+                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", unavailableOverlay && "relative z-0")}>
                           <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>
-                            {boat.name}{isBooked ? " (Booked)" : ""}
+                            {boat.name}{unavailableOverlay?.suffix ?? ""}
                           </span>
                         </div>
                       </button>

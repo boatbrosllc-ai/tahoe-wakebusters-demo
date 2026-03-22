@@ -460,16 +460,30 @@ export function ExperienceCalendarSection({
    * Single-pass derivation of all three boat-availability sets for the selected inline slot.
    * Matching on both startAt + endAt prevents cross-duration false negatives.
    */
-  const { availableBoatIdsForInlineSlot, unavailableBoatIdsForInlineSlot, bookedBoatIdsForInlineSlot } = useMemo(() => {
+  const {
+    availableBoatIdsForInlineSlot,
+    unavailableBoatIdsForInlineSlot,
+    bookedBoatIdsForInlineSlot,
+    heldBoatIdsForInlineSlot,
+    blockedBoatIdsForInlineSlot,
+  } = useMemo(() => {
     const empty = new Set<string>();
     if (!selectedSlotInline?.startAt || !slots.length) {
-      return { availableBoatIdsForInlineSlot: empty, unavailableBoatIdsForInlineSlot: empty, bookedBoatIdsForInlineSlot: empty };
+      return {
+        availableBoatIdsForInlineSlot: empty,
+        unavailableBoatIdsForInlineSlot: empty,
+        bookedBoatIdsForInlineSlot: empty,
+        heldBoatIdsForInlineSlot: empty,
+        blockedBoatIdsForInlineSlot: empty,
+      };
     }
     const startMs = new Date(selectedSlotInline.startAt).getTime();
     const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
     const available = new Set<string>();
     const unavailable = new Set<string>();
     const booked = new Set<string>();
+    const held = new Set<string>();
+    const blocked = new Set<string>();
     for (const s of slots) {
       const boatId = (s as SlotDto & { boatId?: string }).boatId;
       if (!boatId) continue;
@@ -478,10 +492,18 @@ export function ExperienceCalendarSection({
       if (s.status === "open") available.add(boatId);
       else {
         unavailable.add(boatId);
-        booked.add(boatId);
+        if (s.status === "booked") booked.add(boatId);
+        else if (s.status === "held") held.add(boatId);
+        else blocked.add(boatId);
       }
     }
-    return { availableBoatIdsForInlineSlot: available, unavailableBoatIdsForInlineSlot: unavailable, bookedBoatIdsForInlineSlot: booked };
+    return {
+      availableBoatIdsForInlineSlot: available,
+      unavailableBoatIdsForInlineSlot: unavailable,
+      bookedBoatIdsForInlineSlot: booked,
+      heldBoatIdsForInlineSlot: held,
+      blockedBoatIdsForInlineSlot: blocked,
+    };
   }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
 
   // Fetch listing (experience) day pricing so calendar shows the same numbers as the listing page
@@ -959,6 +981,8 @@ export function ExperienceCalendarSection({
     availableBoatIdsForInlineSlot,
     unavailableBoatIdsForInlineSlot,
     bookedBoatIdsForInlineSlot,
+    heldBoatIdsForInlineSlot,
+    blockedBoatIdsForInlineSlot,
     selectedBoatInline,
     setSelectedBoatInline,
     experienceForDetails: effectiveExperienceForDetails,

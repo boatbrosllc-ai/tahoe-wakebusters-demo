@@ -618,8 +618,7 @@ export async function convertHoldToBooking(
 
   bookingLog("convert-hold", "transaction completed, waiver and side effects", { holdId, bookingId });
 
-  void tryImmediateConfirmationSendForBooking(db, bookingId);
-
+  // Waiver must exist on the booking before confirmation send, or the email omits waiver URLs (race).
   const bookingSnapAfterTx = await db.collection("bookings").doc(bookingId).get();
   const bookingAfterTx = bookingSnapAfterTx.exists ? (bookingSnapAfterTx.data() as Booking) : null;
   const waiverAlreadySet = Boolean(bookingAfterTx?.waiver?.requestId);
@@ -637,6 +636,8 @@ export async function convertHoldToBooking(
       bookingError("convert-hold", "waiver invite send failed", waiverErr, { bookingId });
     }
   }
+
+  void tryImmediateConfirmationSendForBooking(db, bookingId);
   if (hold.marketingOptIn) {
     const listId = bookingEnv.brevoMarketingListId;
     try {

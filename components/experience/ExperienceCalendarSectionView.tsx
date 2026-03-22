@@ -19,6 +19,19 @@ function formatPrice(cents: number) {
 }
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
+/** Aligns with calendar `aggregateSlotsByDate`: only `booked` is "Booked"; held/blocked use distinct labels. */
+function inlineSlotUnavailableOverlay(
+  boatId: string,
+  booked: Set<string>,
+  held: Set<string>,
+  blocked: Set<string>
+): { label: string; suffix: string } | null {
+  if (booked.has(boatId)) return { label: "Booked", suffix: " (Booked)" };
+  if (held.has(boatId)) return { label: "On hold", suffix: " (On hold)" };
+  if (blocked.has(boatId)) return { label: "Unavailable", suffix: " (Unavailable)" };
+  return null;
+}
+
 export type OnOpenInModalSelection = { experienceId?: string; experienceSlug?: string; date: string; slotId: string; boatId?: string; pricingType?: "charter" | "ticketed" };
 export type OnOpenInModalFn = (selection: OnOpenInModalSelection) => void;
 
@@ -72,6 +85,8 @@ export interface ExperienceCalendarSectionViewProps {
   availableBoatIdsForInlineSlot: Set<string>;
   unavailableBoatIdsForInlineSlot: Set<string>;
   bookedBoatIdsForInlineSlot: Set<string>;
+  heldBoatIdsForInlineSlot: Set<string>;
+  blockedBoatIdsForInlineSlot: Set<string>;
   selectedBoatInline: { id: string; name: string; photos?: string[] } | null;
   setSelectedBoatInline: (v: { id: string; name: string; photos?: string[] } | null) => void;
   experienceForDetails?: { id: string; title: string; maxGuests: number; petsMax: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean };
@@ -173,6 +188,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
     availableBoatIdsForInlineSlot,
     unavailableBoatIdsForInlineSlot,
     bookedBoatIdsForInlineSlot,
+    heldBoatIdsForInlineSlot,
+    blockedBoatIdsForInlineSlot,
     selectedBoatInline,
     setSelectedBoatInline,
     experienceForDetails,
@@ -769,18 +786,23 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
                                 {inlineBoats.slice(0, 6).map((boat) => {
                                   const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
-                                  const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                  const unavailableOverlay = inlineSlotUnavailableOverlay(
+                                    boat.id,
+                                    bookedBoatIdsForInlineSlot,
+                                    heldBoatIdsForInlineSlot,
+                                    blockedBoatIdsForInlineSlot
+                                  );
                                   const isSelected = selectedBoatInline?.id === boat.id;
                                   const thumb = boat.photos?.[0];
                                   return (
-                                    <button key={boat.id} type="button" disabled={!isAvailable} onClick={() => isAvailable && setSelectedBoatInline(boat)} className={cn("relative flex flex-col overflow-hidden rounded-md border-2 text-left transition-all min-h-0", "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary", isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30", !isAvailable && "cursor-not-allowed opacity-70", isBooked && "border-brand-dark/25 bg-brand-dark/5")}>
+                                    <button key={boat.id} type="button" disabled={!isAvailable} onClick={() => isAvailable && setSelectedBoatInline(boat)} className={cn("relative flex flex-col overflow-hidden rounded-md border-2 text-left transition-all min-h-0", "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary", isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30", !isAvailable && "cursor-not-allowed opacity-70", unavailableOverlay && "border-brand-dark/25 bg-brand-dark/5")}>
                                       <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t">{thumb ? <Image src={getDisplayImageUrl(thumb)} alt="" fill className="object-cover" sizes="80px" /> : <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />}</div>
-                                      {isBooked && (
+                                      {unavailableOverlay && (
                                         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-slate-500/70 z-10 pointer-events-none" aria-hidden>
-                                          <span className="text-[10px] font-bold text-white uppercase tracking-wide px-2 py-1 rounded bg-slate-800/90 border border-white/20">Booked</span>
+                                          <span className="text-[10px] font-bold text-white uppercase tracking-wide px-2 py-1 rounded bg-slate-800/90 border border-white/20">{unavailableOverlay.label}</span>
                                         </div>
                                       )}
-                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-0")}><span className={cn("text-[10px] font-semibold truncate block", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{isBooked ? " (Booked)" : ""}</span></div>
+                                      <div className={cn("px-1.5 py-1 min-w-0", unavailableOverlay && "relative z-0")}><span className={cn("text-[10px] font-semibold truncate block", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{unavailableOverlay?.suffix ?? ""}</span></div>
                                     </button>
                                   );
                                 })}
@@ -1143,7 +1165,12 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 sm:gap-1.5 mb-2">
                                 {inlineBoats.slice(0, 6).map((boat) => {
                                   const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
-                                  const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                  const unavailableOverlay = inlineSlotUnavailableOverlay(
+                                    boat.id,
+                                    bookedBoatIdsForInlineSlot,
+                                    heldBoatIdsForInlineSlot,
+                                    blockedBoatIdsForInlineSlot
+                                  );
                                   const isSelected = selectedBoatInline?.id === boat.id;
                                   const thumb = boat.photos?.[0];
                                   return (
@@ -1157,7 +1184,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
                                         isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30",
                                         !isAvailable && "cursor-not-allowed opacity-70",
-                                        isBooked && "border-brand-dark/25 bg-brand-dark/5"
+                                        unavailableOverlay && "border-brand-dark/25 bg-brand-dark/5"
                                       )}
                                     >
                                       <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t">
@@ -1167,13 +1194,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                           <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                                         )}
                                       </div>
-                                      {isBooked && (
+                                      {unavailableOverlay && (
                                         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-slate-500/70 z-10 pointer-events-none" aria-hidden>
-                                          <span className="text-xs font-bold text-white uppercase tracking-wide px-2.5 py-1.5 rounded-lg bg-slate-800/90 border border-white/20">Booked</span>
+                                          <span className="text-xs font-bold text-white uppercase tracking-wide px-2.5 py-1.5 rounded-lg bg-slate-800/90 border border-white/20">{unavailableOverlay.label}</span>
                                         </div>
                                       )}
-                                      <div className={cn("px-1.5 py-1 min-w-0", isBooked && "relative z-0")}>
-                                        <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{isBooked ? " (Booked)" : ""}</span>
+                                      <div className={cn("px-1.5 py-1 min-w-0", unavailableOverlay && "relative z-0")}>
+                                        <span className={cn("text-[10px] sm:text-[11px] font-semibold truncate block leading-tight", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>{boat.name}{unavailableOverlay?.suffix ?? ""}</span>
                                       </div>
                                     </button>
                                   );
@@ -1197,10 +1224,15 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     <option value="">Other boats ({inlineBoats.length - 6})</option>
                                     {inlineBoats.slice(6).map((boat) => {
                                       const isAvailable = availableBoatIdsForInlineSlot.has(boat.id) && !unavailableBoatIdsForInlineSlot.has(boat.id);
-                                      const isBooked = bookedBoatIdsForInlineSlot.has(boat.id);
+                                      const overlay = inlineSlotUnavailableOverlay(
+                                        boat.id,
+                                        bookedBoatIdsForInlineSlot,
+                                        heldBoatIdsForInlineSlot,
+                                        blockedBoatIdsForInlineSlot
+                                      );
                                       return (
                                         <option key={boat.id} value={boat.id} disabled={!isAvailable}>
-                                          {boat.name}{isBooked ? " (Booked)" : ""}
+                                          {boat.name}{overlay?.suffix ?? ""}
                                         </option>
                                       );
                                     })}
