@@ -120,13 +120,10 @@ export function Dialog({
 
   const overlay = (
     <div
-      className={cn(
+      className={
         // h-dvh: avoid min-h-screen/100vh stretching past visible viewport on mobile (iOS toolbar).
-        "fixed inset-0 z-[100] flex h-dvh max-h-dvh overflow-hidden overscroll-contain",
-        fullScreenOnMobile
-          ? "flex-col justify-end sm:flex-row sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
-          : "items-center justify-center p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
-      )}
+        "fixed inset-0 z-[100] flex h-dvh max-h-dvh items-center justify-center overflow-hidden overscroll-contain p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      }
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -143,8 +140,8 @@ export function Dialog({
         className={cn(
           "relative z-10 flex min-h-0 min-w-0 w-full max-w-[100vw] flex-col overflow-hidden bg-white shadow-premium",
           fullScreenOnMobile
-            ? // dvh tracks visible viewport when mobile browser chrome shows/hides (better than svh for scroll regions).
-              "h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:min-h-0 sm:rounded-2xl sm:max-w-lg"
+            ? // Mobile: centered card, intentionally shorter than the viewport so backdrop shows around it.
+              "mx-auto w-full max-w-full rounded-2xl h-[min(68dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem))] max-h-[min(68dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem))] sm:h-auto sm:max-h-[85vh] sm:min-h-0 sm:max-w-lg"
             : "max-h-[85dvh] w-full max-w-lg rounded-2xl sm:max-h-[85vh] my-auto",
           className
         )}

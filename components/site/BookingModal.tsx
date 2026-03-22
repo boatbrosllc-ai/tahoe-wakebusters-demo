@@ -1645,7 +1645,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       open={open}
       onOpenChange={handleModalOpenChange}
       fullScreenOnMobile
-      className="sm:max-w-md md:max-w-2xl lg:max-w-3xl"
+      className={cn(
+        "sm:max-w-md md:max-w-2xl lg:max-w-3xl",
+        // Step 4 (details & payment): taller panel on phone so more form fields are visible before scrolling.
+        step === 4 &&
+          "max-sm:h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))] max-sm:max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))]"
+      )}
     >
       <div
         className={cn(
