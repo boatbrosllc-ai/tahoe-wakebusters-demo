@@ -9,6 +9,7 @@ import {
   rollbackCheckoutSession,
 } from "@/lib/booking/checkout-session-helpers";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { getStripe, buildLineItems, buildLineItemsFromHoldPricing } from "@/lib/booking/stripe-client";
@@ -96,11 +97,9 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
 
-    // Fetch experience, rates, boats, and addons in parallel — all only need experienceId
-    const [expDoc, ratesSnap, boatsSnap, addonsSnap] = await Promise.all([
+    const [expDoc, ratesSnap, addonsSnap] = await Promise.all([
       db.collection("experiences").doc(input.experienceId).get(),
       db.collection("experiences").doc(input.experienceId).collection("rates").where("active", "==", true).get(),
-      db.collection("boats").where("isListingBoat", "==", true).where("active", "==", true).where("experienceIds", "array-contains", input.experienceId).get(),
       db.collection("experiences").doc(input.experienceId).collection("addons").get(),
     ]);
 
@@ -108,6 +107,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     }
     const experience = expDoc.data() as Experience;
+    const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
+    const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, input.experienceId, expSlug);
     const experienceIdVariants = getExperienceIdVariants(input.experienceId, experience?.slug ?? "");
     if (!experience.active) {
       return NextResponse.json({ error: "Experience not available" }, { status: 400 });
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest) {
     const rate = rateDoc.data() as ExperienceRate;
 
     // Experiences with listing boats: slots live under boats/{boatId}/slots. Require boatId so we hold the correct slot.
-    const listingBoatIds = boatsSnap.docs.map((d) => d.id);
+    const listingBoatIds = listingBoatDocs.map((d) => d.id);
     const hasListingBoats = listingBoatIds.length > 0;
     if (hasListingBoats && !input.boatId && listingBoatIds.length === 1) {
       input.boatId = listingBoatIds[0];
@@ -151,7 +152,7 @@ export async function POST(request: NextRequest) {
 
     // Charter: validate allowed start times for the slot (experience-level or selected boat's allowedStartTimes).
     const selectedBoat = input.boatId
-      ? (boatsSnap.docs.find((d) => d.id === input.boatId)?.data() as ListingBoat | undefined)
+      ? (listingBoatDocs.find((d) => d.id === input.boatId)?.data() as ListingBoat | undefined)
       : undefined;
     if (!isAllowedSlotTime(parsed.startHour, parsed.startMinute, parsed.durationHours, selectedBoat?.allowedStartTimes)) {
       return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });

@@ -183,6 +183,41 @@ export const bookingEnv = {
   },
 };
 
+/**
+ * Effective Firebase project ID for diagnostics and admin token checks: env var, else `project_id`
+ * from the service account JSON when using FIREBASE_SERVICE_ACCOUNT_JSON_PATH / GOOGLE_APPLICATION_CREDENTIALS.
+ */
+let _resolvedFirebaseProjectIdMemo: string | undefined | null = null;
+
+export function getResolvedFirebaseProjectId(): string | undefined {
+  if (_resolvedFirebaseProjectIdMemo !== null) {
+    return _resolvedFirebaseProjectIdMemo === "" ? undefined : _resolvedFirebaseProjectIdMemo;
+  }
+  const fromEnv = getEnv("FIREBASE_PROJECT_ID")?.trim();
+  if (fromEnv) {
+    _resolvedFirebaseProjectIdMemo = fromEnv;
+    return fromEnv;
+  }
+  const path = bookingEnv.firebaseServiceAccountPath;
+  if (path) {
+    try {
+      const pathMod = require("path") as typeof import("path");
+      const fs = require("fs") as typeof import("fs");
+      const resolved = pathMod.isAbsolute(path) ? path : pathMod.join(process.cwd(), path);
+      if (fs.existsSync(resolved)) {
+        const json = JSON.parse(fs.readFileSync(resolved, "utf8")) as { project_id?: string };
+        const id = json.project_id?.trim();
+        _resolvedFirebaseProjectIdMemo = id ?? "";
+        return id;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  _resolvedFirebaseProjectIdMemo = "";
+  return undefined;
+}
+
 export function hasFirebaseConfig(): boolean {
   const path = bookingEnv.firebaseServiceAccountPath;
   if (path) {

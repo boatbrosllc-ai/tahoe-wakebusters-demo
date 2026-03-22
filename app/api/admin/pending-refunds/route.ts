@@ -15,6 +15,19 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "app/api/admin/pending-refunds/route.ts:GET",
+        message: "pendingRefunds parallel query start",
+        hypothesisId: "H1",
+        data: { query: "pending+status+orderByCreatedAt+failedStatus" },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     const [snap, failedSnap] = await Promise.all([
       db
         .collection("pendingRefunds")
@@ -40,6 +53,22 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ refunds });
   } catch (err) {
+    // #region agent log
+    fetch("http://127.0.0.1:7243/ingest/9217380b-37cf-4275-ae62-01f686adc624", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "app/api/admin/pending-refunds/route.ts:catch",
+        message: "pendingRefunds query error",
+        hypothesisId: "H1",
+        data: {
+          errPreview: (err instanceof Error ? err.message : String(err)).slice(0, 400),
+          code: (err as { code?: number }).code,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(

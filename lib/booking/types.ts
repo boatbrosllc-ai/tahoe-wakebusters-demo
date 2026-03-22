@@ -398,6 +398,21 @@ export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<B
   "final_failed",
 ]);
 
+/**
+ * Whether a booking without `boatId` should count toward dashboard / integrity alerts for
+ * listing-boat occupancy. Shared ticketed inventory (and legacy ticketed rows without explicit
+ * `bookingMode: "charter"`) does not use per-boat attribution on the booking doc.
+ */
+export function bookingRequiresBoatIdForOccupancyAlert(
+  bookingMode: Booking["bookingMode"],
+  experiencePricingType: Experience["pricingType"]
+): boolean {
+  if (experiencePricingType === "ticketed") {
+    return bookingMode === "charter";
+  }
+  return true;
+}
+
 /** Display-only card info (never store raw card data). */
 export interface BookingCardDisplay {
   brand?: string;

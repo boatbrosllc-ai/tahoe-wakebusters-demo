@@ -189,6 +189,7 @@ async function deliverClaimedConfirmationEntry(
 
     const baseUrl = (bookingEnv.appBaseUrl ?? "").replace(/\/$/, "");
     const signedReceipt = signReceiptToken(bookingId);
+    /** SMS only — confirmation email does not include a separate receipt link. */
     const receiptLink = signedReceipt ? `${baseUrl}/booking/success?receipt_token=${encodeURIComponent(signedReceipt)}` : undefined;
 
     let waiverSigningUrl: string | undefined;
@@ -231,7 +232,6 @@ async function deliverClaimedConfirmationEntry(
           ? (booking.finalChargeAt as { toDate(): Date }).toDate().toISOString()
           : undefined,
       manageLink: undefined as string | undefined,
-      receiptLink,
       waiverSigningUrl,
       waiverGroupSigningUrl,
       pricingType,

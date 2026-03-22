@@ -27,7 +27,7 @@ type DashboardStats = {
   listingCount: number;
   /** Booking confirmation emails stuck in notification outbox (dead letter). Resend via booking admin. */
   confirmationDeadLetterCount?: number;
-  /** Last-500-bookings sample: slot-taken statuses with missing boatId (drive to zero; see docs/BOOKING_AVAILABILITY.md). */
+  /** Last-500 sample: slot-taken bookings missing boatId where per-boat occupancy applies (shared ticketed excluded). */
   recentBookingsMissingBoatId?: number;
   recentBookings: {
     id: string;
@@ -259,12 +259,17 @@ export default function AdminHomePage() {
               className="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-950 sm:px-5 sm:py-4"
               role="alert"
             >
-              <p className="font-semibold">Bookings missing boat ID</p>
+              <p className="font-semibold">Bookings missing boat ID (per-boat occupancy)</p>
               <p className="mt-1 text-sm text-red-900/95">
-                {stats.recentBookingsMissingBoatId} of the last 500 bookings (by creation time) have a paid/trip status but no{" "}
-                <code className="rounded bg-red-100/80 px-1">boatId</code>. Calendar occupancy for those boats may be wrong until you run the backfill (
-                <code className="rounded bg-red-100/80 px-1">POST /api/admin/backfill-booking-boat-ids</code> with{" "}
-                <code className="rounded bg-red-100/80 px-1">dryRun: false</code>). See docs/BOOKING_AVAILABILITY.md.
+                {stats.recentBookingsMissingBoatId} of the last 500 bookings (by creation time) are in a slot-taken status, have no{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code>, and are on experiences where a boat is required for calendar occupancy
+                (charter listings, and ticketed departures booked as private charter). This count does{" "}
+                <span className="font-medium">not</span> include shared ticketed tickets (pooled inventory; no per-boat{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code> on the booking). If this number is non-zero, run the backfill (
+                <code className="rounded bg-red-100/80 px-1">POST /api/admin/backfill-booking-boat-ids</code> with body{" "}
+                <code className="rounded bg-red-100/80 px-1">{`{ "applyUpdates": true }`}</code> or{" "}
+                <code className="rounded bg-red-100/80 px-1">{`{ "dryRun": false }`}</code>) or assign{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code> manually. See docs/BOOKING_AVAILABILITY.md.
               </p>
             </div>
           )}

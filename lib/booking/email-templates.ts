@@ -97,7 +97,7 @@ const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COL
  * No manage-booking link (manage flow not offered).
  */
 export function renderBookingConfirmationHtml(booking: Booking, context: BookingEmailContext): string {
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType, addonsSummary: addonsSummaryFromContext, remainingAlreadyCharged, receiptLink } = context;
+  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, finalChargeAt, waiverSigningUrl, waiverGroupSigningUrl, pricingType, addonsSummary: addonsSummaryFromContext, remainingAlreadyCharged } = context;
   const isTicketed = pricingType === "ticketed";
   const duration = `${durationHours} hour${durationHours !== 1 ? "s" : ""}`;
   const ticketCount = booking.partySize ?? 1;
@@ -206,16 +206,6 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
               <p style="margin: 16px 0 0; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">Share this link with everyone in your party so they can sign the waiver too:</p>
               <p style="margin: 8px 0 0; font-size: 13px; word-break: break-all;"><a href="${escapeHtml(waiverGroupSigningUrl)}" target="_blank" rel="noopener" style="color: ${PRIMARY_COLOR}; text-decoration: underline;">${escapeHtml(waiverGroupSigningUrl)}</a></p>
               ` : ""}
-              ` : ""}
-              ${receiptLink ? `
-              <p style="margin: 24px 0 0; font-size: 14px; color: ${MUTED_COLOR}; line-height: 1.5;">You can view your receipt anytime using this link:</p>
-              <table role="presentation" cellspacing="0" cellpadding="0" style="margin-top: 12px;">
-                <tr>
-                  <td style="border-radius: 10px; background: ${PRIMARY_COLOR};">
-                    <a href="${escapeHtml(receiptLink)}" target="_blank" rel="noopener" style="display: inline-block; padding: 12px 24px; font-size: 14px; font-weight: 600; color: #ffffff; text-decoration: none;">View your receipt</a>
-                  </td>
-                </tr>
-              </table>
               ` : ""}
             </td>
           </tr>

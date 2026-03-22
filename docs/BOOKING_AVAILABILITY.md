@@ -135,20 +135,24 @@ This gives a single, consistent view of “what’s booked, when, what boat” a
 - The admin calendar (and site) call the slots API with the experience **Firestore document id**. Some data may be stored by **slug** (e.g. boats linked with `experienceIds: ["lake-austin-pontoon-charter"]`, or bookings with `experienceId: "lake-austin-pontoon-charter"`).
 - The slots API handles both: it looks up boats by `experienceIds array-contains experienceId` first; if **no boats** are found, it tries `experienceIds array-contains experienceSlug` (from the experience doc). For **bookings**, it queries by experience id and also by experience slug and merges results. So the admin calendar shows slots and booked times even when boats or bookings use the slug.
 
+## Admin manual booking (`POST /api/admin/bookings`)
+
+For experiences with **listing boats** (`boats` where `isListingBoat` is true and the boat lists this experience), a paid manual booking **must** resolve to a real `boatId` before it is saved. If exactly one active listing boat serves the experience, the API assigns it automatically. If there are multiple listing boats, the admin must choose a boat (the Add Booking modal requires selection; the API returns 400 without a valid `boatId`). This prevents new paid rows from entering the “missing boat” state that breaks per-boat occupancy. Legacy rows are still fixed with the backfill route below.
+
 ## Backfill: missing boatId on legacy bookings
 
 Bookings that have a slot-taken status but missing or empty `boatId` are no longer attributed to any boat by the slots API (they are skipped and counted as unresolved). To fix legacy data and drive unresolved count to zero:
 
 1. **List and backfill**  
    Call the admin backfill API (requires admin session):  
-   - `GET /api/admin/backfill-booking-boat-ids?dryRun=1` — list bookings with missing `boatId` and, where inferrable from the slot doc, the boat that would be set.  
-   - `POST /api/admin/backfill-booking-boat-ids` with `{ "dryRun": false }` — apply updates: set `boatId` on each booking when exactly one boat for that experience has a slot doc with the booking’s `slotId`.
+   - `GET /api/admin/backfill-booking-boat-ids` — read-only dry run: recent slot-taken bookings with missing `boatId` and, where inferrable from slot docs under listing boats, the boat that would be set (uses experience id/slug variants so boats match `experienceIds` correctly).  
+   - `POST /api/admin/backfill-booking-boat-ids` with `{ "applyUpdates": true }` or `{ "dryRun": false }` — apply updates: set `boatId` when exactly one listing boat for that experience has a slot doc with the booking’s `slotId`.
 
 2. **Monitor**  
    Use the slots API response header `X-Unresolved-Booking-Count` and server logs (`unresolved_booking_no_boat_id` telemetry) until the count is zero. Re-run the backfill after fixing any bookings that could not be inferred automatically (e.g. set `boatId` manually in Firestore or via admin).
 
 3. **Production deploy runbook**  
-   After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Do not use `ENABLE_BLOCK_CHECK_FAIL_OPEN` as a substitute for deploying Firestore indexes for **blocks** — that flag skips block checks and can allow holds during maintenance blocks.
+   After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "applyUpdates": true }` or `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Do not use `ENABLE_BLOCK_CHECK_FAIL_OPEN` as a substitute for deploying Firestore indexes for **blocks** — that flag skips block checks and can allow holds during maintenance blocks.
 
 ## Checkout consistency (site + mobile)
 

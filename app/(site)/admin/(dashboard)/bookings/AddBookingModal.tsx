@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -91,13 +91,18 @@ export function AddBookingModal({
       .finally(() => setLoadingExperiences(false));
   }, [open]);
 
-  const boatsForExperience = experienceId
-    ? boats.filter((b) => b.experienceIds?.includes(experienceId))
-    : [];
+  const boatsForExperience = useMemo(
+    () => (experienceId ? boats.filter((b) => b.experienceIds?.includes(experienceId)) : []),
+    [experienceId, boats]
+  );
   const showBoatSelect = boatsForExperience.length > 1;
   useEffect(() => {
-    setBoatId("");
-  }, [experienceId]);
+    if (boatsForExperience.length === 1) {
+      setBoatId(boatsForExperience[0].id);
+    } else {
+      setBoatId("");
+    }
+  }, [experienceId, boatsForExperience]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,6 +120,10 @@ export function AddBookingModal({
       setError("Experience and trip date are required.");
       return;
     }
+    if (showBoatSelect && !boatId) {
+      setError("Select which boat this booking is for.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -127,7 +136,12 @@ export function AddBookingModal({
           tripDate,
           startHour,
           durationHours,
-          boatId: boatId && boatsForExperience.some((b) => b.id === boatId) ? boatId : undefined,
+          boatId:
+            boatId && boatsForExperience.some((b) => b.id === boatId)
+              ? boatId
+              : boatsForExperience.length === 1
+                ? boatsForExperience[0].id
+                : undefined,
           customer: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           partySize: partySize > 0 ? partySize : 1,
           totalCents,
@@ -226,14 +240,15 @@ export function AddBookingModal({
 
         {showBoatSelect && (
           <div>
-            <label htmlFor="add-booking-boat" className="block text-sm font-medium text-brand-dark mb-1">Boat</label>
+            <label htmlFor="add-booking-boat" className="block text-sm font-medium text-brand-dark mb-1">Boat *</label>
             <select
               id="add-booking-boat"
               value={boatId}
               onChange={(e) => setBoatId(e.target.value)}
               className={inputClass}
+              required
             >
-              <option value="">Any / assign later</option>
+              <option value="">Select boat</option>
               {boatsForExperience.map((b) => (
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}

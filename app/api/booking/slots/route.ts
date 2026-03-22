@@ -766,7 +766,7 @@ export async function GET(request: NextRequest) {
           source: "app/api/booking/slots",
           experienceId,
           count: uniqueUnresolved.length,
-          hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids).",
+          hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids with { applyUpdates: true }).",
         }).catch(() => {});
       }
 

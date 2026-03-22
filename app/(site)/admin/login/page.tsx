@@ -24,14 +24,28 @@ export default function AdminLoginPage() {
     adminEmailSet: boolean;
     firebaseConfigured: boolean;
     projectIdsMatch: boolean;
+    adminEmailCount?: number;
+    adminPrimaryDomain?: string;
+    adminPrimaryLocalLength?: number;
   } | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/session?config=1", { credentials: "include" })
       .then((r) => r.json())
-      .then((data: { config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } }) => {
-        if (data.config) setConfigStatus(data.config);
-      })
+      .then(
+        (data: {
+          config?: {
+            adminEmailSet: boolean;
+            firebaseConfigured: boolean;
+            projectIdsMatch: boolean;
+            adminEmailCount?: number;
+            adminPrimaryDomain?: string;
+            adminPrimaryLocalLength?: number;
+          };
+        }) => {
+          if (data.config) setConfigStatus(data.config);
+        }
+      )
       .catch(() => {});
   }, []);
 
@@ -61,8 +75,16 @@ export default function AdminLoginPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const hint = (data as { hint?: string }).hint;
+        const signedInEmail = (data as { signedInEmail?: string }).signedInEmail;
         if (res.status === 403) {
-          setError("This email is not the admin account. Sign in with the exact email set as ADMIN_EMAIL for this site.");
+          const parts = [
+            hint ??
+              "You signed in to Firebase successfully, but this app only allows the exact email address(es) in the server ADMIN_EMAIL variable.",
+          ];
+          if (signedInEmail) {
+            parts.push(`You signed in as: ${signedInEmail}. It must match ADMIN_EMAIL exactly (including typos and dots).`);
+          }
+          setError(parts.join(" "));
         } else if ((data as { code?: string }).code === "FIREBASE_PROJECT_MISMATCH") {
           setError(hint ?? "In Netlify, set FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID to the same Firebase project ID.");
         } else if (res.status === 401) {
@@ -89,7 +111,7 @@ export default function AdminLoginPage() {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("auth/invalid-credential") || msg.includes("auth/wrong-password") || msg.includes("auth/user-not-found")) {
         setError(
-          "Invalid email or password. Use the same email as ADMIN_EMAIL. Forgot password? Use the link below to reset it."
+          "Invalid email or password. Admin sign-in only works for the Firebase user whose email matches ADMIN_EMAIL exactly (server env). Reset password only for that address. Forgot password? Use the link below."
         );
       } else if (msg.includes("auth/") || msg.includes("identitytoolkit")) {
         setError(
@@ -133,7 +155,11 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-brand-bg/50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-6 sm:p-8">
         <h1 className="text-xl font-bold text-brand-dark">Admin sign-in</h1>
-        <p className="mt-1 text-sm text-brand-muted">Sign in with your admin email and password.</p>
+        <p className="mt-1 text-sm text-brand-muted">
+          Use the <strong className="font-semibold text-brand-dark">Admin</strong> account only: the email address must match{" "}
+          <code className="text-xs bg-black/5 px-1 rounded">ADMIN_EMAIL</code> in your server or deployment environment
+          (comma-separated if multiple). Other Firebase users cannot access admin, even with a valid password.
+        </p>
 
         {configStatus && (
           <div className="mt-4 rounded-lg border border-brand-dark/15 bg-brand-bg/50 p-3 text-xs">
@@ -149,6 +175,31 @@ export default function AdminLoginPage() {
                 {configStatus.projectIdsMatch ? "✓" : "✗"} FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match
               </li>
             </ul>
+            {configStatus.adminEmailSet &&
+              typeof configStatus.adminEmailCount === "number" &&
+              configStatus.adminEmailCount > 0 &&
+              (configStatus.adminPrimaryDomain || typeof configStatus.adminPrimaryLocalLength === "number") && (
+                <p className="mt-2 text-brand-dark font-medium border-t border-brand-dark/10 pt-2">
+                  Admin email hint (from first ADMIN_EMAIL entry):{" "}
+                  {typeof configStatus.adminPrimaryLocalLength === "number" ? (
+                    <>
+                      <span className="font-mono">{configStatus.adminPrimaryLocalLength}</span> characters before{" "}
+                      <span className="font-mono">@</span>
+                    </>
+                  ) : null}
+                  {typeof configStatus.adminPrimaryLocalLength === "number" && configStatus.adminPrimaryDomain ? " · " : null}
+                  {configStatus.adminPrimaryDomain ? (
+                    <>
+                      domain <span className="font-mono">@{configStatus.adminPrimaryDomain}</span>
+                    </>
+                  ) : null}
+                  {configStatus.adminEmailCount > 1 ? (
+                    <span className="block mt-1 font-normal text-brand-muted">
+                      ({configStatus.adminEmailCount} admin addresses configured — use one of them exactly.)
+                    </span>
+                  ) : null}
+                </p>
+              )}
             {(!configStatus.adminEmailSet || !configStatus.firebaseConfigured || !configStatus.projectIdsMatch) && (
               <p className="mt-2 text-red-600 font-medium">Fix the items above in .env.local or your deployment env, then restart the dev server or redeploy.</p>
             )}
@@ -167,7 +218,7 @@ export default function AdminLoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="mt-1 block w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
-                placeholder="boatbrosll@gmail.com"
+                placeholder="Same email as ADMIN_EMAIL"
                 autoComplete="email"
                 required
               />
@@ -263,7 +314,14 @@ export default function AdminLoginPage() {
           </Link>
         </p>
         <p className="mt-2 text-xs text-brand-muted">
-          If you see 401 or a securetoken 400: check deployment logs for [admin/session]. Ensure FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match, FIREBASE_PRIVATE_KEY is full PEM with <code className="bg-black/5 px-1 rounded">\n</code> for newlines, ADMIN_EMAIL is set, and your site domain is in Firebase Console → Authentication → Settings → Authorized domains.
+          <strong className="text-brand-dark">Wrong account?</strong> If you see{" "}
+          <span className="font-mono">Not authorized</span> after Firebase accepts your password, the email you used is not the same as{" "}
+          <code className="bg-black/5 px-1 rounded">ADMIN_EMAIL</code> — fix the env or sign in with the admin address.
+        </p>
+        <p className="mt-2 text-xs text-brand-muted">
+          <strong className="text-brand-dark">401 / securetoken 400?</strong> That is usually server Firebase config, not your password. Check deployment logs for{" "}
+          <code className="bg-black/5 px-1 rounded">[admin/session]</code>. Ensure FIREBASE_PROJECT_ID and NEXT_PUBLIC_FIREBASE_PROJECT_ID match, FIREBASE_PRIVATE_KEY is full PEM with{" "}
+          <code className="bg-black/5 px-1 rounded">\n</code> for newlines, and your site domain is in Firebase Console → Authentication → Settings → Authorized domains.
         </p>
       </div>
     </div>

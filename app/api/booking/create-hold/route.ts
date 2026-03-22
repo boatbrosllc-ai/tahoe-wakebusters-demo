@@ -34,6 +34,7 @@ import {
   HOLD_REQUEST_CLAIMS_COLLECTION,
 } from "@/lib/booking/hold-request-idempotency";
 import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
+import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-boat-resolution";
 
 type ExperienceForTicketed = import("@/lib/booking/ticketed-slot-utils").ExperienceForTicketed;
 
@@ -162,25 +163,26 @@ export async function POST(request: NextRequest) {
     /** Reuse when boatId auto-resolution already read this doc (avoids duplicate experience fetch in listing-boat flow). */
     let cachedExperienceDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
     // When the experience has listing boats, slots live under boats/{boatId}/slots. We must have boatId.
-    // Exception: ticketed experiences don't require a boat — admin assigns boats later.
-    // When there is exactly one listing boat, use it so the client doesn't have to send boatId.
+    // Exception: shared ticketed — no boat on hold (inventory-only); charter ticketed and non-ticketed resolve
+    // listing boats via id/slug variants. When there is exactly one listing boat, use it if the client omitted boatId.
     if (hasExperience && !hasBoat) {
       const expCheckDoc = await db.collection("experiences").doc(input.experienceId!).get();
       cachedExperienceDoc = expCheckDoc;
       const expCheckData = expCheckDoc.exists ? (expCheckDoc.data() as Experience) : null;
       const isTicketedExperience = expCheckData?.pricingType === "ticketed";
-      if (!isTicketedExperience) {
-        const listingBoatsSnap = await db
-          .collection("boats")
-          .where("isListingBoat", "==", true)
-          .where("active", "==", true)
-          .where("experienceIds", "array-contains", input.experienceId)
-          .limit(2)
-          .get();
-        const count = listingBoatsSnap.size;
-        if (count === 1) {
-          input.boatId = listingBoatsSnap.docs[0].id;
-        } else if (count > 1) {
+      // Shared ticketed: no boat on hold (admin may assign later). Charter + non-ticketed: resolve listing boats
+      // using id/slug/alias variants so boats match experienceIds even when only the slug is stored.
+      const skipListingBoatResolution = isTicketedExperience === true && input.bookingMode === "shared";
+      if (!skipListingBoatResolution) {
+        const expSlug = typeof expCheckData?.slug === "string" ? expCheckData.slug.trim() : "";
+        const { boatId: resolvedBoatId, uniqueBoatCount } = await resolveSingleListingBoatIdForExperience(
+          db,
+          input.experienceId!,
+          expSlug
+        );
+        if (uniqueBoatCount === 1 && resolvedBoatId) {
+          input.boatId = resolvedBoatId;
+        } else if (uniqueBoatCount > 1) {
           return NextResponse.json(
             { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
             { status: 400 }

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
-import type { Booking } from "@/lib/booking/types";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import type { Booking, Experience } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN, bookingRequiresBoatIdForOccupancyAlert } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 
@@ -45,9 +45,15 @@ export async function GET(request: NextRequest) {
     ]);
 
     const experienceNames = new Map<string, string>();
+    /** Doc id and slug → pricingType so bookings stored with either key resolve correctly. */
+    const experiencePricingType = new Map<string, Experience["pricingType"]>();
     experiencesSnap.docs.forEach((doc) => {
-      const data = doc.data() as { title?: string };
+      const data = doc.data() as Experience;
       experienceNames.set(doc.id, data.title ?? doc.id);
+      experiencePricingType.set(doc.id, data.pricingType);
+      if (typeof data.slug === "string" && data.slug.trim()) {
+        experiencePricingType.set(data.slug.trim(), data.pricingType);
+      }
     });
 
     const thisMonthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -73,7 +79,16 @@ export async function GET(request: NextRequest) {
       if (email) uniqueCustomerEmails.add(email);
       const st = b.status as string | undefined;
       const bid = typeof b.boatId === "string" ? b.boatId.trim() : "";
-      if (st && BOOKING_STATUSES_SLOT_TAKEN.has(st as never) && !bid) recentBookingsMissingBoatId++;
+      const expKey = typeof b.experienceId === "string" ? b.experienceId.trim() : "";
+      const pricingType = expKey ? experiencePricingType.get(expKey) : undefined;
+      if (
+        st &&
+        BOOKING_STATUSES_SLOT_TAKEN.has(st as never) &&
+        !bid &&
+        bookingRequiresBoatIdForOccupancyAlert(b.bookingMode, pricingType)
+      ) {
+        recentBookingsMissingBoatId++;
+      }
     });
     const uniqueCustomerCount = uniqueCustomerEmails.size;
     const revenueThisMonthCents = thisMonthSnap.exists ? ((thisMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0) : 0;
@@ -141,7 +156,7 @@ export async function GET(request: NextRequest) {
       recentBookings,
       upcomingBookings: upcomingBookings.slice(0, 14),
       confirmationDeadLetterCount,
-      /** Among the last 500 bookings (by createdAt), paid/trip bookings with missing boatId — drive to zero via backfill. */
+      /** Among the last 500 bookings (by createdAt): slot-taken rows missing boatId where per-boat occupancy applies (excludes shared ticketed inventory). */
       recentBookingsMissingBoatId,
     });
   } catch (err) {

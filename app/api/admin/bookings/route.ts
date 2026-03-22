@@ -12,6 +12,7 @@ import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -307,7 +308,25 @@ export async function POST(request: NextRequest) {
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     const exp = expSnap.data() as Experience;
 
-    if (boatId) {
+    const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
+    const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, experienceId, expSlug);
+    const listingBoatIds = listingBoatDocs.map((d) => d.id);
+
+    if (listingBoatIds.length === 1) {
+      boatId = listingBoatIds[0];
+    } else if (listingBoatIds.length > 1) {
+      const chosen = typeof body.boatId === "string" ? body.boatId.trim() : "";
+      if (!chosen || !listingBoatIds.includes(chosen)) {
+        return NextResponse.json(
+          {
+            error:
+              "This experience has multiple listing boats. Choose which boat this booking is for and send a valid boatId (admin UI: required boat selection).",
+          },
+          { status: 400 }
+        );
+      }
+      boatId = chosen;
+    } else if (boatId) {
       const boatSnap = await db.collection("boats").doc(boatId).get();
       const boatData = boatSnap.data() as { experienceIds?: string[] } | undefined;
       const assigned = boatData?.experienceIds?.includes(experienceId);

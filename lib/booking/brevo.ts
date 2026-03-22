@@ -86,7 +86,7 @@ export interface BookingEmailContext {
   finalChargeAt?: string;
   /** Signed manage-booking URL (deposit flow) or receipt URL. */
   manageLink?: string;
-  /** Deep link to view receipt (e.g. /booking/success?receipt_token=...). Include in confirmation email so customer has a working receipt link. */
+  /** @deprecated Not shown in confirmation HTML (this email is the receipt). Kept for Brevo template param compatibility — always empty. */
   receiptLink?: string;
   /** Waiver signing URL to include in confirmation (when template has includeInConfirmationEmail). */
   waiverSigningUrl?: string;
@@ -175,7 +175,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           isDeposit: isDepositForTemplate,
           waiverSigningUrl: waiverSigningUrl ?? "",
           manageLink: "", // Intentionally empty so Brevo template does not show "Manage booking"
-          receiptLink: context.receiptLink ?? "",
+          receiptLink: "", // Confirmation email is the receipt; no separate receipt CTA
         },
       }
     : {

@@ -10,13 +10,28 @@ import { createEdgeSessionCookie } from "@/lib/admin-edge-session-create";
 import { ADMIN_EDGE_COOKIE_NAME } from "@/lib/admin-edge-session-verify";
 import { ADMIN_EDGE_SECRET_CONFIG_CODE, isAdminEdgeSecretValid } from "@/lib/admin-edge-secret";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin";
+import { getResolvedFirebaseProjectId } from "@/lib/booking/env";
 
 const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
 
+export type AdminSessionConfigPayload = {
+  adminEmailSet: boolean;
+  firebaseConfigured: boolean;
+  projectIdsMatch: boolean;
+  /** Number of addresses in ADMIN_EMAIL (comma-separated). */
+  adminEmailCount: number;
+  /**
+   * Safe hints so operators can spot typos (e.g. wrong Gmail address) without publishing full ADMIN_EMAIL.
+   * Derived from the first entry only.
+   */
+  adminPrimaryDomain?: string;
+  adminPrimaryLocalLength?: number;
+};
+
 /** GET: Check if admin is signed in (for navbar). Returns { signedIn: boolean }. Optional ?config=1 returns safe config status for login page. */
-function buildSessionConfigPayload(): { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } {
+function buildSessionConfigPayload(): AdminSessionConfigPayload {
   const allowed = getAllowedAdminEmails();
-  const serverProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const serverProjectId = getResolvedFirebaseProjectId();
   const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
   let firebaseConfigured = false;
   try {
@@ -25,10 +40,23 @@ function buildSessionConfigPayload(): { adminEmailSet: boolean; firebaseConfigur
   } catch {
     // not configured or invalid
   }
+  let adminPrimaryDomain: string | undefined;
+  let adminPrimaryLocalLength: number | undefined;
+  if (allowed.length > 0) {
+    const first = allowed[0];
+    const at = first.indexOf("@");
+    if (at > 0) {
+      adminPrimaryDomain = first.slice(at + 1);
+      adminPrimaryLocalLength = at;
+    }
+  }
   return {
     adminEmailSet: allowed.length > 0,
     firebaseConfigured,
     projectIdsMatch: !serverProjectId || !clientProjectId || serverProjectId === clientProjectId,
+    adminEmailCount: allowed.length,
+    ...(adminPrimaryDomain ? { adminPrimaryDomain } : {}),
+    ...(typeof adminPrimaryLocalLength === "number" ? { adminPrimaryLocalLength } : {}),
   };
 }
 
@@ -43,7 +71,7 @@ export async function GET(request: NextRequest) {
         verificationUnavailable: true;
         code: string;
         hint: string;
-        config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean };
+        config?: AdminSessionConfigPayload;
       } = {
         signedIn: false,
         verificationUnavailable: true,
@@ -61,7 +89,7 @@ export async function GET(request: NextRequest) {
     }
     const payload: {
       signedIn: boolean;
-      config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean };
+      config?: AdminSessionConfigPayload;
     } = {
       signedIn: outcome === "valid",
     };
@@ -70,7 +98,7 @@ export async function GET(request: NextRequest) {
     }
     return NextResponse.json(payload);
   } catch {
-    const payload: { signedIn: boolean; config?: { adminEmailSet: boolean; firebaseConfigured: boolean; projectIdsMatch: boolean } } = {
+    const payload: { signedIn: boolean; config?: AdminSessionConfigPayload } = {
       signedIn: false,
     };
     if (wantConfig) {
@@ -104,7 +132,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const app = getFirebaseApp();
-    const serverProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
+    const serverProjectId = getResolvedFirebaseProjectId();
     const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
     if (serverProjectId && clientProjectId && serverProjectId !== clientProjectId) {
       console.log("[admin/session] project mismatch:", { serverProjectId, clientProjectId });
@@ -120,7 +148,16 @@ export async function POST(request: NextRequest) {
     const decoded = await app.auth().verifyIdToken(idToken);
     const email = decoded.email?.trim().toLowerCase();
     if (!email || !allowed.includes(email)) {
-      return NextResponse.json({ error: "Not authorized for admin" }, { status: 403 });
+      return NextResponse.json(
+        {
+          error: "Not authorized for admin",
+          code: "ADMIN_EMAIL_NOT_ALLOWED",
+          hint:
+            "Your password was accepted by Firebase, but this app only allows the exact email address(es) listed in the server ADMIN_EMAIL variable. Sign in with that address (check for typos and extra characters).",
+          ...(email ? { signedInEmail: email } : {}),
+        },
+        { status: 403 }
+      );
     }
 
     const isProduction = process.env.NODE_ENV === "production";
