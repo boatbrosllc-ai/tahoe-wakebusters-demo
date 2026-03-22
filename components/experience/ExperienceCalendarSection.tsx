@@ -10,6 +10,7 @@ import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import type { SeasonalConfig } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
 import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib, getChicagoToday } from "@/lib/booking/booking-date-range";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
@@ -22,6 +23,7 @@ export interface SlotDto {
   endAt: string;
   status: SlotStatus;
   boatId?: string;
+  bookingId?: string | null;
   spotsRemaining?: number;
   spotsBooked?: number;
   isCharterLocked?: boolean;
@@ -559,22 +561,15 @@ export function ExperienceCalendarSection({
 
   /** Single-pass derivation of slotsByDate (counts) and openSlotsByDate (open slot arrays). Ticketed: only count/list slots with spotsRemaining > 0 so sold-out times (7am, 1pm) don't appear as available. */
   const { slotsByDate, openSlotsByDate } = useMemo(() => {
-    const counts = new Map<string, { open: number; held: number; booked: number; blocked: number }>();
+    const counts = aggregateSlotsByDate(slots, isTicketed);
     const openMap = new Map<string, SlotDto[]>();
     for (const s of slots) {
+      if (s.status !== "open") continue;
+      const soldOut = isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0;
+      if (soldOut) continue;
       const day = isoToChicagoDateStr(s.startAt);
-      if (!counts.has(day)) counts.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
-      const entry = counts.get(day)!;
-      if (s.status === "open") {
-        const soldOut = isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0;
-        if (!soldOut) {
-          entry.open++;
-          if (!openMap.has(day)) openMap.set(day, []);
-          openMap.get(day)!.push(s);
-        }
-      } else if (s.status === "held") entry.held++;
-      else if (s.status === "booked") entry.booked++;
-      else entry.blocked++;
+      if (!openMap.has(day)) openMap.set(day, []);
+      openMap.get(day)!.push(s);
     }
     openMap.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return { slotsByDate: counts, openSlotsByDate: openMap };

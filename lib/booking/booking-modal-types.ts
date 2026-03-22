@@ -44,6 +44,8 @@ export interface SlotDto {
   endAt: string;
   status: string;
   boatId?: string;
+  /** When present, used to dedupe calendar “booked” tallies when one booking fans out per boat. */
+  bookingId?: string | null;
   spotsBooked?: number;
   spotsRemaining?: number;
 }

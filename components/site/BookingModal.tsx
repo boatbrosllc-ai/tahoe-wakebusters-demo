@@ -26,6 +26,7 @@ import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth, getMsUntilN
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
+import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import type { CompleteAfterPaymentClientOutcome } from "@/lib/booking/complete-after-payment-client";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
@@ -578,25 +579,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (available.size === 0 && selectedSlot.boatId) available.add(selectedSlot.boatId);
     return { availableBoatIdsForSelectedSlot: available, unavailableBoatIdsForSelectedSlot: unavailable, bookedBoatIdsForSelectedSlot: booked };
   }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots, ticketedForSlot]);
-  const slotsByDate = useMemo(() => {
-    const map = new Map<
-      string,
-      { open: number; held: number; booked: number; blocked: number }
-    >();
-    const ticketed = selectedExperience?.pricingType === "ticketed";
-    for (const s of monthSlots) {
-      const day = isoToChicagoDateStr(s.startAt);
-      if (!map.has(day)) map.set(day, { open: 0, held: 0, booked: 0, blocked: 0 });
-      const e = map.get(day)!;
-      if (s.status === "open") {
-        const soldOut = ticketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0;
-        if (!soldOut) e.open++;
-      } else if (s.status === "held") e.held++;
-      else if (s.status === "booked") e.booked++;
-      else e.blocked++;
-    }
-    return map;
-  }, [monthSlots, selectedExperience?.pricingType]);
+  const slotsByDate = useMemo(
+    () => aggregateSlotsByDate(monthSlots, selectedExperience?.pricingType === "ticketed"),
+    [monthSlots, selectedExperience?.pricingType]
+  );
 
   /** Ticketed: booked count per date from slot.spotsBooked (API). Used so calendar shows yellow when there are bookings. */
   const ticketsBookedByDate = useMemo(() => {
@@ -1471,7 +1457,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           }
         } else {
           lastHoldRef.current = null;
-          setStep(boats.length === 1 ? 2 : 3);
+          // Calendar-first flow only uses steps 3–4; never send users to step 2 (date) — that breaks the stepper and layout.
+          setStep(isCalendarFirstFlow ? 3 : boats.length === 1 ? 2 : 3);
           setPaymentPhase("form");
           setClientSecret(null);
           setReceiptClaimToken(null);
@@ -1620,7 +1607,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       <div
         className={cn(
           // h-full: fill Dialog body flex area so inner slides / scroll regions get a real height on mobile.
-          "flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden overflow-x-hidden",
+          "flex h-full min-h-0 max-h-full w-full min-w-0 flex-col overflow-hidden overflow-x-hidden",
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
@@ -1634,16 +1621,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           </p>
         ) : null}
         {/* Step indicator + back */}
-        <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-1 sm:mb-2" : "mb-4")}>
+        <div className={cn("flex items-center justify-between gap-1.5 sm:gap-3 shrink-0 pr-9 sm:pr-0", step === 4 ? "mb-0.5 sm:mb-2" : "mb-2 sm:mb-4")}>
           <button
             type="button"
             disabled={proceedToPaymentInFlight && paymentPhase === "loading"}
             onClick={step > 1 ? handleBack : () => handleModalOpenChange(false)}
-            className="flex items-center gap-1 rounded-lg p-2 min-h-[44px] min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            className="flex items-center gap-0.5 rounded-lg py-1.5 pl-1 pr-2 sm:p-2 min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors disabled:opacity-40 disabled:pointer-events-none"
             aria-label={step > 1 ? "Back" : "Close"}
           >
-            <ChevronLeft className="h-5 w-5" aria-hidden />
-            {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
+            <ChevronLeft className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" aria-hidden />
+            {step > 1 ? <span className="text-xs sm:text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
             {(isCalendarFirstFlow ? [3, 4] : showTicketedFlow ? [1, 2, 4] : boats.length === 1 ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
@@ -1660,10 +1647,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           <div className="w-14" aria-hidden />
         </div>
         <div aria-live="polite" aria-atomic="true">
-          <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-0.5 sm:mb-1.5" : "mb-3")}>
+          <p className={cn("text-[10px] sm:text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-0.5 sm:mb-1.5" : "mb-1 sm:mb-3")}>
             Step {stepIndex} of {stepCount}
           </p>
-          <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-1.5 sm:mb-2" : "mb-4")}>{stepTitle}</h2>
+          <h2 className={cn("text-sm sm:text-lg font-semibold text-brand-dark shrink-0 leading-snug", step === 4 ? "mb-1 sm:mb-2" : "mb-2 sm:mb-4")}>{stepTitle}</h2>
         </div>
 
         {paymentError && (
@@ -1724,7 +1711,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         <div
           className={cn(
             // Remaining height below step chrome — do not use 90dvh−11rem (fights padded Dialog + bottom sheet).
-            "flex flex-col overflow-hidden min-h-0 flex-1",
+            "flex flex-col overflow-hidden min-h-0 min-w-0 flex-1",
             step === 4 && "min-h-0",
             // Step 1 loading: give the slide row a real height so the spinner can center in the panel (not hug the title)
             step === 1 && loading && "min-h-[min(52dvh,420px)]"
@@ -1732,31 +1719,41 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         >
           <div
             className={cn(
-              "flex w-[400%] transition-transform duration-300 ease-out items-stretch h-full min-h-0",
-              step === 1 && "translate-x-0",
-              step === 2 && "-translate-x-[25%]",
-              step === 3 && "-translate-x-[50%]",
-              step === 4 && "-translate-x-[75%]"
+              // Mobile: stack only the active step (no 400% width strip — avoids horizontal overflow, broken scroll, and subpixel bugs).
+              "flex h-full min-h-0 min-w-0 flex-col items-stretch sm:flex-row sm:w-[400%] sm:transition-transform sm:duration-300 sm:ease-out",
+              "max-sm:translate-x-0",
+              step === 1 && "sm:translate-x-0",
+              step === 2 && "sm:-translate-x-[25%]",
+              step === 3 && "sm:-translate-x-[50%]",
+              step === 4 && "sm:-translate-x-[75%]"
             )}
           >
             {/* Step 1: Category */}
-            <BookingStep1Category
-              loading={loading}
-              experiences={experiences}
-              experiencesLoadError={experiencesLoadError}
-              selectedExperience={selectedExperience}
-              onSelectCategory={handleSelectCategory}
-              panel1Collapsed={panel1Collapsed}
-            />
+            <div
+              className={cn(
+                "flex min-h-0 min-w-0 flex-col overflow-hidden w-full sm:w-1/4 shrink-0",
+                step === 1 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex"
+              )}
+            >
+              <BookingStep1Category
+                loading={loading}
+                experiences={experiences}
+                experiencesLoadError={experiencesLoadError}
+                selectedExperience={selectedExperience}
+                onSelectCategory={handleSelectCategory}
+                panel1Collapsed={panel1Collapsed}
+              />
+            </div>
 
             {/* Step 2: Date & time — duration, calendar, time; then continue to boat */}
             <div
               className={cn(
-                "w-1/4 shrink-0 px-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 transition-[min-height] duration-300 pb-2",
+                "w-full sm:w-1/4 shrink-0 px-0 sm:px-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 min-w-0 transition-[min-height] duration-300 pb-2",
+                step === 2 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex",
                 panel2Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
-              <div className="space-y-3 md:space-y-4">
+              <div className="space-y-2 sm:space-y-3 md:space-y-4 min-w-0">
                 {/* When opened with a pre-selected experience but list failed or didn't match, show why the calendar never loads */}
                 {step === 2 && initialSelection && !selectedExperience && !loading && (
                   <p className="text-sm text-amber-700 py-3 px-2">
@@ -1784,9 +1781,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <p className="text-sm text-amber-700 py-2">{experienceDetailLoadError} Check /api/health for details.</p>
                 )}
                 {ratesForSelection.length > 0 && !isTicketed && (
-                  <div>
-                    <p className="text-sm font-semibold text-brand-dark mb-2 md:mb-3">Duration</p>
-                    <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:gap-2 md:gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-semibold text-brand-dark mb-1.5 sm:mb-2 md:mb-3">Duration</p>
+                    <div className="grid grid-cols-3 gap-1.5 sm:gap-2 sm:flex sm:flex-wrap md:gap-3">
                       {[...ratesForSelection]
                         .sort((a, b) => a.durationHours - b.durationHours)
                         .map((r) => {
@@ -1797,7 +1794,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             type="button"
                             onClick={() => setSelectedRateIdForCalendar(r.id)}
                             className={cn(
-                              "rounded-xl border-2 px-2 py-2.5 sm:px-4 sm:py-3 text-[11px] sm:text-sm font-semibold min-h-[44px] sm:min-h-[48px] transition-all text-center",
+                              "rounded-lg sm:rounded-xl border sm:border-2 px-1.5 py-1.5 sm:px-4 sm:py-3 text-[10px] leading-tight sm:text-sm font-semibold min-h-[36px] sm:min-h-[44px] md:min-h-[48px] transition-all text-center",
                               isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
                             )}
                           >
@@ -1813,10 +1810,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 )}
                 {selectedRateIdForCalendar && (
                   <>
-                  <div className="relative">
-                  <div className="flex flex-col items-center gap-2 mb-3 md:mb-3">
-                    <p className="text-xs font-semibold text-brand-dark w-full">Date</p>
-                    <div className="flex items-center justify-center gap-2 w-full">
+                  <div className="relative w-full min-w-0 max-w-full overflow-x-clip">
+                  <div className="flex flex-col items-center gap-1.5 sm:gap-2 mb-2 sm:mb-3 md:mb-3">
+                    <p className="text-[11px] sm:text-xs font-semibold text-brand-dark w-full">Date</p>
+                    <div className="flex items-center justify-center gap-1 sm:gap-2 w-full min-w-0">
                       <button
                         type="button"
                         disabled={isViewMonthCurrent || !canGoPrevMonth}
@@ -1829,14 +1826,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           }
                         }}
                         className={cn(
-                          "rounded-xl p-2.5 text-brand-dark transition-colors touch-manipulation",
+                          "rounded-lg sm:rounded-xl p-1.5 sm:p-2.5 text-brand-dark transition-colors touch-manipulation shrink-0",
                           (isViewMonthCurrent || !canGoPrevMonth) ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
                         )}
                         aria-label="Previous month"
                       >
-                        <ChevronLeft className="h-6 w-6 md:h-6 md:w-6" />
+                        <ChevronLeft className="h-5 w-5 sm:h-6 sm:w-6" />
                       </button>
-                      <span className="text-sm sm:text-base md:text-lg font-semibold text-brand-dark min-w-[9rem] sm:min-w-[10rem] text-center">
+                      <span className="text-xs sm:text-base md:text-lg font-semibold text-brand-dark min-w-0 flex-1 text-center truncate px-0.5">
                         {viewMonthLabel}
                       </span>
                       <button
@@ -1851,12 +1848,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           }
                         }}
                         className={cn(
-                          "rounded-xl p-2.5 text-brand-dark transition-colors touch-manipulation",
+                          "rounded-lg sm:rounded-xl p-1.5 sm:p-2.5 text-brand-dark transition-colors touch-manipulation shrink-0",
                           !canGoNextMonth ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
                         )}
                         aria-label="Next month"
                       >
-                        <ChevronRight className="h-6 w-6 md:h-6 md:w-6" />
+                        <ChevronRight className="h-5 w-5 sm:h-6 sm:w-6" />
                       </button>
                     </div>
                   </div>
@@ -1874,18 +1871,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       Availability may be incomplete — refresh or contact us to confirm.
                     </p>
                   )}
-                  <div key={calendarRenderKey}>
-                    <div className="grid grid-cols-7 gap-0.5 sm:gap-1.5 md:gap-2">
+                  <div key={calendarRenderKey} className="w-full min-w-0 max-w-full">
+                    <div className="grid grid-cols-7 gap-px sm:gap-0.5 md:gap-2 min-w-0">
                       {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
-                        <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-1 sm:py-0.5 shrink-0 min-w-0 aspect-square sm:aspect-auto flex items-center justify-center">
+                        <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-0.5 sm:py-1 shrink-0 min-w-0 flex items-center justify-center leading-none">
                           {dayLabel}
                         </div>
                       ))}
                     </div>
-                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 mt-0.5 sm:mt-1">
+                    <div className="grid grid-cols-7 gap-px sm:gap-1 md:gap-2 mt-0.5 sm:mt-1 min-w-0">
                       {step3CalendarGrid.map((cell, idx) => {
                       if (cell == null) {
-                        return <div key={`empty-${idx}`} className="aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px]" />;
+                        return <div key={`empty-${idx}`} className="aspect-square min-w-0 sm:aspect-auto sm:min-h-[58px] md:min-h-[64px]" />;
                       }
                       const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
@@ -1947,42 +1944,42 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           aria-label={dateAriaLabel}
                           title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedCount} already booked this day` : undefined}
                           className={cn(
-                            "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
+                            "rounded-md sm:rounded-xl border max-sm:border sm:border-2 max-sm:p-0.5 sm:p-1 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 max-sm:gap-0 sm:gap-0.5 touch-manipulation min-w-0 max-w-full overflow-hidden",
                             isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
                             isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
                             isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
                             hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
                             hasBookingsUrgency && !isFullyBooked && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
-                            isHoliday && !isPast && !hasBookingsUrgency && "ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
+                            isHoliday && !isPast && !hasBookingsUrgency && "ring-1 sm:ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
                             isAvailable && !slotsPartialData && !isHoliday && !hasBookingsUrgency &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
                             isAvailable && slotsPartialData && !isHoliday && !hasBookingsUrgency &&
                               "bg-amber-50/90 text-amber-950 border-amber-400/50 border-dashed hover:bg-amber-100/90 active:scale-[0.98]",
                             isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
-                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-2 ring-brand-primary/40",
+                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-1 sm:ring-2 ring-brand-primary/40",
                             isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5"
                           )}
                         >
-                          <span className="block text-[8px] sm:text-[10px] md:text-xs text-brand-muted uppercase leading-none">{weekday}</span>
-                          <span className="block font-semibold text-[10px] sm:text-sm md:text-base leading-none mt-0.5">{label}</span>
+                          <span className="hidden sm:block text-[10px] md:text-xs text-brand-muted uppercase leading-tight">{weekday}</span>
+                          <span className="block font-semibold text-[11px] sm:text-sm md:text-base leading-none max-sm:mt-0 sm:mt-0.5">{label}</span>
                           {typeof priceCents === "number" && isAvailable && (
                             <span className={cn(
-                              "block text-[11px] sm:text-sm font-bold leading-none mt-0.5",
+                              "block text-[9px] sm:text-sm font-bold leading-none max-sm:truncate mt-0.5 sm:mt-0.5",
                               isSelected ? "text-brand-primary" : hasBookingsUrgency ? "text-amber-800" : "text-emerald-800"
                             )}>
                               ${(priceCents / 100).toFixed(0)}{isTicketed && <span className="text-[8px] sm:text-[10px] font-normal">/ea</span>}
                             </span>
                           )}
                           {hasBookingsUrgency && (
-                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">
+                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5 max-sm:truncate">
                               {displayBookedCount} booked
                             </span>
                           )}
                           {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && !hasBookingsUrgency && (
-                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5">{ticketsLeft} left</span>
+                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5 max-sm:truncate">{ticketsLeft} left</span>
                           )}
                           {isFullyBooked && (
-                            <span className="block text-[8px] sm:text-xs font-semibold text-red-700 leading-none mt-0.5">Full</span>
+                            <span className="block text-[9px] sm:text-xs font-semibold text-red-700 leading-tight mt-0.5">Full</span>
                           )}
                         </button>
                       );
@@ -2060,7 +2057,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       )
                     ) : (
                       <>
-                      <p className="text-xs font-semibold text-brand-dark mb-1.5 md:mb-2">Time</p>
+                      <p className="text-[11px] sm:text-xs font-semibold text-brand-dark mb-1 sm:mb-1.5 md:mb-2">Time</p>
                       {slotsLoading ? (
                         <p className="text-xs text-brand-muted">Loading times…</p>
                       ) : (() => {
@@ -2070,7 +2067,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         return slotsForDay.length === 0 ? (
                           <p className="text-xs text-brand-muted">No open slots this day.</p>
                         ) : (
-                        <div className="flex flex-wrap gap-1.5 md:gap-2">
+                        <div className="flex flex-wrap gap-1.5 sm:gap-2">
                           {slotsForDay.map((slot) => {
                             const isSelected = selectedSlot?.id === slot.id;
                             return (
@@ -2079,7 +2076,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 type="button"
                                 onClick={() => setSelectedSlot(slot)}
                                 className={cn(
-                                  "rounded-lg border-2 px-3 py-2 md:px-4 md:py-2.5 text-xs md:text-sm font-medium transition-all",
+                                  "rounded-lg border sm:border-2 px-2.5 py-2 text-xs sm:text-sm font-medium transition-all min-h-[40px] sm:min-h-[44px] touch-manipulation sm:px-3 sm:py-2.5 md:px-4 md:py-2.5",
                                   isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
                                 )}
                               >
@@ -2101,7 +2098,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 type="button"
                 onClick={handleStep2Next}
                 disabled={!canGoFromStep2}
-                className="mt-4 mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                className="mt-3 sm:mt-4 mb-[max(1rem,env(safe-area-inset-bottom))] sm:mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 sm:py-3.5 px-4 min-h-[44px] sm:min-h-[48px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
               >
                 Continue
               </button>
@@ -2111,7 +2108,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             {/* Step 3: Boat — only boats available for the selected date/time */}
             <div
               className={cn(
-                "w-1/4 shrink-0 pl-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 transition-[min-height] duration-300 pb-2",
+                "w-full sm:w-1/4 shrink-0 pl-0 sm:pl-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 min-w-0 transition-[min-height] duration-300 pb-2",
+                step === 3 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex",
                 panel3Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
@@ -2176,7 +2174,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 type="button"
                 onClick={handleStep3Next}
                 disabled={!canGoFromStep3}
-                className="mt-auto mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                className="mt-auto mb-[max(1rem,env(safe-area-inset-bottom))] sm:mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[48px] touch-manipulation md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 text-base"
               >
                 Continue to checkout
               </button>
@@ -2185,7 +2183,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             {/* Step 4: Details & payment — scrollable form area + sticky pay block */}
             <div
               className={cn(
-                "w-1/4 shrink-0 pl-1 min-h-0 flex flex-col transition-[min-height] duration-300",
+                "w-full sm:w-1/4 shrink-0 pl-0 sm:pl-1 min-h-0 min-w-0 flex flex-col transition-[min-height] duration-300",
+                step === 4 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex",
                 step === 4 && !panel4Collapsed && "h-full min-h-0 max-h-full",
                 panel4Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
@@ -2200,7 +2199,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 )}
                 <div className="flex flex-col flex-1 min-h-0">
                   <div
-                    className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-6 scroll-smooth overscroll-y-contain touch-pan-y"
+                    className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain touch-pan-y"
                     role="region"
                     aria-label="Booking details form"
                   >
@@ -2777,7 +2776,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 </div>
 
                   {/* Pay block — fixed at bottom, always visible */}
-                  <div className="shrink-0 pt-1 pb-1 mt-0.5 sm:pt-1.5 sm:pb-1 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+                  <div className="shrink-0 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] mt-0.5 sm:pt-1.5 sm:pb-1 border-t-2 border-brand-dark/10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
                     <div className="rounded-xl border-2 border-brand-primary/20 bg-brand-primary/5 p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
                       <div className="min-w-0">
                         <p className="text-xs sm:text-sm font-semibold text-brand-dark">
@@ -2819,7 +2818,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           handleProceedToPayment();
                         }}
                         disabled={!isStripeCheckoutReady || !priceReady || paymentPhase !== "form"}
-                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3 px-5 sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-sm sm:text-base disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-5 min-h-[48px] touch-manipulation sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-base disabled:opacity-60 disabled:cursor-not-allowed w-full sm:w-auto"
                       >
                         {paymentPriceBlocked ? "Loading price…" : "Proceed to payment"}
                       </button>
@@ -2927,7 +2926,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               />
               {paymentPhase === "stripe" && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-24 sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
+                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-[max(6rem,calc(env(safe-area-inset-bottom)+5rem))] sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
                   {userChoseDepositRef.current && payFullAmount && !isTicketed && (
                     <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                       This experience requires full payment at checkout. You&apos;re being charged the full amount now.

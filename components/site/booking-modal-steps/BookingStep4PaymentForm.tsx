@@ -56,8 +56,10 @@ export function BookingStep4PaymentForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <PaymentElement />
+    <form onSubmit={handleSubmit} className="flex min-w-0 w-full flex-col gap-4">
+      <div className="min-w-0 w-full overflow-x-hidden">
+        <PaymentElement />
+      </div>
       <button
         type="submit"
         disabled={!stripe || processing}

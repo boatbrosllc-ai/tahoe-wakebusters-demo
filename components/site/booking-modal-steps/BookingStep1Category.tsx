@@ -25,7 +25,7 @@ export function BookingStep1Category({
   return (
     <div
       className={cn(
-        "relative w-1/4 shrink-0 pr-1 flex flex-col min-h-0 h-full transition-[min-height] duration-300",
+        "relative w-full h-full min-w-0 shrink-0 pr-1 flex flex-col min-h-0 transition-[min-height] duration-300",
         loading ? "overflow-hidden" : "overflow-y-auto",
         panel1Collapsed && "!min-h-0 !h-0 overflow-hidden"
       )}
@@ -36,7 +36,7 @@ export function BookingStep1Category({
           <p className="text-sm text-brand-muted text-center">Loading experiences…</p>
         </div>
       ) : experiences && experiences.length > 0 ? (
-        <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-4 md:gap-5 flex-1 min-h-0">
+        <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-2.5 sm:gap-4 md:gap-5 flex-1 min-h-0 min-w-0">
           {experiences.map((exp) => {
             const isSelected = selectedExperience?.id === exp.id;
             const hasImage = exp.heroMedia?.url && exp.heroMedia.type === "image";
@@ -46,9 +46,9 @@ export function BookingStep1Category({
                 type="button"
                 onClick={() => onSelectCategory(exp)}
                 className={cn(
-                  "relative flex flex-col overflow-hidden rounded-2xl border-2 min-h-[165px] md:min-h-[200px] transition-all",
+                  "relative flex flex-col overflow-hidden rounded-xl sm:rounded-2xl border-2 min-h-[128px] sm:min-h-[165px] md:min-h-[200px] transition-all",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                  isSelected ? "border-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 hover:border-brand-dark/30 hover:scale-[1.02] active:scale-[0.99]"
+                  isSelected ? "border-brand-primary ring-1 sm:ring-2 ring-brand-primary/30" : "border-brand-dark/15 hover:border-brand-dark/30 sm:hover:scale-[1.02] active:scale-[0.99]"
                 )}
               >
                 <div className="absolute inset-0 bg-brand-dark/5">
@@ -58,13 +58,13 @@ export function BookingStep1Category({
                     <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                   )}
                 </div>
-                <div className="relative flex flex-1 flex-col justify-end p-4 md:p-5 bg-gradient-to-t from-black/80 via-black/30 to-transparent">
-                  <span className="text-base md:text-lg font-semibold text-white drop-shadow-md">{exp.title}</span>
+                <div className="relative flex flex-1 flex-col justify-end p-2.5 sm:p-4 md:p-5 bg-gradient-to-t from-black/80 via-black/30 to-transparent">
+                  <span className="text-sm sm:text-base md:text-lg font-semibold text-white drop-shadow-md leading-tight line-clamp-2">{exp.title}</span>
                   {exp.subtitle ? (
-                    <span className="text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">{exp.subtitle}</span>
+                    <span className="text-[11px] sm:text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">{exp.subtitle}</span>
                   ) : null}
                   {exp.fromPriceCents != null && (
-                    <span className="text-sm font-medium text-white/95 mt-1">
+                    <span className="text-xs sm:text-sm font-medium text-white/95 mt-0.5 sm:mt-1">
                       {formatExperiencePriceLabel(exp.slug, exp.fromPriceCents, exp.pricingType)}
                     </span>
                   )}
@@ -82,7 +82,7 @@ export function BookingStep1Category({
         <p className="text-sm text-brand-muted py-8">No experiences available.</p>
       )}
       {!loading && (
-        <p className="text-center text-xs text-brand-muted mt-4">Select a category to continue</p>
+        <p className="text-center text-[11px] sm:text-xs text-brand-muted mt-2 sm:mt-4">Select a category to continue</p>
       )}
     </div>
   );

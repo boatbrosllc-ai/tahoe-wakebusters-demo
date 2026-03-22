@@ -141,9 +141,10 @@ export function Dialog({
       {/* Panel — max height uses small viewport (stable on iOS); safe area padding is inside body, not double-counted on overlay */}
       <div
         className={cn(
-          "relative z-10 flex min-h-0 w-full flex-col overflow-hidden bg-white shadow-premium",
+          "relative z-10 flex min-h-0 min-w-0 w-full max-w-[100vw] flex-col overflow-hidden bg-white shadow-premium",
           fullScreenOnMobile
-            ? "max-h-[calc(100svh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
+            ? // dvh tracks visible viewport when mobile browser chrome shows/hides (better than svh for scroll regions).
+              "h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:h-auto sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
             : "max-h-[85dvh] w-full max-w-lg rounded-2xl sm:max-h-[85vh] my-auto",
           className
         )}
@@ -165,11 +166,13 @@ export function Dialog({
         )}
         <div
           className={cn(
-            "flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-hidden px-4 sm:px-6",
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-hidden",
+            // Tighter horizontal padding on phones so dense UIs (calendars) fit without horizontal bleed.
+            "pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-6 sm:pr-6",
             fullScreenOnMobile
               ? title || description
                 ? "pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 sm:py-5"
-                : "pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(3rem,env(safe-area-inset-top))] sm:py-5"
+                : "pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(2.75rem,env(safe-area-inset-top))] sm:py-5"
               : "py-4 sm:py-5"
           )}
         >
@@ -195,7 +198,7 @@ export function DialogCloseButton({ onClose, className }: DialogCloseButtonProps
       type="button"
       onClick={onClose}
       className={cn(
-        "absolute right-[max(1rem,env(safe-area-inset-right))] top-[max(1rem,env(safe-area-inset-top))] rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+        "absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl p-0 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 sm:h-10 sm:w-10",
         className
       )}
       aria-label="Close"
