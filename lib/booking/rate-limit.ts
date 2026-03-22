@@ -21,6 +21,8 @@ const MAX_REQUESTS = 30; // per window per key (Redis)
  */
 const MAX_REQUESTS_PUBLIC_READ = 120;
 const MAX_REQUESTS_PUBLIC_READ_UNKNOWN = 40;
+/** Local dev: every request looks like `*:unknown` (no x-real-ip). Calendar + date-prices + HMR/Strict Mode can exceed the unknown bucket; do not throttle dev like anonymous prod traffic. */
+const MAX_REQUESTS_PUBLIC_READ_DEV = 10_000;
 /** Stricter limit for the shared "unknown" IP bucket (Redis) to reduce blast radius when proxy does not set IP headers. */
 const MAX_REQUESTS_UNKNOWN_BUCKET = 10;
 /** Stricter limit for validate-discount to reduce discount code enumeration via IP rotation. */
@@ -290,6 +292,9 @@ type RateLimitKind = "default" | "publicRead";
 function limitForKey(kind: RateLimitKind, key: string): number {
   const unknown = key.endsWith(":unknown");
   if (kind === "publicRead") {
+    if (process.env.NODE_ENV !== "production") {
+      return MAX_REQUESTS_PUBLIC_READ_DEV;
+    }
     return unknown ? MAX_REQUESTS_PUBLIC_READ_UNKNOWN : MAX_REQUESTS_PUBLIC_READ;
   }
   return unknown ? MAX_REQUESTS_UNKNOWN_BUCKET : MAX_REQUESTS;

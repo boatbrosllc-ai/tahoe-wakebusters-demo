@@ -618,6 +618,8 @@ export interface NotificationOutboxEntry {
   lastError?: string;
   lastAttemptAt?: FirestoreTimestamp;
   claimedAt?: FirestoreTimestamp;
+  /** When status is `claimed`, worker must finish or refresh before this time or the row is reset to `pending`. */
+  claimExpiresAt?: FirestoreTimestamp;
   claimedBy?: string;
   sentAt?: FirestoreTimestamp;
   createdAt: FirestoreTimestamp;

@@ -93,16 +93,21 @@ describe("checkRateLimitPublicRead", () => {
     Reflect.set(process.env, "NODE_ENV", origEnv);
   });
 
-  it("allows a higher budget than default (in-memory dev)", async () => {
+  it("allows a much higher public-read budget than mutations in dev (in-memory)", async () => {
     Reflect.set(process.env, "NODE_ENV", "development");
-    const key = `test:pread:${Date.now()}`;
-    const limit = 120;
-    let result: RateLimitResult = { allowed: true };
-    for (let i = 0; i < limit; i++) {
-      result = await checkRateLimitPublicRead(key);
-      assert.strictEqual(result.allowed, true, `request ${i + 1} should be allowed`);
+    const mutationKey = `test:mut:${Date.now()}`;
+    for (let i = 0; i < 30; i++) {
+      const r = await checkRateLimit(mutationKey);
+      assert.strictEqual(r.allowed, true, `mutation ${i + 1}`);
     }
-    result = await checkRateLimitPublicRead(key);
-    assert.strictEqual(result.allowed, false);
+    assert.strictEqual((await checkRateLimit(mutationKey)).allowed, false);
+
+    const pubKey = `test:pread:${Date.now()}`;
+    for (let i = 0; i < 120; i++) {
+      const r = await checkRateLimitPublicRead(pubKey);
+      assert.strictEqual(r.allowed, true, `public read ${i + 1}`);
+    }
+    // Dev uses MAX_REQUESTS_PUBLIC_READ_DEV (10k) so calendar/HMR is not throttled like prod.
+    assert.strictEqual((await checkRateLimitPublicRead(pubKey)).allowed, true);
   });
 });

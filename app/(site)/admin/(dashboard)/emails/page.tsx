@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Mail, FileText, Send } from "lucide-react";
+import { Mail, FileText, Send, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type EmailTemplateMeta = {
@@ -31,6 +31,12 @@ export default function AdminEmailsPage() {
   const [logLoading, setLogLoading] = useState(true);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [outboxStats, setOutboxStats] = useState<{
+    pending: number;
+    deadLetter: number;
+    stuckClaims: number;
+  } | null>(null);
+  const [outboxStatsLoading, setOutboxStatsLoading] = useState(true);
 
   const fetchTemplates = useCallback(async () => {
     setTemplatesLoading(true);
@@ -64,6 +70,24 @@ export default function AdminEmailsPage() {
     }
   }, []);
 
+  const fetchOutboxStats = useCallback(async () => {
+    setOutboxStatsLoading(true);
+    try {
+      const res = await fetch("/api/admin/notification-outbox-stats", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load outbox stats");
+      const data = await res.json();
+      setOutboxStats({
+        pending: typeof data.pending === "number" ? data.pending : 0,
+        deadLetter: typeof data.deadLetter === "number" ? data.deadLetter : 0,
+        stuckClaims: typeof data.stuckClaims === "number" ? data.stuckClaims : 0,
+      });
+    } catch {
+      setOutboxStats(null);
+    } finally {
+      setOutboxStatsLoading(false);
+    }
+  }, []);
+
   const fetchLog = useCallback(async () => {
     setLogLoading(true);
     try {
@@ -81,7 +105,8 @@ export default function AdminEmailsPage() {
   useEffect(() => {
     fetchTemplates();
     fetchLog();
-  }, [fetchTemplates, fetchLog]);
+    fetchOutboxStats();
+  }, [fetchTemplates, fetchLog, fetchOutboxStats]);
 
   useEffect(() => {
     if (selectedId) fetchPreview(selectedId);
@@ -112,6 +137,36 @@ export default function AdminEmailsPage() {
           {error}
         </div>
       )}
+
+      <div className="rounded-2xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-brand-muted mb-3">
+          <Inbox className="h-4 w-4" />
+          Confirmation outbox (Firestore)
+        </h2>
+        {outboxStatsLoading ? (
+          <p className="text-sm text-brand-muted">Loading…</p>
+        ) : outboxStats ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-6 text-sm">
+            <div>
+              <p className="text-brand-muted">Pending</p>
+              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.pending}</p>
+              <p className="text-xs text-brand-muted mt-0.5">Awaiting send or retry</p>
+            </div>
+            <div>
+              <p className="text-brand-muted">Dead letter</p>
+              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.deadLetter}</p>
+              <p className="text-xs text-brand-muted mt-0.5">Max retries exceeded</p>
+            </div>
+            <div>
+              <p className="text-brand-muted">Stuck claims</p>
+              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.stuckClaims}</p>
+              <p className="text-xs text-brand-muted mt-0.5">Lease expired; reset on next cron</p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-brand-muted">Could not load outbox stats.</p>
+        )}
+      </div>
 
       {/* Two columns: template list | HTML preview */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:gap-8">

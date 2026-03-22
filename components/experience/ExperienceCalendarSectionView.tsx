@@ -796,7 +796,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                     </div>
                     {/* Step 4: Details & payment (only when hasInlineDetails) */}
                     {slidingPanelCount === 5 && hasInlineDetails && panel5Ref && (
-                      <div ref={panel5Ref as React.RefObject<HTMLDivElement>} className="w-1/5 flex-shrink-0 pl-2 min-w-0 overflow-hidden flex flex-col h-full">
+                      <div ref={panel5Ref as React.RefObject<HTMLDivElement>} className="w-1/5 flex-shrink-0 pl-2 min-w-0 min-h-0 overflow-hidden flex flex-col h-full">
                         {selectedDate && selectedSlotInline && experienceForDetails && (!inlineDetailsStepReady ? <p className={cn("text-sm py-4", darkCard ? "text-white/80" : "text-brand-muted")}>Loading…</p> : (
                           <>
                             {goToInlineStep && <button type="button" onClick={() => goToInlineStep(3)} className={cn("mb-2 text-xs font-medium shrink-0", darkCard ? "text-white/80 hover:text-white" : "text-brand-muted hover:text-brand-primary")}>← Back to boat</button>}

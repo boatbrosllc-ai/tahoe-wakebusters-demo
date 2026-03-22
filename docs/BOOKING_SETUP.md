@@ -4,7 +4,7 @@ This document covers local development and deployment for the custom booking flo
 
 ## Cold start (full process)
 
-1. **Environment** — Copy `.env.example` to `.env.local` and fill in the variables below (Firebase, Stripe, Brevo, `APP_BASE_URL`).
+1. **Environment** — Copy `.env.example` to `.env.local` and fill in the variables below (Firebase, Stripe, Brevo, `APP_BASE_URL`). For **local development**, set **`RELEASE_TOKEN_SECRET`** (any random string; e.g. `openssl rand -hex 32`) so the booking modal can release holds when the customer uses **Back** or **Cancel**. Without it, `create-hold` does not return a usable `release_token`, and slots stay locked until the hold expires (~10 minutes).
 2. **Firebase** — Create a Firebase project, enable Firestore (Blaze plan enables it; you still need a **service account** for the server). Create a service account and set `FIREBASE_SERVICE_ACCOUNT_JSON_PATH` (or the individual Firebase env vars). Admin and booking APIs use the server-side Firebase Admin SDK; without this, admin pages and booking will return 503 with a setup hint. For **boat photo uploads** in admin, enable **Firebase Storage** in the Console (Build → Storage → Get started); uploads go to the default bucket and are stored under `boats/`.
 3. **Stripe** — Create a Stripe account and add `STRIPE_SECRET_KEY`. **You must also create a Stripe webhook** (see [Stripe webhook](#stripe-webhook-required-for-bookings-and-confirmation-email) below); without it, payments succeed in Stripe but **no booking is created** and **no confirmation email is sent**.
 4. **Brevo** — Create a Brevo account and set `BREVO_API_KEY` (for booking confirmation emails).
@@ -33,6 +33,7 @@ Create a `.env.local` (or set in your host) with:
 | `BREVO_SENDER_EMAIL` | No | Sender email for transactional emails (default: `noreply@boatbrosatx.com`). **Must be verified in Brevo** (Senders & IP → Senders). |
 | `BREVO_SENDER_NAME` | No | Sender display name (default: `Boat Bros ATX`) |
 | `APP_BASE_URL` | Yes | Base URL of the app (e.g. `http://localhost:3000` or `https://boatbrosatx.com`) |
+| `RELEASE_TOKEN_SECRET` | **Yes (local + production)** | Random secret (e.g. `openssl rand -hex 32`) so `create-hold` can sign `release_token` for `/api/booking/release-hold`. Without it, **Back** and **Cancel** cannot release holds in dev/staging/prod; slots stay locked until hold expiry (~10 minutes). |
 | `CRON_SECRET` | **Yes (production)** | Secret for admin cron endpoints (cleanup-holds, run-final-charges, reminder crons). Use 32+ random bytes (e.g. `openssl rand -base64 32`). Set in Netlify; scheduled functions call `/api/admin/cron/*` with `Authorization: Bearer <CRON_SECRET>`. |
 | `SEED_SECRET` | No | Same as CRON_SECRET for seeding |
 | `RATE_LIMIT_REDIS_REST_URL` | **Yes (production)** | Redis REST URL for rate limiting (e.g. Upstash). **Required for production**; without it rate limiting is disabled (fail-open). Or use `UPSTASH_REDIS_REST_URL`. See [Rate limiting](#rate-limiting). |

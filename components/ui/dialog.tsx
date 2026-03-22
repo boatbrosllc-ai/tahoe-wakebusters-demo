@@ -144,7 +144,7 @@ export function Dialog({
           "relative z-10 flex min-h-0 min-w-0 w-full max-w-[100vw] flex-col overflow-hidden bg-white shadow-premium",
           fullScreenOnMobile
             ? // dvh tracks visible viewport when mobile browser chrome shows/hides (better than svh for scroll regions).
-              "h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:h-auto sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
+              "h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:min-h-0 sm:rounded-2xl sm:max-w-lg"
             : "max-h-[85dvh] w-full max-w-lg rounded-2xl sm:max-h-[85vh] my-auto",
           className
         )}
@@ -166,7 +166,8 @@ export function Dialog({
         )}
         <div
           className={cn(
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-hidden",
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden",
+            fullScreenOnMobile ? "overflow-y-auto" : "overflow-y-hidden",
             // Tighter horizontal padding on phones so dense UIs (calendars) fit without horizontal bleed.
             "pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-6 sm:pr-6",
             fullScreenOnMobile

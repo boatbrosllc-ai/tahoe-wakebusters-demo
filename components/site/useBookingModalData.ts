@@ -78,6 +78,8 @@ export function useBookingModalData(
   const inFlightKeyRef = useRef<string | null>(null);
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   const lastSlotsRetryForRef = useRef<string | null>(null);
+  /** Latest experience id for in-flight slots requests — discard responses after switching listings. */
+  const slotsExperienceIdRef = useRef<string | null>(null);
   const ticketsAvailableByDateRef = useRef<Record<string, number>>({});
   ticketsAvailableByDateRef.current = ticketsAvailableByDate;
 
@@ -166,6 +168,10 @@ export function useBookingModalData(
     setExperienceDetailLoadError(null);
     setMonthSlots([]);
     setMonthDataRangeStart(null);
+    // Drop previous experience's boats/rates/addons immediately so calendar/rates don't show the wrong listing while the new fetch runs.
+    setBoats([]);
+    setExperienceRates([]);
+    setAddons([]);
     setBoatsLoading(true);
     setAddonsLoading(true);
     const controller = new AbortController();
@@ -220,6 +226,7 @@ export function useBookingModalData(
       setRatesLoadError(null);
       return;
     }
+    setRatesSummary(null);
     setRatesLoadError(null);
     const controller = new AbortController();
     bookingCache
@@ -330,6 +337,7 @@ export function useBookingModalData(
   useEffect(() => {
     const exp = selection?.selectedExperience;
     if (!exp?.id) {
+      slotsExperienceIdRef.current = null;
       setMonthSlots([]);
       setSlotsLoadError(null);
       setMonthDataRangeStart(null);
@@ -344,9 +352,11 @@ export function useBookingModalData(
       lastSlotsRetryForRef.current = null;
     }
     slotsRequestRangeRef.current = { start: viewMonthStartStr, end: viewMonthEndStr };
+    slotsExperienceIdRef.current = exp.id;
     setSlotsLoading(true);
     setSlotsLoadError(null);
     const controller = new AbortController();
+    const requestedExpId = exp.id;
     bookingCache.fetchSlots(
       exp.id,
       viewMonthStartStr,
@@ -355,6 +365,7 @@ export function useBookingModalData(
       { ticketed: exp.pricingType === "ticketed" }
     )
       .then((data) => {
+        if (slotsExperienceIdRef.current !== requestedExpId) return;
         const slots = (data?.slots ?? []) as SlotDto[];
         const refMatch = slotsRequestRangeRef.current?.start === viewMonthStartStr && slotsRequestRangeRef.current?.end === viewMonthEndStr;
         if (!refMatch) return;
@@ -370,6 +381,7 @@ export function useBookingModalData(
         const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {
+            if (slotsExperienceIdRef.current !== requestedExpId) return;
             setMonthDataRangeStart(viewMonthStartStr);
             setMonthSlots(nextSlots);
             setSlotsLoading(false);
@@ -382,7 +394,9 @@ export function useBookingModalData(
         const nextYear = viewMonth === 12 ? viewYear + 1 : viewYear;
         const nextMonth0 = viewMonth === 12 ? 0 : viewMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
-        bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: exp.pricingType === "ticketed" }).catch(() => {});
+        if (slotsExperienceIdRef.current === requestedExpId) {
+          bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: exp.pricingType === "ticketed" }).catch(() => {});
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;

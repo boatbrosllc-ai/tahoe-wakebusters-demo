@@ -16,7 +16,7 @@ import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
-import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import { addConfirmationOutboxInTransaction, tryImmediateConfirmationSendForBooking } from "@/lib/booking/notification-outbox";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
@@ -617,6 +617,8 @@ export async function convertHoldToBooking(
   }
 
   bookingLog("convert-hold", "transaction completed, waiver and side effects", { holdId, bookingId });
+
+  void tryImmediateConfirmationSendForBooking(db, bookingId);
 
   const bookingSnapAfterTx = await db.collection("bookings").doc(bookingId).get();
   const bookingAfterTx = bookingSnapAfterTx.exists ? (bookingSnapAfterTx.data() as Booking) : null;

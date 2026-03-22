@@ -80,3 +80,12 @@ export function verifyReleaseToken(token: string): ReleaseTokenPayload | null {
     return null;
   }
 }
+
+if (process.env.NODE_ENV !== "production") {
+  const v = process.env.RELEASE_TOKEN_SECRET;
+  if (v == null || String(v).trim() === "") {
+    console.warn(
+      "[booking] RELEASE_TOKEN_SECRET is not set. Holds will not release on Back or cancel; slots stay locked for up to the hold TTL (~10 minutes). Set it in .env.local for local development."
+    );
+  }
+}

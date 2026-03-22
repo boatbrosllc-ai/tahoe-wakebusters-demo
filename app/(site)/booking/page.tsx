@@ -26,7 +26,7 @@ export default async function BookingPage({
 
   const piId = params.payment_intent ?? (params as { payment_intent_id?: string }).payment_intent_id;
   const rs = params.redirect_status;
-  if (piId && rs && (rs === "succeeded" || rs === "failed")) {
+  if (piId && rs && (rs === "succeeded" || rs === "failed" || rs === "processing")) {
     return <BookingStripeReturnHandler paymentIntentId={piId} redirectStatus={rs} />;
   }
 

@@ -1,6 +1,8 @@
 /**
  * Hold creation + Stripe PaymentIntent prep for BookingModal (`useHoldCreation`).
  * Completion after payment lives in `usePaymentCompletion`.
+ *
+ * Dev/staging: if `RELEASE_TOKEN_SECRET` is unset server-side, holds will not release on Back/cancel (see `lib/booking/releaseToken.ts` startup warning). The client also warns once after a successful create-hold when no `release_token` is returned.
  */
 import { useCallback, useRef, useEffect, useState } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
@@ -13,6 +15,18 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
+
+if (typeof window === "undefined" && process.env.NODE_ENV !== "production") {
+  const v = process.env.RELEASE_TOKEN_SECRET;
+  if (v == null || String(v).trim() === "") {
+    console.warn(
+      "[booking] RELEASE_TOKEN_SECRET is not set — holds will not release on Back/cancel; slots stay locked for up to 10 minutes. Set it in .env.local."
+    );
+  }
+}
+
+/** One-time dev warning when create-hold succeeds without a release token (client bundle). */
+let didWarnReleaseTokenMissingInDev = false;
 
 export type HoldCreationBookingContext = {
   selectedExperience: ExperienceItem | null;
@@ -486,6 +500,18 @@ export function useHoldCreation(
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: holdResult.holdId };
       opts.setHoldId(holdResult.holdId);
       opts.setReleaseToken(holdResult.releaseToken);
+      if (
+        process.env.NODE_ENV !== "production" &&
+        holdResult.holdId &&
+        holdResult.releaseToken == null
+      ) {
+        if (!didWarnReleaseTokenMissingInDev) {
+          didWarnReleaseTokenMissingInDev = true;
+          console.warn(
+            "[booking] RELEASE_TOKEN_SECRET is not set — holds will not release on Back/cancel; slots stay locked for up to 10 minutes. Set it in .env.local."
+          );
+        }
+      }
       if (typeof holdResult.holdDiscountCents === "number") {
         const code =
           holdResult.holdDiscountCode ?? opts.appliedDiscount?.code ?? opts.discountCode.trim();

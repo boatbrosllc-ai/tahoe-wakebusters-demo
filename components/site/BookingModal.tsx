@@ -1425,8 +1425,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     )
       return;
     if (step === 4) setIsHoldExpired(false);
-    if (step === 2) setStep(1);
-    else if (step === 3) {
+    if (step === 2) {
+      setSelectedDate(null);
+      setSelectedSlot(null);
+      setSelectedRateIdForCalendar(null);
+      setSelectedBoat(null);
+      const now = new Date();
+      setViewMonthYear(now.getFullYear());
+      setViewMonthMonth(now.getMonth() + 1);
+      setStep(1);
+      return;
+    }
+    if (step === 3) {
       if (isCalendarFirstFlow) onOpenChange(false);
       else {
         setSelectedBoat(null);
@@ -1434,6 +1444,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     } else if (step === 4) {
       const navigateFromStep4 = () => {
+        setSelectedSlot(null);
+        setSelectedRateIdForCalendar(null);
         if (isTicketed) {
           if (isCalendarFirstFlow) {
             onOpenChange(false);
@@ -1489,6 +1501,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   };
 
   const handleSelectCategory = (exp: ExperienceItem) => {
+    setSelectedDate(null);
+    setSelectedSlot(null);
+    setSelectedRateIdForCalendar(null);
+    setSelectedBoat(null);
+    const now = new Date();
+    setViewMonthYear(now.getFullYear());
+    setViewMonthMonth(now.getMonth() + 1);
     setSelectedExperience(exp);
     setStep(2);
   };
@@ -1606,13 +1625,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     >
       <div
         className={cn(
-          // h-full: fill Dialog body flex area so inner slides / scroll regions get a real height on mobile.
-          "flex h-full min-h-0 max-h-full w-full min-w-0 flex-col overflow-hidden overflow-x-hidden",
+          "flex w-full min-w-0 flex-col overflow-hidden overflow-x-hidden",
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
-              ? "flex-1 min-h-[320px] sm:min-h-[400px] md:min-h-[420px] max-h-full"
-              : "flex-1 min-h-[260px]"
+              ? "flex-1 min-h-0 max-h-full"
+              : "flex-1 max-h-full min-h-[260px]"
         )}
       >
         {pendingCloseWhileProceedMessage ? (
@@ -1622,16 +1640,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         ) : null}
         {/* Step indicator + back */}
         <div className={cn("flex items-center justify-between gap-1.5 sm:gap-3 shrink-0 pr-9 sm:pr-0", step === 4 ? "mb-0.5 sm:mb-2" : "mb-2 sm:mb-4")}>
-          <button
-            type="button"
-            disabled={proceedToPaymentInFlight && paymentPhase === "loading"}
-            onClick={step > 1 ? handleBack : () => handleModalOpenChange(false)}
-            className="flex items-center gap-0.5 rounded-lg py-1.5 pl-1 pr-2 sm:p-2 min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors disabled:opacity-40 disabled:pointer-events-none"
-            aria-label={step > 1 ? "Back" : "Close"}
-          >
-            <ChevronLeft className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" aria-hidden />
-            {step > 1 ? <span className="text-xs sm:text-sm font-medium">Back</span> : null}
-          </button>
+          <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+            <button
+              type="button"
+              disabled={proceedToPaymentInFlight}
+              onClick={step > 1 ? handleBack : () => handleModalOpenChange(false)}
+              className="flex items-center gap-0.5 rounded-lg py-1.5 pl-1 pr-2 sm:p-2 min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] touch-manipulation text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors disabled:opacity-40 disabled:pointer-events-none"
+              aria-label={step > 1 ? "Back" : "Close"}
+            >
+              <ChevronLeft className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" aria-hidden />
+              {step > 1 ? <span className="text-xs sm:text-sm font-medium">Back</span> : null}
+            </button>
+            {proceedToPaymentInFlight ? (
+              <span className="max-w-[min(100%,220px)] text-[11px] sm:text-xs text-brand-muted" role="status">
+                Creating your hold…
+              </span>
+            ) : null}
+          </div>
           <div className="flex items-center gap-1.5">
             {(isCalendarFirstFlow ? [3, 4] : showTicketedFlow ? [1, 2, 4] : boats.length === 1 ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
@@ -2183,9 +2208,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             {/* Step 4: Details & payment — scrollable form area + sticky pay block */}
             <div
               className={cn(
-                "w-full sm:w-1/4 shrink-0 pl-0 sm:pl-1 min-h-0 min-w-0 flex flex-col transition-[min-height] duration-300",
+                "w-full sm:w-1/4 shrink-0 pl-0 sm:pl-1 min-h-0 min-w-0 flex flex-col overflow-hidden transition-[min-height] duration-300",
                 step === 4 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex",
-                step === 4 && !panel4Collapsed && "h-full min-h-0 max-h-full",
+                step === 4 && !panel4Collapsed && "min-h-0 max-h-full flex-1 self-stretch",
                 panel4Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
@@ -2197,9 +2222,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <p className="mt-1 text-amber-800">{STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE}</p>
                   </div>
                 )}
-                <div className="flex flex-col flex-1 min-h-0">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   <div
-                    className="booking-step4-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain touch-pan-y"
+                    className="booking-step4-scroll min-h-0 flex-1 basis-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain max-sm:touch-pan-y"
                     role="region"
                     aria-label="Booking details form"
                   >

@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { processNextPendingConfirmation } from "@/lib/booking/notification-outbox";
+import { processNextPendingConfirmation, processStaleClaims } from "@/lib/booking/notification-outbox";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
@@ -21,6 +21,8 @@ export async function POST(request: NextRequest) {
   }
 
   const db = getDb();
+  const staleClaimsReset = await processStaleClaims(db);
+
   let sentCount = 0;
   let failedCount = 0;
   let noneCount = 0;
@@ -45,6 +47,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    staleClaimsReset,
     sentCount,
     failedCount,
     noneCount,

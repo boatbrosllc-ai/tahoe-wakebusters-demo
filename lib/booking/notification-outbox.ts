@@ -15,9 +15,17 @@ const MAX_ATTEMPTS = 5;
 const INITIAL_BACKOFF_MS = 60 * 1000; // 1 min
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000; // 24 h
 
+/** Lease on a claimed outbox row; if the worker dies, stale claims reset to pending after this window. */
+const CLAIM_LEASE_MS = 2 * 60 * 1000;
+
 function nextAttemptAt(attemptCount: number): Date {
   const delay = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attemptCount), MAX_BACKOFF_MS);
   return new Date(Date.now() + delay);
+}
+
+function claimExpiresAtTimestamp() {
+  const { Timestamp } = getFirestoreExports();
+  return Timestamp.fromMillis(Date.now() + CLAIM_LEASE_MS);
 }
 
 export function createPendingConfirmationPayload(bookingId: string): Omit<NotificationOutboxEntry, "sentAt" | "lastAttemptAt" | "lastError" | "claimedAt" | "claimedBy"> {
@@ -42,41 +50,75 @@ export function addConfirmationOutboxInTransaction(tx: FirebaseFirestore.Transac
   tx.set(ref, entry);
 }
 
-export async function processNextPendingConfirmation(db: Firestore): Promise<"processed" | "sent" | "failed" | "dead_letter" | "none"> {
+/**
+ * Resets claimed rows whose lease expired (e.g. Netlify function killed mid-send) back to pending.
+ */
+export async function processStaleClaims(db: Firestore): Promise<number> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
   const snap = await db
     .collection(COLLECTION)
     .where("type", "==", "booking_confirmation")
-    .where("status", "==", "pending")
-    .where("nextAttemptAt", "<=", now)
-    .limit(1)
+    .where("status", "==", "claimed")
+    .where("claimExpiresAt", "<", now)
     .get();
 
-  if (snap.empty) return "none";
+  if (snap.empty) return 0;
 
-  const doc = snap.docs[0];
-  const data = doc.data() as NotificationOutboxEntry;
-  const bookingId = data.bookingId as string;
-
-  // Claim transactionally
-  const ref = doc.ref;
-  const claimed = await db.runTransaction(async (tx) => {
-    const fresh = await tx.get(ref);
-    if (!fresh.exists) return false;
-    const d = fresh.data() as NotificationOutboxEntry;
-    if (d.status !== "pending") return false;
-    tx.update(ref, {
-      status: "claimed",
-      claimedAt: now,
-      lastAttemptAt: now,
+  let batch = db.batch();
+  let ops = 0;
+  let total = 0;
+  for (const doc of snap.docs) {
+    batch.update(doc.ref, {
+      status: "pending",
+      claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      nextAttemptAt: now,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return true;
-  });
+    ops++;
+    total++;
+    if (ops >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+  return total;
+}
 
-  if (!claimed) return "none";
+export type NotificationOutboxStats = {
+  pending: number;
+  deadLetter: number;
+  stuckClaims: number;
+};
 
+/** Aggregate counts for admin visibility (confirmation pipeline health). */
+export async function getNotificationOutboxStats(db: Firestore): Promise<NotificationOutboxStats> {
+  const { Timestamp } = getFirestoreExports();
+  const now = Timestamp.now();
+  const base = () => db.collection(COLLECTION).where("type", "==", "booking_confirmation");
+  const [pendingSnap, deadSnap, stuckSnap] = await Promise.all([
+    base().where("status", "==", "pending").count().get(),
+    base().where("status", "==", "dead_letter").count().get(),
+    base().where("status", "==", "claimed").where("claimExpiresAt", "<", now).count().get(),
+  ]);
+  return {
+    pending: pendingSnap.data().count,
+    deadLetter: deadSnap.data().count,
+    stuckClaims: stuckSnap.data().count,
+  };
+}
+
+async function deliverClaimedConfirmationEntry(
+  db: Firestore,
+  ref: DocumentReference,
+  bookingId: string,
+  data: NotificationOutboxEntry
+): Promise<"sent" | "failed" | "dead_letter"> {
+  const { Timestamp, FieldValue } = getFirestoreExports();
+  const now = Timestamp.now();
   try {
     const { sendBookingConfirmationEmail, sendBookingConfirmationCopyToBusiness } = await import("./brevo");
     const { sendBookingConfirmationSms } = await import("./sms");
@@ -232,6 +274,7 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"pr
     await ref.update({
       status: "sent",
       sentAt: now,
+      claimExpiresAt: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     return "sent";
@@ -246,6 +289,7 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"pr
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
+      claimExpiresAt: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
@@ -257,5 +301,89 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"pr
       });
     }
     return isDeadLetter ? "dead_letter" : "failed";
+  }
+}
+
+export async function processNextPendingConfirmation(db: Firestore): Promise<"sent" | "failed" | "dead_letter" | "none"> {
+  const { Timestamp, FieldValue } = getFirestoreExports();
+  const now = Timestamp.now();
+  const snap = await db
+    .collection(COLLECTION)
+    .where("type", "==", "booking_confirmation")
+    .where("status", "==", "pending")
+    .where("nextAttemptAt", "<=", now)
+    .limit(1)
+    .get();
+
+  if (snap.empty) return "none";
+
+  const doc = snap.docs[0];
+  const data = doc.data() as NotificationOutboxEntry;
+  const bookingId = data.bookingId as string;
+
+  const ref = doc.ref;
+  const claimed = await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(ref);
+    if (!fresh.exists) return false;
+    const d = fresh.data() as NotificationOutboxEntry;
+    if (d.status !== "pending") return false;
+    tx.update(ref, {
+      status: "claimed",
+      claimedAt: now,
+      claimExpiresAt: claimExpiresAtTimestamp(),
+      lastAttemptAt: now,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+
+  if (!claimed) return "none";
+
+  return deliverClaimedConfirmationEntry(db, ref, bookingId, data);
+}
+
+/**
+ * Best-effort immediate send for a single booking after conversion (fire-and-forget from convert-hold-to-booking).
+ * Claims the pending outbox row for this bookingId, sends, and marks sent on success; on failure leaves pending for cron.
+ * Never throws.
+ */
+export async function tryImmediateConfirmationSendForBooking(db: Firestore, bookingId: string): Promise<void> {
+  try {
+    const { Timestamp, FieldValue } = getFirestoreExports();
+    const now = Timestamp.now();
+    const snap = await db
+      .collection(COLLECTION)
+      .where("type", "==", "booking_confirmation")
+      .where("bookingId", "==", bookingId)
+      .where("status", "==", "pending")
+      .limit(1)
+      .get();
+
+    if (snap.empty) return;
+
+    const doc = snap.docs[0];
+    const data = doc.data() as NotificationOutboxEntry;
+    const ref = doc.ref;
+
+    const claimed = await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(ref);
+      if (!fresh.exists) return false;
+      const d = fresh.data() as NotificationOutboxEntry;
+      if (d.status !== "pending") return false;
+      tx.update(ref, {
+        status: "claimed",
+        claimedAt: now,
+        claimExpiresAt: claimExpiresAtTimestamp(),
+        lastAttemptAt: now,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+
+    if (!claimed) return;
+
+    await deliverClaimedConfirmationEntry(db, ref, bookingId, data);
+  } catch (err) {
+    console.warn("[notification-outbox] tryImmediateConfirmationSendForBooking failed", err);
   }
 }

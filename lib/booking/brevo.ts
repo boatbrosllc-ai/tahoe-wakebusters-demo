@@ -185,7 +185,7 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
         htmlContent: html,
       };
 
-  const url = templateId ? `${BREVO_API_BASE}/smtp/email` : `${BREVO_API_BASE}/smtp/email`;
+  const url = `${BREVO_API_BASE}/smtp/email`;
   const body = templateId
     ? { templateId, to: payload.to, params: payload.params }
     : { sender: payload.sender, to: payload.to, subject: payload.subject, htmlContent: payload.htmlContent };
