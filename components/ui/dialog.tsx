@@ -14,6 +14,11 @@ type DialogProps = {
   children: React.ReactNode;
   className?: string;
   fullScreenOnMobile?: boolean;
+  /**
+   * When false, the dialog body does not scroll (overflow hidden). Use when children manage their own
+   * scroll regions (e.g. nested flex + overflow-y-auto). Default true when fullScreenOnMobile.
+   */
+  bodyScroll?: boolean;
 };
 
 export function Dialog({
@@ -24,7 +29,9 @@ export function Dialog({
   children,
   className,
   fullScreenOnMobile,
+  bodyScroll,
 }: DialogProps) {
+  const allowBodyScroll = bodyScroll ?? true;
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   const baseId = useId();
   const titleId = title ? `${baseId}-title` : undefined;
@@ -164,7 +171,11 @@ export function Dialog({
         <div
           className={cn(
             "flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden",
-            fullScreenOnMobile ? "overflow-y-auto" : "overflow-y-hidden",
+            fullScreenOnMobile
+              ? allowBodyScroll
+                ? "overflow-y-auto"
+                : "overflow-y-hidden min-h-0"
+              : "overflow-y-hidden",
             // Tighter horizontal padding on phones so dense UIs (calendars) fit without horizontal bleed.
             "pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-6 sm:pr-6",
             fullScreenOnMobile

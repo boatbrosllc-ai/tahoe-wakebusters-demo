@@ -237,7 +237,6 @@ export async function POST(request: NextRequest) {
       sessionParams.cancel_url = releaseToken
         ? baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId) + "&release_token=" + encodeURIComponent(releaseToken)
         : baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId);
-      sessionParams.phone_number_collection = { enabled: true };
       sessionParams.custom_fields = [
         { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
       ];

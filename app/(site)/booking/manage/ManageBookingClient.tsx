@@ -6,6 +6,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -563,7 +564,7 @@ export function ManageBookingClient() {
             {data.status === "paid"
               ? null
               : isDepositFlow && data.depositCents > 0
-                ? ` (deposit $${(data.depositCents / 100).toFixed(2)} paid)`
+                ? ` (deposit ${formatMoneyNonNegative(data.depositCents)} paid)`
                 : null}
           </p>
           <p><strong>Card on file</strong> {cardLabel}</p>

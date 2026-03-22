@@ -12,3 +12,11 @@ export function formatMoney(cents: number): string {
   const safe = Number.isFinite(cents) ? Math.round(cents) : 0;
   return `$${(safe / 100).toFixed(2)}`;
 }
+
+/**
+ * Deposit, balance due, and similar — never show a leading minus (avoids looking like a charge reversal).
+ */
+export function formatMoneyNonNegative(cents: number): string {
+  const safe = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+  return `$${(safe / 100).toFixed(2)}`;
+}

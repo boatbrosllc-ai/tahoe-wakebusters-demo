@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import { TAX_RATE } from "@/lib/booking/constants";
+import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
@@ -815,9 +816,11 @@ export function ExperienceBookingCard({
     const displayDepositCents = !payFullAmount && depositCentsFromServer != null
       ? depositCentsFromServer
       : (isTicketed || payFullAmount ? totalFromServer : null);
-    const remainingCents = !payFullAmount && depositCentsFromServer != null && pricing?.totalCents != null
-      ? pricing.totalCents - depositCentsFromServer
-      : null;
+    const remainingCentsRaw =
+      !payFullAmount && depositCentsFromServer != null && pricing?.totalCents != null
+        ? pricing.totalCents - depositCentsFromServer
+        : null;
+    const remainingCents = remainingCentsRaw != null ? Math.max(0, remainingCentsRaw) : null;
     return (
       <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6", className)}>
         <h3 className="text-lg font-semibold text-brand-dark mb-1">Secure payment</h3>
@@ -840,7 +843,7 @@ export function ExperienceBookingCard({
               {isTicketed || payFullAmount ? "Total due now" : "Deposit due now"}
             </span>
             {displayDepositCents != null ? (
-              <span className="text-xl font-bold text-brand-primary">${(displayDepositCents / 100).toFixed(2)}</span>
+              <span className="text-xl font-bold text-brand-primary">{formatMoneyNonNegative(displayDepositCents)}</span>
             ) : (
               <span className="inline-block h-7 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
             )}
@@ -848,7 +851,7 @@ export function ExperienceBookingCard({
           {!isTicketed && !payFullAmount && (
             <p className="text-xs text-brand-muted">
               {remainingCents != null
-                ? `Remaining 50% ($${(remainingCents / 100).toFixed(2)}) charged 48 hours before your trip`
+                ? `Remaining 50% (${formatMoneyNonNegative(remainingCents)}) charged 48 hours before your trip`
                 : "Remaining balance charged 48 hours before your trip"}
             </p>
           )}
@@ -1230,7 +1233,7 @@ export function ExperienceBookingCard({
         </div>
         {appliedDiscountCents > 0 && (
           <p className="text-xs text-brand-muted">
-            Discount applied: −${(appliedDiscountCents / 100).toFixed(2)} (estimate — final amount at checkout)
+            Discount applied: {formatMoneyNonNegative(appliedDiscountCents)} off (estimate — final amount at checkout)
           </p>
         )}
         <div className="grid grid-cols-2 gap-2">
@@ -1279,7 +1282,7 @@ export function ExperienceBookingCard({
               <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
               <span className="block mt-0.5 text-brand-muted font-normal text-xs">
                 {depositCentsFromServer != null
-                  ? `$${(depositCentsFromServer / 100).toFixed(2)} now — remaining balance charged 48 hours before your trip`
+                  ? `${formatMoneyNonNegative(depositCentsFromServer)} now — remaining balance charged 48 hours before your trip`
                   : "Loading… — remaining 50% charged 48 hours before your trip"}
               </span>
             </button>
@@ -1345,7 +1348,7 @@ export function ExperienceBookingCard({
               ) : payFullAmount ? (
                 <span className="text-brand-primary">${(displayTotalCents / 100).toFixed(2)}</span>
               ) : depositCentsFromServer != null ? (
-                <span className="text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
+                <span className="text-brand-primary">{formatMoneyNonNegative(depositCentsFromServer)}</span>
               ) : (
                 <span className="h-5 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
               )

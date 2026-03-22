@@ -2,6 +2,7 @@
 
 import { siteConfig } from "@/config/site";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
+import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import type { ExperienceItem } from "@/lib/booking/booking-modal-types";
 
 type BookingSuccessPanelProps = {
@@ -161,7 +162,10 @@ export function BookingSuccessPanel({
                 serverSaysDeposit || amountsShowDeposit || (isDepositFromServer === null && !isTicketed && !payFullAmount);
               const paymentModeUnknown = isDepositFromServer === null && !amountsShowDeposit && !serverSaysDeposit;
               if (showDeposit) {
-                const depositCents = depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
+                const depositCents = Math.max(
+                  0,
+                  depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION),
+                );
                 let remainingCents: number;
                 if (typeof finalCentsFromServer === "number" && finalCentsFromServer > 0) {
                   remainingCents = finalCentsFromServer;
@@ -170,10 +174,12 @@ export function BookingSuccessPanel({
                 } else {
                   remainingCents = Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
                 }
+                remainingCents = Math.max(0, remainingCents);
                 return (
                   <>
-                    We&apos;ve received your <strong>50% deposit</strong> of <span className="font-semibold text-brand-dark">${(depositCents / 100).toFixed(2)}</span> for {selectedExperience.title}. The remaining balance of{" "}
-                    <span className="font-semibold text-brand-dark">${(remainingCents / 100).toFixed(2)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.
+                    We&apos;ve received your <strong>50% deposit</strong> of{" "}
+                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span> for {selectedExperience.title}. The remaining balance of{" "}
+                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(remainingCents)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.
                   </>
                 );
               }

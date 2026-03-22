@@ -31,6 +31,7 @@ import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIG
 import type { CompleteAfterPaymentClientOutcome } from "@/lib/booking/complete-after-payment-client";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
+import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
 import { AddonSelector } from "@/components/site/booking-modal-steps/AddonSelector";
 import { BookingStep4PaymentForm } from "@/components/site/booking-modal-steps/BookingStep4PaymentForm";
@@ -742,13 +743,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   });
   appliedDiscountRef.current = appliedDiscount;
 
-  const displayDepositCents =
+  const rawDepositCents =
     depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
-  const displayFinalCents =
+  const displayDepositCents = Math.max(0, Number.isFinite(rawDepositCents) ? rawDepositCents : 0);
+  const rawFinalCents =
     finalCentsFromServer ??
     (totalCentsFromServer != null
-      ? totalCentsFromServer - displayDepositCents
-      : Math.max(0, priceSummary.totalCents - displayDepositCents));
+      ? totalCentsFromServer - rawDepositCents
+      : Math.max(0, priceSummary.totalCents - rawDepositCents));
+  const displayFinalCents = Math.max(0, Number.isFinite(rawFinalCents) ? rawFinalCents : 0);
   const depositAmountIsEstimate = depositCentsFromServer == null;
   const finalAmountIsEstimate = finalCentsFromServer == null;
 
@@ -1640,16 +1643,28 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setPaymentError("Your hold expired. Please re-submit your payment details to reserve this slot.");
   }, [isHoldExpired, paymentPhase]);
 
+  /** Step 4 form/stripe: nested scroll regions; outer dialog body must not scroll or flex-1 collapses to zero height. */
+  const step4UsesInnerScroll =
+    step === 4 &&
+    (paymentPhase === "form" ||
+      paymentPhase === "loading" ||
+      paymentPhase === "stripe" ||
+      paymentPhase === "completing" ||
+      paymentPhase === "completeAfterPaymentRetry");
+
   return (
     <Dialog
       open={open}
       onOpenChange={handleModalOpenChange}
       fullScreenOnMobile
+      bodyScroll={!step4UsesInnerScroll}
       className={cn(
         "sm:max-w-md md:max-w-2xl lg:max-w-3xl",
         // Step 4 (details & payment): taller panel on phone so more form fields are visible before scrolling.
         step === 4 &&
-          "max-sm:h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))] max-sm:max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))]"
+          "max-sm:h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))] max-sm:max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))]",
+        // Desktop: explicit height so flex children get real space (min-h alone + overflow-y-auto on body still collapsed inner flex).
+        step4UsesInnerScroll && "sm:h-[min(85dvh,720px)] sm:max-h-[85vh] sm:shrink-0"
       )}
     >
       <div
@@ -1658,7 +1673,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
-              ? "flex-1 min-h-0 max-h-full"
+              ? cn("min-h-0 max-h-full flex-1", step4UsesInnerScroll && "h-full min-h-0")
               : "flex-1 max-h-full min-h-[260px]"
         )}
       >
@@ -1767,6 +1782,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             // Remaining height below step chrome — do not use 90dvh−11rem (fights padded Dialog + bottom sheet).
             "flex flex-col overflow-hidden min-h-0 min-w-0 flex-1",
             step === 4 && "min-h-0",
+            step4UsesInnerScroll && "h-full min-h-0",
             // Step 1 loading: give the slide row a real height so the spinner can center in the panel (not hug the title)
             step === 1 && loading && "min-h-[min(52dvh,420px)]"
           )}
@@ -2248,6 +2264,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 "w-full sm:w-1/4 shrink-0 pl-0 sm:pl-1 min-h-0 min-w-0 flex flex-col overflow-hidden transition-[min-height] duration-300",
                 step === 4 ? "flex flex-1 max-sm:min-h-0" : "hidden sm:flex",
                 step === 4 && !panel4Collapsed && "min-h-0 max-h-full flex-1 self-stretch",
+                step4UsesInnerScroll && "h-full min-h-0",
                 panel4Collapsed && "!min-h-0 !h-0 overflow-hidden"
               )}
             >
@@ -2261,7 +2278,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 )}
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   <div
-                    className="booking-step4-scroll min-h-0 flex-1 basis-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain max-sm:touch-pan-y"
+                    className="booking-step4-scroll min-h-[180px] sm:min-h-[min(42dvh,380px)] flex-1 basis-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain max-sm:touch-pan-y"
                     role="region"
                     aria-label="Booking details form"
                   >
@@ -2427,7 +2444,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           <div className="flex justify-between items-center gap-2 text-sm group">
                             <span className="text-brand-muted">Discount ({appliedDiscount.code})</span>
                             <span className="flex items-center gap-1.5 shrink-0">
-                              <span className="font-medium text-emerald-600">−${(priceSummary.discountCents / 100).toFixed(2)}</span>
+                              <span className="font-medium text-emerald-600">
+                                {formatMoneyNonNegative(priceSummary.discountCents)} off
+                              </span>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -2467,7 +2486,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
                                 {priceReady ? (
                                   <span className="text-xl font-bold text-brand-primary">
-                                    {depositAmountIsEstimate ? "~" : ""}${(displayDepositCents / 100).toFixed(2)}
+                                    {depositAmountIsEstimate ? "~" : ""}
+                                    {formatMoneyNonNegative(displayDepositCents)}
                                   </span>
                                 ) : (
                                   <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
@@ -2480,7 +2500,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
                                 {priceReady ? (
                                   <span className="font-medium text-brand-dark">
-                                    {finalAmountIsEstimate ? "~" : ""}${(displayFinalCents / 100).toFixed(2)}
+                                    {finalAmountIsEstimate ? "~" : ""}
+                                    {formatMoneyNonNegative(displayFinalCents)}
                                   </span>
                                 ) : (
                                   <span className="h-5 w-14 animate-pulse rounded bg-brand-dark/10" aria-hidden />
@@ -2721,7 +2742,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
                           {priceReady
-                            ? `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)} now`
+                            ? `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)} now`
                             : "Loading…"}{" "}
                           — we&apos;ll charge the remaining 50% 48 hours before your trip
                         </span>
@@ -2796,7 +2817,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </p>
                     )}
                     {appliedDiscountError && <p className="text-xs text-red-600">{appliedDiscountError}</p>}
-                    {appliedDiscount && <p className="text-xs text-emerald-600 font-medium">Discount applied: −${(appliedDiscount.discountCents / 100).toFixed(2)}</p>}
+                    {appliedDiscount && (
+                      <p className="text-xs text-emerald-600 font-medium">
+                        Discount applied: {formatMoneyNonNegative(appliedDiscount.discountCents)} off
+                      </p>
+                    )}
                   </div>
                   {/* Optional (other) */}
                   <div className="space-y-2 pt-1">
@@ -2855,7 +2880,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                   `$${(priceSummary.totalCents / 100).toFixed(2)}`
                                 )
                               : priceReady
-                                ? `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`
+                                ? `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`
                                 : null}
                             {!isTicketed && !payFullAmount && !priceReady && (
                               <span className="inline-block h-6 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
@@ -2987,8 +3012,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 priceSummary={priceSummary}
               />
               {paymentPhase === "stripe" && stripePromise && selectedExperience && selectedSlot && selectedRate && (
-                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-[max(6rem,calc(env(safe-area-inset-bottom)+5rem))] sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
+                <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+                  <div className="min-h-[200px] sm:min-h-[min(40dvh,360px)] flex-1 overflow-y-auto overflow-x-hidden pr-1 space-y-4 pb-[max(6rem,calc(env(safe-area-inset-bottom)+5rem))] sm:pb-8 scroll-smooth overscroll-y-contain touch-pan-y">
                   {userChoseDepositRef.current && payFullAmount && !isTicketed && (
                     <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                       This experience requires full payment at checkout. You&apos;re being charged the full amount now.
@@ -3032,7 +3057,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-2xl font-bold text-brand-primary">
                           {(isTicketed || payFullAmount)
                             ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`}
+                            : `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
                           )}
@@ -3074,7 +3099,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <span>
                           {(isTicketed || payFullAmount)
                             ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : `${depositAmountIsEstimate ? "~" : ""}$${(displayDepositCents / 100).toFixed(2)}`}
+                            : `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />
                           )}

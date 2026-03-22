@@ -419,7 +419,6 @@ export async function POST(request: NextRequest) {
         line_items: lineItems,
         ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
         customer_email: undefined,
-        phone_number_collection: { enabled: true },
         custom_fields: [
           { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
         ],

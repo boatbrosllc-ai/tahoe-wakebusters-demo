@@ -18,6 +18,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
 import { siteConfig } from "@/config/site";
 import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
+import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -765,7 +766,7 @@ export function InlineBookingDetailsStep({
             {payFullAmount
               ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
               : depositCentsFromServer != null
-                ? `$${(depositCentsFromServer / 100).toFixed(2)}`
+                ? formatMoneyNonNegative(depositCentsFromServer)
                 : null}
             {!payFullAmount && depositCentsFromServer == null && (
               <span className="inline-block h-7 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
@@ -865,7 +866,7 @@ export function InlineBookingDetailsStep({
             {priceSummary.discountCents > 0 && (
               <div className="flex justify-between text-emerald-600">
                 <span>Discount</span>
-                <span>−${(priceSummary.discountCents / 100).toFixed(2)}</span>
+                <span>{formatMoneyNonNegative(priceSummary.discountCents)} off</span>
               </div>
             )}
             {priceError && !priceLoading && (
@@ -898,7 +899,7 @@ export function InlineBookingDetailsStep({
                   {priceLoading ? (
                     <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
                   ) : depositCentsFromServer != null ? (
-                    <span className="text-lg font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</span>
+                    <span className="text-lg font-bold text-brand-primary">{formatMoneyNonNegative(depositCentsFromServer)}</span>
                   ) : (
                     <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
                   )}
@@ -1109,7 +1110,7 @@ export function InlineBookingDetailsStep({
               >
                 <span className="font-semibold">Pay 50% deposit</span>
                 <span className="block text-xs text-brand-muted">
-                  {depositCentsFromServer != null ? `$${(depositCentsFromServer / 100).toFixed(2)} now` : "Loading…"} · remaining balance charged 48h before your trip
+                  {depositCentsFromServer != null ? `${formatMoneyNonNegative(depositCentsFromServer)} now` : "Loading…"} · remaining balance charged 48h before your trip
                 </span>
               </button>
               <button
@@ -1186,7 +1187,11 @@ export function InlineBookingDetailsStep({
             </button>
           </div>
           {appliedDiscountError && <p className="text-xs text-red-600 mt-1">{appliedDiscountError}</p>}
-          {appliedDiscount && <p className="text-xs text-emerald-600 mt-1">Discount: −${(appliedDiscount.discountCents / 100).toFixed(2)}</p>}
+          {appliedDiscount && (
+            <p className="text-xs text-emerald-600 mt-1">
+              Discount: {formatMoneyNonNegative(appliedDiscount.discountCents)} off
+            </p>
+          )}
         </div>
 
         {/* Optional */}
@@ -1237,7 +1242,7 @@ export function InlineBookingDetailsStep({
             ) : payFullAmount ? (
               <p className="text-xl font-bold text-brand-primary">${(priceSummary.totalCents / 100).toFixed(2)}</p>
             ) : depositCentsFromServer != null ? (
-              <p className="text-xl font-bold text-brand-primary">${(depositCentsFromServer / 100).toFixed(2)}</p>
+              <p className="text-xl font-bold text-brand-primary">{formatMoneyNonNegative(depositCentsFromServer)}</p>
             ) : (
               <p className="text-xl font-bold text-brand-primary">
                 <span className="inline-block h-7 w-24 animate-pulse rounded bg-brand-primary/20" aria-hidden />
