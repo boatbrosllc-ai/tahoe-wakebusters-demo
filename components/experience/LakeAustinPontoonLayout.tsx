@@ -12,6 +12,7 @@ import { FAQ } from "@/components/experience/FAQ";
 import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
 import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
+import type { BookingModalInitialSelection } from "@/lib/booking/booking-modal-types";
 import { HERO, PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
 
 const BOOKING_SECTION_ID = "booking-preview";
@@ -72,8 +73,15 @@ export function LakeAustinPontoonLayout({
   }, []);
 
   const handleBookNow = useCallback(() => {
-    openWithSelection({ experienceSlug: "pontoon" });
+    openWithSelection({ experienceSlug: "pontoon", pricingType: "charter" });
   }, [openWithSelection]);
+
+  const handlePreviewCheckAvailability = useCallback(
+    (selection: BookingModalInitialSelection) => {
+      openWithSelection({ experienceSlug: "pontoon", pricingType: "charter", ...selection });
+    },
+    [openWithSelection],
+  );
 
   return (
     <div className="min-h-screen bg-brand-dark">
@@ -92,7 +100,9 @@ export function LakeAustinPontoonLayout({
           <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0">
             <BookingPreviewCard
               sectionId={BOOKING_SECTION_ID}
-              onCheckAvailability={handleBookNow}
+              experienceSlug="pontoon"
+              pricingType="charter"
+              onCheckAvailability={handlePreviewCheckAvailability}
               fromPriceCents={fromPriceCents ?? null}
             />
           </div>

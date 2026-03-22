@@ -1,5 +1,6 @@
 "use client";
 
+import type { PaymentIntent } from "@stripe/stripe-js";
 import { PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { useState, useEffect } from "react";
 
@@ -12,7 +13,7 @@ export function BookingStep4PaymentForm({
   onError,
   receiptClaimToken,
 }: {
-  onSuccess: (paymentIntentId?: string) => void;
+  onSuccess: (paymentIntent?: PaymentIntent | null) => void;
   onError: (message: string) => void;
   /** From create-payment-intent: faster success page after 3DS via receipt_token. */
   receiptClaimToken?: string | null;
@@ -46,7 +47,7 @@ export function BookingStep4PaymentForm({
       });
 
       if (error) onError(error.message ?? "Payment failed");
-      else onSuccess(paymentIntent?.id);
+      else onSuccess(paymentIntent ?? null);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {

@@ -37,7 +37,7 @@ export const location = {
   areaServed: ["Austin, TX", "Lake Austin", "Mueller", "Downtown Austin", "Westlake", "Tarrytown", "The Domain", "Austin metro"],
   /** Rating/review count from GBP – for display only; no fake schema */
   rating: 5.0,
-  reviewCount: 302,
+  reviewCount: 329,
   /** Same as brand for consistency */
   sameAs: [
     "https://www.instagram.com/boatbrosatx/",

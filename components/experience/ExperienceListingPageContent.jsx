@@ -96,8 +96,21 @@ export function ExperienceListingPageContent(props) {
     openWithSelection({
       experienceId: id,
       experienceSlug: experience.slug,
+      pricingType: experience.pricingType ?? "charter",
     });
-  }, [openWithSelection, id, experience.slug]);
+  }, [openWithSelection, id, experience.slug, experience.pricingType]);
+
+  const handlePreviewCheckAvailability = useCallback(
+    (selection) => {
+      openWithSelection({
+        experienceId: id,
+        experienceSlug: experience.slug,
+        pricingType: experience.pricingType ?? "charter",
+        ...selection,
+      });
+    },
+    [openWithSelection, id, experience.slug, experience.pricingType],
+  );
 
   // Hero: experience name as title, subtext under it (like pontoon listing)
   const heroImageUrl = experience.heroMedia?.url;
@@ -215,7 +228,10 @@ export function ExperienceListingPageContent(props) {
           <div className="w-full max-w-md sm:max-w-lg lg:max-w-xl mt-6 sm:mt-0">
             <BookingPreviewCard
               sectionId={BOOKING_SECTION_ID}
-              onCheckAvailability={handleBookNow}
+              experienceId={id}
+              experienceSlug={experience.slug}
+              pricingType={experience.pricingType ?? "charter"}
+              onCheckAvailability={handlePreviewCheckAvailability}
               fromPriceCents={experience.fromPriceCents ?? null}
             />
           </div>

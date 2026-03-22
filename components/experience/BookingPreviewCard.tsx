@@ -1,24 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { BOOKING_PREVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
+import { getChicagoToday } from "@/lib/booking/booking-date-range";
+import type { BookingModalInitialSelection } from "@/lib/booking/booking-modal-types";
 
 const durationOptions = BOOKING_PREVIEW.durations;
 
 export function BookingPreviewCard({
   onCheckAvailability,
   sectionId,
+  experienceId,
+  experienceSlug,
+  pricingType = "charter",
   /** Denormalized on the experience document in Firestore; pass from the server page. */
   fromPriceCents,
 }: {
-  onCheckAvailability?: () => void;
+  onCheckAvailability?: (selection: BookingModalInitialSelection) => void;
   sectionId?: string;
+  /** When known (e.g. Firestore listing); slug alone is enough for the modal to resolve the experience. */
+  experienceId?: string;
+  experienceSlug: string;
+  pricingType?: "charter" | "ticketed";
   fromPriceCents?: number | null;
 }) {
   const reduceMotion = useReducedMotion();
+  const todayStr = useMemo(() => getChicagoToday(), []);
+  const [selectedDate, setSelectedDate] = useState(todayStr);
   const [duration, setDuration] = useState<number>(BOOKING_PREVIEW.durations[1]);
   const [guests, setGuests] = useState(6);
 
@@ -26,7 +37,15 @@ export function BookingPreviewCard({
     if (sectionId) {
       document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" });
     }
-    onCheckAvailability?.();
+    onCheckAvailability?.({
+      ...(experienceId ? { experienceId } : {}),
+      experienceSlug,
+      pricingType,
+      bookingMode: pricingType === "ticketed" ? "shared" : "charter",
+      date: selectedDate,
+      durationHours: duration,
+      partySize: guests,
+    });
   };
 
   return (
@@ -40,9 +59,17 @@ export function BookingPreviewCard({
       transition={{ duration: 0.5, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
     >
       <p className="text-white/90 text-sm font-medium mb-3">Date</p>
-      <div className="h-11 rounded-xl bg-white/10 border border-white/20 mb-4 flex items-center px-4 text-white/80 text-sm">
-        Select date (placeholder)
-      </div>
+      <label htmlFor="booking-preview-date" className="sr-only">
+        Trip date
+      </label>
+      <input
+        id="booking-preview-date"
+        type="date"
+        min={todayStr}
+        value={selectedDate}
+        onChange={(e) => setSelectedDate(e.target.value)}
+        className="h-11 w-full rounded-xl bg-white/10 border border-white/20 mb-4 px-4 text-white text-sm placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark [color-scheme:dark]"
+      />
 
       <p className="text-white/90 text-sm font-medium mb-2">Duration</p>
       <div className="flex gap-2 mb-4">

@@ -2,12 +2,13 @@
 
 /**
  * Booking modal UI. Data fetching and payment orchestration live in useBookingModalData
- * and useBookingPayment — do not add fetch/payment logic here; add it to those hooks.
+ * and useBookingModalData / useHoldCreation / usePaymentCompletion — do not add fetch/payment logic here.
  */
 
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback, useReducer } from "react";
 import Image from "next/image";
 import { loadStripe } from "@stripe/stripe-js";
+import type { PaymentIntent } from "@stripe/stripe-js";
 import { Elements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
@@ -25,10 +26,7 @@ import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth, getMsUntilN
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
-import {
-  completeAfterPaymentWithPolling,
-  type CompleteAfterPaymentClientOutcome,
-} from "@/lib/booking/complete-after-payment-client";
+import type { CompleteAfterPaymentClientOutcome } from "@/lib/booking/complete-after-payment-client";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
@@ -37,6 +35,7 @@ import { BookingStep4PaymentForm } from "@/components/site/booking-modal-steps/B
 import { BookingSuccessPanel } from "@/components/site/booking-modal-steps/BookingSuccessPanel";
 import { WEEKDAY_LABELS } from "@/components/site/booking-modal-steps/booking-calendar-constants";
 import { usePriceSummary } from "@/components/site/usePriceSummary";
+import { useDiscountValidation } from "@/components/site/useDiscountValidation";
 import type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption } from "@/lib/booking/booking-modal-types";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -62,12 +61,19 @@ function formatTime(iso: string) {
 import type { BookingModalInitialSelection } from "@/components/site/BookingModalContext";
 import { useBookingModalData, type UseBookingModalDataSelection } from "@/components/site/useBookingModalData";
 import {
-  useBookingPayment,
-  type UseBookingPaymentOptions,
+  useHoldCreation,
+  type UseHoldCreationOptions,
   SESSION_HOLD_ID_KEY,
   type ModalHoldRecoveryPayloadV1,
   clearModalHoldRecoverySession,
-} from "@/components/site/useBookingPayment";
+} from "@/components/site/useHoldCreation";
+import { usePaymentCompletion } from "@/components/site/usePaymentCompletion";
+import {
+  bookingModalReducer,
+  BOOKING_MODAL_INITIAL_STATE,
+  bookingModalEffectsPhase,
+  type BookingModalPaymentPhase,
+} from "@/lib/booking/booking-modal-state";
 
 type BookingModalProps = {
   open: boolean;
@@ -75,11 +81,20 @@ type BookingModalProps = {
   initialSelection?: BookingModalInitialSelection | null;
   /** From context: increment when openWithSelection is called so form resets when selection changes while modal is open. */
   selectionKey?: number;
+  /** After success: start a fresh booking (category picker). Provided by Header via `useBookingModal`. */
+  onBookAnother?: () => void;
 };
 
 
-export function BookingModal({ open, onOpenChange, initialSelection, selectionKey }: BookingModalProps) {
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+export function BookingModal({ open, onOpenChange, initialSelection, selectionKey, onBookAnother }: BookingModalProps) {
+  const [bookingState, dispatchBooking] = useReducer(bookingModalReducer, BOOKING_MODAL_INITIAL_STATE);
+  const step = bookingState.step;
+  const paymentPhase = bookingState.paymentPhase as BookingModalPaymentPhase;
+  const setStep = useCallback((s: 1 | 2 | 3 | 4) => dispatchBooking({ type: "SET_STEP", step: s }), []);
+  const setPaymentPhase = useCallback(
+    (p: BookingModalPaymentPhase) => dispatchBooking({ type: "SET_PAYMENT_PHASE", paymentPhase: p }),
+    [],
+  );
   const stepRef = useRef(step);
   stepRef.current = step;
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
@@ -113,21 +128,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [discountCode, setDiscountCode] = useState("");
-  const [appliedDiscount, setAppliedDiscount] = useState<{ discountCents: number; code: string } | null>(null);
-  const [appliedDiscountError, setAppliedDiscountError] = useState<string | null>(null);
-  const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
+  const [discountRemovedNotice, setDiscountRemovedNotice] = useState<string | null>(null);
+  const prevPartySizeForDiscountRef = useRef(partySize);
+  const appliedDiscountRef = useRef<{ discountCents: number; code: string } | null>(null);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [paymentPhase, setPaymentPhase] = useState<
-    | "form"
-    | "loading"
-    | "stripe"
-    | "completing"
-    | "completeAfterPaymentRetry"
-    | "success"
-    | "successWithWarning"
-    | "successRecoveryFailed"
-  >("form");
   const [payFullAmount, setPayFullAmount] = useState(true);
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
   const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
@@ -150,11 +155,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [isDepositFromServer, setIsDepositFromServer] = useState<boolean | null>(null);
   /** When recovery of holdId/paymentIntentId fails after Stripe success: show fallback with this PI ID. */
   const [recoveryFailedPiId, setRecoveryFailedPiId] = useState<string | null>(null);
+  /** Whether Stripe reported `succeeded` when we could not complete booking (Comment 9). */
+  const [successRecoveryPaymentCaptured, setSuccessRecoveryPaymentCaptured] = useState(false);
+  const successRecoveryPaymentCapturedRef = useRef(false);
+  successRecoveryPaymentCapturedRef.current = successRecoveryPaymentCaptured;
+  /** Brief notice when close is blocked while create-hold is in flight (Comment 1). */
+  const [pendingCloseWhileProceedMessage, setPendingCloseWhileProceedMessage] = useState<string | null>(null);
   const [completeAfterRetryInFlight, setCompleteAfterRetryInFlight] = useState(false);
   const completeAfterRetryInFlightRef = useRef(false);
   /** While true, complete-after-payment is polling Stripe "processing" — match BookingStripeReturnHandler copy. */
   const [stripePaymentProcessing, setStripePaymentProcessing] = useState(false);
-  const completeAfterAbortRef = useRef<AbortController | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
   /** Receipt fetch failed transiently during hold recovery — session kept for retry. */
@@ -174,8 +184,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   paymentPhaseRef.current = paymentPhase;
   holdIdRef.current = holdId;
   releaseTokenRef.current = releaseToken;
-  /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker. */
-  const isTicketed = selectedExperience?.pricingType === "ticketed" || (!!open && initialSelection?.pricingType === "ticketed");
+  /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker — only after experience detail loads. */
+  const isTicketed = selectedExperience != null && selectedExperience.pricingType === "ticketed";
+  /** Listing hint before `selectedExperience` is set; do not use for booking logic or data effects. */
+  const isTicketedFromSelection = initialSelection?.pricingType === "ticketed";
+  /** Ticketed step chrome while experience is still loading (display only). */
+  const showTicketedFlow = isTicketed || (selectedExperience === null && !!isTicketedFromSelection);
+  const [bookingMode, setBookingMode] = useState<"shared" | "charter">(
+    () => initialSelection?.bookingMode ?? "shared",
+  );
   const selection: UseBookingModalDataSelection | null = open
     ? {
         selectedExperience,
@@ -188,6 +205,31 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setSelectedExperience,
       }
     : null;
+
+  /** User-driven category changes only — do not read `initialSelection` here (hydration applies `bookingMode` once). */
+  const prevExperienceIdForBookingModeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      prevExperienceIdForBookingModeRef.current = null;
+      return;
+    }
+    if (!selectedExperience) return;
+    const prevId = prevExperienceIdForBookingModeRef.current;
+    const id = selectedExperience.id;
+    if (prevId === null) {
+      prevExperienceIdForBookingModeRef.current = id;
+      return;
+    }
+    if (prevId === id) return;
+    prevExperienceIdForBookingModeRef.current = id;
+    if (selectedExperience.pricingType === "ticketed") {
+      setBookingMode("shared");
+    } else {
+      setBookingMode("charter");
+    }
+  }, [open, selectedExperience?.id, selectedExperience?.pricingType]);
+
+  const bookingEffectsPhase = useMemo(() => bookingModalEffectsPhase(bookingState), [bookingState]);
 
   const {
     experiences,
@@ -237,7 +279,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     effectivePriceLoading,
     viewMonthForPrefetchRef,
     ratesForSelection,
-  } = useBookingModalData(open, initialSelection ?? null, selectionKey ?? 0, selection);
+  } = useBookingModalData(open, initialSelection ?? null, selectionKey ?? 0, selection, paymentPhase);
 
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. Ticketed: exclude sold-out slots (spotsRemaining === 0). */
   const openSlotsForDate = useMemo(() => {
@@ -279,13 +321,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [isTicketed, selectedExperience?.departureHour, selectedExperience?.departureMinute]);
 
   useEffect(() => {
+    if (bookingEffectsPhase === "checkout") return;
     if (ratesForSelection.length === 0) return;
     const valid = ratesForSelection.some((r) => r.id === selectedRateIdForCalendar);
     if (!valid) {
       setSelectedRateIdForCalendar(null);
       setSelectedSlot(null);
     }
-  }, [ratesForSelection, selectedRateIdForCalendar]);
+  }, [bookingEffectsPhase, ratesForSelection, selectedRateIdForCalendar]);
 
   // Ticketed: auto-select the single rate when rates load (no duration picker shown).
   useEffect(() => {
@@ -295,13 +338,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
-  // When rates first load (from hook), set calendar rate if none selected. Prefer 3-hour duration.
+  // When rates first load (from hook), set calendar rate if none selected. Prefer initial `durationHours`, then 3-hour.
   useEffect(() => {
     if (ratesForSelection.length === 0 || selectedRateIdForCalendar) return;
+    const fromPreview =
+      initialSelection?.durationHours != null
+        ? ratesForSelection.find((r) => r.durationHours === initialSelection.durationHours)
+        : undefined;
     const threeHourRate = ratesForSelection.find((r) => r.durationHours === 3);
-    const defaultRate = threeHourRate ?? ratesForSelection[0];
+    const defaultRate = fromPreview ?? threeHourRate ?? ratesForSelection[0];
     setSelectedRateIdForCalendar(defaultRate.id);
-  }, [ratesForSelection, selectedRateIdForCalendar]);
+  }, [ratesForSelection, selectedRateIdForCalendar, initialSelection?.durationHours]);
 
   const dateOptions = useMemo(
     () => getDaysInMonth(viewMonthYear, viewMonthMonth - 1),
@@ -363,281 +410,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     return isMonthInSeasonalRange(selectedExperience.seasonal, nextYear, nextMonth1);
   }, [selectedExperience?.seasonal, viewMonthYear, viewMonthMonth]);
 
-  // Reset modal and data state when opening (useBookingModalData refetches experiences on open/selectionKey).
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setHoldReleaseWarning(null);
-    setHoldSessionVerifyError(null);
-    pendingRecoveryBoatIdRef.current = null;
-
-    void (async () => {
-      const skipSessionHydration = Boolean(initialSelection?.experienceId);
-
-      if (skipSessionHydration && typeof sessionStorage !== "undefined") {
-        try {
-          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
-        } catch (_) {}
-      }
-
-      // Resume Stripe payment after refresh: validate hold via receipt claim (202 pending).
-      if (!skipSessionHydration && typeof sessionStorage !== "undefined") {
-        const rawHold = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
-        if (rawHold) {
-          try {
-            const parsed = JSON.parse(rawHold) as ModalHoldRecoveryPayloadV1;
-            const expAt = parsed.holdExpiresAt ? new Date(parsed.holdExpiresAt).getTime() : NaN;
-            const expired = !Number.isNaN(expAt) && expAt <= Date.now();
-            if (expired) {
-              clearModalHoldRecoverySession();
-            } else if (
-              parsed.v === 1 &&
-              parsed.holdId &&
-              typeof parsed.clientSecret === "string" &&
-              parsed.receiptClaimToken?.trim()
-            ) {
-              let recoveryRes: Response | null = null;
-              let recoveryBody: Record<string, unknown> = {};
-              try {
-                const ac = new AbortController();
-                const tid = window.setTimeout(() => ac.abort(), 15_000);
-                recoveryRes = await fetch("/api/booking/receipt", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ receipt_token: parsed.receiptClaimToken.trim() }),
-                  signal: ac.signal,
-                });
-                clearTimeout(tid);
-                recoveryBody = (await recoveryRes.json().catch(() => ({}))) as Record<string, unknown>;
-              } catch {
-                if (!cancelled) {
-                  setHoldSessionVerifyError(
-                    "We couldn't verify your saved session. Check your connection and try again, or continue booking.",
-                  );
-                }
-                // Transient — keep SESSION_HOLD_ID_KEY for a later open.
-              }
-              if (recoveryRes && !cancelled) {
-                if (recoveryRes.status === 202 && recoveryBody?.pending === true) {
-                  setSelectedExperience(parsed.experienceSnapshot);
-                  setSelectedDate(parsed.selectedDate);
-                  setViewMonthYear(parsed.viewMonthYear);
-                  setViewMonthMonth(parsed.viewMonthMonth);
-                  setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
-                  setSelectedSlot(parsed.selectedSlot);
-                  setPartySize(parsed.partySize);
-                  setHoldId(parsed.holdId);
-                  setReleaseToken(parsed.releaseToken);
-                  setReceiptClaimToken(parsed.receiptClaimToken);
-                  setClientSecret(parsed.clientSecret);
-                  setPaymentIntentId(parsed.paymentIntentId);
-                  setHoldExpiresAt(parsed.holdExpiresAt);
-                  if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
-                  if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
-                  if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
-                  if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
-                  setPayFullAmount(parsed.payFullAmount);
-                  lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
-                  pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
-                  setStep(4);
-                  setPaymentPhase("stripe");
-                  return;
-                }
-                if (
-                  recoveryRes.ok &&
-                  recoveryRes.status === 200 &&
-                  typeof recoveryBody.bookingId === "string" &&
-                  recoveryBody.bookingId
-                ) {
-                  clearModalHoldRecoverySession();
-                  setCompletedBookingId(recoveryBody.bookingId);
-                  const rTok =
-                    (typeof recoveryBody.receiptToken === "string" && recoveryBody.receiptToken.trim()) || null;
-                  setCompletedReceiptToken(rTok);
-                  const ps = recoveryBody.paymentSummary as
-                    | { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number; mode?: string }
-                    | undefined;
-                  if (ps) {
-                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
-                    const depositCents =
-                      typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
-                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
-                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
-                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
-                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
-                    const isDeposit =
-                      ps.mode === "event_deposit" ||
-                      ps.mode === "state_fallback_deposit" ||
-                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
-                    setIsDepositFromServer(isDeposit);
-                    setPayFullAmount(!isDeposit);
-                  }
-                  setPaymentPhase("success");
-                  return;
-                }
-                if (recoveryRes.status === 429 || (recoveryRes.status >= 500 && recoveryRes.status < 600)) {
-                  if (!cancelled) {
-                    setHoldSessionVerifyError(
-                      recoveryRes.status === 429
-                        ? "Too many requests. Please wait a moment and try again."
-                        : "We couldn't verify your saved session. Try again in a moment.",
-                    );
-                  }
-                  // Transient — keep recovery payload.
-                } else if (recoveryRes.status === 401 || recoveryRes.status === 404 || recoveryRes.status === 400) {
-                  clearModalHoldRecoverySession();
-                } else if (!recoveryRes.ok) {
-                  clearModalHoldRecoverySession();
-                }
-              }
-            } else {
-              clearModalHoldRecoverySession();
-            }
-          } catch {
-            clearModalHoldRecoverySession();
-          }
-        }
-      }
-
-      if (cancelled) return;
-
-      // Hydrate success state from session (skip when a new booking is started from the UI with an experience id).
-      if (!skipSessionHydration) {
-        try {
-          const raw = typeof window !== "undefined" ? sessionStorage.getItem(SESSION_SUCCESS_KEY) : null;
-          if (raw) {
-            const parsed = JSON.parse(raw) as {
-              bookingId?: string;
-              receiptClaimToken?: string | null;
-              receiptToken?: string | null;
-              paymentSummary?: { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number };
-              bookedAt?: number;
-            };
-            const stale = typeof parsed.bookedAt === "number" && Date.now() - parsed.bookedAt > SESSION_SUCCESS_MAX_AGE_MS;
-            if (stale && typeof window !== "undefined") {
-              try {
-                sessionStorage.removeItem(SESSION_SUCCESS_KEY);
-              } catch (_) {}
-            }
-            const persistedReceiptTok =
-              (typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()) ||
-              (typeof parsed.receiptToken === "string" && parsed.receiptToken.trim()) ||
-              null;
-            if (!stale && (parsed?.bookingId || persistedReceiptTok)) {
-              if (parsed.bookingId) setCompletedBookingId(parsed.bookingId);
-              setCompletedReceiptToken(persistedReceiptTok);
-              if (parsed.paymentSummary) {
-                const ps = parsed.paymentSummary;
-                if (typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
-                if (typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
-                if (typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
-                if (typeof ps.isDeposit === "boolean") {
-                  setPayFullAmount(!ps.isDeposit);
-                  setIsDepositFromServer(ps.isDeposit);
-                } else if (typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
-                  setIsDepositFromServer(true);
-                  setPayFullAmount(false);
-                }
-              } else if (persistedReceiptTok && typeof fetch === "function") {
-                fetch("/api/booking/receipt", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ receipt_token: persistedReceiptTok }),
-                })
-                  .then((res) => (res.ok ? res.json() : null))
-                  .then((payload: { paymentSummary?: { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number }; mode?: string } | null) => {
-                    if (!payload?.paymentSummary) return;
-                    const ps = payload.paymentSummary;
-                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
-                    const depositCents = typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
-                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
-                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
-                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
-                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
-                    const isDeposit =
-                      payload.mode === "event_deposit" ||
-                      payload.mode === "state_fallback_deposit" ||
-                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
-                    setIsDepositFromServer(isDeposit);
-                    setPayFullAmount(!isDeposit);
-                  })
-                  .catch(() => {});
-              }
-              setPaymentPhase("success");
-              return;
-            }
-          }
-        } catch (_) {
-          // SSR or invalid JSON — ignore
-        }
-      }
-
-      if (cancelled) return;
-
-      if (initialSelection?.date) {
-        const isTicketedPreselect = initialSelection.pricingType === "ticketed";
-        setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
-      } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
-        setStep(2);
-      } else {
-        setStep(1);
-      }
-      setSelectedExperience(null);
-      setBoats([]);
-      setSelectedBoat(null);
-      setExperienceRates([]);
-      setAddons([]);
-      setSelectedDate(null);
-      const now = new Date();
-      setViewMonthYear(now.getFullYear());
-      setViewMonthMonth(now.getMonth() + 1);
-      setSelectedRateIdForCalendar(null);
-      setEffectiveRateCents(null);
-      setDatePrices({});
-      setMonthSlots([]);
-      setMonthDataRangeStart(null);
-      setSelectedSlot(null);
-      setPartySize(1);
-      setPetsCount(0);
-      setCustomerName("");
-      setCustomerEmail("");
-      setCustomerPhone("");
-      setAddonSelections({});
-      setTipChoice(null);
-      setTipLaterMessageOpen(false);
-      tipLaterIntendedRef.current = false;
-      tipLaterWasOpenRef.current = false;
-      setHowDidYouHear("");
-      setComments("");
-      setDiscountCode("");
-      setAppliedDiscount(null);
-      setAppliedDiscountError(null);
-      setMarketingOptIn(false);
-      setCancellationAck(false);
-      setPaymentPhase("form");
-      setStripePaymentProcessing(false);
-      setPayFullAmount(true);
-      setCompletedBookingId(null);
-      setCompletedReceiptToken(null);
-      setHoldId(null);
-      setReleaseToken(null);
-      setHoldExpiresAt(null);
-      setIsHoldExpired(false);
-      setPaymentIntentId(null);
-      setClientSecret(null);
-      setReceiptClaimToken(null);
-      setPaymentError(null);
-      setExperiencesLoadError(null);
-      setRatesSummary(null);
-      setRatesLoadError(null);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
-  }, [open, selectionKey, initialSelection?.experienceId]);
-
   // When opened with initialSelection, apply it once experiences (and boats/slots) are ready
   useEffect(() => {
     if (!open || !initialSelection || !experiences?.length) return;
@@ -652,6 +424,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         ...(initialSelection.departureHour != null && { departureHour: initialSelection.departureHour }),
         ...(initialSelection.departureMinute != null && { departureMinute: initialSelection.departureMinute }),
       });
+      if (exp.pricingType === "ticketed" && initialSelection.bookingMode != null) {
+        setBookingMode(initialSelection.bookingMode);
+      }
+      if (initialSelection.partySize != null) {
+        const max = exp.maxGuests ?? exp.maxCapacity ?? 36;
+        setPartySize(Math.min(Math.max(1, initialSelection.partySize), max));
+      }
       if (initialSelection.date) {
         setSelectedDate(initialSelection.date);
         const d = new Date(initialSelection.date + "T12:00:00");
@@ -753,6 +532,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice).
   // Validate that the selected slot's startHour matches experience.departureHour when available; if mismatch, clear and refresh.
   useEffect(() => {
+    if (bookingEffectsPhase === "checkout") return;
     if (!isTicketed || !selectedDate || openSlotsForDate.length === 0) return;
     const first = openSlotsForDate[0];
     const depHour = selectedExperience?.departureHour;
@@ -767,7 +547,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     }
     setSelectedSlot(first);
-  }, [isTicketed, selectedDate, openSlotsForDate, selectedExperience?.departureHour, selectedExperience?.id]);
+  }, [bookingEffectsPhase, isTicketed, selectedDate, openSlotsForDate, selectedExperience?.departureHour, selectedExperience?.id]);
 
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
@@ -924,6 +704,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
   const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
 
+  const {
+    applyDiscount,
+    appliedDiscount,
+    appliedDiscountLoading,
+    appliedDiscountError,
+    clearDiscount,
+    setAppliedDiscount,
+  } = useDiscountValidation({
+    discountCode,
+    isTicketed,
+    partySize,
+    effectiveRateCents,
+    selectedRatePriceCents: selectedRate?.priceCents,
+    displayAddons,
+    addonSelections,
+  });
+
   const priceSummary = usePriceSummary({
     isTicketed,
     partySize,
@@ -935,6 +732,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     tipPercent,
     appliedDiscount,
   });
+  appliedDiscountRef.current = appliedDiscount;
 
   const displayDepositCents =
     depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
@@ -949,7 +747,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Hide client-estimated totals for pay-in-full until authoritative rate is known. */
   const payFullTotalPending = paymentPriceBlocked || priceSummary.priceIsEstimate;
 
-  const paymentOptions: UseBookingPaymentOptions = {
+  /** useHoldCreation reads latest fields via optionsRef internally — object identity per render is OK. */
+  const paymentOptions: UseHoldCreationOptions = {
     open,
     holdId,
     releaseToken,
@@ -977,7 +776,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     selectedExperience,
     selectedSlot,
     selectedRateId,
-    selectedRate,
     selectedBoat,
     selectedDate,
     customerName,
@@ -1004,9 +802,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     boats,
     viewMonthStartStr,
     viewMonthEndStr,
+    bookingMode,
     viewMonthYear,
     viewMonthMonth,
-    initialSelection,
     lastHoldRef,
     releaseOnCloseDoneRef,
     holdIdRef,
@@ -1016,16 +814,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     stepRef,
     clientSecret,
     holdExpiresAt,
+    onPendingCloseWhileProceed: () => {
+      setPendingCloseWhileProceedMessage("Processing your request…");
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => setPendingCloseWhileProceedMessage(null), 4000);
+      }
+    },
+    successRecoveryPaymentCapturedRef,
   };
   const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange, proceedToPaymentInFlight } =
-    useBookingPayment(paymentOptions);
-
-  useEffect(() => {
-    if (!open) {
-      completeAfterAbortRef.current?.abort();
-      completeAfterAbortRef.current = null;
-    }
-  }, [open]);
+    useHoldCreation(paymentOptions);
 
   const handleCompleteAfterPaymentOutcome = useCallback((outcome: CompleteAfterPaymentClientOutcome) => {
     setStripePaymentProcessing(false);
@@ -1116,30 +914,310 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [selectedExperience?.id]);
 
-  const runCompleteAfterPaymentForModal = useCallback(async () => {
-    const resolvedHoldId = holdId;
-    const resolvedPiId = paymentIntentId;
-    if (!resolvedHoldId || !resolvedPiId) return;
-    completeAfterAbortRef.current?.abort();
-    completeAfterAbortRef.current = new AbortController();
-    setPaymentPhase("completing");
-    setPaymentError(null);
-    setStripePaymentProcessing(false);
-    try {
-      const outcome = await completeAfterPaymentWithPolling({
-        paymentIntentId: resolvedPiId,
-        holdId: resolvedHoldId,
-        signal: completeAfterAbortRef.current.signal,
-        onEnteredProcessing: () => setStripePaymentProcessing(true),
-      });
-      handleCompleteAfterPaymentOutcome(outcome);
-    } catch (e) {
-      bookingError("client", "complete-after-payment unexpected failure", e, { holdId: resolvedHoldId });
-      if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
-      setPaymentPhase("completeAfterPaymentRetry");
-      setPaymentError("Request failed. Please try again.");
+  const { runCompleteAfterPaymentForModal, completeAfterAbortRef } = usePaymentCompletion({
+    holdId,
+    paymentIntentId,
+    receiptClaimToken,
+    setPaymentPhase,
+    setPaymentError,
+    setStripePaymentProcessing,
+    setCompletedBookingId,
+    handleCompleteAfterPaymentOutcome,
+    selectedExperienceId: selectedExperience?.id,
+  });
+
+  useEffect(() => {
+    if (!open) {
+      completeAfterAbortRef.current?.abort();
+      completeAfterAbortRef.current = null;
     }
-  }, [holdId, paymentIntentId, handleCompleteAfterPaymentOutcome, selectedExperience?.id]);
+  }, [open]);
+
+  // Reset modal when opening; sync reset first, then async session recovery (Comment 7).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setHoldReleaseWarning(null);
+    setHoldSessionVerifyError(null);
+    pendingRecoveryBoatIdRef.current = null;
+
+    const applyModalOpenSyncReset = () => {
+      if (initialSelection?.date) {
+        const isTicketedPreselect = initialSelection.pricingType === "ticketed";
+        setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
+      } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
+        setStep(2);
+      } else {
+        setStep(1);
+      }
+      setSelectedExperience(null);
+      setBoats([]);
+      setSelectedBoat(null);
+      setExperienceRates([]);
+      setAddons([]);
+      setSelectedDate(null);
+      const now = new Date();
+      setViewMonthYear(now.getFullYear());
+      setViewMonthMonth(now.getMonth() + 1);
+      setSelectedRateIdForCalendar(null);
+      setEffectiveRateCents(null);
+      setDatePrices({});
+      setMonthSlots([]);
+      setMonthDataRangeStart(null);
+      setSelectedSlot(null);
+      setPartySize(1);
+      setPetsCount(0);
+      setCustomerName("");
+      setCustomerEmail("");
+      setCustomerPhone("");
+      setAddonSelections({});
+      setTipChoice(null);
+      setTipLaterMessageOpen(false);
+      tipLaterIntendedRef.current = false;
+      tipLaterWasOpenRef.current = false;
+      setHowDidYouHear("");
+      setComments("");
+      setDiscountCode("");
+      clearDiscount();
+      setDiscountRemovedNotice(null);
+      setMarketingOptIn(false);
+      setCancellationAck(false);
+      setBookingMode("shared");
+      setDepositCentsFromServer(null);
+      setTotalCentsFromServer(null);
+      setFinalCentsFromServer(null);
+      setIsDepositFromServer(null);
+      setRecoveryFailedPiId(null);
+      setSuccessRecoveryPaymentCaptured(false);
+      setStripePaymentProcessing(false);
+      setPaymentPhase("form");
+      setPayFullAmount(true);
+      setCompletedBookingId(null);
+      setCompletedReceiptToken(null);
+      setHoldId(null);
+      setReleaseToken(null);
+      setHoldExpiresAt(null);
+      setIsHoldExpired(false);
+      setPaymentIntentId(null);
+      setClientSecret(null);
+      setReceiptClaimToken(null);
+      setPaymentError(null);
+      setExperiencesLoadError(null);
+      setRatesSummary(null);
+      setRatesLoadError(null);
+    };
+
+    applyModalOpenSyncReset();
+
+    void (async () => {
+      const skipSessionHydration = Boolean(initialSelection?.experienceId);
+
+      if (skipSessionHydration && typeof sessionStorage !== "undefined") {
+        try {
+          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
+        } catch (_) {}
+      }
+
+      if (cancelled) return;
+
+      // Resume Stripe payment after refresh: validate hold via receipt claim (202 pending).
+      if (!skipSessionHydration && typeof sessionStorage !== "undefined") {
+        const rawHold = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
+        if (rawHold) {
+          try {
+            const parsed = JSON.parse(rawHold) as ModalHoldRecoveryPayloadV1;
+            const expAt = parsed.holdExpiresAt ? new Date(parsed.holdExpiresAt).getTime() : NaN;
+            const expired = !Number.isNaN(expAt) && expAt <= Date.now();
+            if (expired) {
+              clearModalHoldRecoverySession();
+            } else if (
+              parsed.v === 1 &&
+              parsed.holdId &&
+              typeof parsed.clientSecret === "string" &&
+              parsed.receiptClaimToken?.trim()
+            ) {
+              let recoveryRes: Response | null = null;
+              let recoveryBody: Record<string, unknown> = {};
+              try {
+                const ac = new AbortController();
+                const tid = window.setTimeout(() => ac.abort(), 15_000);
+                recoveryRes = await fetch("/api/booking/receipt", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ receipt_token: parsed.receiptClaimToken.trim() }),
+                  signal: ac.signal,
+                });
+                clearTimeout(tid);
+                if (cancelled) return;
+                recoveryBody = (await recoveryRes.json().catch(() => ({}))) as Record<string, unknown>;
+                if (cancelled) return;
+              } catch {
+                if (!cancelled) {
+                  setHoldSessionVerifyError(
+                    "We couldn't verify your saved session. Check your connection and try again, or continue booking.",
+                  );
+                }
+              }
+              if (recoveryRes && !cancelled) {
+                if (recoveryRes.status === 202 && recoveryBody?.pending === true) {
+                  setSelectedExperience(parsed.experienceSnapshot);
+                  setSelectedDate(parsed.selectedDate);
+                  setViewMonthYear(parsed.viewMonthYear);
+                  setViewMonthMonth(parsed.viewMonthMonth);
+                  setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
+                  setSelectedSlot(parsed.selectedSlot);
+                  setPartySize(parsed.partySize);
+                  setHoldId(parsed.holdId);
+                  setReleaseToken(parsed.releaseToken);
+                  setReceiptClaimToken(parsed.receiptClaimToken);
+                  setClientSecret(parsed.clientSecret);
+                  setPaymentIntentId(parsed.paymentIntentId);
+                  setHoldExpiresAt(parsed.holdExpiresAt);
+                  if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
+                  if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
+                  if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
+                  if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
+                  setPayFullAmount(parsed.payFullAmount);
+                  lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
+                  pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
+                  setStep(4);
+                  setPaymentPhase("stripe");
+                  return;
+                }
+                if (
+                  recoveryRes.ok &&
+                  recoveryRes.status === 200 &&
+                  typeof recoveryBody.bookingId === "string" &&
+                  recoveryBody.bookingId
+                ) {
+                  clearModalHoldRecoverySession();
+                  setCompletedBookingId(recoveryBody.bookingId);
+                  const rTok =
+                    (typeof recoveryBody.receiptToken === "string" && recoveryBody.receiptToken.trim()) || null;
+                  setCompletedReceiptToken(rTok);
+                  const ps = recoveryBody.paymentSummary as
+                    | { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number; mode?: string }
+                    | undefined;
+                  if (ps) {
+                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
+                    const depositCents =
+                      typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
+                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
+                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
+                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
+                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
+                    const isDeposit =
+                      ps.mode === "event_deposit" ||
+                      ps.mode === "state_fallback_deposit" ||
+                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
+                    setIsDepositFromServer(isDeposit);
+                    setPayFullAmount(!isDeposit);
+                  }
+                  setPaymentPhase("success");
+                  return;
+                }
+                if (recoveryRes.status === 429 || (recoveryRes.status >= 500 && recoveryRes.status < 600)) {
+                  if (!cancelled) {
+                    setHoldSessionVerifyError(
+                      recoveryRes.status === 429
+                        ? "Too many requests. Please wait a moment and try again."
+                        : "We couldn't verify your saved session. Try again in a moment.",
+                    );
+                  }
+                } else if (recoveryRes.status === 401 || recoveryRes.status === 404 || recoveryRes.status === 400) {
+                  clearModalHoldRecoverySession();
+                } else if (!recoveryRes.ok) {
+                  clearModalHoldRecoverySession();
+                }
+              }
+            } else {
+              clearModalHoldRecoverySession();
+            }
+          } catch {
+            clearModalHoldRecoverySession();
+          }
+        }
+      }
+
+      if (cancelled) return;
+
+      // Hydrate success state from session (skip when a new booking is started from the UI with an experience id).
+      if (!skipSessionHydration) {
+        try {
+          const raw = typeof window !== "undefined" ? sessionStorage.getItem(SESSION_SUCCESS_KEY) : null;
+          if (raw) {
+            const parsed = JSON.parse(raw) as {
+              bookingId?: string;
+              receiptClaimToken?: string | null;
+              receiptToken?: string | null;
+              paymentSummary?: { isDeposit?: boolean; depositCents?: number; totalCents?: number; finalCents?: number };
+              bookedAt?: number;
+            };
+            const stale = typeof parsed.bookedAt === "number" && Date.now() - parsed.bookedAt > SESSION_SUCCESS_MAX_AGE_MS;
+            if (stale && typeof window !== "undefined") {
+              try {
+                sessionStorage.removeItem(SESSION_SUCCESS_KEY);
+              } catch (_) {}
+            }
+            const persistedReceiptTok =
+              (typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()) ||
+              (typeof parsed.receiptToken === "string" && parsed.receiptToken.trim()) ||
+              null;
+            if (!stale && (parsed?.bookingId || persistedReceiptTok)) {
+              if (parsed.bookingId) setCompletedBookingId(parsed.bookingId);
+              setCompletedReceiptToken(persistedReceiptTok);
+              if (parsed.paymentSummary) {
+                const ps = parsed.paymentSummary;
+                if (typeof ps.depositCents === "number") setDepositCentsFromServer(ps.depositCents);
+                if (typeof ps.totalCents === "number") setTotalCentsFromServer(ps.totalCents);
+                if (typeof ps.finalCents === "number") setFinalCentsFromServer(ps.finalCents);
+                if (typeof ps.isDeposit === "boolean") {
+                  setPayFullAmount(!ps.isDeposit);
+                  setIsDepositFromServer(ps.isDeposit);
+                } else if (typeof ps.depositCents === "number" && typeof ps.totalCents === "number" && ps.depositCents < ps.totalCents) {
+                  setIsDepositFromServer(true);
+                  setPayFullAmount(false);
+                }
+              } else if (persistedReceiptTok && typeof fetch === "function") {
+                void fetch("/api/booking/receipt", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ receipt_token: persistedReceiptTok }),
+                })
+                  .then((res) => (res.ok ? res.json() : null))
+                  .then((payload: { paymentSummary?: { paidNowCents?: number; totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number }; mode?: string } | null) => {
+                    if (!payload?.paymentSummary) return;
+                    const ps = payload.paymentSummary;
+                    const totalCents = typeof ps.totalAmountCents === "number" ? ps.totalAmountCents : undefined;
+                    const depositCents = typeof ps.depositAmountCents === "number" ? ps.depositAmountCents : ps.paidNowCents;
+                    const finalCents = typeof ps.finalAmountCents === "number" ? ps.finalAmountCents : undefined;
+                    if (typeof depositCents === "number") setDepositCentsFromServer(depositCents);
+                    if (typeof totalCents === "number") setTotalCentsFromServer(totalCents);
+                    if (typeof finalCents === "number") setFinalCentsFromServer(finalCents);
+                    const isDeposit =
+                      payload.mode === "event_deposit" ||
+                      payload.mode === "state_fallback_deposit" ||
+                      (typeof totalCents === "number" && typeof depositCents === "number" && depositCents < totalCents);
+                    setIsDepositFromServer(isDeposit);
+                    setPayFullAmount(!isDeposit);
+                  })
+                  .catch(() => {});
+              }
+              setPaymentPhase("success");
+              return;
+            }
+          }
+        } catch (_) {
+          // SSR or invalid JSON — ignore
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
+  }, [open, selectionKey, initialSelection?.experienceId, clearDiscount]);
 
   // Clear or revalidate applied discount whenever price drivers or experience change so checkout totals don't drift from server repricing.
   useEffect(() => {
@@ -1152,9 +1230,24 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       paymentPhase === "successWithWarning"
     )
       return;
-    setAppliedDiscount(null);
-    setAppliedDiscountError(null);
-  }, [partySize, addonSelections, tipChoice, tipPercent, selectedRateId, selectedDate, payFullAmount, selectedExperience?.id]);
+    const prevPs = prevPartySizeForDiscountRef.current;
+    prevPartySizeForDiscountRef.current = partySize;
+    const hadDiscount = appliedDiscountRef.current != null;
+    clearDiscount();
+    if (hadDiscount && prevPs !== partySize) {
+      setDiscountRemovedNotice("Discount removed — party size changed");
+    }
+  }, [
+    partySize,
+    addonSelections,
+    tipChoice,
+    tipPercent,
+    selectedRateId,
+    selectedDate,
+    payFullAmount,
+    selectedExperience?.id,
+    clearDiscount,
+  ]);
 
   // When opened with initialSelection (slot pre-picked):
   // - Charter + boatId pre-picked → go directly to step 4
@@ -1280,8 +1373,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             setPaymentError(null);
             setTipChoice(null);
             setTipLaterMessageOpen(false);
-            setAppliedDiscount(null);
-            setAppliedDiscountError(null);
+            clearDiscount();
           }
         } else {
           lastHoldRef.current = null;
@@ -1299,8 +1391,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           setPaymentError(null);
           setTipChoice(null);
           setTipLaterMessageOpen(false);
-          setAppliedDiscount(null);
-          setAppliedDiscountError(null);
+          clearDiscount();
         }
       };
       if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
@@ -1324,8 +1415,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     !!(selectedDate && selectedSlot) &&
     (!isTicketed ||
       (!ticketCountsLoading &&
-        (ticketCounts == null ||
-          ticketCounts.available > 0 ||
+        ((ticketCounts == null && !ticketCountsError) ||
+          (ticketCounts != null && ticketCounts.available > 0) ||
           (ticketCountsError && ticketCountsRetryTrigger > 0))));
   const handleStep2Next = () => {
     if (!canGoFromStep2) return;
@@ -1374,14 +1465,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setPaymentPhase("form");
   };
 
-  const stepTitles = isTicketed
+  const stepTitles = showTicketedFlow
     ? ["Pick category", "Pick date", "Details & payment", "Details & payment"]
     : ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
   // Ticketed: 3 steps; charter with one boat: 3 steps (skip boat); charter with multiple boats: 4 steps
-  const stepCount = isCalendarFirstFlow ? 2 : isTicketed ? 3 : boats.length === 1 ? 3 : 4;
+  const stepCount = isCalendarFirstFlow ? 2 : showTicketedFlow ? 3 : boats.length === 1 ? 3 : 4;
   const stepIndex = isCalendarFirstFlow
     ? (step === 3 ? 1 : 2)
-    : isTicketed
+    : showTicketedFlow
       ? (step === 1 ? 1 : step === 2 ? 2 : 3)
       : boats.length === 1
         ? (step === 4 ? 3 : step)
@@ -1429,20 +1520,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       onOpenChange={handleModalOpenChange}
       fullScreenOnMobile
       className={cn(
-        "max-h-[90dvh] sm:max-h-[85dvh]",
+        "max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] sm:max-h-[85dvh]",
         "sm:max-w-md md:max-w-2xl lg:max-w-3xl"
       )}
     >
       <div
         className={cn(
-          "flex flex-col overflow-hidden min-h-[260px] max-h-[90dvh] sm:max-h-[85dvh] overflow-x-hidden",
+          "flex flex-col overflow-hidden min-h-[260px] max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] sm:max-h-[85dvh] overflow-x-hidden",
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
-              ? "h-[70dvh] min-h-[320px] sm:min-h-[400px] md:min-h-[420px] max-h-[90dvh] sm:max-h-[85dvh]"
+              ? "h-[70dvh] min-h-[320px] sm:min-h-[400px] md:min-h-[420px]"
               : "flex-1 min-h-0"
         )}
       >
+        {pendingCloseWhileProceedMessage ? (
+          <p className="text-center text-sm text-brand-muted py-2 px-3 shrink-0 border-b border-brand-dark/10" role="status">
+            {pendingCloseWhileProceedMessage}
+          </p>
+        ) : null}
         {/* Step indicator + back */}
         <div className={cn("flex items-center justify-between gap-3 shrink-0", step === 4 ? "mb-1 sm:mb-2" : "mb-4")}>
           <button
@@ -1456,7 +1552,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             {step > 1 ? <span className="text-sm font-medium">Back</span> : null}
           </button>
           <div className="flex items-center gap-1.5">
-            {(isCalendarFirstFlow ? [3, 4] : isTicketed ? [1, 2, 4] : boats.length === 1 ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
+            {(isCalendarFirstFlow ? [3, 4] : showTicketedFlow ? [1, 2, 4] : boats.length === 1 ? [1, 2, 4] : [1, 2, 3, 4]).map((stepNum, stepIdx) => (
               <span
                 key={`step-dot-${stepIdx}`}
                 className={cn(
@@ -1723,6 +1819,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       const isOutsideSeasonal = selectedExperience?.seasonal?.enabled && !dateSeasonalAllowed;
                       const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
                       const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
+                      const a11yStatus = isPast
+                        ? "past date"
+                        : isOutsideSeasonal
+                          ? "outside booking season"
+                          : isFullyBooked
+                            ? "fully booked"
+                            : !isAvailable
+                              ? "unavailable"
+                              : "available";
+                      const priceA11y =
+                        typeof priceCents === "number" && isAvailable
+                          ? `, $${(priceCents / 100).toFixed(0)}${isTicketed ? " per ticket" : ""}`
+                          : "";
+                      const holidayA11y = isHoliday && !isPast ? ", holiday pricing" : "";
+                      const urgencyA11y =
+                        hasBookingsUrgency && !isFullyBooked && !isPast
+                          ? `, ${displayBookedCount} already booked this day`
+                          : "";
+                      const dateAriaLabel = `${weekday} ${label}, ${viewMonthLabel}. ${a11yStatus}${priceA11y}${holidayA11y}${urgencyA11y}`;
                       return (
                         <button
                           key={dateStr}
@@ -1733,6 +1848,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             setSelectedDate(dateStr);
                             setSelectedSlot(null);
                           }}
+                          aria-label={dateAriaLabel}
                           title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedCount} already booked this day` : undefined}
                           className={cn(
                             "rounded-lg sm:rounded-xl border-2 p-0.5 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 sm:gap-0.5 touch-manipulation min-w-0",
@@ -1998,11 +2114,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Tickets &amp; add-ons</p>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">
+                            <label htmlFor="booking-party-size-ticketed" className="block text-sm font-medium text-brand-dark mb-1">
                               Tickets <span className="text-red-500 font-semibold" aria-hidden>*</span>
                             </label>
                             <select
-                              id="booking-party-size"
+                              id="booking-party-size-ticketed"
                               value={Math.min(partySize, Math.max(effectiveTicketMax, 1))}
                               onChange={(e) => setPartySize(Math.min(parseInt(e.target.value, 10) || 1, effectiveTicketMax))}
                               required
@@ -2011,7 +2127,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 (!!ticketCountsError || (ticketCounts == null && ticketCountsLoading))
                               }
                               className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                              aria-describedby="booking-party-size-hint"
+                              aria-describedby="booking-party-size-ticketed-hint"
                             >
                               {Array.from({ length: Math.max(effectiveTicketMax, 1) }, (_, i) => i + 1).map((n) => (
                                 <option key={n} value={n}>
@@ -2019,7 +2135,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 </option>
                               ))}
                             </select>
-                            <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">
+                            <p id="booking-party-size-ticketed-hint" className="text-[11px] text-brand-muted mt-0.5">
                               {ticketCounts != null
                                 ? `${ticketCounts.available} of ${ticketCounts.total} tickets available`
                                 : ticketCountsLoading
@@ -2157,7 +2273,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               <span className="font-medium text-emerald-600">−${(priceSummary.discountCents / 100).toFixed(2)}</span>
                               <button
                                 type="button"
-                                onClick={() => { setAppliedDiscount(null); setAppliedDiscountError(null); setDiscountCode(""); }}
+                                onClick={() => {
+                                  clearDiscount();
+                                  setDiscountCode("");
+                                }}
                                 className="rounded p-1 text-brand-muted hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1"
                                 aria-label="Remove discount code"
                                 title="Remove"
@@ -2283,16 +2402,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-3">Party &amp; add-ons</p>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label htmlFor="booking-party-size" className="block text-sm font-medium text-brand-dark mb-1">
+                        <label htmlFor="booking-party-size-charter" className="block text-sm font-medium text-brand-dark mb-1">
                           Party size <span className="text-red-500 font-semibold" aria-hidden>*</span>
                         </label>
                         <select
-                          id="booking-party-size"
+                          id="booking-party-size-charter"
                           value={partySize}
                           onChange={(e) => setPartySize(parseInt(e.target.value, 10) || 1)}
                           required
                           className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer"
-                          aria-describedby="booking-party-size-hint"
+                          aria-describedby="booking-party-size-charter-hint"
                         >
                           {Array.from({ length: ticketMax }, (_, i) => i + 1).map((n) => (
                             <option key={n} value={n}>
@@ -2300,7 +2419,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             </option>
                           ))}
                         </select>
-                        <p id="booking-party-size-hint" className="text-[11px] text-brand-muted mt-0.5">
+                        <p id="booking-party-size-charter-hint" className="text-[11px] text-brand-muted mt-0.5">
                           Max {ticketMax} guests
                         </p>
                       </div>
@@ -2490,8 +2609,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         value={discountCode}
                         onChange={(e) => {
                           setDiscountCode(e.target.value);
-                          setAppliedDiscount(null);
-                          setAppliedDiscountError(null);
+                          clearDiscount();
+                          setDiscountRemovedNotice(null);
                         }}
                         placeholder="Enter code"
                         className="flex-1 min-w-[120px] rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
@@ -2504,44 +2623,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           appliedDiscountLoading ||
                           effectiveRateCents == null
                         }
-                        onClick={async () => {
-                          const code = discountCode.trim();
-                          if (!code) return;
-                          if (effectiveRateCents == null) return;
-                          setAppliedDiscountError(null);
-                          setAppliedDiscountLoading(true);
-                          try {
-                            const ticketCountForDiscount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
-                            const unitRateForDiscount = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
-                            const rateSubtotalCents = isTicketed
-                              ? unitRateForDiscount * ticketCountForDiscount
-                              : unitRateForDiscount;
-                            const addonSubtotalCents = displayAddons.reduce(
-                              (s, a) => s + a.priceCents * (addonSelections[a.id] ?? 0),
-                              0
-                            );
-                            const subtotalBeforeTaxDiscount = rateSubtotalCents + addonSubtotalCents;
-                            const salesTaxForDiscount = Math.round(subtotalBeforeTaxDiscount * TAX_RATE);
-                            const totalBeforeDiscount = subtotalBeforeTaxDiscount + salesTaxForDiscount;
-                            const res = await fetch("/api/booking/validate-discount", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ code, totalCents: totalBeforeDiscount }),
-                            });
-                            const data = await res.json().catch(() => ({}));
-                            if (data.valid && typeof data.discountCents === "number" && data.code) {
-                              setAppliedDiscount({ discountCents: data.discountCents, code: data.code });
-                            } else {
-                              setAppliedDiscount(null);
-                              setAppliedDiscountError(data.error ?? "Invalid or expired code");
-                            }
-                          } catch {
-                            setAppliedDiscount(null);
-                            setAppliedDiscountError("Could not validate code");
-                          } finally {
-                            setAppliedDiscountLoading(false);
-                          }
-                        }}
+                        onClick={() => void applyDiscount()}
                         className="shrink-0 rounded-xl border-2 border-brand-primary bg-brand-primary text-white font-semibold px-4 py-2.5 text-base min-h-[44px] touch-manipulation hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {appliedDiscountLoading
@@ -2551,6 +2633,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             : "Apply"}
                       </button>
                     </div>
+                    {discountRemovedNotice && (
+                      <p className="text-xs text-amber-800/90 rounded-lg bg-amber-50 border border-amber-200/80 px-2.5 py-2" role="status">
+                        {discountRemovedNotice}
+                      </p>
+                    )}
                     {appliedDiscountError && <p className="text-xs text-red-600">{appliedDiscountError}</p>}
                     {appliedDiscount && <p className="text-xs text-emerald-600 font-medium">Discount applied: −${(appliedDiscount.discountCents / 100).toFixed(2)}</p>}
                   </div>
@@ -2681,16 +2768,29 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     >
                       Try again
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentPhase("stripe");
-                        setPaymentError(null);
-                      }}
-                      className="rounded-xl border-2 border-brand-dark/20 text-brand-dark font-semibold py-2.5 px-5 text-sm hover:bg-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    >
-                      Back to payment
-                    </button>
+                    {!successRecoveryPaymentCaptured && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (holdExpiresAt && new Date(holdExpiresAt).getTime() <= Date.now()) {
+                            setPaymentPhase("form");
+                            setPaymentError(null);
+                            setClientSecret(null);
+                            setHoldId(null);
+                            setReleaseToken(null);
+                            setHoldExpiresAt(null);
+                            setPaymentIntentId(null);
+                            setReceiptClaimToken(null);
+                            return;
+                          }
+                          setPaymentPhase("stripe");
+                          setPaymentError(null);
+                        }}
+                        className="rounded-xl border-2 border-brand-dark/20 text-brand-dark font-semibold py-2.5 px-5 text-sm hover:bg-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      >
+                        Back to payment
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -2698,10 +2798,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 paymentPhase={paymentPhase}
                 paymentError={paymentError}
                 recoveryFailedPiId={recoveryFailedPiId}
+                successRecoveryPaymentCaptured={successRecoveryPaymentCaptured}
                 onClose={() => handleModalOpenChange(false)}
+                onBookAnother={
+                  onBookAnother ??
+                  (() => {
+                    void handleModalOpenChange(false);
+                  })
+                }
                 completeAfterRetryInFlight={completeAfterRetryInFlight}
                 onTryAgain={async () => {
-                  if (!holdId || !paymentIntentId) return;
                   if (completeAfterRetryInFlightRef.current) return;
                   completeAfterRetryInFlightRef.current = true;
                   setCompleteAfterRetryInFlight(true);
@@ -2854,35 +2960,31 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <Elements stripe={stripePromise} options={{ clientSecret }}>
                       <BookingStep4PaymentForm
                         receiptClaimToken={receiptClaimToken}
-                        onSuccess={async (paymentIntentIdFromConfirm?: string) => {
+                        onSuccess={async (paymentIntentFromConfirm?: PaymentIntent | null) => {
                           setStripePaymentProcessing(false);
                           setPaymentPhase("completing");
                           const resolvedHoldId = holdId;
-                          const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
+                          const resolvedPiId = paymentIntentFromConfirm?.id ?? paymentIntentId;
+                          const paymentCaptured = paymentIntentFromConfirm?.status === "succeeded";
+                          setSuccessRecoveryPaymentCaptured(paymentCaptured);
                           if (!resolvedHoldId || !resolvedPiId) {
                             bookingError("client", "complete-after-payment recovery failed: missing holdId or paymentIntentId", null, { hasHoldId: !!resolvedHoldId, hasPaymentIntentId: !!resolvedPiId });
                             setRecoveryFailedPiId(resolvedPiId ?? null);
                             setPaymentPhase("successRecoveryFailed");
+                            if (paymentCaptured && resolvedPiId) {
+                              void fetch("/api/booking/client-operational-alert", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  type: "booking_success_recovery_failed",
+                                  paymentIntentId: resolvedPiId,
+                                  source: "booking_modal_stripe_confirm",
+                                }),
+                              }).catch(() => {});
+                            }
                             return;
                           }
-                          completeAfterAbortRef.current?.abort();
-                          completeAfterAbortRef.current = new AbortController();
-                          try {
-                            const outcome = await completeAfterPaymentWithPolling({
-                              paymentIntentId: resolvedPiId,
-                              holdId: resolvedHoldId,
-                              signal: completeAfterAbortRef.current.signal,
-                              onEnteredProcessing: () => setStripePaymentProcessing(true),
-                            });
-                            handleCompleteAfterPaymentOutcome(outcome);
-                          } catch (e) {
-                            bookingError("client", "complete-after-payment request failed", e, { holdId: resolvedHoldId });
-                            if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
-                            setPaymentPhase("completeAfterPaymentRetry");
-                            setPaymentError(
-                              `Payment captured but we couldn't confirm your booking. Please try again or contact us at ${siteConfig.phone}.`,
-                            );
-                          }
+                          void runCompleteAfterPaymentForModal();
                         }}
                         onError={(msg) => {
                           setPaymentError(msg);

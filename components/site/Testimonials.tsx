@@ -33,7 +33,7 @@ export function Testimonials() {
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-brand-primary/5 via-transparent to-brand-primary/5" aria-hidden />
 
       <div className="container-wide relative z-10 px-4 sm:px-6 lg:px-8">
-        {/* Stats strip – 5.0 · 302+ reviews · Austin */}
+        {/* Stats strip – 5.0 · 329+ reviews · Austin */}
         <motion.div
           className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-center mb-10 sm:mb-12"
           initial={{ opacity: 0, y: 12 }}

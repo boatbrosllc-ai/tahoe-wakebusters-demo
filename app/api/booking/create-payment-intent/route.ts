@@ -513,14 +513,15 @@ export async function POST(request: NextRequest) {
       metadata,
     };
     if (isOneTimeTicketed) {
-      paymentIntentParams.automatic_payment_methods = { enabled: true };
+      // Explicit types avoid dashboard extras (e.g. Affirm) while keeping card wallets (Apple/Google Pay).
+      paymentIntentParams.payment_method_types = ["card", "link"];
     } else if (payFullAmount === false) {
       // Deposit: save card for off-session use.
       paymentIntentParams.payment_method_types = ["card"];
       paymentIntentParams.setup_future_usage = "off_session";
     } else {
-      // Full-payment charter: accept Apple Pay / Google Pay and do not retain card.
-      paymentIntentParams.automatic_payment_methods = { enabled: true };
+      // Full-payment charter: wallets via `card`; Link optional.
+      paymentIntentParams.payment_method_types = ["card", "link"];
     }
     const paymentIntent = await stripe.paymentIntents.create(
       paymentIntentParams,

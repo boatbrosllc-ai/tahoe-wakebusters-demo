@@ -25,11 +25,17 @@ export async function reserveCapacity(
   inventoryRef: DocumentReference,
   capacity: number,
   partySize: number,
-  sold: number
+  sold: number,
+  options?: { preReadReservedSeats?: number }
 ): Promise<void> {
   const { FieldValue } = getFirestoreExports();
-  const snap = await tx.get(inventoryRef);
-  const reservedSeats = snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
+  let reservedSeats: number;
+  if (typeof options?.preReadReservedSeats === "number") {
+    reservedSeats = options.preReadReservedSeats;
+  } else {
+    const snap = await tx.get(inventoryRef);
+    reservedSeats = snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
+  }
   if (sold + reservedSeats + partySize > capacity) {
     const available = Math.max(0, capacity - sold - reservedSeats);
     throw new Error(

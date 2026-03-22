@@ -75,4 +75,8 @@ export interface BookingModalInitialSelection {
   bookingMode?: "shared" | "charter";
   departureHour?: number;
   departureMinute?: number;
+  /** When opening from listing preview — selects matching rate duration on the calendar. */
+  durationHours?: number;
+  /** Guest or ticket count to pre-fill step 4. */
+  partySize?: number;
 }

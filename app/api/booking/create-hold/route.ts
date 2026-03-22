@@ -667,6 +667,8 @@ export async function POST(request: NextRequest) {
       const sharedDiscountOut = { cents: discountCents };
       await db.runTransaction(async (tx) => {
         let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
+        /** When the hold-request claim doc does not exist yet, defer its first write until all reads complete (Firestore rule). */
+        let pendingClaimInitialWrite = false;
         let resumeTargetId: string | null =
           input.resumeHoldId && input.resumeHoldId.trim() ? input.resumeHoldId.trim() : null;
         if (input.holdRequestId && holdRequestFingerprint) {
@@ -698,10 +700,7 @@ export async function POST(request: NextRequest) {
               }
             }
           } else {
-            tx.set(claimRef, {
-              requestFingerprint: holdRequestFingerprint,
-              createdAt: FieldValue.serverTimestamp(),
-            });
+            pendingClaimInitialWrite = true;
           }
         }
         // Single per-departure inventory doc is read and updated so concurrent requests conflict and retry safely.
@@ -757,17 +756,20 @@ export async function POST(request: NextRequest) {
             if (isActive && sameExperience && sameSlot && sameMode) {
               const oldPartySize = typeof existingHold.partySize === "number" ? existingHold.partySize : 0;
               const delta = input.partySize - oldPartySize;
-              // When resuming with a different discount (or none), decrement the old discount's usedCount so it is not permanently over-incremented.
               const oldDiscountCode = (existingHold as { discountCode?: string }).discountCode;
+
+              let oldDiscountDecrementRef: import("firebase-admin").firestore.DocumentReference | null = null;
+              let oldDiscountNextCount: number | null = null;
               if (oldDiscountCode && oldDiscountCode !== discountCodeApplied) {
                 const oldDiscountSnap = await tx.get(db.collection("discounts").where("code", "==", oldDiscountCode).limit(1));
                 if (!oldDiscountSnap.empty) {
                   const d = oldDiscountSnap.docs[0].data() as { usedCount?: number };
-                  const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-                  tx.update(oldDiscountSnap.docs[0].ref, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
+                  oldDiscountDecrementRef = oldDiscountSnap.docs[0].ref;
+                  oldDiscountNextCount = Math.max(0, (d.usedCount ?? 0) - 1);
                 }
               }
-              // When resuming with a new discount, validate and increment in same transaction to avoid redemption-limit bypass.
+
+              let shouldIncrementNewDiscount = false;
               if (discountRef && discountCodeApplied && discountCents > 0) {
                 const newDiscountSnap = await tx.get(discountRef);
                 if (newDiscountSnap.exists) {
@@ -784,9 +786,15 @@ export async function POST(request: NextRequest) {
                     throw new Error("This code has reached its usage limit");
                   }
                   sharedDiscountOut.cents = recheck.discountCents;
-                  tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+                  shouldIncrementNewDiscount = true;
                 }
               }
+
+              let currentReserved = 0;
+              if (delta !== 0) {
+                currentReserved = await getReservedSeats(tx, inventoryRef);
+              }
+
               // Explicitly clear discount fields when no discount applies (mirror charter reuse path)
               // so resuming a previously discounted hold without a discount does not retain stale discount amounts.
               const discountUpdate =
@@ -824,19 +832,33 @@ export async function POST(request: NextRequest) {
                 fullPaymentIntentId: FieldValue.delete(),
                 checkoutSessionId: FieldValue.delete(),
               };
+
+              if (oldDiscountDecrementRef && oldDiscountNextCount != null) {
+                tx.update(oldDiscountDecrementRef, { usedCount: oldDiscountNextCount, updatedAt: FieldValue.serverTimestamp() });
+              }
+              if (shouldIncrementNewDiscount && discountRef) {
+                tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+              }
               if (delta === 0) {
-                // No capacity change: just refresh hold (expiry, pricing, etc.).
                 tx.update(db.collection("holds").doc(resumeTargetId), holdUpdatePayload);
               } else {
-                // Read inventory once, then apply net change in a single write (read-before-write).
-                const currentReserved = await getReservedSeats(tx, inventoryRef);
                 applyNetCapacityChange(tx, inventoryRef, sharedCapacityLimit, sold, currentReserved, delta);
                 tx.update(db.collection("holds").doc(resumeTargetId), holdUpdatePayload);
               }
               effectiveHoldId = resumeTargetId;
               effectiveExpiresAt = expiresAt;
               if (claimRef) {
-                tx.set(claimRef, { holdId: effectiveHoldId, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+                tx.set(
+                  claimRef,
+                  {
+                    ...(pendingClaimInitialWrite
+                      ? { requestFingerprint: holdRequestFingerprint, createdAt: FieldValue.serverTimestamp() }
+                      : {}),
+                    holdId: effectiveHoldId,
+                    updatedAt: FieldValue.serverTimestamp(),
+                  },
+                  { merge: true }
+                );
               }
               return;
             }
@@ -844,6 +866,21 @@ export async function POST(request: NextRequest) {
         }
 
         // No valid reusable hold: create new hold and reserve full party size.
+        // Block overlap reads must run before any writes (Firestore: all reads before all writes).
+        const blocked = await hasOverlappingBlock({
+          db,
+          Timestamp,
+          experienceId: expIdForCapacity,
+          experienceIdVariants: slugVariantsList,
+          boatId: isListingBoatFlow ? input.boatId : undefined,
+          slotStart: slotStartForBlock,
+          slotEnd: slotEndForBlock,
+          get: (q) => tx.get(q),
+        });
+        if (blocked) throw new SlotConflictError("This slot is blocked");
+        // Read departure inventory before any writes; discount updates must not precede this read or
+        // reserveCapacity would call tx.get after tx.update (Firestore: all reads before all writes).
+        const inventoryReservedBeforeHold = await getReservedSeats(tx, inventoryRef);
         // Validate discount inside transaction and atomically increment to avoid over-redemption.
         if (discountRef && discountCodeApplied && discountCents > 0) {
           const discountSnapTx = await tx.get(discountRef);
@@ -865,21 +902,22 @@ export async function POST(request: NextRequest) {
             tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
           }
         }
-        const blocked = await hasOverlappingBlock({
-          db,
-          Timestamp,
-          experienceId: expIdForCapacity,
-          experienceIdVariants: slugVariantsList,
-          boatId: isListingBoatFlow ? input.boatId : undefined,
-          slotStart: slotStartForBlock,
-          slotEnd: slotEndForBlock,
-          get: (q) => tx.get(q),
+        await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold, {
+          preReadReservedSeats: inventoryReservedBeforeHold,
         });
-        if (blocked) throw new SlotConflictError("This slot is blocked");
-        await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold);
         tx.set(db.collection("holds").doc(holdId), holdPayload);
         if (claimRef) {
-          tx.set(claimRef, { holdId, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          tx.set(
+            claimRef,
+            {
+              ...(pendingClaimInitialWrite
+                ? { requestFingerprint: holdRequestFingerprint, createdAt: FieldValue.serverTimestamp() }
+                : {}),
+              holdId,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
         }
       });
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
@@ -913,6 +951,7 @@ export async function POST(request: NextRequest) {
     const charterDiscountOut = { cents: discountCents };
     await db.runTransaction(async (tx) => {
       let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
+      let pendingClaimInitialWrite = false;
       let effectiveResumeHoldId: string | null =
         input.resumeHoldId && input.resumeHoldId.trim() ? input.resumeHoldId.trim() : null;
       if (input.holdRequestId && holdRequestFingerprint) {
@@ -945,12 +984,31 @@ export async function POST(request: NextRequest) {
             }
           }
         } else {
-          tx.set(claimRef, {
-            requestFingerprint: holdRequestFingerprint,
-            createdAt: FieldValue.serverTimestamp(),
-          });
+          pendingClaimInitialWrite = true;
         }
       }
+      const applyCharterDiscountForNewHold = async () => {
+        if (discountRef && discountCodeApplied && discountCents > 0) {
+          const discountSnapTx = await tx.get(discountRef);
+          if (discountSnapTx.exists) {
+            const discountLive = discountSnapTx.data() as Discount;
+            const recheck = validateAndApplyDiscount(discountLive, pricing.totalCents);
+            if (!recheck.valid) throw new Error(recheck.error);
+            if (recheck.discountCents !== discountCents || recheck.discount.code !== discountCodeApplied) {
+              throw new Error("Discount changed while booking; please try again");
+            }
+            const d = discountLive as { usedCount?: number; maxRedemptions?: number };
+            const used = d.usedCount ?? 0;
+            const max = d.maxRedemptions;
+            if (typeof max === "number" && used >= max) {
+              throw new Error("This code has reached its usage limit");
+            }
+            charterDiscountOut.cents = recheck.discountCents;
+            holdPayload.discountCents = recheck.discountCents;
+            tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+          }
+        }
+      };
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
@@ -974,18 +1032,34 @@ export async function POST(request: NextRequest) {
                 const newExpiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
                 reusedHoldId = slot.holdId;
                 reusedExpiresAt = newExpiresAt;
-                // When resuming with a different discount (or none), decrement the old discount's usedCount.
+                if (input.experienceId && parsedSlotForHold) {
+                  await assertSlotAvailable({
+                    db,
+                    Timestamp,
+                    get: (q) => tx.get(q),
+                    experienceId: input.experienceId,
+                    experienceIdVariants: experienceIdVariantsForAssert,
+                    parsed: parsedSlotForHold,
+                    slotStart: slotStartDate,
+                    slotEnd: slotEndDate,
+                    boatId: input.boatId,
+                    useBoatSlots: isListingBoatFlow,
+                    runSameDaySlotScan: false,
+                  });
+                }
                 const existingHoldForCharter = existingHoldSnap.data() as Hold & { discountCode?: string };
                 const oldDiscountCodeCharter = existingHoldForCharter.discountCode;
+                let oldDiscountDecrementRefCharter: import("firebase-admin").firestore.DocumentReference | null = null;
+                let oldDiscountNextCountCharter: number | null = null;
                 if (oldDiscountCodeCharter && oldDiscountCodeCharter !== discountCodeApplied) {
                   const oldDiscountSnapCharter = await tx.get(db.collection("discounts").where("code", "==", oldDiscountCodeCharter).limit(1));
                   if (!oldDiscountSnapCharter.empty) {
                     const d = oldDiscountSnapCharter.docs[0].data() as { usedCount?: number };
-                    const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-                    tx.update(oldDiscountSnapCharter.docs[0].ref, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
+                    oldDiscountDecrementRefCharter = oldDiscountSnapCharter.docs[0].ref;
+                    oldDiscountNextCountCharter = Math.max(0, (d.usedCount ?? 0) - 1);
                   }
                 }
-                // When resuming with a new discount, validate and increment in same transaction to avoid redemption-limit bypass.
+                let shouldIncrementNewDiscountCharter = false;
                 if (discountRef && discountCodeApplied && discountCents > 0) {
                   const newDiscountSnapCharter = await tx.get(discountRef);
                   if (newDiscountSnapCharter.exists) {
@@ -1002,23 +1076,17 @@ export async function POST(request: NextRequest) {
                       throw new Error("This code has reached its usage limit");
                     }
                     charterDiscountOut.cents = recheck.discountCents;
-                    tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+                    shouldIncrementNewDiscountCharter = true;
                   }
                 }
-                if (input.experienceId && parsedSlotForHold) {
-                  await assertSlotAvailable({
-                    db,
-                    Timestamp,
-                    get: (q) => tx.get(q),
-                    experienceId: input.experienceId,
-                    experienceIdVariants: experienceIdVariantsForAssert,
-                    parsed: parsedSlotForHold,
-                    slotStart: slotStartDate,
-                    slotEnd: slotEndDate,
-                    boatId: input.boatId,
-                    useBoatSlots: isListingBoatFlow,
-                    runSameDaySlotScan: false,
+                if (oldDiscountDecrementRefCharter && oldDiscountNextCountCharter != null) {
+                  tx.update(oldDiscountDecrementRefCharter, {
+                    usedCount: oldDiscountNextCountCharter,
+                    updatedAt: FieldValue.serverTimestamp(),
                   });
+                }
+                if (shouldIncrementNewDiscountCharter && discountRef) {
+                  tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
                 }
                 // Clear stage-specific payment intent IDs when reusing/extending a hold with mutated pricing
                 // so stale intents (wrong amount) cannot be reused.
@@ -1060,7 +1128,17 @@ export async function POST(request: NextRequest) {
                   checkoutSessionId: FieldValue.delete(),
                 });
                 if (claimRef && slot.holdId) {
-                  tx.set(claimRef, { holdId: slot.holdId, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+                  tx.set(
+                    claimRef,
+                    {
+                      ...(pendingClaimInitialWrite
+                        ? { requestFingerprint: holdRequestFingerprint, createdAt: FieldValue.serverTimestamp() }
+                        : {}),
+                      holdId: slot.holdId,
+                      updatedAt: FieldValue.serverTimestamp(),
+                    },
+                    { merge: true }
+                  );
                 }
                 return;
               }
@@ -1095,6 +1173,7 @@ export async function POST(request: NextRequest) {
             runSameDaySlotScan: false,
           });
         }
+        await applyCharterDiscountForNewHold();
         tx.update(slotRef, {
           status: "held",
           holdId,
@@ -1196,6 +1275,7 @@ export async function POST(request: NextRequest) {
             runSameDaySlotScan: false,
           });
         }
+        await applyCharterDiscountForNewHold();
         tx.set(slotRef, {
           startAt: Timestamp.fromDate(slotStartDate),
           endAt: Timestamp.fromDate(slotEndDate),
@@ -1205,30 +1285,19 @@ export async function POST(request: NextRequest) {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
-      // Validate discount inside transaction and atomically increment to avoid over-redemption.
-      if (discountRef && discountCodeApplied && discountCents > 0) {
-        const discountSnapTx = await tx.get(discountRef);
-        if (discountSnapTx.exists) {
-          const discountLive = discountSnapTx.data() as Discount;
-          const recheck = validateAndApplyDiscount(discountLive, pricing.totalCents);
-          if (!recheck.valid) throw new Error(recheck.error);
-          if (recheck.discountCents !== discountCents || recheck.discount.code !== discountCodeApplied) {
-            throw new Error("Discount changed while booking; please try again");
-          }
-          const d = discountLive as { usedCount?: number; maxRedemptions?: number };
-          const used = d.usedCount ?? 0;
-          const max = d.maxRedemptions;
-          if (typeof max === "number" && used >= max) {
-            throw new Error("This code has reached its usage limit");
-          }
-          charterDiscountOut.cents = recheck.discountCents;
-          holdPayload.discountCents = recheck.discountCents;
-          tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
-        }
-      }
       tx.set(db.collection("holds").doc(holdId), holdPayload);
       if (claimRef) {
-        tx.set(claimRef, { holdId, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        tx.set(
+          claimRef,
+          {
+            ...(pendingClaimInitialWrite
+              ? { requestFingerprint: holdRequestFingerprint, createdAt: FieldValue.serverTimestamp() }
+              : {}),
+            holdId,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
     });
 

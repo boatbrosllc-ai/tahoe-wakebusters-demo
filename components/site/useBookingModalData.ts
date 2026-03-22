@@ -37,8 +37,12 @@ export function useBookingModalData(
   open: boolean,
   initialSelection: BookingModalInitialSelection | null | undefined,
   selectionKey: number,
-  selection: UseBookingModalDataSelection | null
+  selection: UseBookingModalDataSelection | null,
+  /** Skip experience-detail fetch and merge during active Stripe checkout so slot selection is not overwritten. */
+  paymentPhase: string
 ) {
+  const paymentPhaseRef = useRef(paymentPhase);
+  paymentPhaseRef.current = paymentPhase;
   const [experiences, setExperiences] = useState<ExperienceItem[] | null>(null);
   const [experiencesLoadError, setExperiencesLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,6 +146,13 @@ export function useBookingModalData(
 
   // Experience detail (boats, rates, addons)
   useEffect(() => {
+    if (
+      paymentPhase === "stripe" ||
+      paymentPhase === "loading" ||
+      paymentPhase === "completing"
+    ) {
+      return;
+    }
     const exp = selection?.selectedExperience;
     if (!exp?.id) {
       setBoats([]);
@@ -163,6 +174,13 @@ export function useBookingModalData(
         setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
         const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceSeasonal };
+        if (
+          paymentPhaseRef.current === "stripe" ||
+          paymentPhaseRef.current === "loading" ||
+          paymentPhaseRef.current === "completing"
+        ) {
+          return;
+        }
         if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null || detail?.allowTipNow != null || detail?.allowTipLater != null || detail?.seasonal != null) {
           selection?.setSelectedExperience((prev) =>
             prev
@@ -195,7 +213,7 @@ export function useBookingModalData(
         setAddonsLoading(false);
       });
     return () => controller.abort();
-  }, [selection?.selectedExperience?.id, selection?.setSelectedExperience, boatsRetryTrigger]);
+  }, [selection?.selectedExperience?.id, selection?.setSelectedExperience, boatsRetryTrigger, paymentPhase]);
 
   // Rates summary (early fetch for duration/date-prices)
   useEffect(() => {

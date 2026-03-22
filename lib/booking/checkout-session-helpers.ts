@@ -66,6 +66,33 @@ export async function rollbackCheckoutSession(
         inventoryRef != null && typeof hold.partySize === "number"
           ? Math.max(0, (await getReservedSeats(tx, inventoryRef)) - hold.partySize)
           : null;
+
+      const discountDocId = holdData.discountDocId ?? (hold as { discountDocId?: string }).discountDocId;
+      const discountCode = holdData.discountCode ?? hold.discountCode;
+      let discountRollback: { ref: DocumentReference; nextCount: number } | null = null;
+      if (discountDocId) {
+        const discountRef = db.collection("discounts").doc(discountDocId);
+        const discountSnap = await tx.get(discountRef);
+        if (discountSnap.exists) {
+          const d = discountSnap.data() as { usedCount?: number };
+          discountRollback = {
+            ref: discountRef,
+            nextCount: Math.max(0, (d.usedCount ?? 0) - 1),
+          };
+        }
+      } else if (discountCode && discountCode.trim()) {
+        const discountSnap = await tx.get(
+          db.collection("discounts").where("code", "==", discountCode.trim()).limit(1)
+        );
+        if (!discountSnap.empty) {
+          const d = discountSnap.docs[0].data() as { usedCount?: number };
+          discountRollback = {
+            ref: discountSnap.docs[0].ref,
+            nextCount: Math.max(0, (d.usedCount ?? 0) - 1),
+          };
+        }
+      }
+
       if (slotRef && slotSnap.exists && (slotSnap.data() as { holdId?: string })?.holdId === holdId) {
         tx.update(slotRef, {
           status: "open",
@@ -82,26 +109,11 @@ export async function rollbackCheckoutSession(
       }
       tx.update(holdRef, { status: "expired", sessionCreationInFlight: FieldValue.delete() });
 
-      const discountDocId = holdData.discountDocId ?? (hold as { discountDocId?: string }).discountDocId;
-      const discountCode = holdData.discountCode ?? hold.discountCode;
-      if (discountDocId) {
-        const discountRef = db.collection("discounts").doc(discountDocId);
-        const discountSnap = await tx.get(discountRef);
-        if (discountSnap.exists) {
-          const d = discountSnap.data() as { usedCount?: number };
-          const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-          tx.update(discountRef, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
-        }
-      } else if (discountCode && discountCode.trim()) {
-        const discountSnap = await tx.get(
-          db.collection("discounts").where("code", "==", discountCode.trim()).limit(1)
-        );
-        if (!discountSnap.empty) {
-          const ref = discountSnap.docs[0].ref;
-          const d = discountSnap.docs[0].data() as { usedCount?: number };
-          const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-          tx.update(ref, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
-        }
+      if (discountRollback) {
+        tx.update(discountRollback.ref, {
+          usedCount: discountRollback.nextCount,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
       }
     });
   } catch (rollbackErr) {

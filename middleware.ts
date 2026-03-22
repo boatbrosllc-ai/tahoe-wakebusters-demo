@@ -113,12 +113,18 @@ function buildCsp(nonce: string): string {
     "https://*.stripe.com",
     "https://*.stripe.network",
     "https://checkout.stripe.com",
+    // Google Pay / Payment Handler manifest fetch (browser → www.google.com/pay, pay.google.com)
+    "https://www.google.com",
+    "https://pay.google.com",
     "https://www.google-analytics.com",
     "https://www.googletagmanager.com",
   ].join(" ");
   return [
     "default-src 'self'",
     `script-src ${scriptSrc}`,
+    // Web Workers created from blob URLs (e.g. Stripe Elements / Payment Element) fall back to
+    // script-src when worker-src is omitted; script-src must not include blob:, so set explicitly.
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "frame-src 'self' https://js.stripe.com https://*.stripe.com https://checkout.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://www.google.com https://*.google.com",
     `connect-src ${connectSrc}`,

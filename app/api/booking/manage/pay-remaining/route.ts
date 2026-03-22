@@ -351,7 +351,7 @@ export async function POST(request: NextRequest) {
               amount: finalCents,
               currency: "usd",
               customer: customerId,
-              automatic_payment_methods: { enabled: true },
+              payment_method_types: ["card", "link"],
               metadata: { bookingId: payload.bookingId, payment_stage: "final" },
             },
             { idempotencyKey: useElementSuffix ? `${idempotencyKey}:element` : idempotencyKey }

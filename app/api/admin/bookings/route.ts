@@ -7,7 +7,7 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, getCentralCalendarDayBounds, buildSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getDepartureInventoryRef, reserveCapacity, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
@@ -421,9 +421,16 @@ export async function POST(request: NextRequest) {
           }
         }
         const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
-        await reserveCapacity(tx, inventoryRef, capacity, partySizeNum, sold);
-        // For direct manual booking the new booking is "sold", not a hold; release the seats we just claimed so reservedSeats stays correct.
-        await releaseCapacity(tx, inventoryRef, partySizeNum);
+        const reservedSeats = await getReservedSeats(tx, inventoryRef);
+        if (sold + reservedSeats + partySizeNum > capacity) {
+          const available = Math.max(0, capacity - sold - reservedSeats);
+          throw new Error(
+            available === 0
+              ? "This date is sold out."
+              : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
+          );
+        }
+        // Manual booking does not mutate departureInventory: the new paid row is counted in `sold` above.
       }
 
       const slotsRef = boatId

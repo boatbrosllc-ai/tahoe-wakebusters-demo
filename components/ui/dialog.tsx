@@ -123,7 +123,7 @@ export function Dialog({
       className={cn(
         "fixed inset-0 z-[100] flex overflow-hidden min-h-screen overscroll-contain",
         fullScreenOnMobile
-          ? "items-end sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
+          ? "items-end pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
           : "items-center justify-center p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
       )}
       role="dialog"
@@ -142,7 +142,7 @@ export function Dialog({
         className={cn(
           "relative z-10 flex flex-col min-h-0 overflow-hidden bg-white shadow-premium",
           fullScreenOnMobile
-            ? "w-full max-h-[90dvh] rounded-t-2xl rounded-b-none sm:rounded-2xl sm:max-w-lg sm:max-h-[85vh]"
+            ? "w-full max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
             : "w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] rounded-2xl my-auto",
           className
         )}
@@ -180,7 +180,7 @@ export function DialogCloseButton({ onClose, className }: DialogCloseButtonProps
       type="button"
       onClick={onClose}
       className={cn(
-        "absolute right-4 top-4 rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+        "absolute right-[max(1rem,env(safe-area-inset-right))] top-[max(1rem,env(safe-area-inset-top))] rounded-lg p-1.5 text-brand-muted hover:bg-brand-bg hover:text-brand-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
         className
       )}
       aria-label="Close"

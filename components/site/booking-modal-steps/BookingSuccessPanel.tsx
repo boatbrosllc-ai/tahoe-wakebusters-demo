@@ -8,7 +8,10 @@ type BookingSuccessPanelProps = {
   paymentPhase: string;
   paymentError: string | null;
   recoveryFailedPiId: string | null;
+  successRecoveryPaymentCaptured?: boolean;
   onClose: () => void;
+  /** Fresh booking flow (category picker) — not the same as closing only. */
+  onBookAnother: () => void;
   onTryAgain: () => void | Promise<void>;
   /** While true, complete-after-payment retry is in flight — blocks duplicate retries. */
   completeAfterRetryInFlight?: boolean;
@@ -30,7 +33,9 @@ export function BookingSuccessPanel({
   paymentPhase,
   paymentError,
   recoveryFailedPiId,
+  successRecoveryPaymentCaptured = false,
   onClose,
+  onBookAnother,
   onTryAgain,
   completeAfterRetryInFlight = false,
   selectedExperience,
@@ -46,6 +51,37 @@ export function BookingSuccessPanel({
   if (paymentPhase !== "successRecoveryFailed" && paymentPhase !== "successWithWarning" && paymentPhase !== "success") return null;
 
   if (paymentPhase === "successRecoveryFailed") {
+    if (successRecoveryPaymentCaptured) {
+      return (
+        <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
+          <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
+            <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
+            <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
+              Your payment was captured. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference below.
+            </p>
+            {recoveryFailedPiId && (
+              <p className="text-sm font-mono font-semibold text-brand-dark bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg mt-3">
+                Payment reference: {recoveryFailedPiId}
+              </p>
+            )}
+            <p className="text-base font-bold text-brand-dark mt-4">{siteConfig.phone}</p>
+            <p className="text-xs text-brand-muted mt-1">Call or text with this reference so we can locate your payment.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0">
+            Close
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
         <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
@@ -58,17 +94,13 @@ export function BookingSuccessPanel({
           </svg>
         </div>
         <div className="min-w-0">
-          <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
+          <h3 className="text-lg font-bold text-brand-dark">Couldn&apos;t confirm payment</h3>
           <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
-            Your payment was successful. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference.
+            We couldn&apos;t verify your payment with the server. You can start the booking again — you won&apos;t be charged twice for the same completed payment.
           </p>
-          {recoveryFailedPiId && (
-            <p className="text-xs font-mono text-brand-dark/80 bg-brand-dark/5 px-2 py-1 rounded mt-2">Payment reference: {recoveryFailedPiId}</p>
-          )}
-          <p className="text-sm font-medium text-brand-dark mt-2">Contact us at {siteConfig.phone}</p>
         </div>
         <button type="button" onClick={onClose} className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0">
-          Close
+          Start over
         </button>
       </div>
     );
@@ -163,7 +195,7 @@ export function BookingSuccessPanel({
         </button>
         <button
           type="button"
-          onClick={onClose}
+          onClick={onBookAnother}
           className="w-full sm:w-auto rounded-xl border-2 border-brand-primary bg-white text-brand-primary font-semibold py-2.5 px-5 sm:py-3 sm:px-6 text-sm sm:text-base hover:bg-brand-primary/10 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shrink-0"
         >
           Book another experience

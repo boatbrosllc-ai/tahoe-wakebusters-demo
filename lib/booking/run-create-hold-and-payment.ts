@@ -448,11 +448,13 @@ export async function runCreateHoldAndPaymentIntent(
  * Release a hold (e.g. on cancel or error). Best-effort; safe to call without token for admin flows.
  */
 export async function releaseHold(holdId: string, releaseToken: string | null): Promise<void> {
+  const token = typeof releaseToken === "string" ? releaseToken.trim() : "";
+  if (!token) return;
   try {
     await fetch("/api/booking/release-hold", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ holdId, ...(releaseToken && { release_token: releaseToken }) }),
+      body: JSON.stringify({ holdId, release_token: token }),
     });
   } catch {
     // best-effort

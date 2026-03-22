@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
@@ -15,7 +16,9 @@ import { cn } from "@/lib/utils";
 import { revalidateAdminSession, subscribeAdminAuthRevalidate } from "@/lib/admin-auth-client";
 
 function BookingModalChunkLoading() {
-  return (
+  // Portal to body: header uses backdrop-filter, which makes `fixed` children position
+  // relative to the header — spinner looked stuck at the top. Dialog already portals.
+  const overlay = (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-brand-dark/40 backdrop-blur-[2px]"
       role="status"
@@ -28,6 +31,7 @@ function BookingModalChunkLoading() {
       </div>
     </div>
   );
+  return typeof document !== "undefined" ? createPortal(overlay, document.body) : null;
 }
 
 // Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
@@ -50,7 +54,13 @@ export function Header() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
-  const { open: bookingModalOpen, setOpen: setBookingModalOpen, initialSelection, selectionKey } = useBookingModal();
+  const {
+    open: bookingModalOpen,
+    setOpen: setBookingModalOpen,
+    initialSelection,
+    selectionKey,
+    openWithSelection,
+  } = useBookingModal();
   // Only mount the modal after it has been opened at least once — avoids mounting a
   // 2300-line component on every page load even when the modal is never opened.
   const [hasOpenedBookingModal, setHasOpenedBookingModal] = useState(false);
@@ -268,6 +278,10 @@ export function Header() {
               onOpenChange={setBookingModalOpen}
               initialSelection={initialSelection}
               selectionKey={selectionKey}
+              onBookAnother={() => {
+                setBookingModalOpen(false);
+                queueMicrotask(() => openWithSelection({}));
+              }}
             />
           )}
         </div>
