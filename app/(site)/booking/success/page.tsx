@@ -6,30 +6,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { siteConfig } from "@/config/site";
 import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
-import { SESSION_HOLD_ID_KEY, clearModalHoldRecoverySession } from "@/components/site/useBookingPayment";
+import { releaseHoldFromModalSessionStorage } from "@/components/site/useBookingPayment";
 
 const RECEIPT_TOKEN_STORAGE_KEY = "booking_receipt_token";
-
-async function releaseHoldFromModalSessionStorage(): Promise<void> {
-  try {
-    const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_HOLD_ID_KEY) : null;
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as { holdId?: string; releaseToken?: string | null };
-    if (!parsed.holdId) return;
-    await fetch("/api/booking/release-hold", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        holdId: parsed.holdId,
-        ...(parsed.releaseToken ? { release_token: parsed.releaseToken } : {}),
-      }),
-    });
-  } catch {
-    /* ignore */
-  } finally {
-    clearModalHoldRecoverySession();
-  }
-}
 
 interface ReceiptData {
   bookingId: string;

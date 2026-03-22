@@ -24,6 +24,7 @@ import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
 import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth, getMsUntilNextChicagoMidnight } from "@/lib/booking/booking-date-range";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
+import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import type { CompleteAfterPaymentClientOutcome } from "@/lib/booking/complete-after-payment-client";
@@ -62,7 +63,12 @@ import type { BookingModalInitialSelection } from "@/components/site/BookingModa
 import { useBookingModalData, type UseBookingModalDataSelection } from "@/components/site/useBookingModalData";
 import {
   useHoldCreation,
-  type UseHoldCreationOptions,
+  type HoldCreationBookingContext,
+  type HoldCreationFormValues,
+  type HoldCreationPaymentCallbacks,
+  type HoldCreationModalCallbacks,
+  type HoldCreationInfrastructureRefs,
+  type HoldConflictContext,
   SESSION_HOLD_ID_KEY,
   type ModalHoldRecoveryPayloadV1,
   clearModalHoldRecoverySession,
@@ -202,7 +208,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         selectedDate,
         isTicketed,
         selectedBoatId: selectedBoat?.id ?? null,
-        setSelectedExperience,
       }
     : null;
 
@@ -233,53 +238,46 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   const {
     experiences,
-    setExperiences,
     experiencesLoadError,
-    setExperiencesLoadError,
     loading,
     boats,
-    setBoats,
     boatsLoading,
     experienceRates,
-    setExperienceRates,
     addons,
-    setAddons,
     addonsLoading,
     experienceDetailLoadError,
-    setExperienceDetailLoadError,
     monthSlots,
-    setMonthSlots,
     slotsLoadError,
-    setSlotsLoadError,
     slotsLoading,
     slotsPartialData,
     datePrices,
-    setDatePrices,
     datePricesLoading,
     holidayDateStrings,
-    setHolidayDateStrings,
     ticketsAvailableByDate,
-    setTicketsAvailableByDate,
     ratesSummary,
-    setRatesSummary,
     ratesLoadError,
-    setRatesLoadError,
     monthDataRangeStart,
-    setMonthDataRangeStart,
-    slotsRetryTrigger,
-    setSlotsRetryTrigger,
     ticketCounts,
-    setTicketCounts,
     ticketCountsLoading,
     ticketCountsError,
     ticketCountsRetryTrigger,
-    setTicketCountsRetryTrigger,
     effectiveRateCents,
-    setEffectiveRateCents,
     effectivePriceLoading,
     viewMonthForPrefetchRef,
     ratesForSelection,
+    experienceDetailPatch,
+    clearExperienceDetailPatch,
+    retrySlots,
+    retryTicketCounts,
+    resetBookingDataForModalOpen,
+    invalidateAfterConflict,
   } = useBookingModalData(open, initialSelection ?? null, selectionKey ?? 0, selection, paymentPhase);
+
+  useEffect(() => {
+    if (!experienceDetailPatch) return;
+    setSelectedExperience((prev) => (prev ? { ...prev, ...experienceDetailPatch } : null));
+    clearExperienceDetailPatch();
+  }, [experienceDetailPatch, clearExperienceDetailPatch]);
 
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. Ticketed: exclude sold-out slots (spotsRemaining === 0). */
   const openSlotsForDate = useMemo(() => {
@@ -367,7 +365,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       const ms = getMsUntilNextChicagoMidnight();
       tid = setTimeout(() => {
         if (cancelled) return;
-        setSlotsRetryTrigger((x) => x + 1);
+        retrySlots();
         setChicagoDateTick((t) => t + 1);
         schedule();
       }, ms + 50);
@@ -377,7 +375,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [setSlotsRetryTrigger]);
+  }, [retrySlots]);
   /** Today's date in America/Chicago for past-date comparison; updates each minute and at Chicago midnight. */
   const chicagoTodayStr = useMemo(() => {
     void chicagoDateTick;
@@ -698,7 +696,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   );
 
   const emailValid = useMemo(
-    () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()),
+    () => BOOKING_EMAIL_REGEX.test(customerEmail.trim()),
     [customerEmail]
   );
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
@@ -711,15 +709,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     appliedDiscountError,
     clearDiscount,
     setAppliedDiscount,
-  } = useDiscountValidation({
+  } = useDiscountValidation(
     discountCode,
     isTicketed,
     partySize,
     effectiveRateCents,
-    selectedRatePriceCents: selectedRate?.priceCents,
+    selectedRate?.priceCents,
     displayAddons,
-    addonSelections,
-  });
+    addonSelections
+  );
 
   const priceSummary = usePriceSummary({
     isTicketed,
@@ -747,83 +745,187 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Hide client-estimated totals for pay-in-full until authoritative rate is known. */
   const payFullTotalPending = paymentPriceBlocked || priceSummary.priceIsEstimate;
 
-  /** useHoldCreation reads latest fields via optionsRef internally — object identity per render is OK. */
-  const paymentOptions: UseHoldCreationOptions = {
-    open,
-    holdId,
-    releaseToken,
-    paymentPhase,
-    onOpenChange,
-    setHoldId,
-    setReleaseToken,
-    setHoldExpiresAt,
-    setPaymentError,
-    setPaymentPhase,
-    setClientSecret,
-    setReceiptClaimToken,
-    setPaymentIntentId,
-    setDepositCentsFromServer,
-    setTotalCentsFromServer,
-    setFinalCentsFromServer,
-    setPayFullAmount,
-    setAppliedDiscount,
-    setStep,
-    setSelectedBoat,
-    setSelectedDate,
-    setSelectedSlot,
-    setMonthDataRangeStart,
-    setMonthSlots,
-    selectedExperience,
-    selectedSlot,
-    selectedRateId,
-    selectedBoat,
-    selectedDate,
-    customerName,
-    customerEmail,
-    customerPhone,
-    emailValid,
-    phoneValid,
-    tipChoice,
-    cancellationAck,
-    isTicketed,
-    effectiveTicketMax,
-    ticketMax,
-    partySize,
-    setPartySize,
-    petsCount,
-    addonSelections,
-    priceSummary,
-    appliedDiscount,
-    discountCode,
-    marketingOptIn,
-    howDidYouHear,
-    comments,
-    payFullAmount,
-    boats,
-    viewMonthStartStr,
-    viewMonthEndStr,
-    bookingMode,
-    viewMonthYear,
-    viewMonthMonth,
-    lastHoldRef,
-    releaseOnCloseDoneRef,
-    holdIdRef,
-    releaseTokenRef,
-    paymentPhaseRef,
-    setHoldReleaseWarning,
-    stepRef,
-    clientSecret,
-    holdExpiresAt,
-    onPendingCloseWhileProceed: () => {
-      setPendingCloseWhileProceedMessage("Processing your request…");
-      if (typeof window !== "undefined") {
-        window.setTimeout(() => setPendingCloseWhileProceedMessage(null), 4000);
+  const handleHoldConflict = useCallback(
+    (ctx: HoldConflictContext) => {
+      invalidateAfterConflict();
+      if (ctx.isTicketed) setPartySize(1);
+      else if (ctx.boats.length > 1) {
+        setStep(3);
+        setSelectedBoat(null);
+      } else if (ctx.boats.length > 0) {
+        setStep(3);
+        setSelectedSlot(null);
+      } else {
+        setStep(2);
+        setSelectedDate(null);
       }
     },
-    successRecoveryPaymentCapturedRef,
-  };
+    [invalidateAfterConflict, setStep, setSelectedBoat, setSelectedSlot, setSelectedDate, setPartySize],
+  );
+
+  const holdBookingContext: HoldCreationBookingContext = useMemo(
+    () => ({
+      selectedExperience,
+      selectedSlot,
+      selectedRateId,
+      selectedBoat,
+      selectedDate,
+      isTicketed,
+      effectiveTicketMax,
+      ticketMax,
+      partySize,
+      petsCount,
+      boats,
+      viewMonthStartStr,
+      viewMonthEndStr,
+      bookingMode,
+      viewMonthYear,
+      viewMonthMonth,
+    }),
+    [
+      selectedExperience,
+      selectedSlot,
+      selectedRateId,
+      selectedBoat,
+      selectedDate,
+      isTicketed,
+      effectiveTicketMax,
+      ticketMax,
+      partySize,
+      petsCount,
+      boats,
+      viewMonthStartStr,
+      viewMonthEndStr,
+      bookingMode,
+      viewMonthYear,
+      viewMonthMonth,
+    ],
+  );
+
+  const holdFormValues: HoldCreationFormValues = useMemo(
+    () => ({
+      customerName,
+      customerEmail,
+      customerPhone,
+      emailValid,
+      phoneValid,
+      tipChoice,
+      cancellationAck,
+      addonSelections,
+      priceSummary,
+      appliedDiscount,
+      discountCode,
+      marketingOptIn,
+      howDidYouHear,
+      comments,
+      payFullAmount,
+    }),
+    [
+      customerName,
+      customerEmail,
+      customerPhone,
+      emailValid,
+      phoneValid,
+      tipChoice,
+      cancellationAck,
+      addonSelections,
+      priceSummary,
+      appliedDiscount,
+      discountCode,
+      marketingOptIn,
+      howDidYouHear,
+      comments,
+      payFullAmount,
+    ],
+  );
+
+  const holdPaymentCallbacks: HoldCreationPaymentCallbacks = useMemo(
+    () => ({
+      holdId,
+      releaseToken,
+      paymentPhase,
+      setHoldId,
+      setReleaseToken,
+      setHoldExpiresAt,
+      setPaymentError,
+      setPaymentPhase,
+      setClientSecret,
+      setReceiptClaimToken,
+      setPaymentIntentId,
+      setDepositCentsFromServer,
+      setTotalCentsFromServer,
+      setFinalCentsFromServer,
+      setPayFullAmount,
+      setAppliedDiscount,
+      clientSecret,
+      holdExpiresAt,
+    }),
+    [
+      holdId,
+      releaseToken,
+      paymentPhase,
+      setHoldId,
+      setReleaseToken,
+      setHoldExpiresAt,
+      setPaymentError,
+      setPaymentPhase,
+      setClientSecret,
+      setReceiptClaimToken,
+      setPaymentIntentId,
+      setDepositCentsFromServer,
+      setTotalCentsFromServer,
+      setFinalCentsFromServer,
+      setPayFullAmount,
+      setAppliedDiscount,
+      clientSecret,
+      holdExpiresAt,
+    ],
+  );
+
+  const holdModalCallbacks: HoldCreationModalCallbacks = useMemo(
+    () => ({
+      onOpenChange,
+      setStep,
+      setSelectedBoat,
+      setSelectedDate,
+      setSelectedSlot,
+      setPartySize,
+      onPendingCloseWhileProceed: () => {
+        setPendingCloseWhileProceedMessage("Processing your request…");
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => setPendingCloseWhileProceedMessage(null), 4000);
+        }
+      },
+      onHoldConflict: handleHoldConflict,
+    }),
+    [
+      onOpenChange,
+      setStep,
+      setSelectedBoat,
+      setSelectedDate,
+      setSelectedSlot,
+      setPartySize,
+      handleHoldConflict,
+    ],
+  );
+
+  const holdInfrastructure: HoldCreationInfrastructureRefs = useMemo(
+    () => ({
+      open,
+      lastHoldRef,
+      releaseOnCloseDoneRef,
+      holdIdRef,
+      releaseTokenRef,
+      paymentPhaseRef,
+      stepRef,
+      setHoldReleaseWarning,
+      successRecoveryPaymentCapturedRef,
+    }),
+    [open],
+  );
+
   const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange, proceedToPaymentInFlight } =
-    useHoldCreation(paymentOptions);
+    useHoldCreation(holdBookingContext, holdFormValues, holdPaymentCallbacks, holdModalCallbacks, holdInfrastructure);
 
   const handleCompleteAfterPaymentOutcome = useCallback((outcome: CompleteAfterPaymentClientOutcome) => {
     setStripePaymentProcessing(false);
@@ -951,19 +1053,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setStep(1);
       }
       setSelectedExperience(null);
-      setBoats([]);
+      resetBookingDataForModalOpen();
       setSelectedBoat(null);
-      setExperienceRates([]);
-      setAddons([]);
       setSelectedDate(null);
       const now = new Date();
       setViewMonthYear(now.getFullYear());
       setViewMonthMonth(now.getMonth() + 1);
       setSelectedRateIdForCalendar(null);
-      setEffectiveRateCents(null);
-      setDatePrices({});
-      setMonthSlots([]);
-      setMonthDataRangeStart(null);
       setSelectedSlot(null);
       setPartySize(1);
       setPetsCount(0);
@@ -1002,9 +1098,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setClientSecret(null);
       setReceiptClaimToken(null);
       setPaymentError(null);
-      setExperiencesLoadError(null);
-      setRatesSummary(null);
-      setRatesLoadError(null);
     };
 
     applyModalOpenSyncReset();
@@ -1217,7 +1310,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
-  }, [open, selectionKey, initialSelection?.experienceId, clearDiscount]);
+  }, [open, selectionKey, initialSelection?.experienceId, clearDiscount, resetBookingDataForModalOpen]);
 
   // Clear or revalidate applied discount whenever price drivers or experience change so checkout totals don't drift from server repricing.
   useEffect(() => {
@@ -1288,10 +1381,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const allowTipLater = selectedExperience?.allowTipLater !== false;
   const tipSectionRequired = allowTipNow || allowTipLater;
   useEffect(() => {
+    if (!selectedExperience) return;
     if (!tipSectionRequired) return;
     if (allowTipNow && !allowTipLater) setTipChoice("now");
     else if (!allowTipNow && allowTipLater) setTipChoice("later");
-  }, [tipSectionRequired, allowTipNow, allowTipLater]);
+  }, [selectedExperience, tipSectionRequired, allowTipNow, allowTipLater]);
 
   // Confetti when booking is confirmed (payment success) — dynamic import to avoid SSR resolution
   useEffect(() => {
@@ -1395,8 +1489,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         }
       };
       if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
-        void releaseCreatedHold().then((ok) => {
-          if (!ok) return;
+        void releaseCreatedHold().then(() => {
+          // Always leave the payment step after a best-effort release. If release failed
+          // (e.g. missing RELEASE_TOKEN_SECRET on the server), holdReleaseWarning is set
+          // so the user is not trapped on checkout.
           navigateFromStep4();
         });
         return;
@@ -1422,7 +1518,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!canGoFromStep2) return;
     if (selectedExperience?.id) {
       bookingCache.invalidate(`slots|${selectedExperience.id}|`);
-      setSlotsRetryTrigger((prev) => prev + 1);
+      retrySlots();
     }
     if (isTicketed) {
       setStep(4);
@@ -1459,7 +1555,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!canGoToStep4) return;
     if (selectedExperience?.id) {
       bookingCache.invalidate(`slots|${selectedExperience.id}|`);
-      setSlotsRetryTrigger((prev) => prev + 1);
+      retrySlots();
     }
     setStep(4);
     setPaymentPhase("form");
@@ -1519,19 +1615,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       open={open}
       onOpenChange={handleModalOpenChange}
       fullScreenOnMobile
-      className={cn(
-        "max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] sm:max-h-[85dvh]",
-        "sm:max-w-md md:max-w-2xl lg:max-w-3xl"
-      )}
+      className="sm:max-w-md md:max-w-2xl lg:max-w-3xl"
     >
       <div
         className={cn(
-          "flex flex-col overflow-hidden min-h-[260px] max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] sm:max-h-[85dvh] overflow-x-hidden",
+          // h-full: fill Dialog body flex area so inner slides / scroll regions get a real height on mobile.
+          "flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden overflow-x-hidden",
           step === 4 && paymentPhase === "success"
             ? "h-auto min-h-0"
             : step === 4
-              ? "h-[70dvh] min-h-[320px] sm:min-h-[400px] md:min-h-[420px]"
-              : "flex-1 min-h-0"
+              ? "flex-1 min-h-[320px] sm:min-h-[400px] md:min-h-[420px] max-h-full"
+              : "flex-1 min-h-[260px]"
         )}
       >
         {pendingCloseWhileProceedMessage ? (
@@ -1565,10 +1659,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           </div>
           <div className="w-14" aria-hidden />
         </div>
-        <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-0.5 sm:mb-1.5" : "mb-3")}>
-          Step {stepIndex} of {stepCount}
-        </p>
-        <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-1.5 sm:mb-2" : "mb-4")}>{stepTitle}</h2>
+        <div aria-live="polite" aria-atomic="true">
+          <p className={cn("text-xs font-medium text-brand-muted uppercase tracking-wider shrink-0", step === 4 ? "mb-0.5 sm:mb-1.5" : "mb-3")}>
+            Step {stepIndex} of {stepCount}
+          </p>
+          <h2 className={cn("text-lg font-semibold text-brand-dark shrink-0", step === 4 ? "mb-1.5 sm:mb-2" : "mb-4")}>{stepTitle}</h2>
+        </div>
 
         {paymentError && (
           <div className="mb-4 shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-3 flex items-start justify-between gap-3">
@@ -1627,8 +1723,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         {/* Sliding panels — constrained height so calendar/boat steps scroll and bottom buttons stay visible */}
         <div
           className={cn(
+            // Remaining height below step chrome — do not use 90dvh−11rem (fights padded Dialog + bottom sheet).
             "flex flex-col overflow-hidden min-h-0 flex-1",
-            step !== 4 && "max-h-[calc(90dvh-11rem)] sm:max-h-[calc(85dvh-11rem)]",
             step === 4 && "min-h-0",
             // Step 1 loading: give the slide row a real height so the spinner can center in the panel (not hug the title)
             step === 1 && loading && "min-h-[min(52dvh,420px)]"
@@ -1946,7 +2042,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               </p>
                               <button
                                 type="button"
-                                onClick={() => setTicketCountsRetryTrigger((t) => t + 1)}
+                                onClick={() => retryTicketCounts()}
                                 className="w-full rounded-lg bg-brand-primary text-white text-sm font-semibold py-2.5 px-3 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                               >
                                 Retry availability
@@ -2984,7 +3080,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             }
                             return;
                           }
-                          void runCompleteAfterPaymentForModal();
+                          void runCompleteAfterPaymentForModal({
+                            holdId: resolvedHoldId,
+                            paymentIntentId: resolvedPiId ?? undefined,
+                          });
                         }}
                         onError={(msg) => {
                           setPaymentError(msg);

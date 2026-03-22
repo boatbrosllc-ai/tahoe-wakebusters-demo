@@ -263,11 +263,12 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         onOpenChange={onOpenChange}
         title="Book now"
         description="Pick an experience, then a date and time."
-        className="max-w-lg w-[calc(100vw-2rem)]"
+        fullScreenOnMobile
+        className="sm:max-w-lg"
       >
-        <div className="flex flex-col min-h-0">
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           {/* Pill filters: one per experience */}
-          <div className="flex flex-wrap gap-2 mb-4">
+          <div className="flex flex-wrap gap-2 mb-4 shrink-0">
             {experiencesLoading ? (
               <div className="h-9 w-24 animate-pulse rounded-full bg-brand-dark/10" />
             ) : (
@@ -290,7 +291,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
           </div>
 
           {/* Month nav */}
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 shrink-0">
             <button
               type="button"
               onClick={goPrevMonth}
@@ -315,7 +316,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
           </div>
 
           {/* Weekday headers — Sunday first to match grid (getDay() 0 = Sunday) */}
-          <div className="grid grid-cols-7 gap-0.5 text-center mb-1">
+          <div className="grid grid-cols-7 gap-0.5 text-center mb-1 shrink-0">
             {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((d, i) => (
               <span key={`wd-${i}`} className="text-[10px] font-medium text-brand-muted py-0.5">
                 {d}
@@ -325,7 +326,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
           {/* Slots load error: visible inline message + retry */}
           {slotsLoadError && (
-            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+            <div className="mb-3 shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
               <p className="font-medium">{slotsLoadError}</p>
               <button
                 type="button"
@@ -337,8 +338,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
             </div>
           )}
 
-          {/* Calendar grid */}
-          <div className="grid grid-cols-7 gap-0.5 sm:gap-1 flex-1 min-h-0 overflow-y-auto">
+          {/* Scroll wrapper: flex+grid alone is unreliable for min-height 0 / overflow on mobile WebKit */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+          <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
             {slotsLoading ? (
               Array.from({ length: 35 }, (_, i) => (
                 <div key={i} className="min-h-[36px] sm:min-h-[44px] animate-pulse rounded bg-brand-dark/10" aria-hidden />
@@ -374,8 +376,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
               })
             )}
           </div>
+          </div>
 
-          <p className="mt-3 text-xs text-brand-muted text-center">
+          <p className="mt-3 shrink-0 text-xs text-brand-muted text-center">
             Green = available. Tap a date to pick a time and go to checkout.
           </p>
         </div>
@@ -389,9 +392,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         }}
         title={selectedDate ? `Pick a time · ${selectedDateLabel}` : "Pick a time"}
         description={`${selectedExperience?.title ?? ""}. Tap a duration to go to checkout. Price shown per option.`}
-        className="max-w-md w-[calc(100vw-2rem)] sm:w-full"
+        fullScreenOnMobile
+        className="sm:max-w-md"
       >
-        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 pb-2">
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1 pb-2 [scrollbar-gutter:stable]">
           {slotsGroupedByStartTime.length > 0 ? (
             <div className="space-y-5 sm:space-y-6">
               {slotsGroupedByStartTime.map(([timeLabel, timeSlots]) => (
@@ -435,6 +440,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
           ) : (
             <p className="text-sm text-brand-muted py-4 text-center">No times available for this date.</p>
           )}
+          </div>
         </div>
       </Dialog>
     </>

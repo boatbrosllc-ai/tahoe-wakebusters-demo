@@ -3,7 +3,7 @@
  * Owns experiences, boats, rates, slots, date prices, ticket counts, and effective pricing.
  * Accepts (open, initialSelection, selectionKey) and selection state; returns all loaded data + loading/error states.
  */
-import { useState, useRef, useMemo, useEffect } from "react";
+import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 import { bookingError } from "@/lib/booking/debug";
@@ -30,7 +30,6 @@ export type UseBookingModalDataSelection = {
   isTicketed: boolean;
   /** Listing boat id for calendar/effective pricing when the experience has boats. */
   selectedBoatId: string | null;
-  setSelectedExperience: React.Dispatch<React.SetStateAction<ExperienceItem | null>>;
 };
 
 export function useBookingModalData(
@@ -72,6 +71,8 @@ export function useBookingModalData(
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   /** True while fetching `/api/booking/effective-price` for the selected date (cache miss for that date). */
   const [effectivePriceLoading, setEffectivePriceLoading] = useState(false);
+  /** Merged into parent `selectedExperience` in BookingModal after detail fetch (avoids setter in selection). */
+  const [experienceDetailPatch, setExperienceDetailPatch] = useState<Partial<ExperienceItem> | null>(null);
 
   const viewMonthForPrefetchRef = useRef<{ viewMonthStartStr: string; daysInViewMonth: number } | null>(null);
   const inFlightKeyRef = useRef<string | null>(null);
@@ -119,6 +120,7 @@ export function useBookingModalData(
     setTicketCounts(null);
     setTicketCountsLoading(false);
     setTicketCountsError(null);
+    setExperienceDetailPatch(null);
   }, [open]);
 
   // Experiences fetch (on open/selectionKey)
@@ -182,21 +184,16 @@ export function useBookingModalData(
           return;
         }
         if (detail?.pricingType || detail?.departureHour != null || detail?.allowDeposit != null || detail?.allowTipNow != null || detail?.allowTipLater != null || detail?.seasonal != null) {
-          selection?.setSelectedExperience((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  ...(detail.pricingType && { pricingType: detail.pricingType }),
-                  ...(detail.pricingType === "ticketed" && detail.maxCapacity != null && { maxCapacity: detail.maxCapacity }),
-                  ...(detail.pricingType === "ticketed" && detail.departureHour != null && { departureHour: detail.departureHour }),
-                  ...(detail.pricingType === "ticketed" && detail.departureMinute != null && { departureMinute: detail.departureMinute }),
-                  ...(detail.allowDeposit != null && { allowDeposit: detail.allowDeposit }),
-                  ...(detail.allowTipNow != null && { allowTipNow: detail.allowTipNow }),
-                  ...(detail.allowTipLater != null && { allowTipLater: detail.allowTipLater }),
-                  ...(detail.seasonal != null && { seasonal: detail.seasonal }),
-                }
-              : null
-          );
+          setExperienceDetailPatch({
+            ...(detail.pricingType && { pricingType: detail.pricingType }),
+            ...(detail.pricingType === "ticketed" && detail.maxCapacity != null && { maxCapacity: detail.maxCapacity }),
+            ...(detail.pricingType === "ticketed" && detail.departureHour != null && { departureHour: detail.departureHour }),
+            ...(detail.pricingType === "ticketed" && detail.departureMinute != null && { departureMinute: detail.departureMinute }),
+            ...(detail.allowDeposit != null && { allowDeposit: detail.allowDeposit }),
+            ...(detail.allowTipNow != null && { allowTipNow: detail.allowTipNow }),
+            ...(detail.allowTipLater != null && { allowTipLater: detail.allowTipLater }),
+            ...(detail.seasonal != null && { seasonal: detail.seasonal }),
+          });
         }
       })
       .catch((err: unknown) => {
@@ -213,7 +210,7 @@ export function useBookingModalData(
         setAddonsLoading(false);
       });
     return () => controller.abort();
-  }, [selection?.selectedExperience?.id, selection?.setSelectedExperience, boatsRetryTrigger, paymentPhase]);
+  }, [selection?.selectedExperience?.id, boatsRetryTrigger, paymentPhase]);
 
   // Rates summary (early fetch for duration/date-prices)
   useEffect(() => {
@@ -589,58 +586,85 @@ export function useBookingModalData(
     };
   }, [selection?.selectedExperience?.id, selection?.selectedRateIdForCalendar, selection?.selectedDate, selection?.selectedBoatId, datePrices]);
 
+  const clearExperienceDetailPatch = useCallback(() => {
+    setExperienceDetailPatch(null);
+  }, []);
+
+  const retrySlots = useCallback(() => {
+    setSlotsRetryTrigger((t) => t + 1);
+  }, []);
+
+  const retryTicketCounts = useCallback(() => {
+    setTicketCountsRetryTrigger((t) => t + 1);
+  }, []);
+
+  const resetBookingDataForModalOpen = useCallback(() => {
+    setExperiencesLoadError(null);
+    setBoats([]);
+    setExperienceRates([]);
+    setAddons([]);
+    setExperienceDetailLoadError(null);
+    setEffectiveRateCents(null);
+    setDatePrices({});
+    setMonthSlots([]);
+    setMonthDataRangeStart(null);
+    setRatesSummary(null);
+    setRatesLoadError(null);
+    setExperienceDetailPatch(null);
+  }, []);
+
+  const invalidateAfterConflict = useCallback(() => {
+    const exp = selection?.selectedExperience;
+    if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return;
+    bookingCache.invalidate(`slots|${exp.id}|`);
+    const ticketed = exp.pricingType === "ticketed";
+    bookingCache
+      .fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, { ticketed })
+      .then((data) => {
+        const nextSlots = (data?.slots ?? []) as SlotDto[];
+        setMonthDataRangeStart(viewMonthStartStr);
+        setMonthSlots(nextSlots);
+      })
+      .catch(() => {
+        setMonthSlots([]);
+        setMonthDataRangeStart(null);
+      });
+  }, [selection?.selectedExperience, viewMonthStartStr, viewMonthEndStr]);
+
   return {
     experiences,
-    setExperiences,
     experiencesLoadError,
-    setExperiencesLoadError,
     loading,
     boats,
-    setBoats,
     boatsLoading,
-    setBoatsLoading,
     experienceRates,
-    setExperienceRates,
     addons,
-    setAddons,
     addonsLoading,
     experienceDetailLoadError,
-    setExperienceDetailLoadError,
     monthSlots,
-    setMonthSlots,
     slotsLoadError,
-    setSlotsLoadError,
     slotsLoading,
     slotsPartialData,
     datePrices,
-    setDatePrices,
     datePricesLoading,
-    setDatePricesLoading,
     holidayDateStrings,
-    setHolidayDateStrings,
     ticketsAvailableByDate,
-    setTicketsAvailableByDate,
     ratesSummary,
-    setRatesSummary,
     ratesLoadError,
-    setRatesLoadError,
     monthDataRangeStart,
-    setMonthDataRangeStart,
-    slotsRetryTrigger,
-    setSlotsRetryTrigger,
-    boatsRetryTrigger,
-    setBoatsRetryTrigger,
     ticketCounts,
-    setTicketCounts,
     ticketCountsLoading,
     ticketCountsError,
-    setTicketCountsError,
     ticketCountsRetryTrigger,
-    setTicketCountsRetryTrigger,
     effectiveRateCents,
-    setEffectiveRateCents,
     effectivePriceLoading,
     viewMonthForPrefetchRef,
     ratesForSelection,
+    experienceDetailPatch,
+    clearExperienceDetailPatch,
+    retrySlots,
+    retryTicketCounts,
+    resetBookingDataForModalOpen,
+    invalidateAfterConflict,
   };
 }

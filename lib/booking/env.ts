@@ -51,6 +51,27 @@ function requireEnv(name: string): string {
   return v;
 }
 
+/**
+ * Public site URL for Stripe redirects, email links, and assets.
+ * Prefer explicit APP_BASE_URL; otherwise use host-injected URLs (Netlify `URL`, `DEPLOY_PRIME_URL`; Vercel `VERCEL_URL`)
+ * so confirmation-outbox and Brevo sends work even when only deployment defaults are set.
+ */
+function resolveAppBaseUrl(): string {
+  const explicit = getEnv("APP_BASE_URL")?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  const deploy =
+    getEnv("URL")?.trim() ||
+    getEnv("DEPLOY_PRIME_URL")?.trim() ||
+    getEnv("VERCEL_URL")?.trim();
+  if (deploy) {
+    const withScheme = /^https?:\/\//i.test(deploy) ? deploy : `https://${deploy}`;
+    return withScheme.replace(/\/$/, "");
+  }
+  throw new Error(
+    "Missing public app URL: set APP_BASE_URL, or rely on URL (Netlify) / VERCEL_URL in deployment."
+  );
+}
+
 export const bookingEnv = {
   get firebaseProjectId(): string | undefined {
     return getEnv("FIREBASE_PROJECT_ID");
@@ -124,7 +145,7 @@ export const bookingEnv = {
     return Number.isNaN(n) ? undefined : n;
   },
   get appBaseUrl(): string {
-    return requireEnv("APP_BASE_URL").replace(/\/$/, "");
+    return resolveAppBaseUrl();
   },
   /**
    * Required for signing/verifying `release_token` on user-initiated hold release (`/api/booking/release-hold`).

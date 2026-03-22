@@ -121,9 +121,10 @@ export function Dialog({
   const overlay = (
     <div
       className={cn(
-        "fixed inset-0 z-[100] flex overflow-hidden min-h-screen overscroll-contain",
+        // h-dvh: avoid min-h-screen/100vh stretching past visible viewport on mobile (iOS toolbar).
+        "fixed inset-0 z-[100] flex h-dvh max-h-dvh overflow-hidden overscroll-contain",
         fullScreenOnMobile
-          ? "items-end pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
+          ? "flex-col justify-end sm:flex-row sm:items-center sm:justify-center sm:p-4 sm:pt-[env(safe-area-inset-top)] sm:pb-[env(safe-area-inset-bottom)]"
           : "items-center justify-center p-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
       )}
       role="dialog"
@@ -137,13 +138,13 @@ export function Dialog({
         onClick={close}
         aria-hidden
       />
-      {/* Panel */}
+      {/* Panel — max height uses small viewport (stable on iOS); safe area padding is inside body, not double-counted on overlay */}
       <div
         className={cn(
-          "relative z-10 flex flex-col min-h-0 overflow-hidden bg-white shadow-premium",
+          "relative z-10 flex min-h-0 w-full flex-col overflow-hidden bg-white shadow-premium",
           fullScreenOnMobile
-            ? "w-full max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
-            : "w-full max-w-lg max-h-[85dvh] sm:max-h-[85vh] rounded-2xl my-auto",
+            ? "max-h-[calc(100svh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] rounded-t-2xl rounded-b-none sm:max-h-[85vh] sm:rounded-2xl sm:max-w-lg"
+            : "max-h-[85dvh] w-full max-w-lg rounded-2xl sm:max-h-[85vh] my-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}
@@ -152,12 +153,26 @@ export function Dialog({
       >
         <DialogCloseButton onClose={close} />
         {(title || description) && (
-          <div className="border-b border-brand-dark/10 px-4 sm:px-6 py-3 sm:py-4 pr-12 shrink-0">
+          <div
+            className={cn(
+              "border-b border-brand-dark/10 px-4 sm:px-6 py-3 sm:py-4 pr-12 shrink-0",
+              fullScreenOnMobile && "pt-[max(0.75rem,env(safe-area-inset-top))]"
+            )}
+          >
             {title && <h2 id={titleId} className="text-lg font-semibold text-brand-dark">{title}</h2>}
             {description && <p id={descId} className="mt-0.5 text-sm text-brand-muted">{description}</p>}
           </div>
         )}
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-4 sm:px-6 py-4 sm:py-5 overflow-x-hidden">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-hidden px-4 sm:px-6",
+            fullScreenOnMobile
+              ? title || description
+                ? "pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 sm:py-5"
+                : "pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(3rem,env(safe-area-inset-top))] sm:py-5"
+              : "py-4 sm:py-5"
+          )}
+        >
           {children}
         </div>
       </div>

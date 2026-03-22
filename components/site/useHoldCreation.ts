@@ -13,12 +13,49 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
-export interface UseHoldCreationOptions {
-  open: boolean;
+
+export type HoldCreationBookingContext = {
+  selectedExperience: ExperienceItem | null;
+  selectedSlot: SlotDto | null;
+  selectedRateId: string | null;
+  selectedBoat: BoatOption | null;
+  selectedDate: string | null;
+  isTicketed: boolean;
+  effectiveTicketMax: number;
+  ticketMax: number;
+  partySize: number;
+  petsCount: number;
+  boats: BoatOption[];
+  viewMonthStartStr: string;
+  viewMonthEndStr: string;
+  /** Ticketed shared vs private; captured from listing — not read from initialSelection at create-hold. */
+  bookingMode: "shared" | "charter";
+  viewMonthYear: number;
+  viewMonthMonth: number;
+};
+
+export type HoldCreationFormValues = {
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  emailValid: boolean;
+  phoneValid: boolean;
+  tipChoice: "now" | "later" | null;
+  cancellationAck: boolean;
+  addonSelections: Record<string, number>;
+  priceSummary: { tipCents: number };
+  appliedDiscount: { discountCents: number; code: string } | null;
+  discountCode: string;
+  marketingOptIn: boolean;
+  howDidYouHear: string;
+  comments: string;
+  payFullAmount: boolean;
+};
+
+export type HoldCreationPaymentCallbacks = {
   holdId: string | null;
   releaseToken: string | null;
   paymentPhase: string;
-  onOpenChange: (open: boolean) => void;
   setHoldId: (v: string | null) => void;
   setReleaseToken: (v: string | null) => void;
   setHoldExpiresAt: (v: string | null) => void;
@@ -42,62 +79,47 @@ export interface UseHoldCreationOptions {
   setFinalCentsFromServer: (v: number | null) => void;
   setPayFullAmount: (v: boolean) => void;
   setAppliedDiscount: (v: { discountCents: number; code: string } | null) => void;
+  clientSecret: string | null;
+  holdExpiresAt: string | null;
+};
+
+export type HoldConflictContext = {
+  isTicketed: boolean;
+  boats: BoatOption[];
+};
+
+export type HoldCreationModalCallbacks = {
+  onOpenChange: (open: boolean) => void;
   setStep: (s: 1 | 2 | 3 | 4) => void;
   setSelectedBoat: React.Dispatch<React.SetStateAction<BoatOption | null>>;
   setSelectedDate: (v: string | null) => void;
   setSelectedSlot: (v: SlotDto | null) => void;
-  setMonthDataRangeStart: (v: string | null) => void;
-  setMonthSlots: (v: SlotDto[]) => void;
-  selectedExperience: ExperienceItem | null;
-  selectedSlot: SlotDto | null;
-  selectedRateId: string | null;
-  selectedBoat: BoatOption | null;
-  selectedDate: string | null;
-  customerName: string;
-  customerEmail: string;
-  customerPhone: string;
-  emailValid: boolean;
-  phoneValid: boolean;
-  tipChoice: "now" | "later" | null;
-  cancellationAck: boolean;
-  isTicketed: boolean;
-  effectiveTicketMax: number;
-  ticketMax: number;
-  partySize: number;
   setPartySize: (v: number) => void;
-  petsCount: number;
-  addonSelections: Record<string, number>;
-  priceSummary: { tipCents: number };
-  appliedDiscount: { discountCents: number; code: string } | null;
-  discountCode: string;
-  marketingOptIn: boolean;
-  howDidYouHear: string;
-  comments: string;
-  payFullAmount: boolean;
-  boats: BoatOption[];
-  viewMonthStartStr: string;
-  viewMonthEndStr: string;
-  /** Ticketed shared vs private; captured from listing — not read from initialSelection at create-hold. */
-  bookingMode: "shared" | "charter";
-  /** Calendar month (for persisting hold recovery across refresh). */
-  viewMonthYear: number;
-  viewMonthMonth: number;
+  onPendingCloseWhileProceed?: () => void;
+  /** After create-hold 409 (slot conflict): parent refreshes slots and resets navigation. */
+  onHoldConflict?: (ctx: HoldConflictContext) => void;
+};
+
+export type HoldCreationInfrastructureRefs = {
+  open: boolean;
   lastHoldRef: React.MutableRefObject<{ slotId: string; holdId: string } | null>;
   releaseOnCloseDoneRef: React.MutableRefObject<boolean>;
   holdIdRef: React.MutableRefObject<string | null>;
   releaseTokenRef: React.MutableRefObject<string | null>;
   paymentPhaseRef: React.MutableRefObject<string>;
-  setHoldReleaseWarning?: (message: string | null) => void;
-  /** Current booking step; used to avoid applying create-hold results after user navigates away during loading. */
   stepRef: React.MutableRefObject<1 | 2 | 3 | 4>;
-  /** Current Stripe client secret; when null in `stripe` phase, PaymentIntent is still being created. */
-  clientSecret: string | null;
-  holdExpiresAt: string | null;
-  /** When user tries to close while create-hold is in flight (modal stays open until request finishes). */
-  onPendingCloseWhileProceed?: () => void;
-  /** Best-effort release hold when closing recovery-failed UI after payment was captured (Comment 9). */
+  setHoldReleaseWarning?: (message: string | null) => void;
   successRecoveryPaymentCapturedRef?: React.MutableRefObject<boolean>;
-}
+};
+
+/** Flattened options for internal use and legacy `UseHoldCreationOptions` alias. */
+export type UseHoldCreationMergedOptions = HoldCreationBookingContext &
+  HoldCreationFormValues &
+  HoldCreationPaymentCallbacks &
+  HoldCreationModalCallbacks &
+  HoldCreationInfrastructureRefs;
+
+export type UseHoldCreationOptions = UseHoldCreationMergedOptions;
 
 /** @deprecated Use UseHoldCreationOptions — kept for existing imports. */
 export type UseBookingPaymentOptions = UseHoldCreationOptions;
@@ -197,9 +219,21 @@ async function postReleaseHold(
   }
 }
 
-export function useHoldCreation(options: UseHoldCreationOptions) {
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
+export function useHoldCreation(
+  bookingContext: HoldCreationBookingContext,
+  formValues: HoldCreationFormValues,
+  paymentCallbacks: HoldCreationPaymentCallbacks,
+  modalCallbacks: HoldCreationModalCallbacks,
+  infrastructure: HoldCreationInfrastructureRefs
+) {
+  const optionsRef = useRef<UseHoldCreationMergedOptions>(null!);
+  optionsRef.current = {
+    ...bookingContext,
+    ...formValues,
+    ...paymentCallbacks,
+    ...modalCallbacks,
+    ...infrastructure,
+  };
   const proceedToPaymentInFlightRef = useRef(false);
   const pendingModalCloseWhileProceedRef = useRef(false);
   const [proceedToPaymentInFlight, setProceedToPaymentInFlight] = useState(false);
@@ -425,30 +459,7 @@ export function useHoldCreation(options: UseHoldCreationOptions) {
                 : result.error ?? charterFallback
           );
           if (!isHoldRequestIdError) {
-            bookingCache.invalidate(`slots|${selectedExperience.id}`);
-            bookingCache
-              .fetchSlots(selectedExperience.id, viewMonthStartStr, viewMonthEndStr, undefined, { ticketed: isTicketed })
-              .then((data) => {
-                const nextSlots = (data?.slots ?? []) as SlotDto[];
-                opts.setMonthDataRangeStart(viewMonthStartStr);
-                opts.setMonthSlots(nextSlots);
-              })
-              .catch(() => {
-                opts.setMonthSlots([]);
-                opts.setMonthDataRangeStart(null);
-              });
-            if (isTicketed) {
-              opts.setPartySize(1);
-            } else if (boats.length > 1) {
-              opts.setStep(3);
-              opts.setSelectedBoat(null);
-            } else if (boats.length > 0) {
-              opts.setStep(3);
-              opts.setSelectedSlot(null);
-            } else {
-              opts.setStep(2);
-              opts.setSelectedDate(null);
-            }
+            opts.onHoldConflict?.({ isTicketed, boats });
           }
         } else {
           const ref = result.incidentId ? ` Reference: ${result.incidentId}.` : "";
@@ -609,19 +620,19 @@ export function useHoldCreation(options: UseHoldCreationOptions) {
       cancelled = true;
     };
   }, [
-    options.paymentPhase,
-    options.holdId,
-    options.clientSecret,
-    options.releaseToken,
-    options.payFullAmount,
-    options.isTicketed,
-    options.holdExpiresAt,
+    paymentCallbacks.paymentPhase,
+    paymentCallbacks.holdId,
+    paymentCallbacks.clientSecret,
+    paymentCallbacks.releaseToken,
+    formValues.payFullAmount,
+    bookingContext.isTicketed,
+    paymentCallbacks.holdExpiresAt,
     releaseCreatedHold,
   ]);
 
   // Defensive cleanup: release hold when modal closes during payment (include release_token so non-admin release succeeds)
   useEffect(() => {
-    if (!options.open) return;
+    if (!infrastructure.open) return;
     return () => {
       const opts = optionsRef.current;
       const h = opts.holdIdRef.current;
@@ -644,7 +655,7 @@ export function useHoldCreation(options: UseHoldCreationOptions) {
         });
       }
     };
-  }, [options.open]);
+  }, [infrastructure.open]);
 
   return {
     handleProceedToPayment,

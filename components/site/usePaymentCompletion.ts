@@ -13,6 +13,9 @@ import type { BookingModalPaymentPhase } from "@/lib/booking/booking-modal-state
 export type UsePaymentCompletionOptions = {
   holdId: string | null;
   paymentIntentId: string | null;
+  /** When React state may lag behind IDs resolved at payment confirmation time. */
+  holdIdOverride?: string | null;
+  paymentIntentIdOverride?: string | null;
   receiptClaimToken: string | null;
   setPaymentPhase: (v: BookingModalPaymentPhase) => void;
   setPaymentError: (v: string | null) => void;
@@ -27,10 +30,11 @@ export function usePaymentCompletion(options: UsePaymentCompletionOptions) {
   optionsRef.current = options;
   const completeAfterAbortRef = useRef<AbortController | null>(null);
 
-  const runCompleteAfterPaymentForModal = useCallback(async () => {
+  const runCompleteAfterPaymentForModal = useCallback(
+    async (resolvedIds?: { holdId?: string | null; paymentIntentId?: string | null }) => {
     const o = optionsRef.current;
-    let resolvedHoldId = o.holdId;
-    let resolvedPiId = o.paymentIntentId;
+    let resolvedHoldId = resolvedIds?.holdId ?? o.holdIdOverride ?? o.holdId;
+    let resolvedPiId = resolvedIds?.paymentIntentId ?? o.paymentIntentIdOverride ?? o.paymentIntentId;
 
     if ((!resolvedHoldId || !resolvedPiId) && o.receiptClaimToken?.trim()) {
       try {
@@ -78,7 +82,9 @@ export function usePaymentCompletion(options: UsePaymentCompletionOptions) {
       o.setPaymentPhase("completeAfterPaymentRetry");
       o.setPaymentError("Request failed. Please try again.");
     }
-  }, []);
+  },
+  [],
+);
 
   return { runCompleteAfterPaymentForModal, completeAfterAbortRef };
 }

@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { createPortal } from "react-dom";
-import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -14,31 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 import { revalidateAdminSession, subscribeAdminAuthRevalidate } from "@/lib/admin-auth-client";
-
-function BookingModalChunkLoading() {
-  // Portal to body: header uses backdrop-filter, which makes `fixed` children position
-  // relative to the header — spinner looked stuck at the top. Dialog already portals.
-  const overlay = (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-brand-dark/40 backdrop-blur-[2px]"
-      role="status"
-      aria-live="polite"
-      aria-label="Loading booking"
-    >
-      <div className="flex flex-col items-center gap-3 rounded-2xl bg-white px-8 py-6 shadow-lg border border-brand-dark/10">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-        <span className="text-sm font-medium text-brand-dark">Opening booking…</span>
-      </div>
-    </div>
-  );
-  return typeof document !== "undefined" ? createPortal(overlay, document.body) : null;
-}
-
-// Lazy-load the booking modal — it's a large chunk that's never needed at page-load time
-const BookingModal = dynamic(() => import("@/components/site/BookingModal"), {
-  ssr: false,
-  loading: () => <BookingModalChunkLoading />,
-});
+import BookingModal from "@/components/site/BookingModal";
 
 const navLinks = [
   { href: "/experiences", label: "Experiences" },

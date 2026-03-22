@@ -1,23 +1,30 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { TAX_RATE } from "@/lib/booking/constants";
 import type { AddonOption } from "@/lib/booking/booking-modal-types";
 
-export type UseDiscountValidationParams = {
-  discountCode: string;
-  isTicketed: boolean;
-  partySize: number;
-  effectiveRateCents: number | null;
-  selectedRatePriceCents: number | undefined;
-  displayAddons: AddonOption[];
-  addonSelections: Record<string, number>;
-};
-
-export function useDiscountValidation(params: UseDiscountValidationParams) {
+export function useDiscountValidation(
+  discountCode: string,
+  isTicketed: boolean,
+  partySize: number,
+  effectiveRateCents: number | null,
+  selectedRatePriceCents: number | undefined,
+  displayAddons: AddonOption[],
+  addonSelections: Record<string, number>
+) {
   const [appliedDiscount, setAppliedDiscount] = useState<{ discountCents: number; code: string } | null>(null);
   const [appliedDiscountLoading, setAppliedDiscountLoading] = useState(false);
   const [appliedDiscountError, setAppliedDiscountError] = useState<string | null>(null);
+
+  const addonSelectionsKey = useMemo(
+    () =>
+      Object.keys(addonSelections)
+        .sort()
+        .map((k) => `${k}:${addonSelections[k] ?? 0}`)
+        .join("|"),
+    [addonSelections]
+  );
 
   const clearDiscount = useCallback(() => {
     setAppliedDiscount(null);
@@ -25,18 +32,18 @@ export function useDiscountValidation(params: UseDiscountValidationParams) {
   }, []);
 
   const applyDiscount = useCallback(async () => {
-    const code = params.discountCode.trim();
+    const code = discountCode.trim();
     if (!code) return;
-    if (params.effectiveRateCents == null) return;
+    if (effectiveRateCents == null) return;
     setAppliedDiscountError(null);
     setAppliedDiscountLoading(true);
     try {
-      const ticketCountForDiscount = params.isTicketed ? Math.max(1, Math.floor(Number(params.partySize))) : 1;
-      const unitRateForDiscount = params.effectiveRateCents ?? params.selectedRatePriceCents ?? 0;
-      const rateSubtotalCents = params.isTicketed ? unitRateForDiscount * ticketCountForDiscount : unitRateForDiscount;
-      const addonSubtotalCents = params.displayAddons.reduce(
-        (s, a) => s + a.priceCents * (params.addonSelections[a.id] ?? 0),
-        0,
+      const ticketCountForDiscount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
+      const unitRateForDiscount = effectiveRateCents ?? selectedRatePriceCents ?? 0;
+      const rateSubtotalCents = isTicketed ? unitRateForDiscount * ticketCountForDiscount : unitRateForDiscount;
+      const addonSubtotalCents = displayAddons.reduce(
+        (s, a) => s + a.priceCents * (addonSelections[a.id] ?? 0),
+        0
       );
       const subtotalBeforeTaxDiscount = rateSubtotalCents + addonSubtotalCents;
       const salesTaxForDiscount = Math.round(subtotalBeforeTaxDiscount * TAX_RATE);
@@ -65,13 +72,14 @@ export function useDiscountValidation(params: UseDiscountValidationParams) {
       setAppliedDiscountLoading(false);
     }
   }, [
-    params.discountCode,
-    params.isTicketed,
-    params.partySize,
-    params.effectiveRateCents,
-    params.selectedRatePriceCents,
-    params.displayAddons,
-    params.addonSelections,
+    discountCode,
+    isTicketed,
+    partySize,
+    effectiveRateCents,
+    selectedRatePriceCents,
+    displayAddons,
+    addonSelections,
+    addonSelectionsKey,
   ]);
 
   return {

@@ -4,6 +4,7 @@
 
 import type { CreateHoldInput } from "@/lib/booking/types";
 import { validatePhone } from "@/lib/booking/validate-phone";
+import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
 
 export type ParseCreateHoldBodyResult =
   | { input: CreateHoldInput; hint?: string }
@@ -51,7 +52,7 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
     else {
       const email = (customerDraft.email as string).trim();
       if (email.length > 254) missing.push("customerDraft.email (must be at most 254 characters)");
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) missing.push("customerDraft.email (must be a valid email format)");
+      else if (!BOOKING_EMAIL_REGEX.test(email)) missing.push("customerDraft.email (must be a valid email format)");
     }
     if (typeof customerDraft.phone !== "string") {
       missing.push("customerDraft.phone");
