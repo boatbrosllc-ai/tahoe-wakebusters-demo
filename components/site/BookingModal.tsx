@@ -1533,7 +1533,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           className={cn(
             "flex flex-col overflow-hidden min-h-0 flex-1",
             step !== 4 && "max-h-[calc(90dvh-11rem)] sm:max-h-[calc(85dvh-11rem)]",
-            step === 4 && "min-h-0"
+            step === 4 && "min-h-0",
+            // Step 1 loading: give the slide row a real height so the spinner can center in the panel (not hug the title)
+            step === 1 && loading && "min-h-[min(52dvh,420px)]"
           )}
         >
           <div

@@ -180,8 +180,8 @@ export function Header() {
               width={64}
               height={64}
               className="h-10 w-10 sm:h-11 sm:w-11 lg:h-14 lg:w-14 object-contain object-left"
-              priority
               sizes="(max-width: 1023px) 40px, 56px"
+              fetchPriority="high"
             />
           </Link>
         </div>

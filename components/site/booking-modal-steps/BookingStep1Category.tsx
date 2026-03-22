@@ -25,14 +25,15 @@ export function BookingStep1Category({
   return (
     <div
       className={cn(
-        "w-1/4 shrink-0 pr-1 overflow-y-auto flex flex-col min-h-0 transition-[min-height] duration-300",
+        "relative w-1/4 shrink-0 pr-1 flex flex-col min-h-0 h-full transition-[min-height] duration-300",
+        loading ? "overflow-hidden" : "overflow-y-auto",
         panel1Collapsed && "!min-h-0 !h-0 overflow-hidden"
       )}
     >
       {loading ? (
-        <div className="flex flex-1 min-h-[min(52dvh,420px)] flex-col items-center justify-center gap-3 py-8">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-2 py-8">
           <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-          <p className="text-sm text-brand-muted">Loading experiences…</p>
+          <p className="text-sm text-brand-muted text-center">Loading experiences…</p>
         </div>
       ) : experiences && experiences.length > 0 ? (
         <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-4 md:gap-5 flex-1 min-h-0">

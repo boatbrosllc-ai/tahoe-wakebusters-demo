@@ -25,11 +25,20 @@
  * availability requests use credentials only for same-origin to avoid cross-origin issues.
  */
 
+/** Avoid spamming the console: getApiBaseUrl runs on every fetch; mismatch is common on Netlify branch URLs. */
+const siteUrlWarnOnce = new Set<string>();
+
+function warnSiteUrlOnce(key: string, log: () => void) {
+  if (siteUrlWarnOnce.has(key)) return;
+  siteUrlWarnOnce.add(key);
+  log();
+}
+
 /**
  * Returns the base URL for API requests. Validates env-provided URL; falls back to
  * same-origin when invalid or when origin does not match the current page (avoids
- * wrong production value breaking availability requests). Logs a guarded warning
- * when an override is rejected so production misconfiguration is diagnosable.
+ * wrong production value breaking availability requests). Logs once per session when
+ * an override is rejected (not on every API call).
  */
 function getApiBaseUrl(): string {
   if (typeof window === "undefined") return "";
@@ -48,18 +57,22 @@ function getApiBaseUrl(): string {
     parsed = new URL(normalized);
   } catch {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-      console.warn(
-        "[booking-data-cache] NEXT_PUBLIC_SITE_URL (or APP_URL) is not a valid URL; using same-origin.",
-        { value: fromEnv },
+      warnSiteUrlOnce("invalid", () =>
+        console.warn(
+          "[booking-data-cache] NEXT_PUBLIC_SITE_URL (or APP_URL) is not a valid URL; using same-origin.",
+          { value: fromEnv },
+        ),
       );
     }
     return origin;
   }
   if (!/^https?:$/i.test(parsed.protocol)) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-      console.warn(
-        "[booking-data-cache] NEXT_PUBLIC_SITE_URL must be http or https; using same-origin.",
-        { value: fromEnv },
+      warnSiteUrlOnce("protocol", () =>
+        console.warn(
+          "[booking-data-cache] NEXT_PUBLIC_SITE_URL must be http or https; using same-origin.",
+          { value: fromEnv },
+        ),
       );
     }
     return origin;
@@ -67,9 +80,12 @@ function getApiBaseUrl(): string {
   const envOrigin = parsed.origin;
   if (envOrigin !== origin) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-      console.warn(
-        "[booking-data-cache] NEXT_PUBLIC_SITE_URL origin does not match current origin; using same-origin to avoid cross-origin requests.",
-        { envOrigin, currentOrigin: origin, value: fromEnv },
+      warnSiteUrlOnce(`origin:${envOrigin}->${origin}`, () =>
+        console.warn(
+          "[booking-data-cache] NEXT_PUBLIC_SITE_URL origin does not match this page; using same-origin for API calls. " +
+            "For Netlify previews, set NEXT_PUBLIC_SITE_URL to the preview URL, use DEPLOY_PRIME_URL, or leave unset.",
+          { envOrigin, currentOrigin: origin, value: fromEnv },
+        ),
       );
     }
     return origin;

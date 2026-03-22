@@ -28,9 +28,13 @@ function shouldFailOpenBlockCheck(): boolean {
  * Shared block-overlap check for create-hold and create-checkout-session-direct.
  * Returns true if any block exists for the experience (or any id variant) that overlaps [slotStart, slotEnd],
  * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
+ *
+ * Uses `where("experienceId", "==", …)` only, then filters overlap in memory — no composite index required
+ * (avoids 503 when the triple-field blocks index is missing or still building).
  */
 export async function hasOverlappingBlock(opts: {
   db: Firestore;
+  /** Retained for callers; not used for the query (see module doc). */
   Timestamp: TimestampConstructor;
   experienceId: string;
   /** Same experience under slug vs doc id, etc. — blocks may be stored under any variant. */
@@ -40,7 +44,7 @@ export async function hasOverlappingBlock(opts: {
   slotEnd: Date;
   get?: (q: Query) => Promise<QuerySnapshot>;
 }): Promise<boolean> {
-  const { db, Timestamp, experienceId, slotStart, slotEnd, get } = opts;
+  const { db, experienceId, slotStart, slotEnd, get } = opts;
   const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
   const slotStartMs = slotStart.getTime();
   const slotEndMs = slotEnd.getTime();
@@ -51,7 +55,7 @@ export async function hasOverlappingBlock(opts: {
 
   const getSnap = get ?? ((q: Query) => q.get());
 
-  const checkSnap = async (snap: QuerySnapshot): Promise<boolean> => {
+  const checkSnap = (snap: QuerySnapshot): boolean => {
     for (const doc of snap.docs) {
       const b = doc.data() as { boatId?: string | null; startAt?: { toDate?: () => Date }; endAt?: { toDate?: () => Date } };
       const blockBoatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
@@ -68,18 +72,16 @@ export async function hasOverlappingBlock(opts: {
   };
 
   const runQuery = async (expIdForQuery: string): Promise<boolean> => {
-    const query = db
-      .collection("blocks")
-      .where("experienceId", "==", expIdForQuery)
-      .where("startAt", "<=", Timestamp.fromDate(slotEnd))
-      .where("endAt", ">=", Timestamp.fromDate(slotStart));
+    const query = db.collection("blocks").where("experienceId", "==", expIdForQuery);
+
     try {
       const snap = await getSnap(query);
       return checkSnap(snap);
     } catch (err) {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
-      if (code === "failed-precondition" || /index/i.test(message)) {
+      const indexRelated = code === "failed-precondition" || /index/i.test(message);
+      if (indexRelated) {
         if (shouldFailOpenBlockCheck()) {
           const explicitEnv = process.env.ENABLE_BLOCK_CHECK_FAIL_OPEN === "true";
           bookingWarn("slot-availability", "blocks query failed (index missing or building); failing open", {
