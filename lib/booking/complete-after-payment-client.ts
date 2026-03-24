@@ -14,7 +14,7 @@ export const COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS = 30_000;
 export const COMPLETE_AFTER_INITIAL_FETCH_TIMEOUT_MS = COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS;
 
 export const COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE =
-  "Your payment was received. If no confirmation email arrives within 15 minutes, please contact us.";
+  "Your payment was received — we are confirming your booking. You will receive a confirmation email shortly.";
 
 function mergeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   if (typeof AbortSignal !== "undefined" && "any" in AbortSignal && typeof AbortSignal.any === "function") {
@@ -37,15 +37,21 @@ function timeoutAbortSignal(ms: number): AbortSignal {
  * Use for retry flows in InlineBookingDetailsStep, ExperienceBookingCard, and BookingSuccessPanel.
  */
 export async function postCompleteAfterPaymentWithTimeout(
-  body: { holdId: string; paymentIntentId: string },
+  body: { paymentIntentId: string; holdId?: string; receiptClaimToken?: string | null },
   signal?: AbortSignal
 ): Promise<Response> {
   const timeoutSig = timeoutAbortSignal(COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS);
   const merged = signal ? mergeAbortSignals(signal, timeoutSig) : timeoutSig;
+  const token = body.receiptClaimToken?.trim();
+  const holdId = body.holdId?.trim();
   return fetch("/api/booking/complete-after-payment", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      paymentIntentId: body.paymentIntentId,
+      ...(holdId ? { holdId } : {}),
+      ...(token ? { receipt_claim_token: token } : {}),
+    }),
     signal: merged,
   });
 }
@@ -59,17 +65,21 @@ function isAbortOrTimeout(e: unknown): boolean {
  * On timeout/abort, returns { ok: false, stallTimeout: true } so callers can show COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE.
  */
 export async function retryCompleteAfterPaymentOnce(options: {
-  holdId: string;
+  holdId?: string | null;
   paymentIntentId: string;
+  receiptClaimToken?: string | null;
   signal?: AbortSignal;
 }): Promise<
   | { ok: true; res: Response; data: Record<string, unknown> }
   | { ok: false; stallTimeout: true; message: string }
   | { ok: false; stallTimeout: false; error: string }
 > {
-  const { holdId, paymentIntentId, signal } = options;
+  const { holdId, paymentIntentId, receiptClaimToken, signal } = options;
   try {
-    const res = await postCompleteAfterPaymentWithTimeout({ holdId, paymentIntentId }, signal);
+    const res = await postCompleteAfterPaymentWithTimeout(
+      { holdId: holdId ?? undefined, paymentIntentId, receiptClaimToken },
+      signal
+    );
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { ok: true, res, data };
   } catch (e) {
@@ -119,6 +129,13 @@ export type CompleteAfterPaymentSuccessPayload = {
   };
   message?: string;
   alreadyConverted?: boolean;
+  /** True when a pending refund row exists for discount limit exceeded */
+  discountLimitExceeded?: boolean;
+  /** When receipt token cannot be signed, server returns booking summary for the success UI */
+  degradedConfirmation?: {
+    bookingId: string;
+    startDateStr?: string;
+  };
 };
 
 export type CompleteAfterPaymentClientOutcome =
@@ -134,10 +151,10 @@ export type CompleteAfterPaymentClientOutcome =
       holdExpired?: boolean;
       status: number;
     }
-  | { kind: "processing_timeout"; message: string }
+  | { kind: "processing_timeout"; message: string; pollHardTimeoutMs?: number }
   | { kind: "aborted" }
   | { kind: "fetch_error"; message: string; isAbort: boolean }
-  | { kind: "stall_timeout"; message: string };
+  | { kind: "stall_timeout"; message: string; pollHardTimeoutMs?: number };
 
 function parseJsonSafe<T>(res: Response): Promise<T> {
   return res.json().catch(() => ({} as T));
@@ -157,6 +174,8 @@ type CompleteAfterJson = {
   experienceId?: string;
   alreadyConverted?: boolean;
   paymentSummary?: CompleteAfterPaymentSuccessPayload["paymentSummary"];
+  discountLimitExceeded?: boolean;
+  degradedConfirmation?: CompleteAfterPaymentSuccessPayload["degradedConfirmation"];
 };
 
 function pollFetchSignal(parent: AbortSignal): AbortSignal {
@@ -170,14 +189,19 @@ function pollFetchSignal(parent: AbortSignal): AbortSignal {
 export async function completeAfterPaymentWithPolling(options: {
   paymentIntentId: string;
   holdId?: string | null;
+  /** Optional signed claim; if omitted, server verifies via holdId + PaymentIntent metadata. */
+  receiptClaimToken?: string | null;
   signal: AbortSignal;
   /** Called once when the server reports payment still processing (HTTP 202 / `processing: true`) before polling begins. */
   onEnteredProcessing?: () => void;
 }): Promise<CompleteAfterPaymentClientOutcome> {
-  const { paymentIntentId, holdId, signal, onEnteredProcessing } = options;
+  const { paymentIntentId, holdId, receiptClaimToken, signal, onEnteredProcessing } = options;
+  const token = receiptClaimToken?.trim();
+  const holdIdTrim = holdId?.trim();
   const body = JSON.stringify({
     paymentIntentId,
-    ...(holdId ? { holdId } : {}),
+    ...(holdIdTrim ? { holdId: holdIdTrim } : {}),
+    ...(token ? { receipt_claim_token: token } : {}),
   });
 
   const abortController = new AbortController();
@@ -204,7 +228,11 @@ export async function completeAfterPaymentWithPolling(options: {
     const isAbort = e instanceof Error && e.name === "AbortError";
     const isTimeout = e instanceof Error && e.name === "TimeoutError";
     if (isAbort || isTimeout) {
-      return { kind: "stall_timeout", message: COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE };
+      return {
+        kind: "stall_timeout",
+        message: COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
+        pollHardTimeoutMs: COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
+      };
     }
     return {
       kind: "fetch_error",
@@ -222,7 +250,7 @@ export async function completeAfterPaymentWithPolling(options: {
     onEnteredProcessing?.();
     const pollStart = Date.now();
     const hardLimitMs =
-      typeof json.pollHardTimeoutMs === "number" && json.pollHardTimeoutMs >= 60_000
+      typeof json.pollHardTimeoutMs === "number" && json.pollHardTimeoutMs >= 1000
         ? json.pollHardTimeoutMs
         : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS;
     let pollIntervalMs = COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS;
@@ -236,7 +264,9 @@ export async function completeAfterPaymentWithPolling(options: {
         signal.removeEventListener("abort", onParentAbort);
         return {
           kind: "processing_timeout",
-          message: `We couldn't confirm your booking in time. Please check your email for a confirmation. If you're unsure, contact us at ${siteConfig.phone}.`,
+          message:
+            "Your payment was received — we are confirming your booking. You will receive a confirmation email shortly.",
+          pollHardTimeoutMs: hardLimitMs,
         };
       }
       await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
@@ -259,7 +289,11 @@ export async function completeAfterPaymentWithPolling(options: {
         const isAbort = e instanceof Error && e.name === "AbortError";
         const isTimeout = e instanceof Error && e.name === "TimeoutError";
         if (isAbort || isTimeout) {
-          return { kind: "stall_timeout", message: COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE };
+          return {
+            kind: "stall_timeout",
+            message: COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
+            pollHardTimeoutMs: hardLimitMs,
+          };
         }
         return {
           kind: "fetch_error",
@@ -306,6 +340,8 @@ export async function completeAfterPaymentWithPolling(options: {
             paymentSummary: pollJson.paymentSummary,
             message: typeof pollJson.message === "string" ? pollJson.message : undefined,
             alreadyConverted: pollJson.alreadyConverted,
+            discountLimitExceeded: pollJson.discountLimitExceeded === true,
+            degradedConfirmation: pollJson.degradedConfirmation,
           },
         };
       }
@@ -351,6 +387,8 @@ export async function completeAfterPaymentWithPolling(options: {
         paymentSummary: json.paymentSummary,
         message: typeof json.message === "string" ? json.message : undefined,
         alreadyConverted: json.alreadyConverted,
+        discountLimitExceeded: json.discountLimitExceeded === true,
+        degradedConfirmation: json.degradedConfirmation,
       },
     };
   }

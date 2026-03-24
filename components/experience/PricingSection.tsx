@@ -3,15 +3,23 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { PRICING_MAP, PRICING } from "@/lib/experience/lakeAustinPontoon.data";
+import { PRICING_MAP as PRICING_MAP_STATIC, PRICING } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
 
 const durations = [2, 4, 6, 8] as const;
 
-export function PricingSection({ id }: { id?: string }) {
+export function PricingSection({
+  id,
+  /** When set (e.g. from Firestore rates on the server), overrides static `PRICING_MAP` for display dollars by duration. */
+  pricingDollarsByDuration,
+}: {
+  id?: string;
+  pricingDollarsByDuration?: Record<number, number>;
+}) {
   const reduceMotion = useReducedMotion();
+  const pricingMap = pricingDollarsByDuration && Object.keys(pricingDollarsByDuration).length > 0 ? pricingDollarsByDuration : PRICING_MAP_STATIC;
   const [selectedHours, setSelectedHours] = useState<number>(PRICING.popularHours);
-  const price = PRICING_MAP[selectedHours] ?? PRICING_MAP[4];
+  const price = pricingMap[selectedHours] ?? pricingMap[4] ?? PRICING_MAP_STATIC[4];
 
   const scrollToBooking = () => {
     if (id) document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });

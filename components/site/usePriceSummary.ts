@@ -3,7 +3,7 @@
  * Keeps BookingModal lean and allows reuse if needed.
  */
 import { useMemo } from "react";
-import { TAX_RATE } from "@/lib/booking/constants";
+import { TAX_RATE, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import type { RateOption, AddonOption } from "@/lib/booking/booking-modal-types";
 
 export interface PriceSummaryLine {
@@ -16,6 +16,8 @@ export interface PriceSummary {
   rateLabel: string;
   rateCents: number;
   addonLines: PriceSummaryLine[];
+  /** Rate + add-ons before tax (for display of zero-tax / free tiers). */
+  subtotalBeforeTaxCents: number;
   salesTaxCents: number;
   tipCents: number;
   discountCents: number;
@@ -34,6 +36,8 @@ export interface UsePriceSummaryArgs {
   tipChoice: "now" | "later" | null;
   tipPercent: number;
   appliedDiscount: { discountCents: number; code: string } | null;
+  /** True while `/api/booking/effective-price` is resolving (e.g. boat price override). */
+  effectivePriceLoading?: boolean;
 }
 
 export function usePriceSummary({
@@ -46,9 +50,11 @@ export function usePriceSummary({
   tipChoice,
   tipPercent,
   appliedDiscount,
+  effectivePriceLoading = false,
 }: UsePriceSummaryArgs): PriceSummary {
   return useMemo(() => {
-    const priceIsEstimate = effectiveRateCents == null && selectedRate != null;
+    const priceIsEstimate =
+      (effectiveRateCents == null && selectedRate != null) || effectivePriceLoading;
     const unitCents = effectiveRateCents ?? selectedRate?.priceCents ?? 0;
     const ticketCount = isTicketed ? Math.max(1, Math.floor(Number(partySize))) : 1;
     const rateCents = isTicketed ? unitCents * ticketCount : unitCents;
@@ -63,7 +69,7 @@ export function usePriceSummary({
     const subtotalBeforeTax = rateCents + addonsTotalCents;
     const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
-    const pct = Math.min(35, Math.max(20, tipPercent));
+    const pct = Math.min(TIP_MAX_PERCENT_SERVER, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
     const discountCents = appliedDiscount?.discountCents ?? 0;
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
@@ -75,6 +81,7 @@ export function usePriceSummary({
       rateLabel,
       rateCents,
       addonLines,
+      subtotalBeforeTaxCents: subtotalBeforeTax,
       salesTaxCents,
       tipCents,
       discountCents,
@@ -91,5 +98,6 @@ export function usePriceSummary({
     tipChoice,
     tipPercent,
     appliedDiscount,
+    effectivePriceLoading,
   ]);
 }

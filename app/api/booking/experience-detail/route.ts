@@ -35,6 +35,10 @@ export interface ExperienceDetailRate {
   durationHours: number;
   displayName: string;
   priceCents: number;
+  /** Optional tier prices (weekday base is `priceCents`); use with date-prices for authoritative per-date amounts. */
+  priceWeekendCents?: number;
+  priceFriSunCents?: number;
+  priceHolidayCents?: number;
 }
 
 export interface ExperienceDetailAddon {
@@ -45,6 +49,7 @@ export interface ExperienceDetailAddon {
   type: string;
   maxQty?: number;
   highlight: boolean;
+  hiddenFromBookingUI?: boolean;
 }
 
 export interface ExperienceDetailSeasonal {
@@ -140,7 +145,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       .filter((d) => typeof (d.data() as ExperienceRate).priceCents === "number")
       .map((d) => {
         const r = d.data() as ExperienceRate;
-        return { id: d.id, durationHours: r.durationHours, displayName: r.displayName, priceCents: r.priceCents };
+        return {
+          id: d.id,
+          durationHours: r.durationHours,
+          displayName: r.displayName,
+          priceCents: r.priceCents,
+          ...(typeof r.priceWeekendCents === "number" ? { priceWeekendCents: r.priceWeekendCents } : {}),
+          ...(typeof r.priceFriSunCents === "number" ? { priceFriSunCents: r.priceFriSunCents } : {}),
+          ...(typeof r.priceHolidayCents === "number" ? { priceHolidayCents: r.priceHolidayCents } : {}),
+        };
       });
 
     let fromPriceCents: number | null = null;
@@ -191,6 +204,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           type: a.type,
           maxQty: a.maxQty,
           highlight: a.highlight ?? false,
+          ...(a.hiddenFromBookingUI === true ? { hiddenFromBookingUI: true as const } : {}),
         };
       })
       .filter((a) => a.type !== "tip");

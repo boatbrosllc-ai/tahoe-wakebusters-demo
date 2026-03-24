@@ -98,7 +98,7 @@ export async function POST(
       timeZone: "America/Chicago",
     });
 
-    const manageToken = signManageToken({ bookingId, customerEmail: toEmail, tripDateStr: booking.startDateStr });
+    const manageToken = signManageToken({ bookingId, tripDateStr: booking.startDateStr });
     const payLink = manageToken ? `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(manageToken)}` : "";
 
     // If business requirements demand admin overriding the notification claim, reset the claim explicitly
@@ -111,15 +111,19 @@ export async function POST(
       );
     }
 
-    await sendFinalPaymentRequestEmail({
-      to: toEmail,
-      customerName,
-      experienceName,
-      tripDate: tripDateStr,
-      startTime: startTimeStr,
-      amountFormatted: formatMoney(finalCents),
-      payLink,
-    });
+    const { providerMessageId } = await sendFinalPaymentRequestEmail(
+      {
+        to: toEmail,
+        customerName,
+        experienceName,
+        tripDate: tripDateStr,
+        startTime: startTimeStr,
+        amountFormatted: formatMoney(finalCents),
+        payLink,
+      },
+      { idempotencyKey: `${bookingId}_final_payment_request_resend` }
+    );
+    await markClaimSent(db, bookingId, "final_payment_request", { providerMessageId });
     await logEmailSent({
       to: toEmail,
       toName: customerName,
@@ -132,7 +136,6 @@ export async function POST(
       finalPaymentRequestSentAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     });
-    await markClaimSent(db, bookingId, "final_payment_request");
 
     return NextResponse.json({ ok: true, message: "Final payment request email sent" });
   } catch (err) {

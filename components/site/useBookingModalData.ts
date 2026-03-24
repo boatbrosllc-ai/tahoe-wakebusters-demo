@@ -6,6 +6,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
+import { isTicketedExperienceForBooking } from "@/lib/booking/experience-aliases";
 import { bookingError } from "@/lib/booking/debug";
 import type {
   ExperienceItem,
@@ -55,16 +56,27 @@ export function useBookingModalData(
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsPartialData, setSlotsPartialData] = useState(false);
+  /** Last time month slots were written to state from a successful fetch (for staleness on step advance). */
+  const [slotsFetchedAt, setSlotsFetchedAt] = useState<number | null>(null);
   const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
+  /** True when date-prices API indicates incomplete legacy hold scan (conservative ticket caps in UI). */
+  const [datePricesPartialData, setDatePricesPartialData] = useState(false);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [ratesSummary, setRatesSummary] = useState<bookingCache.CachedRateOption[] | null>(null);
   const [ratesLoadError, setRatesLoadError] = useState<string | null>(null);
-  const [monthDataRangeStart, setMonthDataRangeStart] = useState<string | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
   const [boatsRetryTrigger, setBoatsRetryTrigger] = useState(0);
-  const [ticketCounts, setTicketCounts] = useState<{ total: number; sold: number; onHold: number; available: number } | null>(null);
+  const [effectivePriceRetryTrigger, setEffectivePriceRetryTrigger] = useState(0);
+  const [ticketCounts, setTicketCounts] = useState<{
+    total: number;
+    sold: number;
+    onHold: number;
+    available: number;
+    conservativeEstimate?: boolean;
+    availabilityNote?: string;
+  } | null>(null);
   const [ticketCountsLoading, setTicketCountsLoading] = useState(false);
   const [ticketCountsError, setTicketCountsError] = useState<string | null>(null);
   const [ticketCountsRetryTrigger, setTicketCountsRetryTrigger] = useState(0);
@@ -109,10 +121,10 @@ export function useBookingModalData(
     setAddons([]);
     setExperienceDetailLoadError(null);
     setMonthSlots([]);
-    setMonthDataRangeStart(null);
     setSlotsLoadError(null);
     setSlotsLoading(false);
     setSlotsPartialData(false);
+    setSlotsFetchedAt(null);
     setRatesSummary(null);
     setRatesLoadError(null);
     setDatePrices({});
@@ -161,13 +173,14 @@ export function useBookingModalData(
     if (!exp?.id) {
       setBoats([]);
       setExperienceRates([]);
+      setRatesSummary(null);
+      setRatesLoadError(null);
       setAddons([]);
       setExperienceDetailLoadError(null);
       return;
     }
     setExperienceDetailLoadError(null);
     setMonthSlots([]);
-    setMonthDataRangeStart(null);
     // Drop previous experience's boats/rates/addons immediately so calendar/rates don't show the wrong listing while the new fetch runs.
     setBoats([]);
     setExperienceRates([]);
@@ -179,7 +192,21 @@ export function useBookingModalData(
       .then((data) => {
         const boatList = Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
         setBoats(boatList);
-        setExperienceRates(Array.isArray(data.rates) ? (data.rates as RateOption[]) : []);
+        const rateList = Array.isArray(data.rates) ? (data.rates as RateOption[]) : [];
+        setExperienceRates(rateList);
+        setRatesSummary(rateList);
+        setRatesLoadError(null);
+        const viewMonth = viewMonthForPrefetchRef.current;
+        if (viewMonth && rateList.length > 0) {
+          const allRateIds = rateList.map((r) => r.id).filter(Boolean);
+          bookingCache.prefetchDatePrices(
+            exp.id,
+            viewMonth.viewMonthStartStr,
+            viewMonth.daysInViewMonth,
+            allRateIds,
+            undefined
+          );
+        }
         setAddons(Array.isArray(data.addons) ? (data.addons as AddonOption[]) : []);
         const detail = data as { pricingType?: "charter" | "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; allowDeposit?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; seasonal?: ExperienceSeasonal };
         if (
@@ -206,6 +233,8 @@ export function useBookingModalData(
         if ((err as { name?: string })?.name === "AbortError") return;
         setBoats([]);
         setExperienceRates([]);
+        setRatesSummary(null);
+        setRatesLoadError(null);
         setAddons([]);
         const apiBody = (err as { apiBody?: { error?: string; hint?: string }; message?: string })?.apiBody;
         const msg = apiBody?.error ?? apiBody?.hint ?? (err instanceof Error ? err.message : "Could not load experience details.");
@@ -218,45 +247,6 @@ export function useBookingModalData(
     return () => controller.abort();
   }, [selection?.selectedExperience?.id, boatsRetryTrigger, paymentPhase]);
 
-  // Rates summary (early fetch for duration/date-prices)
-  useEffect(() => {
-    const exp = selection?.selectedExperience;
-    if (!exp?.id) {
-      setRatesSummary(null);
-      setRatesLoadError(null);
-      return;
-    }
-    setRatesSummary(null);
-    setRatesLoadError(null);
-    const controller = new AbortController();
-    bookingCache
-      .fetchExperienceRates(exp.id, controller.signal)
-      .then((data) => {
-        const list = data?.rates ?? [];
-        setRatesSummary(list);
-        setRatesLoadError(null);
-        const viewMonth = viewMonthForPrefetchRef.current;
-        if (viewMonth && list.length > 0) {
-          const allRateIds = list.map((r) => r.id);
-          bookingCache.prefetchDatePrices(
-            exp.id,
-            viewMonth.viewMonthStartStr,
-            viewMonth.daysInViewMonth,
-            allRateIds,
-            undefined
-          );
-        }
-      })
-      .catch((err: unknown) => {
-        if ((err as { name?: string })?.name === "AbortError") return;
-        setRatesSummary(null);
-        const apiBody = (err as { apiBody?: { error?: string; hint?: string }; message?: string })?.apiBody;
-        const msg = apiBody?.error ?? apiBody?.hint ?? (err instanceof Error ? err.message : "We couldn't load rates for this experience.");
-        setRatesLoadError(msg);
-      });
-    return () => controller.abort();
-  }, [selection?.selectedExperience?.id]);
-
   // View month ref for prefetch
   useEffect(() => {
     if (!selection || !viewMonthStartStr) return;
@@ -266,14 +256,16 @@ export function useBookingModalData(
   // Date prices
   useEffect(() => {
     const exp = selection?.selectedExperience;
-    if (!exp?.id || !selection?.selectedRateIdForCalendar || !viewMonthStartStr) {
+    const rateIdForDatePrices =
+      selection?.selectedRateIdForCalendar ?? (ratesForSelection.length > 0 ? ratesForSelection[0]?.id : null);
+    if (!exp?.id || !rateIdForDatePrices || !viewMonthStartStr) {
       setDatePrices({});
       setHolidayDateStrings(new Set());
       setTicketsAvailableByDate({});
       setDatePricesLoading(false);
       return;
     }
-    const key = `${exp.id}|${viewMonthStartStr}|${daysInViewMonth}|${selection.selectedRateIdForCalendar}`;
+    const key = `${exp.id}|${viewMonthStartStr}|${daysInViewMonth}|${rateIdForDatePrices}`;
     inFlightKeyRef.current = key;
     setDatePricesLoading(true);
     const controller = new AbortController();
@@ -282,7 +274,7 @@ export function useBookingModalData(
         exp.id,
         viewMonthStartStr,
         daysInViewMonth,
-        selection.selectedRateIdForCalendar,
+        rateIdForDatePrices,
         controller.signal
       )
       .then((data) => {
@@ -297,15 +289,17 @@ export function useBookingModalData(
         setDatePrices({ ...prices });
         setHolidayDateStrings(new Set(holidays));
         setTicketsAvailableByDate({ ...ticketsAvailable });
+        setDatePricesPartialData(Boolean((data as { partialData?: boolean }).partialData));
+        if (!selection) return;
         const otherRateIds = ratesForSelection
           .map((r) => r.id)
-          .filter((id) => id !== selection.selectedRateIdForCalendar);
+          .filter((id) => id !== rateIdForDatePrices);
         bookingCache.prefetchDatePrices(exp.id, viewMonthStartStr, daysInViewMonth, otherRateIds, undefined);
         const nextYear = selection.viewMonthMonth === 12 ? selection.viewMonthYear + 1 : selection.viewMonthYear;
         const nextMonth0 = selection.viewMonthMonth === 12 ? 0 : selection.viewMonthMonth;
         const { start: nextStart } = getMonthRange(nextYear, nextMonth0);
         const daysInNextMonth = new Date(nextYear, nextMonth0 + 1, 0).getDate();
-        const selId = selection.selectedRateIdForCalendar;
+        const selId = rateIdForDatePrices;
         const allRateIdsForAdjacentMonth: string[] = otherRateIds.length && selId
           ? [...otherRateIds, selId]
           : selId ? [selId] : [];
@@ -322,6 +316,7 @@ export function useBookingModalData(
           setDatePrices({});
           setHolidayDateStrings(new Set());
           setTicketsAvailableByDate({});
+          setDatePricesPartialData(false);
         }
       })
       .finally(() => {
@@ -331,7 +326,15 @@ export function useBookingModalData(
       controller.abort();
       if (inFlightKeyRef.current === key) inFlightKeyRef.current = null;
     };
-  }, [selection?.selectedExperience?.id, selection?.viewMonthYear, selection?.viewMonthMonth, viewMonthStartStr, daysInViewMonth, selection?.selectedRateIdForCalendar, ratesForSelection]);
+  }, [
+    selection?.selectedExperience?.id,
+    selection?.viewMonthYear,
+    selection?.viewMonthMonth,
+    viewMonthStartStr,
+    daysInViewMonth,
+    selection?.selectedRateIdForCalendar,
+    ratesForSelection,
+  ]);
 
   // Slots for visible month
   useEffect(() => {
@@ -340,8 +343,8 @@ export function useBookingModalData(
       slotsExperienceIdRef.current = null;
       setMonthSlots([]);
       setSlotsLoadError(null);
-      setMonthDataRangeStart(null);
       setSlotsPartialData(false);
+      setSlotsFetchedAt(null);
       return;
     }
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -362,7 +365,7 @@ export function useBookingModalData(
       viewMonthStartStr,
       viewMonthEndStr,
       controller.signal,
-      { ticketed: exp.pricingType === "ticketed" }
+      { ticketed: isTicketedExperienceForBooking(exp) }
     )
       .then((data) => {
         if (slotsExperienceIdRef.current !== requestedExpId) return;
@@ -371,6 +374,7 @@ export function useBookingModalData(
         if (!refMatch) return;
         setSlotsLoadError(null);
         setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
+        setSlotsFetchedAt(Date.now());
         const ur = (data as { unresolvedBookingCount?: number })?.unresolvedBookingCount;
         if (typeof ur === "number" && ur > 0) {
           bookingError("client", "slots API reports bookings missing boatId — verify backfill", null, {
@@ -382,12 +386,10 @@ export function useBookingModalData(
         if (slots.length > 100) {
           setTimeout(() => {
             if (slotsExperienceIdRef.current !== requestedExpId) return;
-            setMonthDataRangeStart(viewMonthStartStr);
             setMonthSlots(nextSlots);
             setSlotsLoading(false);
           }, 0);
         } else {
-          setMonthDataRangeStart(viewMonthStartStr);
           setMonthSlots(nextSlots);
           setSlotsLoading(false);
         }
@@ -395,7 +397,7 @@ export function useBookingModalData(
         const nextMonth0 = viewMonth === 12 ? 0 : viewMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
         if (slotsExperienceIdRef.current === requestedExpId) {
-          bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: exp.pricingType === "ticketed" }).catch(() => {});
+          bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: isTicketedExperienceForBooking(exp) }).catch(() => {});
         }
       })
       .catch((err: unknown) => {
@@ -411,10 +413,13 @@ export function useBookingModalData(
           firebaseSummary: apiBody?.firebaseDetail?.summary,
         });
         setMonthSlots([]);
-        setMonthDataRangeStart(null);
-        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
-        const parts = [msg, apiBody?.hint, apiBody?.firebaseDetail?.summary].filter(Boolean);
-        setSlotsLoadError(parts.join(" "));
+        if ((err as { name?: string })?.name === "TimeoutError") {
+          setSlotsLoadError("Availability is taking a moment to load. Please try again.");
+        } else {
+          const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
+          const parts = [msg, apiBody?.hint, apiBody?.firebaseDetail?.summary].filter(Boolean);
+          setSlotsLoadError(parts.join(" "));
+        }
         if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
           retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
@@ -438,6 +443,8 @@ export function useBookingModalData(
         bookingCache.invalidate(`slots|${experienceId}|`);
         bookingCache.invalidate(`boats|${experienceId}`);
         bookingCache.invalidate(`experience-detail|${experienceId}`);
+        setTicketCounts(null);
+        setTicketCountsRetryTrigger((t) => t + 1);
         setSlotsRetryTrigger((t) => t + 1);
         setBoatsRetryTrigger((t) => t + 1);
       }
@@ -453,11 +460,13 @@ export function useBookingModalData(
     if (!selection?.isTicketed || !selectedDate || !exp?.id) {
       setTicketCounts(null);
       setTicketCountsError(null);
+      setTicketCountsLoading(false);
       return;
     }
     if (ticketsAvailableByDateRef.current[selectedDate] === 0) {
       setTicketCounts({ total: 0, sold: 0, onHold: 0, available: 0 });
       setTicketCountsError(null);
+      setTicketCountsLoading(false);
       return;
     }
     setTicketCountsLoading(true);
@@ -477,6 +486,10 @@ export function useBookingModalData(
           sold: body.sold,
           onHold: body.onHold,
           available: body.available,
+          ...(body.conservativeEstimate === true ? { conservativeEstimate: true as const } : {}),
+          ...(typeof body.availabilityNote === "string" && body.availabilityNote.trim()
+            ? { availabilityNote: body.availabilityNote.trim() }
+            : {}),
         };
       }
       return null;
@@ -529,7 +542,7 @@ export function useBookingModalData(
         }
         if (controller.signal.aborted) return;
         setTicketCounts(null);
-        setTicketCountsError("We couldn’t load ticket availability. Tap Retry to try again.");
+        setTicketCountsError("We couldn't confirm available tickets — tap Retry to try again.");
       } catch (err: unknown) {
         if ((err as { name?: string })?.name === "AbortError") return;
         bookingError("client", "ticket-availability fetch threw", err, {
@@ -598,7 +611,7 @@ export function useBookingModalData(
       cancelled = true;
       controller.abort();
     };
-  }, [selection?.selectedExperience?.id, selection?.selectedRateIdForCalendar, selection?.selectedDate, selection?.selectedBoatId, datePrices]);
+  }, [selection?.selectedExperience?.id, selection?.selectedRateIdForCalendar, selection?.selectedDate, selection?.selectedBoatId, datePrices, effectivePriceRetryTrigger]);
 
   const clearExperienceDetailPatch = useCallback(() => {
     setExperienceDetailPatch(null);
@@ -606,6 +619,34 @@ export function useBookingModalData(
 
   const retrySlots = useCallback(() => {
     setSlotsRetryTrigger((t) => t + 1);
+  }, []);
+
+  /** Invalidate slot cache and fetch immediately (e.g. before payment step when data may be stale). */
+  const confirmSlotsFresh = useCallback(async (): Promise<{ slots: SlotDto[] }> => {
+    const exp = selection?.selectedExperience;
+    if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return { slots: [] };
+    bookingCache.invalidate(`slots|${exp.id}|`);
+    setSlotsLoading(true);
+    try {
+      const data = await bookingCache.fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, {
+        ticketed: isTicketedExperienceForBooking(exp),
+      });
+      const slots = (data?.slots ?? []) as SlotDto[];
+      setMonthSlots(slots);
+      setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
+      setSlotsFetchedAt(Date.now());
+      return { slots };
+    } finally {
+      setSlotsLoading(false);
+    }
+  }, [selection?.selectedExperience, viewMonthStartStr, viewMonthEndStr]);
+
+  const retryBoats = useCallback(() => {
+    setBoatsRetryTrigger((t) => t + 1);
+  }, []);
+
+  const retryEffectivePrice = useCallback(() => {
+    setEffectivePriceRetryTrigger((t) => t + 1);
   }, []);
 
   const retryTicketCounts = useCallback(() => {
@@ -620,8 +661,8 @@ export function useBookingModalData(
     setExperienceDetailLoadError(null);
     setEffectiveRateCents(null);
     setDatePrices({});
+    setDatePricesPartialData(false);
     setMonthSlots([]);
-    setMonthDataRangeStart(null);
     setRatesSummary(null);
     setRatesLoadError(null);
     setExperienceDetailPatch(null);
@@ -631,17 +672,16 @@ export function useBookingModalData(
     const exp = selection?.selectedExperience;
     if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return;
     bookingCache.invalidate(`slots|${exp.id}|`);
-    const ticketed = exp.pricingType === "ticketed";
+    const ticketed = isTicketedExperienceForBooking(exp);
     bookingCache
       .fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, { ticketed })
       .then((data) => {
         const nextSlots = (data?.slots ?? []) as SlotDto[];
-        setMonthDataRangeStart(viewMonthStartStr);
         setMonthSlots(nextSlots);
+        setSlotsFetchedAt(Date.now());
       })
       .catch(() => {
         setMonthSlots([]);
-        setMonthDataRangeStart(null);
       });
   }, [selection?.selectedExperience, viewMonthStartStr, viewMonthEndStr]);
 
@@ -659,13 +699,14 @@ export function useBookingModalData(
     slotsLoadError,
     slotsLoading,
     slotsPartialData,
+    slotsFetchedAt,
     datePrices,
     datePricesLoading,
+    datePricesPartialData,
     holidayDateStrings,
     ticketsAvailableByDate,
     ratesSummary,
     ratesLoadError,
-    monthDataRangeStart,
     ticketCounts,
     ticketCountsLoading,
     ticketCountsError,
@@ -677,6 +718,9 @@ export function useBookingModalData(
     experienceDetailPatch,
     clearExperienceDetailPatch,
     retrySlots,
+    confirmSlotsFresh,
+    retryBoats,
+    retryEffectivePrice,
     retryTicketCounts,
     resetBookingDataForModalOpen,
     invalidateAfterConflict,

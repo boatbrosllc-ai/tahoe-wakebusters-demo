@@ -5,9 +5,22 @@
 
 export type FinalChargeIdempotencySource = "cron" | "customer";
 
-/** Deterministic key per booking and charge path (cron off-session vs customer on-session create). */
-export function getFinalChargeIdempotencyKey(bookingId: string, source: FinalChargeIdempotencySource): string {
-  return `final_charge_${bookingId}_${source}`;
+/** Distinguishes off-session vs Payment Element PI creation so two Stripe calls never share one idempotency key. */
+export type FinalChargeIdempotencyAttempt = "off-session" | "element";
+
+/** Deterministic key per booking, charge path, and amount (avoids Stripe replaying a stale amount within idempotency window). */
+export function getFinalChargeIdempotencyKey(
+  bookingId: string,
+  source: FinalChargeIdempotencySource,
+  attempt?: FinalChargeIdempotencyAttempt,
+  amountCents?: number
+): string {
+  const amt =
+    amountCents != null && Number.isFinite(amountCents) ? Math.max(0, Math.round(amountCents)) : 0;
+  const base = `final_charge_${bookingId}_${source}_${amt}`;
+  if (attempt === "off-session") return `${base}:off-session`;
+  if (attempt === "element") return `${base}:element`;
+  return base;
 }
 
 /** Lock window: do not create a new final PaymentIntent if lock was set within this period (ms). */

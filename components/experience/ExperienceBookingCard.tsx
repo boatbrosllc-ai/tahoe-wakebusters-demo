@@ -12,14 +12,14 @@ import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import {
   fetchSlots as fetchSlotsCache,
   fetchDatePrices,
+  prefetchDatePrices,
   CachedSlotDto,
   invalidateBookingCaches,
 } from "@/lib/booking/booking-data-cache";
 import { runCreateHold, runCreatePaymentIntentForHold, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import {
-  postCompleteAfterPaymentWithTimeout,
+  completeAfterPaymentWithPolling,
   retryCompleteAfterPaymentOnce,
-  COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
 } from "@/lib/booking/complete-after-payment-client";
 import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
@@ -33,37 +33,42 @@ function BookingPaymentForm({
   onSuccess,
   onError,
 }: {
-  onSuccess: () => void;
+  onSuccess: (paymentIntentId?: string) => void;
   onError: (message: string) => void;
 }) {
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
+  const submitInFlightRef = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setProcessing(true);
     try {
       const returnUrl = typeof window !== "undefined" ? `${window.location.origin}/booking/success` : "";
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: { return_url: returnUrl },
         redirect: "if_required",
       });
       if (error) onError(error.message ?? "Payment failed");
-      else onSuccess();
+      else onSuccess(paymentIntent?.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {
+      submitInFlightRef.current = false;
       setProcessing(false);
     }
   };
+  const disabled = !stripe || processing;
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <PaymentElement />
       <button
         type="submit"
-        disabled={!stripe || processing}
+        disabled={disabled}
         className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
       >
         {processing ? "Processing…" : "Pay now"}
@@ -183,12 +188,13 @@ export function ExperienceBookingCard({
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning">("form");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [receiptClaimToken, setReceiptClaimToken] = useState<string | null>(null);
   const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slotStolen, setSlotStolen] = useState(false);
-  /** Per-rate effective price for selected date (from date-prices). */
-  const [effectiveRateByRateId, setEffectiveRateByRateId] = useState<Record<string, number>>({});
+  /** Full month prices per rate id (dateStr → cents), from one date-prices request per rate per month. */
+  const [monthPricesByRateId, setMonthPricesByRateId] = useState<Record<string, Record<string, number>>>({});
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   const [appliedDiscountCents, setAppliedDiscountCents] = useState(0);
   const [appliedDiscountCode, setAppliedDiscountCode] = useState("");
@@ -203,6 +209,15 @@ export function ExperienceBookingCard({
   const paymentIntentFetchGenRef = useRef(0);
   const completeAfterRetryInFlightRef = useRef(false);
   const [completeAfterRetryBusy, setCompleteAfterRetryBusy] = useState(false);
+  const completeAfterPaymentAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    completeAfterPaymentAbortRef.current = ac;
+    return () => {
+      ac.abort();
+      completeAfterPaymentAbortRef.current = null;
+    };
+  }, []);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     if (initialDate) {
       const d = new Date(initialDate + "T12:00:00");
@@ -295,43 +310,102 @@ export function ExperienceBookingCard({
     if (initialDate) setSelectedDate(initialDate);
   }, [initialDate]);
 
-  const rateIdsKey = useMemo(() => rates.map((r) => r.id).sort().join(","), [rates]);
+  const effectiveRateByRateId = useMemo(() => {
+    if (!selectedDate) return {};
+    const out: Record<string, number> = {};
+    for (const r of rates) {
+      const p = monthPricesByRateId[r.id]?.[selectedDate];
+      if (typeof p === "number") out[r.id] = p;
+    }
+    return out;
+  }, [rates, monthPricesByRateId, selectedDate]);
 
   useEffect(() => {
-    if (!selectedDate || rates.length === 0) {
+    if (!experienceId || rates.length === 0) {
+      setMonthPricesByRateId({});
       setDatePricesLoading(false);
-      setEffectiveRateByRateId({});
       return;
     }
     const controller = new AbortController();
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const rateIds = rates.map((r) => r.id).filter(Boolean);
+    const foregroundId =
+      selectedRateId != null && rateIds.includes(selectedRateId) ? selectedRateId : rateIds[0];
+    const otherIds = rateIds.filter((id) => id !== foregroundId);
+
     setDatePricesLoading(true);
     let cancelled = false;
+    let pollId: ReturnType<typeof setInterval> | null = null;
+
     (async () => {
       try {
-        const entries = await Promise.all(
-          rates.map(async (r) => {
-            const data = await fetchDatePrices(experienceId, selectedDate, 1, r.id, controller.signal);
-            const price = data?.prices?.[selectedDate];
-            return [r.id, typeof price === "number" ? price : null] as const;
-          })
-        );
-        if (cancelled) return;
-        const next: Record<string, number> = {};
-        for (const [id, v] of entries) {
-          if (v != null) next[id] = v;
+        if (foregroundId == null) {
+          setMonthPricesByRateId({});
+          return;
         }
-        setEffectiveRateByRateId(next);
+        const first = await fetchDatePrices(experienceId, monthStart, daysInMonth, foregroundId, controller.signal);
+        if (cancelled) return;
+        setMonthPricesByRateId((prev) => ({
+          ...prev,
+          [foregroundId]:
+            first?.prices && typeof first.prices === "object" ? { ...first.prices } : {},
+        }));
+        setDatePricesLoading(false);
+
+        prefetchDatePrices(experienceId, monthStart, daysInMonth, otherIds, controller.signal);
+
+        const mergeFromCache = (): void => {
+          void Promise.all(
+            rateIds.map((rid) =>
+              fetchDatePrices(experienceId, monthStart, daysInMonth, rid, controller.signal).then((res) => ({
+                rid,
+                res,
+              })),
+            ),
+          ).then((rows) => {
+            if (cancelled) return;
+            setMonthPricesByRateId((prev) => {
+              const next = { ...prev };
+              for (const { rid, res } of rows) {
+                const prices = res?.prices;
+                if (prices && typeof prices === "object") next[rid] = { ...prices };
+              }
+              return next;
+            });
+          });
+        };
+
+        let ticks = 0;
+        pollId = setInterval(() => {
+          mergeFromCache();
+          ticks += 1;
+          if (ticks >= 24) {
+            if (pollId != null) clearInterval(pollId);
+            pollId = null;
+          }
+        }, 400);
+        mergeFromCache();
       } catch {
-        if (!cancelled) setEffectiveRateByRateId({});
-      } finally {
-        if (!cancelled) setDatePricesLoading(false);
+        if (!cancelled) {
+          setMonthPricesByRateId((prev) => {
+            const next = { ...prev };
+            for (const r of rates) delete next[r.id];
+            return next;
+          });
+          setDatePricesLoading(false);
+        }
       }
     })();
+
     return () => {
       cancelled = true;
+      if (pollId != null) clearInterval(pollId);
       controller.abort();
     };
-  }, [experienceId, selectedDate, rateIdsKey]);
+  }, [experienceId, calendarMonth, rates, selectedRateId]);
 
   useEffect(() => {
     setAppliedDiscountCents(0);
@@ -454,13 +528,29 @@ export function ExperienceBookingCard({
       setError("Enter a discount code (at least 4 characters).");
       return;
     }
+    if (!selectedSlot || !selectedRateId) {
+      setError("Select a date, time, and rate before applying a code.");
+      return;
+    }
     setDiscountApplying(true);
     setError(null);
     try {
+      const addonPayload = Object.entries(addonSelections)
+        .filter(([, q]) => q > 0)
+        .map(([addonId, qty]) => ({ addonId, qty }));
       const res = await fetch("/api/booking/validate-discount", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, totalCents: orderSummaryTotalCents }),
+        body: JSON.stringify({
+          code,
+          totalCents: orderSummaryTotalCents,
+          slotId: selectedSlot?.id ?? "",
+          rateId: selectedRateId ?? "",
+          experienceId,
+          partySize,
+          bookingMode: isTicketed ? "shared" : "charter",
+          addonSelections: addonPayload,
+        }),
       });
       const data = (await res.json()) as { valid?: boolean; discountCents?: number; error?: string };
       if (res.ok && data.valid && typeof data.discountCents === "number") {
@@ -543,6 +633,7 @@ export function ExperienceBookingCard({
       setHoldExpiresAt(result.expiresAt ?? null);
       setPricing((result.pricing ?? null) as { totalCents: number; currency: string } | null);
       setPaymentIntentId(null);
+      setReceiptClaimToken(null);
       if (!isStripeCheckoutReady) {
         releaseHold(result.holdId, result.releaseToken);
         setError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
@@ -591,6 +682,12 @@ export function ExperienceBookingCard({
       if (typeof pi.totalCents === "number") setTotalCentsFromServer(pi.totalCents);
       setClientSecret(pi.clientSecret);
       setPaymentIntentId(pi.paymentIntentId ?? null);
+      setReleaseToken(pi.releaseToken ?? null);
+      if (typeof pi.receiptClaimToken === "string" && pi.receiptClaimToken.trim()) {
+        setReceiptClaimToken(pi.receiptClaimToken.trim());
+      } else {
+        setReceiptClaimToken(null);
+      }
       if (typeof pi.expiresAtFromIntent === "string") setHoldExpiresAt(pi.expiresAtFromIntent);
     })();
     return () => {
@@ -605,7 +702,7 @@ export function ExperienceBookingCard({
     setCompleteAfterRetryBusy(true);
     setError(null);
     try {
-      const out = await retryCompleteAfterPaymentOnce({ holdId, paymentIntentId });
+      const out = await retryCompleteAfterPaymentOnce({ holdId, paymentIntentId, receiptClaimToken });
       if (!out.ok) {
         if (out.stallTimeout) {
           setError(out.message);
@@ -757,7 +854,7 @@ export function ExperienceBookingCard({
     return (
       <div className={cn("rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-6 flex flex-col items-center justify-center gap-3 min-h-[200px]", className)}>
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-        <p className="text-sm text-brand-muted">Preparing checkout…</p>
+        <p className="text-sm text-brand-muted">Reserving your slot…</p>
       </div>
     );
   }
@@ -869,43 +966,65 @@ export function ExperienceBookingCard({
         ) : (
           <Elements stripe={stripePromise} options={{ clientSecret }}>
             <BookingPaymentForm
-              onSuccess={async () => {
+              onSuccess={async (paymentIntentIdFromStripe?: string) => {
                 setPaymentPhase("completing");
-                if (!holdId || !paymentIntentId) {
-                  bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!paymentIntentId });
+                const resolvedPiId = paymentIntentIdFromStripe ?? paymentIntentId;
+                if (!holdId || !resolvedPiId) {
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment skipped: missing holdId or paymentIntentId", { hasHoldId: !!holdId, hasPaymentIntentId: !!resolvedPiId });
                   setError("Your payment succeeded. If you don't see a confirmation email, contact us and we'll confirm your booking.");
                   setPaymentPhase("successWithWarning");
                   return;
                 }
                 try {
-                  bookingLog("client", "ExperienceBookingCard complete-after-payment request", { holdId, paymentIntentIdPrefix: paymentIntentId?.slice(0, 24) + "..." });
-                  const res = await postCompleteAfterPaymentWithTimeout({ holdId, paymentIntentId });
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok) {
-                    invalidateBookingCaches(experienceId);
-                    bookingLog("client", "ExperienceBookingCard complete-after-payment failed", { status: res.status, error: (data as { error?: string }).error });
-                    setError((data as { error?: string }).error ?? "Booking is being created; check your email in a moment.");
+                  bookingLog("client", "ExperienceBookingCard complete-after-payment request (polling)", { holdId, paymentIntentIdPrefix: resolvedPiId?.slice(0, 24) + "..." });
+                  const signal = completeAfterPaymentAbortRef.current?.signal;
+                  if (!signal) {
+                    bookingError("client", "ExperienceBookingCard complete-after-payment: no abort signal", new Error("no_signal"), { holdId });
+                    setError("Confirmation could not start. Please use Try again.");
                     setPaymentPhase("successWithWarning");
                     return;
                   }
-                  const expIdForCache = (data as { experienceId?: string }).experienceId ?? experienceId;
-                  if (expIdForCache) invalidateBookingCaches(expIdForCache);
-                  const success = (data as { success?: boolean }).success;
-                  if (success) {
-                    bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: (data as { bookingId?: string }).bookingId });
+                  const outcome = await completeAfterPaymentWithPolling({
+                    paymentIntentId: resolvedPiId,
+                    holdId,
+                    receiptClaimToken,
+                    signal,
+                  });
+                  if (outcome.kind === "success") {
+                    bookingLog("client", "ExperienceBookingCard complete-after-payment success", { holdId, bookingId: outcome.data.bookingId });
+                    const expIdForCache = outcome.data.experienceId ?? experienceId;
+                    if (expIdForCache) invalidateBookingCaches(expIdForCache);
                     setPaymentPhase("success");
-                  } else {
-                    bookingLog("client", "ExperienceBookingCard complete-after-payment not successful", { holdId, data });
-                    setError((data as { error?: string }).error ?? "Booking confirmation is pending. Contact us if you don't receive an email.");
-                    setPaymentPhase("successWithWarning");
+                    return;
                   }
+                  if (outcome.kind === "aborted") {
+                    return;
+                  }
+                  if (outcome.kind === "reconciliation_pending" || outcome.kind === "processing_timeout" || outcome.kind === "stall_timeout") {
+                    const expId = outcome.kind === "reconciliation_pending" ? outcome.experienceId ?? experienceId : experienceId;
+                    if (expId) invalidateBookingCaches(expId);
+                    setError(outcome.message);
+                    setPaymentPhase("successWithWarning");
+                    return;
+                  }
+                  if (outcome.kind === "terminal_error") {
+                    invalidateBookingCaches(experienceId);
+                    setError(outcome.message);
+                    setPaymentPhase("successWithWarning");
+                    return;
+                  }
+                  if (outcome.kind === "fetch_error") {
+                    invalidateBookingCaches(experienceId);
+                    setError(outcome.message);
+                    setPaymentPhase("successWithWarning");
+                    return;
+                  }
+                  const _never: never = outcome;
+                  void _never;
                 } catch (e) {
                   bookingError("client", "ExperienceBookingCard complete-after-payment request failed", e, { holdId });
-                  if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
-                    setError(COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE);
-                  } else {
-                    setError("Your payment succeeded. If you don't see a booking or email, contact us with your email.");
-                  }
+                  invalidateBookingCaches(experienceId);
+                  setError(e instanceof Error ? e.message : "Your payment succeeded. If you don't see a booking or email, contact us with your email.");
                   setPaymentPhase("successWithWarning");
                 }
               }}

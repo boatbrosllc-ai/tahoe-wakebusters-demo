@@ -24,6 +24,8 @@ import type {
   WaiverClause,
   WaiverSignatureConfig,
   FirestoreTimestamp,
+  BookingWaiverPointer,
+  BookingWaiverPointerStatus,
 } from "./types";
 import type { CreateWaiverTemplateInput } from "./schema";
 
@@ -35,8 +37,14 @@ const COLL = {
   bookings: "bookings",
 } as const;
 
-function getAppBaseUrl(): string {
+/**
+ * Public base URL for waiver links and emails. Must be an absolute URL in production so email clients can open links.
+ */
+export function getAppBaseUrl(): string {
   const url = process.env.APP_BASE_URL?.trim() ?? "";
+  if (!url.startsWith("https://") && !url.startsWith("http://")) {
+    console.error("[waiver] APP_BASE_URL is not set or is not absolute — signing URLs in emails will be broken");
+  }
   return url.replace(/\/$/, "");
 }
 
@@ -192,6 +200,79 @@ export async function createRequest(
   });
 
   return { requestId, tokenId, signingUrl };
+}
+
+/**
+ * Same writes as {@link createRequest}, but participates in an existing Firestore transaction
+ * (e.g. booking + waiver atomic with convert-hold-to-booking).
+ */
+export function createWaiverRequestAndTokenInTransaction(
+  tx: import("firebase-admin/firestore").Transaction,
+  db: import("firebase-admin/firestore").Firestore,
+  input: CreateWaiverRequestInput
+): { requestId: string; tokenId: string; signingUrl: string } {
+  const { Timestamp } = getFirestoreExports();
+  const tokenId = generateSigningToken();
+  const expiresAt = createTokenExpiresAt(getDefaultTokenExpiryDays());
+  const baseUrl = getAppBaseUrl();
+  const signingUrl = `${baseUrl}/waiver/sign?token=${encodeURIComponent(tokenId)}`;
+  const requestId = db.collection(COLL.requests).doc().id;
+  const request: Omit<WaiverRequest, "createdAt"> & {
+    createdAt: import("firebase-admin").firestore.Timestamp;
+  } = {
+    bookingId: input.bookingId,
+    templateId: input.templateId,
+    templateVersion: input.templateVersion,
+    status: "pending",
+    signingTokenId: tokenId,
+    signingUrl,
+    sent: {
+      initialSentAt: null,
+      lastSentAt: null,
+      reminder1SentAt: null,
+    },
+    createdAt: Timestamp.now(),
+  };
+  tx.set(db.collection(COLL.requests).doc(requestId), request);
+  tx.set(db.collection(COLL.tokens).doc(tokenId), {
+    waiverRequestId: requestId,
+    bookingId: input.bookingId,
+    expiresAt: Timestamp.fromDate(expiresAt),
+    usedAt: null,
+    ...(input.signerEmail ? { signerEmail: input.signerEmail } : {}),
+  });
+  return { requestId, tokenId, signingUrl };
+}
+
+/**
+ * Same as {@link createGroupToken} but uses an existing transaction (atomic with booking + waiver request).
+ */
+export function createGroupTokenInTransaction(
+  tx: import("firebase-admin/firestore").Transaction,
+  db: import("firebase-admin/firestore").Firestore,
+  bookingId: string,
+  templateId: string,
+  templateVersion: number,
+  partySize: number
+): { groupSigningUrl: string } {
+  const { Timestamp } = getFirestoreExports();
+  const groupToken = generateGroupToken();
+  const expiresAt = createTokenExpiresAt(getDefaultTokenExpiryDays());
+  const baseUrl = getAppBaseUrl();
+  const groupSigningUrl = `${baseUrl}/waiver/sign?group=${encodeURIComponent(groupToken)}`;
+  const doc: WaiverGroupTokenDoc & {
+    createdAt: import("firebase-admin").firestore.Timestamp;
+    expiresAt: import("firebase-admin").firestore.Timestamp;
+  } = {
+    bookingId,
+    templateId,
+    templateVersion,
+    partySize,
+    createdAt: Timestamp.now(),
+    expiresAt: Timestamp.fromDate(expiresAt),
+  };
+  tx.set(db.collection(COLL.groupTokens).doc(groupToken), doc);
+  return { groupSigningUrl };
 }
 
 // ---------------------------------------------------------------------------
@@ -437,47 +518,57 @@ export async function listRequests(
   filters: ListWaiverRequestsFilters = {}
 ): Promise<(WaiverRequest & { id: string })[]> {
   const db = getDb();
+  const { Timestamp } = getFirestoreExports();
   const limit = Math.min(filters.limit ?? 100, 500);
-  const fetchLimit = filters.status || filters.fromDate || filters.toDate || filters.search ? limit * 3 : limit;
-  const query = db
-    .collection(COLL.requests)
-    .orderBy("createdAt", "desc")
-    .limit(fetchLimit);
-  const snap = await query.get();
-  let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as WaiverRequest) }));
+  const hasSearch = Boolean(filters.search?.trim());
+
+  let q: FirebaseFirestore.Query = db.collection(COLL.requests);
 
   if (filters.status) {
-    docs = docs.filter((d) => d.status === filters.status);
+    q = q.where("status", "==", filters.status);
   }
 
   if (filters.fromDate || filters.toDate) {
-    const from = filters.fromDate ? new Date(filters.fromDate).getTime() : 0;
-    const to = filters.toDate
+    const fromMs = filters.fromDate ? new Date(filters.fromDate + "T00:00:00.000Z").getTime() : 0;
+    const toMs = filters.toDate
       ? new Date(filters.toDate + "T23:59:59.999Z").getTime()
-      : Number.MAX_SAFE_INTEGER;
-    docs = docs.filter((d) => {
-      const created = d.createdAt;
-      const ms =
-        typeof (created as { toDate?: () => Date }).toDate === "function"
-          ? (created as { toDate: () => Date }).toDate().getTime()
-          : typeof (created as { seconds?: number }).seconds === "number"
-            ? (created as { seconds: number }).seconds * 1000
-            : new Date(created as unknown as string).getTime();
-      return ms >= from && ms <= to;
-    });
+      : Date.now() + 10 * 365 * 24 * 60 * 60 * 1000;
+    q = q
+      .where("createdAt", ">=", Timestamp.fromMillis(fromMs))
+      .where("createdAt", "<=", Timestamp.fromMillis(toMs));
   }
 
-  if (filters.search && filters.search.trim()) {
-    const q = filters.search.trim().toLowerCase();
+  // When searching by name/email/bookingId, fetch up to 5× limit then filter (no Algolia/Typesense yet).
+  q = q.orderBy("createdAt", "desc").limit(hasSearch ? Math.min(limit * 5, 500) : limit);
+
+  const snap = await q.get();
+  let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as WaiverRequest) }));
+
+  if (hasSearch) {
+    const s = filters.search!.trim().toLowerCase();
     docs = docs.filter(
       (d) =>
-        (d.signerName ?? "").toLowerCase().includes(q) ||
-        (d.signerEmail ?? "").toLowerCase().includes(q) ||
-        d.bookingId.toLowerCase().includes(q)
+        (d.signerName ?? "").toLowerCase().includes(s) ||
+        (d.signerEmail ?? "").toLowerCase().includes(s) ||
+        d.bookingId.toLowerCase().includes(s)
     );
+    docs = docs.slice(0, limit);
   }
 
-  return docs.slice(0, limit);
+  return docs;
+}
+
+/** After commit, attach Storage paths to the signed waiver request (PDF and/or HTML). */
+export async function appendWaiverSignedStoragePaths(
+  requestId: string,
+  paths: { pdfStoragePath?: string | null; htmlStoragePath?: string | null }
+): Promise<void> {
+  const db = getDb();
+  const patch: Record<string, unknown> = {};
+  if (paths.pdfStoragePath != null) patch["signed.pdfStoragePath"] = paths.pdfStoragePath;
+  if (paths.htmlStoragePath != null) patch["signed.htmlStoragePath"] = paths.htmlStoragePath;
+  if (Object.keys(patch).length === 0) return;
+  await db.collection(COLL.requests).doc(requestId).update(patch);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,11 +747,12 @@ export function isTokenValid(
 // Booking waiver pointer
 // ---------------------------------------------------------------------------
 
-export type BookingWaiverPointer = {
-  requestId: string;
-  status: WaiverRequestStatus;
-  templateId: string;
-  templateVersion: number;
+const STATUS_PRIORITY: Record<string, number> = {
+  void: 0,
+  expired: 1,
+  pending: 2,
+  partial: 3,
+  signed: 4,
 };
 
 export async function getBookingWaiverPointer(
@@ -680,17 +772,55 @@ export async function getBookingWaiverPointer(
   return waiver as BookingWaiverPointer;
 }
 
+/**
+ * Updates booking.waiver. Does not downgrade `signed` to `partial`/`pending` (e.g. from group signers).
+ * Merges `signedCount` when status is `partial`.
+ */
 export async function setBookingWaiverPointer(
   bookingId: string,
   pointer: BookingWaiverPointer
 ): Promise<void> {
   const db = getDb();
   const { FieldValue } = getFirestoreExports();
-  // Never overwrite the primary requestId: it is set once by createWaiverForBooking. Group signers use a separate request; keep the first.
   const existing = await getBookingWaiverPointer(bookingId);
   const requestId = existing?.requestId ?? pointer.requestId;
+
+  const incomingPri = STATUS_PRIORITY[pointer.status] ?? -1;
+  const existingPri = existing?.status != null ? (STATUS_PRIORITY[existing.status] ?? -1) : -1;
+
+  if (existing?.status === "signed" && pointer.status !== "signed") {
+    await db.collection(COLL.bookings).doc(bookingId).update({
+      waiver: { ...existing, requestId },
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return;
+  }
+
+  if (existing && existingPri > incomingPri) {
+    await db.collection(COLL.bookings).doc(bookingId).update({
+      waiver: { ...existing, requestId },
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return;
+  }
+
+  let next: BookingWaiverPointer = { ...pointer, requestId };
+
+  if (pointer.status === "partial") {
+    const prevCount = existing?.signedCount ?? 0;
+    const add = pointer.signedCount ?? 1;
+    next = {
+      ...(existing ?? pointer),
+      requestId,
+      status: "partial" as BookingWaiverPointerStatus,
+      templateId: pointer.templateId,
+      templateVersion: pointer.templateVersion,
+      signedCount: prevCount + add,
+    };
+  }
+
   await db.collection(COLL.bookings).doc(bookingId).update({
-    waiver: { ...pointer, requestId },
+    waiver: next,
     updatedAt: FieldValue.serverTimestamp(),
   });
 }

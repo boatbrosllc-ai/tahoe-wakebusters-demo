@@ -12,6 +12,14 @@ export const TAX_RATE = 0.0825;
  */
 export const DEPOSIT_FRACTION = 0.5;
 
+/** Server enforcement in create-hold (tip cap as % of post-discount total). */
+export const TIP_MAX_PERCENT_SERVER = 35;
+
+/**
+ * Max tip percentage when customer chooses "tip now" — must match {@link TIP_MAX_PERCENT_SERVER} and create-hold.
+ */
+export const TIP_MAX_PERCENT = TIP_MAX_PERCENT_SERVER;
+
 /** Hold lifetime for `create-hold` (modal / inline / embedded payment flows). */
 export const HOLD_EXPIRY_MINUTES = 10;
 

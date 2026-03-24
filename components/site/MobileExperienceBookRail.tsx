@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { CalendarCheck, ChevronLeft } from "lucide-react";
 import { TrustLine } from "./TrustLine";
 import { analytics } from "@/lib/analytics";
+import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 
 const BOTTOM_NAV_HEIGHT = 80;
@@ -21,6 +22,7 @@ export function MobileExperienceBookRail({
   heroId?: string;
 }) {
   const [visible, setVisible] = useState(false);
+  const { openWithSelection } = useBookingModal();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -36,8 +38,6 @@ export function MobileExperienceBookRail({
     observer.observe(hero);
     return () => observer.disconnect();
   }, [heroId]);
-
-  const bookUrl = `/booking?experience=${encodeURIComponent(slug)}`;
 
   return (
     <AnimatePresence>
@@ -68,9 +68,12 @@ export function MobileExperienceBookRail({
               <p className="font-semibold text-brand-dark truncate text-sm">{title}</p>
               <TrustLine variant="default" className="mt-0.5" />
             </div>
-            <Link
-              href={bookUrl}
-              onClick={() => analytics.bookCtaClick("experience_rail", `experiences/${slug}`, slug)}
+            <button
+              type="button"
+              onClick={() => {
+                analytics.bookCtaClick("experience_rail", `experiences/${slug}`, slug);
+                openWithSelection({ experienceSlug: slug });
+              }}
               className={cn(
                 "shrink-0 inline-flex items-center justify-center gap-2 rounded-xl",
                 "bg-brand-secondary text-white font-semibold h-12 min-h-[44px] px-5 text-sm",
@@ -81,7 +84,7 @@ export function MobileExperienceBookRail({
             >
               <CalendarCheck className="h-5 w-5" aria-hidden />
               Book now
-            </Link>
+            </button>
           </div>
         </motion.div>
       )}

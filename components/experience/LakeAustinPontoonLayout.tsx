@@ -14,6 +14,7 @@ import { FinalCTA } from "@/components/experience/FinalCTA";
 import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
 import type { BookingModalInitialSelection } from "@/lib/booking/booking-modal-types";
 import { HERO, PRICING_MAP } from "@/lib/experience/lakeAustinPontoon.data";
+import { PricingSection } from "@/components/experience/PricingSection";
 
 const BOOKING_SECTION_ID = "booking-preview";
 
@@ -52,6 +53,8 @@ export interface LakeAustinPontoonLayoutProps {
   eventOverrides?: LakeAustinPontoonLayoutEventOverrides;
   /** From Firestore experience `fromPriceCents` (denormalized starting price). */
   fromPriceCents?: number | null;
+  /** Optional dollars by charter duration (hours) from Firestore rates — overrides static `PRICING_MAP` in `PricingSection`. */
+  pricingDollarsByDuration?: Record<number, number>;
 }
 
 /**
@@ -66,6 +69,7 @@ export function LakeAustinPontoonLayout({
   socialProof,
   eventOverrides,
   fromPriceCents,
+  pricingDollarsByDuration,
 }: LakeAustinPontoonLayoutProps = {}) {
   const { openWithSelection } = useBookingModal();
   const scrollToBooking = useCallback(() => {
@@ -119,6 +123,7 @@ export function LakeAustinPontoonLayout({
       />
       <GalleryMosaic id="gallery" images={galleryImages} />
       <IncludedGrid />
+      <PricingSection id={BOOKING_SECTION_ID} pricingDollarsByDuration={pricingDollarsByDuration} />
       <Reviews />
       <FAQ items={eventOverrides?.faqItems} />
       <FinalCTA

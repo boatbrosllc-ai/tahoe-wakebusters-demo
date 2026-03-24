@@ -336,12 +336,11 @@ export function validateWebhookEnv(): void {
 
 /**
  * Production startup (e.g. instrumentation.ts): ensures hold release tokens can be issued and verified.
- * Without RELEASE_TOKEN_SECRET, customers cannot release holds on cancel/back navigation.
  */
 export function assertProductionReleaseTokenSecret(): void {
   if (process.env.NODE_ENV !== "production") return;
-  const v = getEnv("RELEASE_TOKEN_SECRET");
-  if (v == null || String(v).trim() === "") {
+  const release = getEnv("RELEASE_TOKEN_SECRET");
+  if (release == null || String(release).trim() === "") {
     throw new Error(
       "RELEASE_TOKEN_SECRET is required in production. Without it, customers cannot release holds on cancel or back navigation (slots stay locked until expiry)."
     );
@@ -349,15 +348,66 @@ export function assertProductionReleaseTokenSecret(): void {
 }
 
 /**
- * Production startup: fail on missing release token secret; warn if legacy booking fallback is still enabled.
+ * Production startup: receipt-claim tokens (embedded checkout success URL, receipt recovery) require a dedicated secret.
+ * Must be a different random value than MANAGE_BOOKING_SECRET (see SECURITY.md).
  */
-export function assertProductionBookingEnv(): void {
-  assertProductionReleaseTokenSecret();
+export function assertProductionReceiptTokenSecret(): void {
   if (process.env.NODE_ENV !== "production") return;
-  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
-    console.error(
-      "[booking-env] DISABLE_LEGACY_BOOKING_FALLBACK is not true in production. " +
-        "Run app/api/admin/backfill-start-date-str, verify data, then set DISABLE_LEGACY_BOOKING_FALLBACK=true to avoid large legacy booking scans on every hold."
+  const v = getEnv("RECEIPT_TOKEN_SECRET");
+  if (v == null || String(v).trim() === "") {
+    throw new Error(
+      "RECEIPT_TOKEN_SECRET is required in production. It signs receipt links after payment (not the same as Stripe keys). " +
+        "Generate: openssl rand -hex 32. Add it in your host env (e.g. Netlify: Site configuration → Environment variables), redeploy. " +
+        "See .env.example and docs/BOOKING_SETUP.md."
     );
   }
+}
+
+/**
+ * Production: legacy hold full scans should be disabled after Firestore `startDateStr` backfill on holds.
+ * Set `DISABLE_LEGACY_HOLDS_FALLBACK=true` alongside `DISABLE_LEGACY_BOOKING_FALLBACK=true`.
+ * Startup no longer throws here; see `isLegacyFallbackSafe` in `booking-runtime-state.ts` and `/api/admin/backfill-status`.
+ */
+export function warnIfProductionLegacyHoldsFallbackNotDisabled(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.DISABLE_LEGACY_HOLDS_FALLBACK === "true") return;
+  console.warn(
+    "[booking-env] DISABLE_LEGACY_HOLDS_FALLBACK is not true in production. Run /api/admin/backfill-start-date-str until holds have startDateStr, confirm /api/admin/backfill-status shows zero remaining, then set both legacy flags. See docs/BOOKING_FLOW_OVERVIEW.md."
+  );
+}
+
+/**
+ * Production startup: fail on missing release token secret; warn if legacy booking fallback is still enabled.
+ */
+/**
+ * Production: CONTACT_EMAIL is the business inbox; STAFF_OPERATIONS_EMAIL is the captain/ops inbox for staff notifications.
+ */
+export function assertProductionContactAndStaffEmails(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  const contact = getEnv("CONTACT_EMAIL")?.trim();
+  if (!contact) {
+    throw new Error(
+      "CONTACT_EMAIL is required in production. It is used for operational alerts and business notification copies."
+    );
+  }
+  const staff = getEnv("STAFF_OPERATIONS_EMAIL")?.trim();
+  if (!staff) {
+    throw new Error(
+      "STAFF_OPERATIONS_EMAIL is required in production. It is used for staff booking and operational alerts (see SECURITY.md)."
+    );
+  }
+}
+
+export function assertProductionBookingEnv(): void {
+  assertProductionReleaseTokenSecret();
+  assertProductionReceiptTokenSecret();
+  assertProductionContactAndStaffEmails();
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+    console.warn(
+      "[booking-env] DISABLE_LEGACY_BOOKING_FALLBACK is not true in production. " +
+        "After GET /api/admin/backfill-status reports zero remaining, set DISABLE_LEGACY_BOOKING_FALLBACK=true and DISABLE_LEGACY_HOLDS_FALLBACK=true. New greenfield deploys with no legacy rows may set both to true immediately. See docs/BOOKING_FLOW_OVERVIEW.md."
+    );
+  }
+  warnIfProductionLegacyHoldsFallbackNotDisabled();
 }

@@ -12,26 +12,60 @@ export function ContactForm() {
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showRetry, setShowRetry] = useState(false);
+
+  const submitWithValues = async (n: string, em: string, msg: string) => {
+    const res = await fetch("/api/contact", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: n.trim(), email: em.trim(), message: msg.trim() }),
+    });
+    if (!res.ok) {
+      if (res.status === 429) {
+        setErrorMessage("Too many requests — please wait a moment and try again.");
+        setShowRetry(false);
+      } else {
+        setErrorMessage("Something went wrong. Try again or call us.");
+        setShowRetry(true);
+      }
+      setStatus("error");
+      return;
+    }
+    analytics.contactSubmit("contact_page");
+    setStatus("success");
+    setErrorMessage(null);
+    setShowRetry(false);
+    setName("");
+    setEmail("");
+    setMessage("");
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !email.trim() || !message.trim()) return;
     setStatus("loading");
+    setErrorMessage(null);
+    setShowRetry(false);
     try {
-      const res = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), message: message.trim() }),
-      });
-      if (!res.ok) throw new Error("Submit failed");
-      analytics.contactSubmit("contact_page");
-      setStatus("success");
-      setName("");
-      setEmail("");
-      setMessage("");
+      await submitWithValues(name, email, message);
     } catch {
+      setErrorMessage("Something went wrong. Try again or call us.");
+      setShowRetry(true);
       setStatus("error");
     }
+  };
+
+  const handleRetry = () => {
+    if (!name.trim() || !email.trim() || !message.trim()) return;
+    setStatus("loading");
+    setErrorMessage(null);
+    setShowRetry(false);
+    void submitWithValues(name, email, message).catch(() => {
+      setErrorMessage("Something went wrong. Try again or call us.");
+      setShowRetry(true);
+      setStatus("error");
+    });
   };
 
   if (status === "success") {
@@ -107,10 +141,15 @@ export function ContactForm() {
           className={cn(inputBase, "min-h-[112px] px-4 py-3 resize-y")}
         />
       </div>
-      {status === "error" && (
-        <p className="text-sm text-red-600">
-          Something went wrong. Try again or call us.
-        </p>
+      {status === "error" && errorMessage && (
+        <div className="space-y-2">
+          <p className="text-sm text-red-600">{errorMessage}</p>
+          {showRetry && (
+            <Button type="button" variant="outline" size="sm" onClick={handleRetry}>
+              Retry
+            </Button>
+          )}
+        </div>
       )}
       <Button type="submit" disabled={status === "loading"} size="lg" className="rounded-xl w-full sm:w-auto mt-1">
         {status === "loading" ? "Sending…" : "Send message"}

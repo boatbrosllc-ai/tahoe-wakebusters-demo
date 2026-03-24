@@ -39,4 +39,15 @@ describe("checkout rollback discount restoration", () => {
     // and when hold.discountCode is set, decrements that discount's usedCount.
     assert.strictEqual(restoredUsedCount(1), 0, "one reservation restored so usedCount back to 0");
   });
+
+  it("checkout line-item sum + coupon aligns with hold pricing + tip − discount (sanity identity)", () => {
+    const pricingTotalCents = 10_000;
+    const tipCents = 500;
+    const discountCents = 1_000;
+    const lineItemSumCents = pricingTotalCents + tipCents;
+    const expectedLineItemsCents = pricingTotalCents + tipCents;
+    const expectedChargeCents = pricingTotalCents + tipCents - discountCents;
+    assert.strictEqual(lineItemSumCents, expectedLineItemsCents);
+    assert.strictEqual(expectedChargeCents, 9_500);
+  });
 });

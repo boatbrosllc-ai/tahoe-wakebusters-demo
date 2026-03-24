@@ -360,6 +360,10 @@ export async function runCreatePaymentIntentForHold(
       };
     }
     const clientSecret = intentData.clientSecret;
+    const releaseTokenOut =
+      typeof intentData.releaseToken === "string" && intentData.releaseToken.trim()
+        ? intentData.releaseToken.trim()
+        : releaseToken;
     if (!clientSecret || typeof clientSecret !== "string") {
       return {
         ok: false,
@@ -373,7 +377,7 @@ export async function runCreatePaymentIntentForHold(
     return {
       ok: true,
       holdId,
-      releaseToken,
+      releaseToken: releaseTokenOut,
       expiresAt: null,
       pricing: null,
       clientSecret,
@@ -428,7 +432,7 @@ export async function runCreateHoldAndPaymentIntent(
   return {
     ok: true,
     holdId: holdResult.holdId,
-    releaseToken: holdResult.releaseToken,
+    releaseToken: piResult.releaseToken,
     expiresAt: holdResult.expiresAt,
     pricing: holdResult.pricing,
     clientSecret: piResult.clientSecret,

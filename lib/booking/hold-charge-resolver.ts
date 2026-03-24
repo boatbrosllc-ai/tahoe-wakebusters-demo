@@ -69,6 +69,7 @@ export async function resolveHoldBookingPricing(
     addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
   }
 
+  /** Snapshot line items only when every addon row has priceCents; otherwise `addonRowsMissingSnapshot` forces live `buildLineItems`. */
   const useSnapshotLineItemsCheckout =
     mode === "checkout" && !!hold.pricing && !addonRowsMissingSnapshot(hold);
   const useSnapshotPaymentIntent = mode === "payment_intent" && !!hold.pricing;

@@ -233,6 +233,7 @@ export function ExperienceListingPageContent(props) {
               pricingType={experience.pricingType ?? "charter"}
               onCheckAvailability={handlePreviewCheckAvailability}
               fromPriceCents={experience.fromPriceCents ?? null}
+              seasonal={experience.seasonal}
             />
           </div>
         </div>

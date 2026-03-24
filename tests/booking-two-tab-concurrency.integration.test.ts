@@ -3,30 +3,49 @@
  * bounded session-creation locks, and single-stage pre-conversion PaymentIntent ownership
  * (deposit vs full) when toggling payment mode across tabs.
  *
- * When FIRESTORE_EMULATOR_HOST is set and Firebase credentials are available, additional
- * parallel integration tests run against the Firestore emulator (start with:
- * `firebase emulators:start --only firestore` and set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080).
+ * When FIRESTORE_EMULATOR_HOST is set (e.g. CI: `firebase emulators:exec --only firestore`), additional
+ * parallel integration tests run against the Firestore emulator.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { safeHasFirebaseConfig } from "../lib/booking/env";
-
 /** Keep in sync with `SESSION_CREATION_IN_FLIGHT_MAX_AGE_MS` in `lib/booking/checkout-session-helpers.ts`. */
 const SESSION_CREATION_IN_FLIGHT_MAX_AGE_MS = 30_000;
 
 function firestoreConcurrencyEnabled(): boolean {
-  if (!process.env.FIRESTORE_EMULATOR_HOST?.trim()) return false;
-  try {
-    return safeHasFirebaseConfig();
-  } catch {
-    return false;
-  }
+  return Boolean(process.env.FIRESTORE_EMULATOR_HOST?.trim());
 }
 
 describe("two-tab checkout and mode-toggle duplicate-charge prevention", () => {
-  it("checkout session create uses one idempotency key per hold (embedded and redirect share it)", () => {
+  it("checkout session idempotency key is per hold, mode (embedded vs redirect), and paymentAttemptVersion", async () => {
+    const { buildCheckoutSessionIdempotencyKey } = await import("../lib/booking/stripe-idempotency-keys");
     const holdId = "hold_concurrency_1";
-    assert.strictEqual(`cs-${holdId}`, "cs-hold_concurrency_1");
+    const embV1 = buildCheckoutSessionIdempotencyKey({ holdId, embedded: true, holdPaymentAttemptVersion: 1 });
+    const redirV1 = buildCheckoutSessionIdempotencyKey({ holdId, embedded: false, holdPaymentAttemptVersion: 1 });
+    const embV2 = buildCheckoutSessionIdempotencyKey({ holdId, embedded: true, holdPaymentAttemptVersion: 2 });
+    assert.strictEqual(embV1, "cs-hold_concurrency_1-emb-v1");
+    assert.strictEqual(redirV1, "cs-hold_concurrency_1-redir-v1");
+    assert.notStrictEqual(embV1, redirV1);
+    assert.notStrictEqual(embV1, embV2, "hold resume (version bump) must use a fresh Stripe idempotency key");
+  });
+
+  it("payment intent idempotency key includes hold payment attempt version (resume-safe)", async () => {
+    const { buildPaymentIntentIdempotencyKey } = await import("../lib/booking/stripe-idempotency-keys");
+    const holdId = "hold_resume_test";
+    const k1 = buildPaymentIntentIdempotencyKey({
+      holdId,
+      payFullAmount: false,
+      chargeCents: 5000,
+      holdPaymentAttemptVersion: 1,
+    });
+    const k2 = buildPaymentIntentIdempotencyKey({
+      holdId,
+      payFullAmount: false,
+      chargeCents: 5000,
+      holdPaymentAttemptVersion: 2,
+    });
+    assert.notStrictEqual(k1, k2);
+    assert.match(k1, /-v1$/);
+    assert.match(k2, /-v2$/);
   });
 
   it("session creation inflight lease is time-bounded so locks cannot stick forever", () => {
@@ -93,16 +112,16 @@ describe(
           pricing: { subtotalCents: 1000, totalCents: 1083, taxCents: 83, currency: "usd" },
         });
 
-      if (!process.env.BLOCK_SECRET?.trim()) {
-        process.env.BLOCK_SECRET = "emulator-test-block-secret";
+      if (!process.env.RELEASE_HOLD_INTERNAL_SECRET?.trim()) {
+        process.env.RELEASE_HOLD_INTERNAL_SECRET = "emulator-test-release-hold-internal-secret";
       }
-      const blockSecret = process.env.BLOCK_SECRET.trim();
+      const releaseHoldSecret = process.env.RELEASE_HOLD_INTERNAL_SECRET.trim();
       const mkRelease = () =>
         releaseHoldPost(
           new NextRequest("http://localhost/api/booking/release-hold", {
             method: "POST",
             headers: {
-              authorization: `Bearer ${blockSecret}`,
+              authorization: `Bearer ${releaseHoldSecret}`,
               "content-type": "application/json",
             },
             body: JSON.stringify({ holdId }),
@@ -171,8 +190,8 @@ describe(
       const qSnap = holdDoc as import("firebase-admin/firestore").QueryDocumentSnapshot<DocumentData>;
 
       const [r1, r2] = await Promise.all([
-        runExpiredHoldReleaseTransaction(db, FieldValue, qSnap),
-        runExpiredHoldReleaseTransaction(db, FieldValue, qSnap),
+        runExpiredHoldReleaseTransaction(db, FieldValue, qSnap.ref),
+        runExpiredHoldReleaseTransaction(db, FieldValue, qSnap.ref),
       ]);
 
       const processed = [r1, r2].filter((x) => x === "processed").length;
@@ -299,6 +318,227 @@ describe(
         .where("startDateStr", "==", dateStr)
         .get();
       assert.strictEqual(bookingsSnap.size, 0, "no bookings from hold creation alone");
+    });
+
+    it("shared ticketed hold: convertHoldToBooking (checkout.session.completed conversion path) zeros departureInventory.reservedSeats", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { getDepartureInventoryRef } = await import("../lib/booking/shared-departure-inventory");
+      const { convertHoldToBooking } = await import("../lib/booking/convert-hold-to-booking");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `conc_conv_${uid}`;
+      const dateStr = "2030-06-20";
+      const slotId = `${dateStr}-10-3`;
+      const holdId = `conc_conv_hold_${uid}`;
+      const partySize = 2;
+      const pricing = { subtotalCents: 1000, totalCents: 1083, taxCents: 83, currency: "usd" };
+
+      await db
+        .collection("experiences")
+        .doc(expId)
+        .set({
+          slug: "conv-test",
+          title: "Conversion Test",
+          subtitle: "",
+          descriptionLong: "",
+          heroMedia: { type: "image", url: "https://example.com/x.jpg" },
+          gallery: [],
+          location: { title: "Lake Austin", addressText: "Lake Austin, TX" },
+          maxGuests: 14,
+          petsMax: 0,
+          included: [],
+          whatToBring: [],
+          rules: [],
+          cancellationPolicy: {
+            freeCancelDays: 2,
+            partialRefundDaysStart: 1,
+            partialRefundDaysEnd: 0,
+            noRefundWithinDays: 0,
+            fullText: "",
+          },
+          faqs: [],
+          seasonal: { enabled: false },
+          active: true,
+          pricingType: "ticketed",
+          maxCapacity: 10,
+          departureHour: 10,
+          departureMinute: 0,
+          tripDurationHours: 3,
+          defaultRateId: "rate1",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+      await db
+        .collection("experiences")
+        .doc(expId)
+        .collection("rates")
+        .doc("rate1")
+        .set({
+          durationHours: 3,
+          displayName: "3h",
+          priceCents: 10000,
+          active: true,
+        });
+
+      const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+      await inventoryRef.set({
+        reservedSeats: partySize,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      await db
+        .collection("holds")
+        .doc(holdId)
+        .set({
+          experienceId: expId,
+          slotId,
+          startDateStr: dateStr,
+          rateId: "rate1",
+          partySize,
+          bookingMode: "shared",
+          pricingType: "ticketed",
+          status: "active",
+          expiresAt: Timestamp.fromDate(new Date(Date.now() + 120_000)),
+          createdAt: FieldValue.serverTimestamp(),
+          customerDraft: { name: "Test", email: "test@example.com", phone: "+15125551234" },
+          addonSelections: [],
+          answers: {},
+          marketingOptIn: false,
+          pricing,
+        });
+
+      const result = await convertHoldToBooking(db, holdId, {
+        paymentIntentId: "pi_test_concurrency_simulated",
+        amountTotalCents: pricing.totalCents,
+        currency: "usd",
+        customerOverride: { name: "Test", email: "test@example.com", phone: "+15125551234" },
+        checkoutSessionId: "cs_test_concurrency_simulated",
+      });
+      assert.ok(result && "bookingId" in result && typeof result.bookingId === "string");
+
+      const invSnap = await inventoryRef.get();
+      const reserved = invSnap.exists ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : -1;
+      assert.strictEqual(reserved, 0, "reservedSeats must be released after checkout conversion");
+    });
+
+    it("two concurrent charter holds for the same boat slot: one 200, one 409; slot held by winner", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { getSlotStartEnd } = await import("../lib/booking/experience-slots");
+      const { POST: createHoldPost } = await import("../app/api/booking/create-hold/route");
+      const { NextRequest } = await import("next/server");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `conc_chtr_${uid}`;
+      const boatId = `boat_${uid}`;
+      const dateStr = "2030-06-21";
+      const slotId = `${dateStr}-10-3`;
+      const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, 10, 3, 0);
+
+      await db
+        .collection("experiences")
+        .doc(expId)
+        .set({
+          slug: "charter-conc",
+          title: "Charter Concurrency",
+          subtitle: "",
+          descriptionLong: "",
+          heroMedia: { type: "image", url: "https://example.com/x.jpg" },
+          gallery: [],
+          location: { title: "Lake Austin", addressText: "Lake Austin, TX" },
+          maxGuests: 14,
+          petsMax: 0,
+          included: [],
+          whatToBring: [],
+          rules: [],
+          cancellationPolicy: {
+            freeCancelDays: 2,
+            partialRefundDaysStart: 1,
+            partialRefundDaysEnd: 0,
+            noRefundWithinDays: 0,
+            fullText: "",
+          },
+          faqs: [],
+          seasonal: { enabled: false },
+          active: true,
+          pricingType: "charter",
+          defaultRateId: "rate1",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+      await db
+        .collection("experiences")
+        .doc(expId)
+        .collection("rates")
+        .doc("rate1")
+        .set({
+          durationHours: 3,
+          displayName: "3h",
+          priceCents: 10000,
+          active: true,
+        });
+
+      await db
+        .collection("boats")
+        .doc(boatId)
+        .set({
+          name: "Solo Boat",
+          experienceIds: [expId],
+          isListingBoat: true,
+          defaultLocationText: "Lake Austin",
+          cancellationPolicyText: "",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+      await db
+        .collection("boats")
+        .doc(boatId)
+        .collection("slots")
+        .doc(slotId)
+        .set({
+          status: "open",
+          startAt: Timestamp.fromDate(slotStart),
+          endAt: Timestamp.fromDate(slotEnd),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+      const bodyBase = {
+        experienceId: expId,
+        boatId,
+        slotId,
+        rateId: "rate1",
+        partySize: 6,
+        bookingMode: "charter" as const,
+        customerDraft: { name: "Charter", email: "c@example.com", phone: "+15125559876" },
+        addonSelections: [],
+      };
+
+      const mkReq = (holdRequestId: string) =>
+        createHoldPost(
+          new NextRequest("http://localhost/api/booking/create-hold", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-real-ip": "127.0.0.1",
+            },
+            body: JSON.stringify({ ...bodyBase, holdRequestId }),
+          })
+        );
+
+      const [resA, resB] = await Promise.all([mkReq(`hr_${uid}_a`), mkReq(`hr_${uid}_b`)]);
+      const statuses = [resA.status, resB.status].sort();
+      assert.deepStrictEqual(statuses, [200, 409], "one success and one slot conflict");
+
+      const slotSnap = await db.collection("boats").doc(boatId).collection("slots").doc(slotId).get();
+      assert.strictEqual(slotSnap.exists, true);
+      const slotData = slotSnap.data() as { status?: string; holdId?: string };
+      assert.strictEqual(slotData.status, "held");
+      assert.ok(typeof slotData.holdId === "string" && slotData.holdId.length > 0);
+      const winnerSnap = await db.collection("holds").doc(slotData.holdId!).get();
+      assert.strictEqual((winnerSnap.data() as { status?: string })?.status, "active");
     });
   }
 );

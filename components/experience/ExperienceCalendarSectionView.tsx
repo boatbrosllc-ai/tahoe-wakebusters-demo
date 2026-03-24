@@ -345,7 +345,9 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                         const isSoldOutShared = bookingMode === "shared" && spotsLeft === 0 && !isCharterLocked;
                         const isFullyUnavailable = isCharterLocked;
                         const isAvailable = !isPast && (isTicketedCell ? (openForDate > 0 && spotsLeft !== 0) : (openForDate > 0 && !isFullyUnavailable));
-                        const soldOutNoSlots = onOpenInModal != null && isTicketed && openForDate === 0;
+                        /** When shared is sold out but charter is still available, keep the cell clickable (handleDayClick switches to charter). */
+                        const soldOutNoSlots =
+                          onOpenInModal != null && isTicketed && openForDate === 0 && !isSoldOutShared;
                         const hasBookingsUrgency = !isPast && (isTicketedCell ? (spotsBookedFirst ?? 0) > 0 && spotsLeft !== 0 : (isAvailable && !isSoldOutShared && bookedCount > 0));
                         const hasBookingsOnDateFirst = isTicketedCell && !isPast && (spotsBookedFirst ?? 0) > 0;
                         const displayBookedFirst = isTicketedCell ? (spotsBookedFirst ?? 0) : bookedCount;
@@ -356,7 +358,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             key={dateStr}
                             type="button"
                             disabled={isPast || (!isAvailable && !isSoldOutShared) || isFullyUnavailable || soldOutNoSlots}
-                            onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
+                            onClick={() => ((isAvailable || isSoldOutShared) && handleDayClick(dateStr))}
                             title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedFirst} already booked this day` : undefined}
                             className={cn(
                               "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] md:min-h-[64px] touch-manipulation",
@@ -601,7 +603,11 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const isFullyBookedTicketed = isTicketed && !isPast && (spotsLeft === 0 && slotData != null || (typeof ticketsAvail2 === "number" && ticketsAvail2 === 0));
                                 const isFullyBookedCharter = !isTicketed && !isPast && entry != null && openForDuration === 0;
                                 const isFullyBooked = isFullyBookedTicketed || isFullyBookedCharter;
-                                const soldOutNoSlots2 = onOpenInModal != null && isTicketed && (slotsByDate.get(dateStr)?.open ?? 0) === 0;
+                                const soldOutNoSlots2 =
+                                  onOpenInModal != null &&
+                                  isTicketed &&
+                                  (slotsByDate.get(dateStr)?.open ?? 0) === 0 &&
+                                  !isSoldOutShared;
                                 const hasBookingsUrgencyTicketed = isTicketed && !isPast && (spotsBooked ?? 0) > 0 && spotsLeft !== 0;
                                 const hasBookingsUrgencyCharter = !isTicketed && !isPast && (openForDuration > 0 || (slotsLength === 0 && typeof datePrices[dateStr] === "number")) && bookedCount > 0 && !isFullyBooked;
                                 const hasBookingsUrgency = hasBookingsUrgencyTicketed || hasBookingsUrgencyCharter;
@@ -611,8 +617,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   <button
                                     key={dateStr}
                                     type="button"
-                                    disabled={isPast || !isAvailable || isFullyUnavailable || soldOutNoSlots2}
-                                    onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable : (isAvailable || isSoldOutShared)) && handleDayClick(dateStr))}
+                                    disabled={
+                                      isPast ||
+                                      (!isAvailable && !isSoldOutShared) ||
+                                      isFullyUnavailable ||
+                                      soldOutNoSlots2
+                                    }
+                                    onClick={() => ((isAvailable || isSoldOutShared) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency || hasBookingsOnDate) ? `${displayBookedCount} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 p-0.5 sm:p-1 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full min-h-[44px] min-w-[44px] sm:min-h-[58px] touch-manipulation",
@@ -976,7 +987,8 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                 const ticketsAvail3 = ticketsAvailableByDate?.[dateStr];
                                 const isFullyBooked3 = !isPast && (isTicketed ? (spotsLeft3 === 0 && slotData3 != null || (typeof ticketsAvail3 === "number" && ticketsAvail3 === 0)) : (entry != null && openForDuration === 0));
                                 const openForDate3 = entry?.open ?? 0;
-                                const soldOutNoSlots3 = onOpenInModal != null && isTicketed && openForDate3 === 0;
+                                const soldOutNoSlots3 =
+                                  onOpenInModal != null && isTicketed && openForDate3 === 0 && !isSoldOutShared3;
                                 const hasBookingsUrgency3 = !isPast && (isTicketed ? (spotsBooked3 ?? 0) > 0 && spotsLeft3 !== 0 : (openForDuration > 0 || (slotsLength === 0 && hasPriceForDay3)) && bookedCount3 > 0 && !isFullyBooked3);
                                 const hasBookingsOnDate3 = isTicketed && !isPast && (spotsBooked3 ?? 0) > 0;
                                 const displayBookedCount3 = isTicketed ? (spotsBooked3 ?? 0) : bookedCount3;
@@ -984,8 +996,13 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   <button
                                     key={dateStr}
                                     type="button"
-                                    disabled={isPast || !isAvailable3 || isFullyUnavailable3 || soldOutNoSlots3}
-                                    onClick={() => ((onOpenInModal != null && isTicketed ? isAvailable3 : (isAvailable3 || isSoldOutShared3)) && handleDayClick(dateStr))}
+                                    disabled={
+                                      isPast ||
+                                      (!isAvailable3 && !isSoldOutShared3) ||
+                                      isFullyUnavailable3 ||
+                                      soldOutNoSlots3
+                                    }
+                                    onClick={() => ((isAvailable3 || isSoldOutShared3) && handleDayClick(dateStr))}
                                     title={isHoliday ? "Holiday pricing" : (hasBookingsUrgency3 || hasBookingsOnDate3) ? `${displayBookedCount3} already booked this day` : undefined}
                                     className={cn(
                                       "rounded-lg sm:rounded-xl border-2 min-h-[44px] min-w-[44px] sm:min-h-[58px] p-0.5 text-center transition-all flex flex-col justify-center gap-0 min-w-0 w-full touch-manipulation",
@@ -1576,6 +1593,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             setDirectCheckoutError(null);
                             setDirectCheckoutLoading(slot.id);
                             try {
+                              const discountNorm = directDiscountCode.trim().toUpperCase();
                               const res = await fetch("/api/booking/create-checkout-session-direct", {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
@@ -1585,11 +1603,11 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                   ...(slot.boatId && { boatId: slot.boatId }),
                                   partySize: 1,
                                   petsCount: 0,
-                                  ...(directDiscountCode.trim() && { discountCode: directDiscountCode.trim() }),
+                                  ...(discountNorm && { discountCode: discountNorm }),
                                 }),
                               });
                               const data = await res.json().catch(() => ({}));
-                              if (data?.ticketedFlowRequired && data?.bookingUrl) {
+                              if (!res.ok && data?.ticketedFlowRequired && data?.bookingUrl) {
                                 setSlotModalOpen(false);
                                 if (onOpenInModal) {
                                   const openModal = onOpenInModal as OnOpenInModalFn;
@@ -1601,7 +1619,7 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                                     boatId: (slot as { boatId?: string }).boatId,
                                   });
                                 } else {
-                                  window.location.href = data.bookingUrl;
+                                  window.location.href = data.bookingUrl as string;
                                 }
                                 return;
                               }

@@ -2,7 +2,7 @@
 
 import type { PaymentIntent } from "@stripe/stripe-js";
 import { PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
-import { useState, useEffect } from "react";
+import { useState, useRef } from "react";
 
 /**
  * Payment form for Payment Element.
@@ -12,27 +12,29 @@ export function BookingStep4PaymentForm({
   onSuccess,
   onError,
   receiptClaimToken,
+  submitting = false,
+  onPaymentSubmitStart,
 }: {
   onSuccess: (paymentIntent?: PaymentIntent | null) => void;
   onError: (message: string) => void;
   /** From create-payment-intent: faster success page after 3DS via receipt_token. */
   receiptClaimToken?: string | null;
+  /** Parent-owned guard so Pay stays disabled across `<Elements>` remounts during phase transitions. */
+  submitting?: boolean;
+  /** Called synchronously before `stripe.confirmPayment` so the parent can set `submitting`. */
+  onPaymentSubmitStart?: () => void;
 }) {
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    if (receiptClaimToken != null && String(receiptClaimToken).trim() !== "") return;
-    console.warn(
-      "[BookingStep4PaymentForm] receiptClaimToken is missing — set RECEIPT_TOKEN_SECRET (and related receipt env) so success redirects can pass a receipt claim token."
-    );
-  }, [receiptClaimToken]);
+  const submitInFlightRef = useRef(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    onPaymentSubmitStart?.();
     setProcessing(true);
     try {
       const baseSuccess = typeof window !== "undefined" ? `${window.location.origin}/booking/success` : "";
@@ -51,6 +53,7 @@ export function BookingStep4PaymentForm({
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {
+      submitInFlightRef.current = false;
       setProcessing(false);
     }
   };
@@ -62,10 +65,10 @@ export function BookingStep4PaymentForm({
       </div>
       <button
         type="submit"
-        disabled={!stripe || processing}
+        disabled={!stripe || processing || submitting}
         className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:opacity-60 disabled:pointer-events-none"
       >
-        {processing ? "Processing…" : "Pay now"}
+        {processing || submitting ? "Processing…" : "Pay now"}
       </button>
     </form>
   );

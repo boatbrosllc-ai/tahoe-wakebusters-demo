@@ -1,12 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { releaseHoldFromModalSessionStorage } from "@/components/site/useBookingPayment";
 import { completeAfterPaymentWithPolling } from "@/lib/booking/complete-after-payment-client";
+import {
+  SESSION_HOLD_ID_KEY,
+  type ModalHoldRecoveryPayloadV1,
+} from "@/components/site/useHoldCreation";
 
 export function BookingStripeReturnHandler({
   paymentIntentId,
@@ -24,6 +28,7 @@ export function BookingStripeReturnHandler({
   const [retryNonce, setRetryNonce] = useState(0);
   const [showStillConfirming, setShowStillConfirming] = useState(false);
   const [showContactHelp, setShowContactHelp] = useState(false);
+  const fetchErrorAutoRetryDoneRef = useRef(false);
 
   useEffect(() => {
     if (!processing) {
@@ -38,6 +43,10 @@ export function BookingStripeReturnHandler({
       clearTimeout(t2);
     };
   }, [processing]);
+
+  useEffect(() => {
+    fetchErrorAutoRetryDoneRef.current = false;
+  }, [paymentIntentId, redirectStatus]);
 
   useEffect(() => {
     if (redirectStatus === "failed") {
@@ -57,9 +66,27 @@ export function BookingStripeReturnHandler({
       setError(null);
       setProcessing(false);
       setHoldExpired(false);
+      let holdIdFromSession: string | undefined;
+      let receiptClaimFromSession: string | null = null;
+      try {
+        const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_HOLD_ID_KEY) : null;
+        if (raw) {
+          const parsed = JSON.parse(raw) as ModalHoldRecoveryPayloadV1;
+          if (parsed?.v === 1 && typeof parsed.holdId === "string" && parsed.holdId.trim()) {
+            holdIdFromSession = parsed.holdId.trim();
+          }
+          if (parsed?.v === 1 && typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()) {
+            receiptClaimFromSession = parsed.receiptClaimToken.trim();
+          }
+        }
+      } catch {
+        /* ignore */
+      }
       try {
         const outcome = await completeAfterPaymentWithPolling({
           paymentIntentId,
+          holdId: holdIdFromSession,
+          receiptClaimToken: receiptClaimFromSession,
           signal: abortController.signal,
           onEnteredProcessing: () => {
             if (!cancelled) {
@@ -76,6 +103,13 @@ export function BookingStripeReturnHandler({
         }
 
         if (outcome.kind === "fetch_error") {
+          if (!fetchErrorAutoRetryDoneRef.current) {
+            fetchErrorAutoRetryDoneRef.current = true;
+            await new Promise((r) => setTimeout(r, 3000));
+            if (cancelled) return;
+            setRetryNonce((n) => n + 1);
+            return;
+          }
           setError(outcome.message);
           setLoading(false);
           setProcessing(false);
@@ -126,7 +160,9 @@ export function BookingStripeReturnHandler({
               `/booking/success?receipt_token=${encodeURIComponent(claim)}&payment_intent_id=${encodeURIComponent(paymentIntentId)}`,
             );
           } else {
-            router.replace(`/booking/success?payment_intent_id=${encodeURIComponent(paymentIntentId)}`);
+            router.replace(
+              `/booking/success?payment_intent_id=${encodeURIComponent(paymentIntentId)}&confirmed=true`,
+            );
           }
           return;
         }

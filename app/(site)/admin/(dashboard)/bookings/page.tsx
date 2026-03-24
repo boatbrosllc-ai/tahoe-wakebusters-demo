@@ -11,6 +11,7 @@ import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, 
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
 import { AdminSessionRedirectError, subscribeAdminAuthRevalidate, throwIfAdminApiError } from "@/lib/admin-auth-client";
+import { ADMIN_BOOKING_VISIBILITY_SLA_MS } from "@/lib/admin-booking-visibility-sla";
 
 type StripeEventItem = {
   id: string;
@@ -346,18 +347,22 @@ export default function AdminBookingsPage() {
       if (document.visibilityState !== "visible") return;
       void silentMergeFirstPage();
       setCalendarPollTick((t) => t + 1);
-    }, 90_000);
+    }, ADMIN_BOOKING_VISIBILITY_SLA_MS);
     return () => clearInterval(id);
   }, [silentMergeFirstPage]);
 
   useEffect(() => {
-    const onFocus = () => {
+    const onReconcile = () => {
       if (document.visibilityState !== "visible") return;
       void silentMergeFirstPage();
       setCalendarPollTick((t) => t + 1);
     };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener("focus", onReconcile);
+    document.addEventListener("visibilitychange", onReconcile);
+    return () => {
+      window.removeEventListener("focus", onReconcile);
+      document.removeEventListener("visibilitychange", onReconcile);
+    };
   }, [silentMergeFirstPage]);
 
   useEffect(() => {
@@ -385,6 +390,8 @@ export default function AdminBookingsPage() {
         const list = Array.isArray(data) ? (data as StripeEventItem[]) : [];
         setWebhookEvents(list);
         setWebhookEventsError(null);
+        void silentMergeFirstPage();
+        setCalendarPollTick((t) => t + 1);
       })
       .catch((e) => {
         console.error("[admin] stripe-events diagnostics fetch failed", {
@@ -395,7 +402,7 @@ export default function AdminBookingsPage() {
         setWebhookEventsError(e instanceof Error ? e.message : "Network error");
       })
       .finally(() => setWebhookEventsLoading(false));
-  }, [webhookEventsOpen, webhookEventsRefreshKey]);
+  }, [webhookEventsOpen, webhookEventsRefreshKey, silentMergeFirstPage]);
 
   function exportCsv() {
     const headers = ["Date", "Trip date", "Experience", "Party (guests)", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
@@ -1076,9 +1083,11 @@ export default function AdminBookingsPage() {
                     className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
                       selectedBooking.waiver.status === "signed"
                         ? "bg-green-100 text-green-800"
-                        : selectedBooking.waiver.status === "pending"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-gray-100 text-gray-600"
+                        : selectedBooking.waiver.status === "partial"
+                          ? "bg-amber-100 text-amber-900"
+                          : selectedBooking.waiver.status === "pending"
+                            ? "bg-blue-100 text-blue-800"
+                            : "bg-gray-100 text-gray-600"
                     }`}
                   >
                     {selectedBooking.waiver.status}
@@ -1089,14 +1098,14 @@ export default function AdminBookingsPage() {
                   >
                     View request
                   </Link>
-                  {selectedBooking.waiver.status === "signed" && (
+                  {(selectedBooking.waiver.status === "signed" || selectedBooking.waiver.status === "partial") && (
                     <a
                       href={`/api/waiver/pdf/${selectedBooking.waiver.requestId}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sm text-brand-primary hover:underline"
                     >
-                      View PDF
+                      View waiver document
                     </a>
                   )}
                 </div>

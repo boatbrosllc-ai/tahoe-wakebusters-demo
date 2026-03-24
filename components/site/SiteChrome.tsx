@@ -9,7 +9,14 @@ import { BookingModalProvider } from "@/components/site/BookingModalContext";
 import { BookingPreload } from "@/components/site/BookingPreload";
 import { cn } from "@/lib/utils";
 
-export function SiteChrome({ children }: { children: React.ReactNode }) {
+export function SiteChrome({
+  children,
+  adminSessionCookiePresent = false,
+}: {
+  children: React.ReactNode;
+  /** Server-read: admin session cookie present — client may still verify via GET /api/admin/session. */
+  adminSessionCookiePresent?: boolean;
+}) {
   const pathname = usePathname();
   const isAdmin = pathname?.startsWith("/admin");
   /** Minimal chrome: no sticky CTA bar or extra bottom spacer (stepper controls need clear tap targets). */
@@ -21,10 +28,11 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
 
   return (
     <BookingModalProvider>
+      {/* ViewTransitions is intentionally not mounted here: NavProgress already handles route feedback; opt-in later to avoid duplicate capture-phase link handlers. */}
       <BookingPreload />
       <NavProgress />
       <div className="min-h-screen flex flex-col">
-        <Header />
+        <Header adminSessionCookiePresent={adminSessionCookiePresent} />
         <main
           className={cn(
             "flex-1",

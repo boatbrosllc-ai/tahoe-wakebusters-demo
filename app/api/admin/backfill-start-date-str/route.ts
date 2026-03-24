@@ -2,6 +2,10 @@
  * Backfill missing startDateStr on bookings (and optionally holds).
  * Run until remaining count is zero, then set DISABLE_LEGACY_BOOKING_FALLBACK=true in production.
  *
+ * **Deployment gate:** Before indexed paid-booking counts for any experience variant approach ~80% of
+ * `LEGACY_BOOKING_SCAN_LIMIT` (default 2000 → 1600 rows), complete this backfill so legacy scans do not hit the cap
+ * and surface as degraded availability (503) for customers.
+ *
  * GET: Dry-run report of how many docs are missing startDateStr.
  * POST with body { applyUpdates: true, collection?: "bookings" | "holds" }: paginate through docs
  * missing startDateStr, set startDateStr from slotId (parseSlotId), then re-run until zero.

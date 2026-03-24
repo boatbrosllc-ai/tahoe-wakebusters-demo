@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { getDb, getStorageBucket, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import {
   submitWaiverSigningSchema,
   validateSignerRequiredFieldsForTemplate,
@@ -17,6 +18,7 @@ import {
   isTokenValid,
   commitSingleUseTokenWaiverSign,
   commitGroupTokenNewSignedRequest,
+  appendWaiverSignedStoragePaths,
 } from "@/lib/waiver/firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
@@ -61,7 +63,10 @@ export async function POST(request: NextRequest) {
       const gt = await getGroupTokenById(groupToken);
       if (!gt) {
         return NextResponse.json(
-          { error: "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached." },
+          {
+            error:
+              "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached.",
+          },
           { status: 400 }
         );
       }
@@ -109,16 +114,10 @@ export async function POST(request: NextRequest) {
       const dataUrlPrefix = signatureDataUrl.slice(0, signatureDataUrl.indexOf(";"));
       const mime = dataUrlPrefix.startsWith("data:") ? dataUrlPrefix.slice(5) : "";
       if (!allowedImagePrefixes.includes(mime)) {
-        return NextResponse.json(
-          { error: "Signature must be a PNG, JPEG, or WebP image" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Signature must be a PNG, JPEG, or WebP image" }, { status: 400 });
       }
       if (signatureDataUrl.length > MAX_SIGNATURE_PAYLOAD_LENGTH) {
-        return NextResponse.json(
-          { error: "Signature payload too large" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Signature payload too large" }, { status: 400 });
       }
     }
 
@@ -151,28 +150,6 @@ export async function POST(request: NextRequest) {
     const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? request.headers.get("x-real-ip") ?? null;
     const userAgent = request.headers.get("user-agent") ?? null;
 
-    let pdfUrl: string | null = null;
-    let pdfStoragePath: string | null = null;
-
-    try {
-      const pdfBuffer = await generateWaiverPdf(html);
-      const storagePath = `waivers/${requestIdForStorage}.pdf`;
-      const bucket = getStorageBucket();
-      const file = bucket.file(storagePath);
-      await file.save(pdfBuffer, {
-        metadata: {
-          contentType: "application/pdf",
-          metadata: { requestId: requestIdForStorage, contentHash },
-        },
-      });
-      const pathSegments = storagePath.split("/").map((s) => encodeURIComponent(s)).join("/");
-      pdfUrl = `https://storage.googleapis.com/${bucket.name}/${pathSegments}`;
-      pdfStoragePath = storagePath;
-    } catch (pdfErr) {
-      const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
-      console.warn("[waiver/submit] PDF generation skipped (waiver still marked signed)", msg);
-    }
-
     const signedPayloadForFirestore: WaiverSignedPayload = { ...signedPayload };
     delete signedPayloadForFirestore.signatureDataUrl;
 
@@ -180,8 +157,6 @@ export async function POST(request: NextRequest) {
       signedAt: now,
       ip,
       userAgent,
-      ...(pdfUrl != null && { pdfUrl }),
-      ...(pdfStoragePath != null && { pdfStoragePath }),
       contentHash,
       signedPayload: signedPayloadForFirestore,
     };
@@ -201,14 +176,80 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const bucket = getStorageBucket();
+    let pdfStoragePath: string | null = null;
+    let htmlStoragePath: string | null = null;
+
+    try {
+      const htmlPath = `waivers/${requestIdForStorage}.html`;
+      const htmlFile = bucket.file(htmlPath);
+      await htmlFile.save(Buffer.from(html, "utf8"), {
+        metadata: {
+          contentType: "text/html; charset=utf-8",
+          metadata: { requestId: requestIdForStorage, contentHash },
+        },
+      });
+      htmlStoragePath = htmlPath;
+    } catch (htmlErr) {
+      const msg = htmlErr instanceof Error ? htmlErr.message : String(htmlErr);
+      console.error("[waiver/submit] HTML storage failed", msg);
+      await writeOperationalAlert({
+        type: "waiver_signed_html_storage_failed",
+        bookingId,
+        requestId: requestIdForStorage,
+        error: msg,
+        source: "waiver-submit",
+      });
+    }
+
+    try {
+      const pdfBuffer = await generateWaiverPdf(html);
+      const pdfPath = `waivers/${requestIdForStorage}.pdf`;
+      const pdfFile = bucket.file(pdfPath);
+      await pdfFile.save(pdfBuffer, {
+        metadata: {
+          contentType: "application/pdf",
+          metadata: { requestId: requestIdForStorage, contentHash },
+        },
+      });
+      pdfStoragePath = pdfPath;
+    } catch (pdfErr) {
+      const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
+      console.warn("[waiver/submit] PDF generation failed (signed record stored; use HTML or regenerate)", msg);
+      await writeOperationalAlert({
+        type: "waiver_pdf_generation_failed",
+        bookingId,
+        requestId: requestIdForStorage,
+        error: msg,
+        source: "waiver-submit",
+      });
+    }
+
+    if (pdfStoragePath != null || htmlStoragePath != null) {
+      await appendWaiverSignedStoragePaths(requestIdForStorage, {
+        pdfStoragePath,
+        htmlStoragePath,
+      });
+    }
+
     try {
       const existing = await getBookingWaiverPointer(bookingId);
-      await setBookingWaiverPointer(bookingId, {
-        requestId: existing?.requestId ?? requestIdForStorage,
-        status: "signed",
-        templateId: existing?.templateId ?? templateId,
-        templateVersion: existing?.templateVersion ?? templateVersion,
-      });
+      if (isGroupSign) {
+        await setBookingWaiverPointer(bookingId, {
+          requestId: existing?.requestId ?? requestIdForStorage,
+          status: "partial",
+          templateId: existing?.templateId ?? templateId,
+          templateVersion: existing?.templateVersion ?? templateVersion,
+          signedCount: 1,
+        });
+      } else {
+        await setBookingWaiverPointer(bookingId, {
+          requestId: existing?.requestId ?? requestIdForStorage,
+          status: "signed",
+          templateId: existing?.templateId ?? templateId,
+          templateVersion: existing?.templateVersion ?? templateVersion,
+        });
+      }
     } catch (pointerErr) {
       console.error("[waiver/submit] setBookingWaiverPointer failed (non-fatal)", pointerErr);
     }

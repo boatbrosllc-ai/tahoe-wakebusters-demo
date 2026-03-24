@@ -1,64 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
-import { FieldPath } from "firebase-admin/firestore";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
+import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import type { Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import {
+  LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
+  mergeLegacyHoldDocsWithOptionalBackfill,
+  scanLegacyActiveHoldsForExperience,
+} from "@/lib/booking/legacy-hold-scan";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 
 export const dynamic = "force-dynamic";
 
-const LEGACY_HOLDS_PAGE_SIZE = 100;
 const MAX_PAGES = 5;
-
-/** Cursor-based pagination over legacy holds (no startDateStr) until exhaustion or MAX_PAGES. */
-async function fetchAllLegacyHolds(
-  db: ReturnType<typeof getDb>,
-  expId: string
-): Promise<{ snap: import("firebase-admin").firestore.QuerySnapshot; partial: boolean }> {
-  const allDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
-  let lastDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
-  let pageCount = 0;
-  let partial = false;
-  for (;;) {
-    if (pageCount >= MAX_PAGES) {
-      partial = true;
-      console.warn("[ticket-availability] fetchAllLegacyHolds: MAX_PAGES reached; legacy holds scan truncated", {
-        experienceId: expId,
-        maxPages: MAX_PAGES,
-      });
-      break;
-    }
-    pageCount++;
-    let query = db
-      .collection("holds")
-      .where("experienceId", "==", expId)
-      .where("status", "==", "active")
-      .orderBy(FieldPath.documentId())
-      .limit(LEGACY_HOLDS_PAGE_SIZE);
-    if (lastDoc) query = query.startAfter(lastDoc) as typeof query;
-    const snap = await query.get();
-    allDocs.push(...snap.docs);
-    if (snap.empty || snap.docs.length < LEGACY_HOLDS_PAGE_SIZE) break;
-    lastDoc = snap.docs[snap.docs.length - 1];
-  }
-  const snap = { docs: allDocs, empty: allDocs.length === 0, size: allDocs.length } as import("firebase-admin").firestore.QuerySnapshot;
-  return { snap, partial };
-}
 
 export interface TicketAvailabilityResponse {
   total: number;
   sold: number;
   onHold: number;
   available: number;
+  /** True when legacy holds scan was truncated; UI should show `availabilityNote` instead of treating `available` as exact. */
+  conservativeEstimate?: boolean;
+  /** When `conservativeEstimate` is true, show this message instead of the numeric `available` count. */
+  availabilityNote?: string;
 }
+
+const CONSERVATIVE_AVAILABILITY_NOTE = LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE;
 
 export async function GET(request: NextRequest) {
   try {
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
     if (!hasFirebaseConfig()) {
       return NextResponse.json({ error: "Booking not configured." }, { status: 503 });
+    }
+    const rl = await checkRateLimitPublicRead(getClientKey(request));
+    if (!rl.allowed) {
+      const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
     }
     const experienceId = request.nextUrl.searchParams.get("experienceId");
     const date = request.nextUrl.searchParams.get("date"); // YYYY-MM-DD
@@ -80,8 +69,6 @@ export async function GET(request: NextRequest) {
     const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
     if (legacyFallbackEnabled) warnIfLegacyHoldsFallbackEnabled();
 
-    type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
-
     const [bookingsSnaps, holdsSnaps, legacyHoldsResult] = await Promise.all([
       Promise.all(
         allExpIds.map((id) =>
@@ -99,8 +86,10 @@ export async function GET(request: NextRequest) {
         )
       ),
       legacyFallbackEnabled
-        ? Promise.all(allExpIds.map((id) => fetchAllLegacyHolds(db, id)))
-        : Promise.resolve([] as { snap: QuerySnapshot; partial: boolean }[]),
+        ? Promise.all(allExpIds.map((id) => scanLegacyActiveHoldsForExperience(db, id, { maxPages: MAX_PAGES })))
+        : Promise.resolve(
+            [] as Awaited<ReturnType<typeof scanLegacyActiveHoldsForExperience>>[]
+          ),
     ]);
 
     const total = exp.maxCapacity ?? exp.maxGuests ?? 36;
@@ -112,25 +101,10 @@ export async function GET(request: NextRequest) {
     }
     const legacyHoldsPartial =
       Array.isArray(legacyHoldsResult) && legacyHoldsResult.some((r) => r.partial);
-    const legacyHoldsSnap = Array.isArray(legacyHoldsResult)
-      ? {
-          docs: legacyHoldsResult.flatMap((r) => r.snap.docs),
-          empty: legacyHoldsResult.every((r) => r.snap.empty),
-          size: legacyHoldsResult.reduce((n, r) => n + r.snap.size, 0),
-        }
-      : { docs: [] as import("firebase-admin").firestore.QueryDocumentSnapshot[], empty: true, size: 0 };
-    const backfillWrites: Promise<unknown>[] = [];
-    for (const doc of legacyHoldsSnap.docs) {
-      if (holdDocMap.has(doc.id)) continue;
-      const legacyData = doc.data() as { startDateStr?: string; slotId?: string };
-      if (legacyData.startDateStr) continue; // has field but not on target date — skip
-      holdDocMap.set(doc.id, doc);
-      const legacyParsed = legacyData.slotId ? parseSlotId(legacyData.slotId) : null;
-      if (legacyParsed) {
-        backfillWrites.push(doc.ref.set({ startDateStr: legacyParsed.dateStr }, { merge: true }).catch(() => {}));
-      }
-    }
-    if (backfillWrites.length > 0) Promise.all(backfillWrites).catch(() => {});
+    const legacyDocsFlat = Array.isArray(legacyHoldsResult)
+      ? legacyHoldsResult.flatMap((r) => r.docs)
+      : [];
+    mergeLegacyHoldDocsWithOptionalBackfill(holdDocMap, legacyDocsFlat);
 
     const now = Date.now();
     const seenBookingIds = new Set<string>();
@@ -159,9 +133,29 @@ export async function GET(request: NextRequest) {
       onHold += h.partySize;
     }
 
-    const available = Math.max(0, total - sold - onHold);
+    let available = Math.max(0, total - sold - onHold);
+    let conservativeEstimate = false;
+    if (legacyHoldsPartial) {
+      conservativeEstimate = true;
+      available = Math.max(0, total - sold - onHold);
+      void writeOperationalAlert({
+        type: "ticket_availability_legacy_holds_truncated",
+        experienceId,
+        date,
+        source: "ticket-availability",
+        maxPages: MAX_PAGES,
+      }).catch(() => {});
+    }
 
-    const response: TicketAvailabilityResponse = { total, sold, onHold, available };
+    const response: TicketAvailabilityResponse = {
+      total,
+      sold,
+      onHold,
+      available,
+      ...(conservativeEstimate
+        ? { conservativeEstimate: true as const, availabilityNote: CONSERVATIVE_AVAILABILITY_NOTE }
+        : {}),
+    };
     const headers: Record<string, string> = { "Cache-Control": "no-store, max-age=0" };
     if (legacyHoldsPartial) {
       headers["X-Slots-Partial-Data"] = "true";

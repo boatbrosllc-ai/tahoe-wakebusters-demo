@@ -4,9 +4,8 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { runCreateHold, runCreatePaymentIntentForHold, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import {
-  postCompleteAfterPaymentWithTimeout,
+  completeAfterPaymentWithPolling,
   retryCompleteAfterPaymentOnce,
-  COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
 } from "@/lib/booking/complete-after-payment-client";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -17,7 +16,8 @@ import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime"
 import { Dialog } from "@/components/ui/dialog";
 import { bookingLog, bookingError } from "@/lib/booking/debug";
 import { siteConfig } from "@/config/site";
-import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
+import { loadConfetti } from "@/lib/client/load-confetti";
+import { TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -33,8 +33,8 @@ function BookingSuccessWithConfetti({ children }: { children: React.ReactNode })
   useEffect(() => {
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    import("canvas-confetti").then(({ default: confetti }) => {
-      if (cancelled) return;
+    void loadConfetti().then((confetti) => {
+      if (cancelled || !confetti) return;
       const duration = 2500;
       const end = Date.now() + duration;
       const frame = () => {
@@ -78,33 +78,36 @@ function PaymentFormInner({
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
+  const submitInFlightRef = useRef(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setProcessing(true);
     try {
       const returnUrl = typeof window !== "undefined" ? `${window.location.origin}/booking/success` : "";
-      const result = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: { return_url: returnUrl },
         redirect: "if_required",
       });
-      const err = result.error;
-      const paymentIntent = "paymentIntent" in result ? (result.paymentIntent as { id?: string } | undefined) : undefined;
-      if (err) onError(err.message ?? "Payment failed");
+      if (error) onError(error.message ?? "Payment failed");
       else onSuccess(paymentIntent?.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Payment failed");
     } finally {
+      submitInFlightRef.current = false;
       setProcessing(false);
     }
   };
+  const disabled = !stripe || processing;
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <PaymentElement />
       <button
         type="submit"
-        disabled={!stripe || processing}
+        disabled={disabled}
         className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 min-h-[44px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-60 transition-colors"
       >
         {processing ? "Processing…" : "Pay now"}
@@ -131,7 +134,15 @@ export interface InlineBookingDetailsStepProps {
   rateDisplayName: string;
   rateDurationHours: number;
   selectedDate: string;
-  addons: { id: string; name: string; description?: string; priceCents: number; type: string; maxQty?: number }[];
+  addons: {
+    id: string;
+    name: string;
+    description?: string;
+    priceCents: number;
+    type: string;
+    maxQty?: number;
+    hiddenFromBookingUI?: boolean;
+  }[];
   onBack: () => void;
   onSuccess: () => void;
   bookingMode?: "shared" | "charter";
@@ -169,7 +180,7 @@ export function InlineBookingDetailsStep({
   const [partySize, setPartySize] = useState(1);
   const [petsCount, setPetsCount] = useState(0);
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
-  const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
+  const [tipChoice, setTipChoice] = useState<"now" | "later" | null>("later");
   const [tipPercent, setTipPercent] = useState(20);
   const [tipNowModalOpen, setTipNowModalOpen] = useState(false);
   const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
@@ -184,6 +195,7 @@ export function InlineBookingDetailsStep({
   const [cancellationAck, setCancellationAck] = useState(false);
   const [paymentPhase, setPaymentPhase] = useState<"form" | "loading" | "stripe" | "completing" | "success" | "successWithWarning" | "successRecoveryFailed">("form");
   const [holdId, setHoldId] = useState<string | null>(null);
+  const [receiptClaimToken, setReceiptClaimToken] = useState<string | null>(null);
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
@@ -207,6 +219,16 @@ export function InlineBookingDetailsStep({
   const completeAfterRetryInFlightRef = useRef(false);
   const [completeAfterRetryBusy, setCompleteAfterRetryBusy] = useState(false);
   const paymentIntentFetchGenRef = useRef(0);
+  /** Aborts complete-after-payment polling when the step unmounts. */
+  const completeAfterPaymentAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    completeAfterPaymentAbortRef.current = ac;
+    return () => {
+      ac.abort();
+      completeAfterPaymentAbortRef.current = null;
+    };
+  }, []);
 
   const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
@@ -278,6 +300,7 @@ export function InlineBookingDetailsStep({
     if (!tipSectionRequired) return;
     if (allowTipNow && !allowTipLater) setTipChoice("now");
     else if (!allowTipNow && allowTipLater) setTipChoice("later");
+    else if (allowTipNow && allowTipLater) setTipChoice("later");
   }, [tipSectionRequired, allowTipNow, allowTipLater]);
 
   const effectiveMaxGuests = bookingMode === "shared" && typeof spotsRemaining === "number"
@@ -288,7 +311,16 @@ export function InlineBookingDetailsStep({
     if (petsCount > experiencePetsMax) setPetsCount(experiencePetsMax);
   }, [experiencePetsMax, petsCount]);
 
-  const displayAddons = useMemo(() => addons.filter((a) => !/sunscreen/i.test(a.name)), [addons]);
+  const displayAddons = useMemo(
+    () =>
+      addons.filter((a) => {
+        if (a.hiddenFromBookingUI === true) return false;
+        // Legacy: sunscreen was hidden by name until Firestore sets `hiddenFromBookingUI` on the add-on doc.
+        if (/sunscreen/i.test(a.name)) return false;
+        return true;
+      }),
+    [addons]
+  );
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()), [customerEmail]);
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
   const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
@@ -359,7 +391,7 @@ export function InlineBookingDetailsStep({
     const subtotalBeforeTax = rateCents + addonsTotalCents;
     const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
-    const pct = Math.min(35, Math.max(20, tipPercent));
+    const pct = Math.min(TIP_MAX_PERCENT, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
     const discountCents = appliedDiscount?.discountCents ?? 0;
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
@@ -399,7 +431,9 @@ export function InlineBookingDetailsStep({
       setPaymentError(phoneError ?? "Please enter a valid phone number (at least 10 digits).");
       return;
     }
-    if (tipSectionRequired && tipChoice === null) {
+    if (!allowTipNow && !allowTipLater) {
+      /* no tip UI */
+    } else if (tipChoice === null) {
       setPaymentError("Please choose a tip option: Tip now or Tip later.");
       return;
     }
@@ -416,6 +450,7 @@ export function InlineBookingDetailsStep({
     userChoseDepositRef.current = bookingMode !== "shared" && !payFullAmount;
     setShowDepositCoercionBanner(false);
     holdFlowInFlightRef.current = true;
+    setReceiptClaimToken(null);
     setHoldSubmitInFlight(true);
     setPaymentPhase("loading");
     const addonList = Object.entries(addonSelections)
@@ -541,6 +576,12 @@ export function InlineBookingDetailsStep({
       }
       setClientSecret(pi.clientSecret);
       setPaymentIntentId(pi.paymentIntentId ?? null);
+      setReleaseToken(pi.releaseToken ?? null);
+      if (typeof pi.receiptClaimToken === "string" && pi.receiptClaimToken.trim()) {
+        setReceiptClaimToken(pi.receiptClaimToken.trim());
+      } else {
+        setReceiptClaimToken(null);
+      }
       if (typeof pi.depositCents === "number") setDepositCentsFromServer(pi.depositCents);
       if (typeof pi.totalCents === "number") setTotalCentsFromServer(pi.totalCents);
       const effectivePayFull = bookingMode === "shared" ? true : pi.payFullAmount ?? payFullAmount;
@@ -557,11 +598,11 @@ export function InlineBookingDetailsStep({
     };
   }, [paymentPhase, holdId, clientSecret, releaseToken, payFullAmount, bookingMode]);
 
-  const handlePaymentSuccess = async (paymentIntentIdFromConfirm?: string) => {
+  const handlePaymentSuccess = async (paymentIntentIdFromStripe?: string) => {
     setPaymentPhase("completing");
     setCompleteAfterPaymentError(null);
     const resolvedHoldId = holdId ?? (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_STORAGE_HOLD_ID_KEY) : null);
-    const resolvedPiId = paymentIntentIdFromConfirm ?? paymentIntentId;
+    const resolvedPiId = paymentIntentIdFromStripe ?? paymentIntentId;
     if (!resolvedHoldId || !resolvedPiId) {
       bookingLog("client", "InlineBookingDetailsStep complete-after-payment recovery failed: missing holdId or paymentIntentId", { hasHoldId: !!resolvedHoldId, hasPaymentIntentId: !!resolvedPiId });
       setCompleteAfterPaymentError(null);
@@ -570,29 +611,56 @@ export function InlineBookingDetailsStep({
       return;
     }
     try {
-      bookingLog("client", "InlineBookingDetailsStep complete-after-payment request", { holdId: resolvedHoldId, paymentIntentIdPrefix: resolvedPiId.slice(0, 24) + "..." });
-      const res = await postCompleteAfterPaymentWithTimeout({ holdId: resolvedHoldId, paymentIntentId: resolvedPiId });
-      const data = await res.json().catch(() => ({}));
-      bookingLog("client", "InlineBookingDetailsStep complete-after-payment response", { status: res.status, ok: res.ok, success: data?.success, bookingId: data?.bookingId });
-      if (!res.ok) {
-        const expIdErr = (data as { experienceId?: string }).experienceId ?? experienceId;
-        if (expIdErr) bookingCache.invalidateBookingCaches(expIdErr);
-        const message = (data?.error as string) || "Confirmation failed";
-        setCompleteAfterPaymentError(message);
+      bookingLog("client", "InlineBookingDetailsStep complete-after-payment request (polling)", { holdId: resolvedHoldId, paymentIntentIdPrefix: resolvedPiId.slice(0, 24) + "..." });
+      const signal = completeAfterPaymentAbortRef.current?.signal;
+      if (!signal) {
+        bookingError("client", "InlineBookingDetailsStep complete-after-payment: no abort signal", new Error("no_signal"), { holdId: resolvedHoldId });
+        setCompleteAfterPaymentError("Confirmation could not start. Please use Try again.");
         setPaymentPhase("successWithWarning");
         return;
       }
-      const expIdOk = (data as { experienceId?: string }).experienceId ?? experienceId;
-      if (expIdOk) bookingCache.invalidateBookingCaches(expIdOk);
-      holdRequestIdRef.current = null;
-      setPaymentPhase("success");
+      const outcome = await completeAfterPaymentWithPolling({
+        paymentIntentId: resolvedPiId,
+        holdId: resolvedHoldId,
+        receiptClaimToken,
+        signal,
+      });
+      if (outcome.kind === "success") {
+        bookingLog("client", "InlineBookingDetailsStep complete-after-payment success", { bookingId: outcome.data.bookingId });
+        const expIdOk = outcome.data.experienceId ?? experienceId;
+        if (expIdOk) bookingCache.invalidateBookingCaches(expIdOk);
+        holdRequestIdRef.current = null;
+        setPaymentPhase("success");
+        return;
+      }
+      if (outcome.kind === "aborted") {
+        return;
+      }
+      if (outcome.kind === "reconciliation_pending" || outcome.kind === "processing_timeout" || outcome.kind === "stall_timeout") {
+        const expId = outcome.kind === "reconciliation_pending" ? outcome.experienceId ?? experienceId : experienceId;
+        if (expId) bookingCache.invalidateBookingCaches(expId);
+        setCompleteAfterPaymentError(outcome.message);
+        setPaymentPhase("successWithWarning");
+        return;
+      }
+      if (outcome.kind === "terminal_error") {
+        bookingCache.invalidateBookingCaches(experienceId);
+        setCompleteAfterPaymentError(outcome.message);
+        setPaymentPhase("successWithWarning");
+        return;
+      }
+      if (outcome.kind === "fetch_error") {
+        bookingCache.invalidateBookingCaches(experienceId);
+        setCompleteAfterPaymentError(outcome.message);
+        setPaymentPhase("successWithWarning");
+        return;
+      }
+      const _never: never = outcome;
+      void _never;
     } catch (e) {
       bookingError("client", "InlineBookingDetailsStep complete-after-payment request failed", e, { holdId: resolvedHoldId });
-      if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
-        setCompleteAfterPaymentError(COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE);
-      } else {
-        setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
-      }
+      bookingCache.invalidateBookingCaches(experienceId);
+      setCompleteAfterPaymentError(e instanceof Error ? e.message : "Request failed");
       setPaymentPhase("successWithWarning");
     }
   };
@@ -605,7 +673,11 @@ export function InlineBookingDetailsStep({
     setCompleteAfterRetryBusy(true);
     setCompleteAfterPaymentError(null);
     try {
-      const out = await retryCompleteAfterPaymentOnce({ holdId: resolvedHoldId, paymentIntentId });
+      const out = await retryCompleteAfterPaymentOnce({
+        holdId: resolvedHoldId,
+        paymentIntentId,
+        receiptClaimToken,
+      });
       if (!out.ok) {
         if (out.stallTimeout) {
           setCompleteAfterPaymentError(out.message);
@@ -1064,7 +1136,7 @@ export function InlineBookingDetailsStep({
                 "flex-1 rounded-xl border-2 py-2.5 text-sm font-semibold",
                 tipChoice === "now" ? "border-brand-primary bg-brand-primary/15 text-brand-dark" : "border-brand-dark/15 bg-white text-brand-muted"
               )}
-              title="Choose tip amount (20–35%)"
+              title={`Choose tip amount (20–${TIP_MAX_PERCENT}%)`}
             >
               Tip now
             </button>
@@ -1087,7 +1159,7 @@ export function InlineBookingDetailsStep({
             )}
           </div>
           {tipChoice === "now" && priceSummary.tipCents > 0 && (
-            <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
+            <p className="text-xs text-brand-muted mt-1.5">{Math.min(TIP_MAX_PERCENT, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
           )}
           {tipChoice === "later" && (
             <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
@@ -1163,10 +1235,23 @@ export function InlineBookingDetailsStep({
                 const totalBeforeDiscount = priceSummary.rateCents
                   + priceSummary.addonLines.reduce((s, l) => s + l.priceCents, 0)
                   + priceSummary.salesTaxCents;
+                const addonPayload = Object.entries(addonSelections)
+                  .filter(([, q]) => q > 0)
+                  .map(([addonId, qty]) => ({ addonId, qty }));
                 const res = await fetch("/api/booking/validate-discount", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ code, totalCents: totalBeforeDiscount }),
+                  body: JSON.stringify({
+                    code,
+                    totalCents: totalBeforeDiscount,
+                    slotId: slot.id,
+                    rateId,
+                    experienceId,
+                    ...(boatId?.trim() ? { boatId: boatId.trim() } : {}),
+                    partySize,
+                    bookingMode: bookingMode ?? "charter",
+                    addonSelections: addonPayload,
+                  }),
                 });
                   const data = await res.json().catch(() => ({}));
                   if (data.valid && typeof data.discountCents === "number" && data.code) {
@@ -1267,7 +1352,7 @@ export function InlineBookingDetailsStep({
         <p className="text-center text-[10px] text-brand-muted mt-1.5">Secure payment via Stripe</p>
       </div>
 
-      {/* Tip amount modal — choose 20–35% */}
+      {/* Tip amount modal — choose 20–30% */}
       <Dialog
         open={tipNowModalOpen}
         onOpenChange={(open) => {
@@ -1278,9 +1363,9 @@ export function InlineBookingDetailsStep({
       >
         <div>
           <h3 className="text-lg font-bold text-brand-dark mb-1">Choose tip amount</h3>
-          <p className="text-xs text-brand-muted mb-4">20–35%. Tips go directly to your captain and crew.</p>
+          <p className="text-xs text-brand-muted mb-4">20–{TIP_MAX_PERCENT}%. Tips go directly to your captain and crew.</p>
           <div className="flex flex-wrap gap-2 mb-4">
-            {[20, 22, 25, 28, 30, 35].map((p) => (
+            {[20, 22, 25, 28, 30].map((p) => (
               <button
                 key={p}
                 type="button"
@@ -1297,16 +1382,16 @@ export function InlineBookingDetailsStep({
             ))}
           </div>
           <div className="mb-4">
-            <label htmlFor="inline-tip-custom-pct" className="block text-xs font-medium text-brand-dark mb-1.5">Or enter custom % (20–35)</label>
+            <label htmlFor="inline-tip-custom-pct" className="block text-xs font-medium text-brand-dark mb-1.5">Or enter custom % (20–{TIP_MAX_PERCENT})</label>
             <input
               id="inline-tip-custom-pct"
               type="number"
               min={20}
-              max={35}
+              max={TIP_MAX_PERCENT}
               value={tipModalPercent}
               onChange={(e) => {
                 const v = parseInt(e.target.value, 10);
-                if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
+                if (!Number.isNaN(v)) setTipModalPercent(Math.min(TIP_MAX_PERCENT, Math.max(20, v)));
               }}
               className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 min-h-[44px] text-base touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
             />
@@ -1314,7 +1399,7 @@ export function InlineBookingDetailsStep({
           <button
             type="button"
             onClick={() => {
-              setTipPercent(Math.min(35, Math.max(20, tipModalPercent)));
+              setTipPercent(Math.min(TIP_MAX_PERCENT, Math.max(20, tipModalPercent)));
               setTipChoice("now");
               setTipNowModalOpen(false);
             }}

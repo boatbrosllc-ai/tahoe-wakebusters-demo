@@ -12,7 +12,13 @@ import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-sl
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking } from "@/lib/booking/types";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
-import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
+import {
+  checkRateLimit,
+  checkRateLimitPublicRead,
+  getCalendarFeedTokenRateLimitKey,
+  getClientKey,
+} from "@/lib/booking/rate-limit";
+import { verifyReceiptToken } from "@/lib/booking/receiptToken";
 
 const TZ = "America/Chicago";
 
@@ -52,6 +58,91 @@ function escapeIcalText(s: string): string {
 }
 
 export async function GET(request: NextRequest) {
+  const bookingIdParam = request.nextUrl.searchParams.get("bookingId");
+  const receiptTokenParam = request.nextUrl.searchParams.get("receipt_token");
+
+  if (bookingIdParam && receiptTokenParam) {
+    const payload = verifyReceiptToken(receiptTokenParam);
+    if (!payload || payload.bookingId !== bookingIdParam) {
+      return new NextResponse("Unauthorized", { status: 401 });
+    }
+    const db = getDb();
+    const doc = await db.collection("bookings").doc(bookingIdParam).get();
+    if (!doc.exists) {
+      return new NextResponse("Not found", { status: 404 });
+    }
+    const b = doc.data() as Booking;
+    if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
+      return new NextResponse("Not found", { status: 404 });
+    }
+    const expId = b.experienceId ?? "";
+    let experienceName = "Boat Bros trip";
+    if (expId) {
+      const expSnap = await db.collection("experiences").doc(expId).get();
+      experienceName = expSnap.exists ? (expSnap.data() as { title?: string })?.title ?? experienceName : experienceName;
+    }
+    const parsed = parseSlotIdRelaxed(b.slotId ?? "");
+    const dateStr = b.startDateStr ?? parsed?.dateStr ?? "";
+    if (!dateStr || !parsed) {
+      return new NextResponse("Invalid booking slot", { status: 400 });
+    }
+    let start: Date;
+    let end: Date;
+    try {
+      const se = getSlotStartEnd(dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+      start = se.start;
+      end = se.end;
+    } catch {
+      return new NextResponse("Invalid slot times", { status: 400 });
+    }
+    const summary = `${escapeIcalText(experienceName)} – ${escapeIcalText(b.customer?.name?.trim() || "Guest")}`;
+    const dtStart = formatIcalLocal(start);
+    const dtEnd = formatIcalLocal(end);
+    const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();
+    const lines: string[] = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Boat Bros//Booking Calendar//EN",
+      "CALSCALE:GREGORIAN",
+      "METHOD:PUBLISH",
+      "BEGIN:VTIMEZONE",
+      "TZID:America/Chicago",
+      "X-LIC-LOCATION:America/Chicago",
+      "BEGIN:DAYLIGHT",
+      "TZOFFSETFROM:-0600",
+      "TZOFFSETTO:-0500",
+      "TZNAME:CDT",
+      "DTSTART:19700308T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
+      "END:DAYLIGHT",
+      "BEGIN:STANDARD",
+      "TZOFFSETFROM:-0500",
+      "TZOFFSETTO:-0600",
+      "TZNAME:CST",
+      "DTSTART:19701101T020000",
+      "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
+      "END:STANDARD",
+      "END:VTIMEZONE",
+      "BEGIN:VEVENT",
+      `UID:booking-${bookingIdParam}@boatbros`,
+      `DTSTAMP:${formatIcalUtc(new Date())}`,
+      `DTSTART;TZID=${TZ}:${dtStart}`,
+      `DTEND;TZID=${TZ}:${dtEnd}`,
+      `SUMMARY:${summary}`,
+    ];
+    if (updated) lines.push(`LAST-MODIFIED:${formatIcalUtc(updated)}`);
+    lines.push("END:VEVENT", "END:VCALENDAR");
+    const body = lines.join("\r\n");
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/calendar; charset=utf-8",
+        "Content-Disposition": `attachment; filename="booking-${bookingIdParam}.ics"`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  }
+
   const token = request.nextUrl.searchParams.get("token");
   const experienceId = request.nextUrl.searchParams.get("experienceId");
   const fromParam = request.nextUrl.searchParams.get("from");
@@ -61,6 +152,15 @@ export async function GET(request: NextRequest) {
   const t = token ?? "";
   if (!secret || !timingSafeStringEqual(t, secret)) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+  const tokenPrefix = t.length > 0 ? t.slice(0, 32) : "empty";
+  const rlToken = await checkRateLimit(getCalendarFeedTokenRateLimitKey(tokenPrefix));
+  if (!rlToken.allowed) {
+    const retryAfter = rlToken.retryAfterMs ? Math.ceil(rlToken.retryAfterMs / 1000) : 60;
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
   }
   const rl = await checkRateLimitPublicRead(getClientKey(request));
   if (!rl.allowed) {
@@ -155,7 +255,7 @@ export async function GET(request: NextRequest) {
     } catch {
       continue;
     }
-    const summary = `${escapeIcalText(experienceName)} – ${escapeIcalText(b.customer?.name?.trim() || b.customer?.email || "Guest")}`;
+    const summary = `${escapeIcalText(experienceName)} – ${escapeIcalText(b.customer?.name?.trim() || "Guest")}`;
     const dtStart = formatIcalLocal(start);
     const dtEnd = formatIcalLocal(end);
     const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();

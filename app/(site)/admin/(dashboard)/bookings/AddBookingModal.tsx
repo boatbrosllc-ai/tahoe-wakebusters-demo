@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { TAX_RATE } from "@/lib/booking/constants";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "Select source (optional)" },
@@ -25,6 +26,8 @@ const CARD_BRANDS = [
 
 const DURATION_OPTIONS = [2, 3, 4, 6, 8];
 const START_HOURS = Array.from({ length: 13 }, (_, i) => i + 7); // 7–19 (last departure 7pm)
+
+const taxPercentLabel = `${(TAX_RATE * 100).toFixed(2)}%`;
 
 type ExperienceOption = { id: string; title: string };
 type BoatOption = { id: string; name: string; experienceIds?: string[] };
@@ -52,6 +55,7 @@ export function AddBookingModal({
   const [customerPhone, setCustomerPhone] = useState("");
   const [partySize, setPartySize] = useState(4);
   const [totalDollars, setTotalDollars] = useState("");
+  const [amountIncludesTax, setAmountIncludesTax] = useState(false);
   const [source, setSource] = useState("");
   const [referenceNumber, setReferenceNumber] = useState("");
   const [specialNotes, setSpecialNotes] = useState("");
@@ -68,6 +72,7 @@ export function AddBookingModal({
   const [cardBrand, setCardBrand] = useState("");
   const [cardExpMonth, setCardExpMonth] = useState("");
   const [cardExpYear, setCardExpYear] = useState("");
+  const [confirmZeroDollarBooking, setConfirmZeroDollarBooking] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -95,6 +100,14 @@ export function AddBookingModal({
     () => (experienceId ? boats.filter((b) => b.experienceIds?.includes(experienceId)) : []),
     [experienceId, boats]
   );
+
+  const pricingPreview = useMemo(() => {
+    const raw = Math.round(parseFloat(totalDollars || "0") * 100);
+    if (raw < 0 || Number.isNaN(raw)) return { subtotalCents: 0, taxCents: 0, totalCents: 0 };
+    const subtotalCents = amountIncludesTax ? Math.floor(raw / (1 + TAX_RATE)) : raw;
+    const taxCents = Math.round(subtotalCents * TAX_RATE);
+    return { subtotalCents, taxCents, totalCents: subtotalCents + taxCents };
+  }, [totalDollars, amountIncludesTax]);
   const showBoatSelect = boatsForExperience.length > 1;
   useEffect(() => {
     if (boatsForExperience.length === 1) {
@@ -111,9 +124,14 @@ export function AddBookingModal({
       setError("Customer name and email are required.");
       return;
     }
-    const totalCents = Math.round(parseFloat(totalDollars || "0") * 100);
-    if (totalCents < 0) {
-      setError("Total amount must be ≥ 0.");
+    const rawCents = Math.round(parseFloat(totalDollars || "0") * 100);
+    const subtotalCents = amountIncludesTax ? Math.floor(rawCents / (1 + TAX_RATE)) : rawCents;
+    if (subtotalCents < 0) {
+      setError("Subtotal must be ≥ 0.");
+      return;
+    }
+    if (subtotalCents === 0 && !confirmZeroDollarBooking) {
+      setError("Check the box to confirm a $0 booking, or enter a non-zero amount.");
       return;
     }
     if (!experienceId || !tripDate) {
@@ -144,7 +162,9 @@ export function AddBookingModal({
                 : undefined,
           customer: { name: customerName.trim(), email: customerEmail.trim(), phone: customerPhone.trim() },
           partySize: partySize > 0 ? partySize : 1,
-          totalCents,
+          subtotalCents,
+          amountIncludesTax,
+          ...(subtotalCents === 0 ? { confirmZeroDollarBooking: true } : {}),
           source: source || undefined,
           externalReference: referenceNumber.trim() || undefined,
           specialNotes: specialNotes.trim() || undefined,
@@ -196,6 +216,7 @@ export function AddBookingModal({
       setCardBrand("");
       setCardExpMonth("");
       setCardExpYear("");
+      setConfirmZeroDollarBooking(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create booking");
     } finally {
@@ -341,7 +362,11 @@ export function AddBookingModal({
             />
           </div>
           <div>
-            <label htmlFor="add-booking-total" className="block text-sm font-medium text-brand-dark mb-1">Total (USD) *</label>
+            <label htmlFor="add-booking-total" className="block text-sm font-medium text-brand-dark mb-1">
+              {amountIncludesTax
+                ? `Total collected (USD, includes ${taxPercentLabel} tax) *`
+                : `Subtotal (before ${taxPercentLabel} tax) (USD) *`}
+            </label>
             <input
               id="add-booking-total"
               type="number"
@@ -352,7 +377,41 @@ export function AddBookingModal({
               onChange={(e) => setTotalDollars(e.target.value)}
               className={inputClass}
               required
+              aria-describedby="add-booking-total-hint"
             />
+            <label className="mt-2 flex items-center gap-2 cursor-pointer text-sm text-brand-dark">
+              <input
+                type="checkbox"
+                checked={amountIncludesTax}
+                onChange={(e) => setAmountIncludesTax(e.target.checked)}
+                className="h-4 w-4 rounded border-brand-dark/30 text-brand-primary"
+              />
+              Amount entered includes sales tax (we&apos;ll back-calculate the pre-tax subtotal)
+            </label>
+            <p id="add-booking-total-hint" className="text-xs text-brand-muted mt-1">
+              {amountIncludesTax
+                ? `We derive the pre-tax subtotal from your total (floor cents) so tax is not applied twice; totals may differ by up to 1¢ from a pure round-trip.`
+                : `Tax (${taxPercentLabel}) is added to this subtotal; the stored booking total includes tax.`}
+            </p>
+            <p className="text-xs font-medium text-brand-dark mt-2">
+              Total stored: ${(pricingPreview.totalCents / 100).toFixed(2)} including tax
+              {!amountIncludesTax && (
+                <span className="block font-normal text-brand-muted mt-0.5">
+                  (subtotal ${(pricingPreview.subtotalCents / 100).toFixed(2)} + tax ${(pricingPreview.taxCents / 100).toFixed(2)})
+                </span>
+              )}
+            </p>
+            {pricingPreview.subtotalCents === 0 && (
+              <label className="mt-3 flex items-start gap-2 cursor-pointer text-sm text-brand-dark">
+                <input
+                  type="checkbox"
+                  checked={confirmZeroDollarBooking}
+                  onChange={(e) => setConfirmZeroDollarBooking(e.target.checked)}
+                  className="h-4 w-4 mt-0.5 rounded border-brand-dark/30 text-brand-primary"
+                />
+                <span>I confirm this is a complimentary or $0 booking</span>
+              </label>
+            )}
           </div>
         </div>
 

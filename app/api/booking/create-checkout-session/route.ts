@@ -1,6 +1,6 @@
 /**
  * Creates a Stripe Checkout Session for a hold (embedded or redirect).
- * When RELEASE_TOKEN_SECRET is set, the client must send `release_token` from create-hold (proof of hold possession).
+ * Requires `RELEASE_TOKEN_SECRET` (503 if unset). The client must send `release_token` from create-hold (proof of hold possession).
  * Do not log raw `holdId` in client-visible errors or third-party analytics.
  * Supports two modes:
  * (a) Embedded (ui_mode: "custom"): returns clientSecret for the Payment Element modal; return_url points to success page.
@@ -10,21 +10,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getStripe, buildLineItems, buildLineItemsFromHoldPricing } from "@/lib/booking/stripe-client";
+import { getStripe, buildLineItems, buildLineItemsFromHoldPricing, assertLiveAddonPricesMatchHoldSnapshot } from "@/lib/booking/stripe-client";
 import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode, bookingError, bookingWarn } from "@/lib/booking/debug";
 import {
   acquireCheckoutSessionCreationLock,
+  cleanupOrphanedCoupon,
   clearSessionCreationInflight,
-  persistCheckoutSessionOnHoldWithRetry,
+  createStripeCheckoutSessionForHold,
   rollbackCheckoutSession,
 } from "@/lib/booking/checkout-session-helpers";
 import { resolveHoldBookingPricing } from "@/lib/booking/hold-charge-resolver";
 import { bookingEnv } from "@/lib/booking/env";
 import { signReleaseToken, verifyReleaseToken, hasReleaseTokenSecret } from "@/lib/booking/releaseToken";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { buildCheckoutSessionIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
+import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED_MS } from "@/lib/booking/hold-expiry";
 import type { Hold, Rate, ExperienceRate } from "@/lib/booking/types";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 
 function formatStripeError(e: unknown): Record<string, unknown> {
   const err = e as Record<string, unknown> | null | undefined;
@@ -84,10 +90,52 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
       );
     }
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
+    try {
+      assertReceiptTokenSecretConfigured();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      bookingError("create-checkout-session", "RECEIPT_TOKEN_SECRET missing in non-development — refusing checkout session", null, {
+        nodeEnv: process.env.NODE_ENV ?? "",
+        message: msg,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Booking payments are temporarily unavailable (server configuration: RECEIPT_TOKEN_SECRET). Set the secret and redeploy.",
+        },
+        { status: 503 }
+      );
+    }
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
+    }
+    if (!hasReleaseTokenSecret()) {
+      bookingError("create-checkout-session", "RELEASE_TOKEN_SECRET is not set; refusing checkout session creation", null, {
+        holdId: input.holdId,
+        nodeEnv: process.env.NODE_ENV ?? "",
+      });
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          {
+            error:
+              "Booking payments are temporarily unavailable (server configuration: RELEASE_TOKEN_SECRET). Set the secret and redeploy.",
+          },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        {
+          error:
+            "RELEASE_TOKEN_SECRET is required for checkout. Set it in your environment (e.g. .env.local for local development).",
+        },
+        { status: 503 }
+      );
     }
     const db = getDb();
     const { Timestamp, FieldValue } = getFirestoreExports();
@@ -97,17 +145,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Hold not found" }, { status: 404 });
     }
     const hold = holdSnap.data() as Hold;
-    if (hasReleaseTokenSecret()) {
-      if (!input.release_token) {
-        return NextResponse.json(
-          { error: "release_token required (returned from create-hold with this hold)" },
-          { status: 401 }
-        );
-      }
-      const rel = verifyReleaseToken(input.release_token);
-      if (!rel || rel.holdId !== input.holdId) {
-        return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
-      }
+    if (!input.release_token) {
+      return NextResponse.json(
+        { error: "release_token required (returned from create-hold with this hold)" },
+        { status: 401 }
+      );
+    }
+    const rel = verifyReleaseToken(input.release_token);
+    if (!rel || rel.holdId !== input.holdId) {
+      return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
     }
     if (hold.status !== "active") {
       return NextResponse.json({ error: "Hold expired or already used" }, { status: 400 });
@@ -116,6 +162,10 @@ export async function POST(request: NextRequest) {
     if (expiresAt.toDate() < new Date()) {
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
+
+    /** Snapshot after auth + status/expiry guards: true only while the hold is active and unexpired (before any Stripe calls). Passed to rollback helpers so we skip destructive rollback if the hold became inactive mid-flight. */
+    const holdWasActiveAtRequestStart =
+      hold.status === "active" && expiresAt.toDate() >= new Date();
 
     const stripe = getStripe();
 
@@ -133,14 +183,36 @@ export async function POST(request: NextRequest) {
     const unitPriceCentsForLineItems = isSharedTicketed && (hold.effectiveRateCents != null || (rateForPricing as { priceCents?: number }).priceCents != null)
       ? (hold.effectiveRateCents ?? (rateForPricing as { priceCents: number }).priceCents)
       : undefined;
-    let lineItems = useSnapshotLineItems
-      ? buildLineItemsFromHoldPricing({
-          pricing,
-          rate: rateForPricing as Rate | ExperienceRate,
-          hold,
-          ticketQty: ticketQtyForLineItems,
-        })
-      : buildLineItems({
+    let lineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
+    if (useSnapshotLineItems) {
+      const fromHold = buildLineItemsFromHoldPricing({
+        pricing,
+        rate: rateForPricing as Rate | ExperienceRate,
+        hold,
+        ticketQty: ticketQtyForLineItems,
+        holdIdForLog: input.holdId,
+      });
+      if (fromHold == null) {
+        const liveCheck = assertLiveAddonPricesMatchHoldSnapshot(hold, addonsForPricing);
+        if (!liveCheck.ok) {
+          await clearSessionCreationInflight(holdRef, FieldValue);
+          await writeOperationalAlert({
+            type: "checkout_addon_snapshot_live_price_mismatch",
+            holdId: input.holdId,
+            addonId: liveCheck.addonId,
+            snapshotCents: liveCheck.snapshotCents,
+            liveCents: liveCheck.liveCents,
+            source: "create-checkout-session",
+          });
+          return NextResponse.json(
+            { error: "Checkout is temporarily unavailable. Please try again." },
+            { status: 500 }
+          );
+        }
+      }
+      lineItems =
+        fromHold ??
+        buildLineItems({
           pricing,
           rate: rateForPricing as Rate | ExperienceRate,
           addons: addonsForPricing,
@@ -148,6 +220,16 @@ export async function POST(request: NextRequest) {
           ticketQty: ticketQtyForLineItems,
           unitPriceCents: unitPriceCentsForLineItems,
         });
+    } else {
+      lineItems = buildLineItems({
+        pricing,
+        rate: rateForPricing as Rate | ExperienceRate,
+        addons: addonsForPricing,
+        hold,
+        ticketQty: ticketQtyForLineItems,
+        unitPriceCents: unitPriceCentsForLineItems,
+      });
+    }
     const holdDiscountCode = (hold as { discountCode?: string }).discountCode;
     const holdDiscountCents = (hold as { discountCents?: number }).discountCents ?? 0;
     const tipCentsSanity = (hold as { tipCents?: number }).tipCents ?? 0;
@@ -156,6 +238,7 @@ export async function POST(request: NextRequest) {
       const q = typeof li.quantity === "number" && Number.isFinite(li.quantity) ? li.quantity : 1;
       return acc + (typeof u === "number" && Number.isFinite(u) ? u * q : 0);
     }, 0);
+    // Compare line items to pre-discount total: the Stripe coupon (session `discounts`) applies the discount, not a negative line.
     const expectedLineItemsCents = pricing.totalCents + tipCentsSanity;
     const expectedPerHoldTotalCents = pricing.totalCents + tipCentsSanity - holdDiscountCents;
     if (Math.abs(lineItemSumCents - expectedLineItemsCents) > 1) {
@@ -175,25 +258,13 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    const holdStripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
-    let stripeCouponId: string | undefined = holdStripeCouponId;
-    if (holdDiscountCents > 0 && !stripeCouponId) {
-      const coupon = await stripe.coupons.create(
-        {
-          amount_off: holdDiscountCents,
-          currency: pricing.currency ?? "usd",
-          name: `Discount${holdDiscountCode ? ` (${holdDiscountCode})` : ""}`,
-          duration: "once",
-        },
-        { idempotencyKey: `coupon-cs-${input.holdId}` }
-      );
-      stripeCouponId = coupon.id;
-    }
-    const baseUrl = bookingEnv.appBaseUrl;
     const holdPaymentAttemptVersion =
       typeof (hold as { paymentAttemptVersion?: number }).paymentAttemptVersion === "number"
         ? (hold as { paymentAttemptVersion?: number }).paymentAttemptVersion!
         : 1;
+    const holdStripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
+    let stripeCouponId: string | undefined = holdStripeCouponId;
+    const baseUrl = bookingEnv.appBaseUrl;
     const versionMeta = { [HOLD_PAYMENT_ATTEMPT_VERSION_META]: String(holdPaymentAttemptVersion) };
     const metadata: Record<string, string> = {
       holdId: input.holdId,
@@ -207,6 +278,8 @@ export async function POST(request: NextRequest) {
       holdId: input.holdId,
       slotId: hold.slotId,
       rateId: hold.rateId,
+      payment_stage: "full",
+      totalCents: String(Math.max(0, expectedPerHoldTotalCents)),
       ...versionMeta,
       ...(hold.experienceId && { experienceId: hold.experienceId }),
       ...(hold.boatId && { boatId: hold.boatId }),
@@ -235,16 +308,12 @@ export async function POST(request: NextRequest) {
         "/booking/success?session_id={CHECKOUT_SESSION_ID}&receipt_token=" +
         encodeURIComponent(receiptClaimToken ?? "");
       sessionParams.cancel_url = releaseToken
-        ? baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId) + "&release_token=" + encodeURIComponent(releaseToken)
-        : baseUrl + "/booking/cancel?holdId=" + encodeURIComponent(input.holdId);
+        ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}&release_token=${encodeURIComponent(releaseToken)}`
+        : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}`;
       sessionParams.custom_fields = [
         { key: "special_notes", label: { type: "custom", custom: "Special requests (optional)" }, type: "text" },
       ];
     }
-    if (stripeCouponId) {
-      sessionParams.discounts = [{ coupon: stripeCouponId }];
-    }
-
     const checkoutSessionMode = input.embedded ? ("embedded" as const) : ("redirect" as const);
     const lockResult = await acquireCheckoutSessionCreationLock(db, holdRef, Timestamp, checkoutSessionMode);
     if (lockResult.kind === "hold_inactive") {
@@ -280,7 +349,33 @@ export async function POST(request: NextRequest) {
     }
 
     if (lockResult.kind === "proceed") {
-      const holdFreshSnap = await holdRef.get();
+      const holdSnapForExtend = lockResult.holdSnap;
+      const holdForExtend = holdSnapForExtend.exists ? (holdSnapForExtend.data() as Hold) : hold;
+      const createdAtTs = holdForExtend.createdAt as unknown as { toMillis?: () => number } | undefined;
+      if (createdAtTs && typeof createdAtTs.toMillis === "function") {
+        const currentExp = (holdForExtend.expiresAt as { toDate(): Date }).toDate();
+        const capAt = new Date(createdAtTs.toMillis() + MAX_HOLD_LIFETIME_FROM_CREATED_MS);
+        const proposed = new Date(Date.now() + HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES * 60 * 1000);
+        const newExp = proposed.getTime() > capAt.getTime() ? capAt : proposed;
+        if (newExp.getTime() > currentExp.getTime()) {
+          await holdRef.update({
+            expiresAt: Timestamp.fromDate(newExp),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+        const urlExpiry = newExp.getTime() > currentExp.getTime() ? newExp : currentExp;
+        if (!input.embedded) {
+          const releaseTokenExtended = signReleaseToken(input.holdId, Math.floor(urlExpiry.getTime() / 1000));
+          sessionParams.success_url =
+            baseUrl +
+            "/booking/success?session_id={CHECKOUT_SESSION_ID}&receipt_token=" +
+            encodeURIComponent(receiptClaimToken ?? "");
+          sessionParams.cancel_url = releaseTokenExtended
+            ? `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}&release_token=${encodeURIComponent(releaseTokenExtended)}`
+            : `${baseUrl}/booking/cancel?holdId=${encodeURIComponent(input.holdId)}`;
+        }
+      }
+      const holdFreshSnap = lockResult.holdSnap;
       const holdFresh = holdFreshSnap.exists ? (holdFreshSnap.data() as Hold) : hold;
       const existingSessionIdFresh = (holdFresh as { checkoutSessionId?: string }).checkoutSessionId?.trim();
       if (existingSessionIdFresh) {
@@ -331,87 +426,99 @@ export async function POST(request: NextRequest) {
           });
         }
       }
+      // Stripe requires `discounts` at `sessions.create`; coupon is placed after lock + fresh hold read.
+      // Orphan cleanup on failure skips bumping `paymentAttemptVersion` when persist fails with `hold_inactive`.
+      if (holdDiscountCents > 0 && !stripeCouponId) {
+        const coupon = await stripe.coupons.create(
+          {
+            amount_off: holdDiscountCents,
+            currency: pricing.currency ?? "usd",
+            name: `Discount${holdDiscountCode ? ` (${holdDiscountCode})` : ""}`,
+            duration: "once",
+          },
+          { idempotencyKey: `coupon-cs-${input.holdId}-v${holdPaymentAttemptVersion}` }
+        );
+        stripeCouponId = coupon.id;
+      }
+      if (stripeCouponId) {
+        sessionParams.discounts = [{ coupon: stripeCouponId }];
+      }
     }
 
-    let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
-    try {
-      session = await stripe.checkout.sessions.create(sessionParams, {
-        idempotencyKey: "cs-" + input.holdId + (input.embedded ? "-emb" : "-redir"),
-      });
-    } catch (e) {
-      const details = formatStripeError(e);
-      console.error("[create-checkout-session] Stripe create session failed:", details);
-      if (stripeCouponId && !holdStripeCouponId) {
-        try {
-          await stripe.coupons.del(stripeCouponId);
-        } catch (delErr) {
-          console.error("[create-checkout-session] Failed to delete orphaned coupon", stripeCouponId, delErr);
-        }
-      }
-      await clearSessionCreationInflight(holdRef, FieldValue);
-      await rollbackCheckoutSession(db, input.holdId, hold, { FieldValue, Timestamp });
-      return NextResponse.json(
-        { error: stripeErrorToUserMessage(details) },
-        { status: 500 }
-      );
-    }
-    const holdUpdate: Record<string, unknown> = { checkoutSessionId: session.id, checkoutSessionMode };
-    if (stripeCouponId && !holdStripeCouponId) holdUpdate.stripeCouponId = stripeCouponId;
-    const paymentIntentIdFromSession =
-      typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null;
-    if (paymentIntentIdFromSession) {
-      holdUpdate.fullPaymentIntentId = paymentIntentIdFromSession;
-    } else {
-      try {
-        const expanded = await stripe.checkout.sessions.retrieve(session.id, { expand: ["payment_intent"] });
-        const piId = typeof expanded.payment_intent === "object" && expanded.payment_intent?.id
-          ? expanded.payment_intent.id
-          : typeof expanded.payment_intent === "string"
-            ? expanded.payment_intent
-            : null;
-        if (piId) holdUpdate.fullPaymentIntentId = piId;
-      } catch (retrieveErr) {
-        bookingError("create-checkout-session", "Could not persist payment intent on hold (retrieve expanded session failed)", retrieveErr, {
-          holdId: input.holdId,
-          sessionId: session.id,
-        });
-      }
-    }
-    const persistResult = await persistCheckoutSessionOnHoldWithRetry(
+    const holdUpdateBase: Record<string, unknown> = { checkoutSessionMode };
+    if (stripeCouponId && !holdStripeCouponId) holdUpdateBase.stripeCouponId = stripeCouponId;
+    const created = await createStripeCheckoutSessionForHold(
+      stripe,
       db,
       holdRef,
       input.holdId,
-      session.id,
-      holdUpdate,
-      { FieldValue, Timestamp },
-      stripe
+      sessionParams,
+      buildCheckoutSessionIdempotencyKey({
+        holdId: input.holdId,
+        embedded: input.embedded === true,
+        holdPaymentAttemptVersion,
+      }),
+      holdUpdateBase,
+      { FieldValue, Timestamp }
     );
-    if (persistResult.ok === false && persistResult.reason === "lost_race") {
-      return NextResponse.json(
-        { error: "Checkout session is being created; please retry in a moment." },
-        { status: 409 }
-      );
-    }
-    if (persistResult.ok === false && persistResult.reason === "hold_inactive") {
-      return NextResponse.json({ error: "Hold expired or already used" }, { status: 400 });
-    }
-    const piIdForMeta =
-      (typeof holdUpdate.fullPaymentIntentId === "string" ? holdUpdate.fullPaymentIntentId : null) ??
-      (typeof paymentIntentIdFromSession === "string" ? paymentIntentIdFromSession : null);
-    if (piIdForMeta) {
-      try {
-        const piExisting = await stripe.paymentIntents.retrieve(piIdForMeta);
-        await stripe.paymentIntents.update(piIdForMeta, {
-          metadata: { ...piExisting.metadata, checkoutSessionId: session.id },
-        });
-      } catch (metaErr) {
-        bookingError("create-checkout-session", "Could not attach checkoutSessionId to PaymentIntent metadata", metaErr, {
-          holdId: input.holdId,
-          sessionId: session.id,
-          paymentIntentIdPrefix: piIdForMeta.slice(0, 12),
+    if (!created.ok) {
+      if (stripeCouponId && !holdStripeCouponId) {
+        const persistHoldInactive =
+          created.kind === "persist_failed" && created.persistReason === "hold_inactive";
+        await cleanupOrphanedCoupon(stripe, stripeCouponId, holdRef, FieldValue, {
+          skipHoldPaymentAttemptBump: persistHoldInactive,
         });
       }
+      if (created.kind === "stripe_create_failed") {
+        const e = created.stripeError;
+        const details = formatStripeError(e);
+        console.error("[create-checkout-session] Stripe create session failed:", details);
+        await clearSessionCreationInflight(holdRef, FieldValue);
+        if (holdWasActiveAtRequestStart) {
+          const rb = await rollbackCheckoutSession(db, input.holdId, hold, { FieldValue, Timestamp });
+          if (!rb.ok) {
+            await writeOperationalAlert({
+              type: "rollback_checkout_session_failed",
+              holdId: input.holdId,
+              source: "create-checkout-session",
+              error: rb.error instanceof Error ? rb.error.message : String(rb.error),
+            });
+          }
+        }
+        return NextResponse.json(
+          { error: stripeErrorToUserMessage(details) },
+          { status: 500 }
+        );
+      }
+      if (created.kind === "persist_failed") {
+        if (created.persistReason === "lost_race") {
+          return NextResponse.json(
+            { error: "Checkout session is being created; please retry in a moment." },
+            { status: 409 }
+          );
+        }
+        if (created.persistReason === "hold_inactive") {
+          return NextResponse.json({ error: "Hold expired or already used" }, { status: 400 });
+        }
+        if (holdWasActiveAtRequestStart) {
+          const rb = await rollbackCheckoutSession(db, input.holdId, hold, { FieldValue, Timestamp });
+          if (!rb.ok) {
+            await writeOperationalAlert({
+              type: "rollback_checkout_session_failed",
+              holdId: input.holdId,
+              source: "create-checkout-session",
+              error: rb.error instanceof Error ? rb.error.message : String(rb.error),
+            });
+          }
+        }
+      }
+      await clearSessionCreationInflight(holdRef, FieldValue);
+      return NextResponse.json(
+        { error: "Checkout is temporarily unavailable. Please try again." },
+        { status: 500 }
+      );
     }
+    const session = created.session;
     if (input.embedded && session.client_secret) {
       return NextResponse.json({ clientSecret: session.client_secret, sessionId: session.id });
     }

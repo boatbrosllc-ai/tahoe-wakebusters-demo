@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
+import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import type { ExperienceItem } from "@/lib/booking/booking-modal-types";
 
 type BookingSuccessPanelProps = {
@@ -25,9 +27,16 @@ type BookingSuccessPanelProps = {
   isTicketed: boolean;
   payFullAmount: boolean;
   completedBookingId: string | null;
+  /** Trip date (YYYY-MM-DD) and slot start ISO for display */
+  selectedDateStr: string | null;
+  selectedSlotStartIso: string | null;
+  /** Long-lived or claim token for linking to /booking/success */
+  receiptClaimToken: string | null;
   priceSummary: {
     totalCents: number;
   };
+  /** From complete-after-payment when pendingRefunds has discount_limit_exceeded */
+  discountLimitExceeded?: boolean;
 };
 
 export function BookingSuccessPanel({
@@ -47,12 +56,20 @@ export function BookingSuccessPanel({
   isTicketed,
   payFullAmount,
   completedBookingId,
+  selectedDateStr,
+  selectedSlotStartIso,
+  receiptClaimToken,
   priceSummary,
+  discountLimitExceeded = false,
 }: BookingSuccessPanelProps) {
   if (paymentPhase !== "successRecoveryFailed" && paymentPhase !== "successWithWarning" && paymentPhase !== "success") return null;
 
   if (paymentPhase === "successRecoveryFailed") {
     if (successRecoveryPaymentCaptured) {
+      const telHref =
+        recoveryFailedPiId != null && recoveryFailedPiId.length > 0
+          ? `tel:${siteConfig.phoneTel}?text=${encodeURIComponent(`Payment ref: ${recoveryFailedPiId}`)}`
+          : `tel:${siteConfig.phoneTel}`;
       return (
         <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
           <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
@@ -65,17 +82,22 @@ export function BookingSuccessPanel({
             </svg>
           </div>
           <div className="min-w-0">
-            <h3 className="text-lg font-bold text-brand-dark">Payment received — please contact support</h3>
+            <h3 className="text-lg font-bold text-brand-dark">Your payment was received</h3>
             <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
-              Your payment was captured. We couldn&apos;t complete the booking confirmation automatically. Please contact us with your payment reference below.
+              We&apos;re confirming your booking now. If you don&apos;t get a confirmation email within 15 minutes, contact us at{" "}
+              <a href={telHref} className="font-semibold text-brand-primary underline underline-offset-2">
+                {siteConfig.phone}
+              </a>
+              .
             </p>
             {recoveryFailedPiId && (
-              <p className="text-sm font-mono font-semibold text-brand-dark bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg mt-3">
-                Payment reference: {recoveryFailedPiId}
-              </p>
+              <details className="mt-4 text-left max-w-[320px] mx-auto">
+                <summary className="text-xs text-brand-muted cursor-pointer">Reference (optional)</summary>
+                <p className="text-xs font-mono text-brand-dark bg-brand-bg/80 border border-brand-dark/10 px-2 py-1.5 rounded-lg mt-1 break-all">
+                  {recoveryFailedPiId}
+                </p>
+              </details>
             )}
-            <p className="text-base font-bold text-brand-dark mt-4">{siteConfig.phone}</p>
-            <p className="text-xs text-brand-muted mt-1">Call or text with this reference so we can locate your payment.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0">
             Close
@@ -95,9 +117,9 @@ export function BookingSuccessPanel({
           </svg>
         </div>
         <div className="min-w-0">
-          <h3 className="text-lg font-bold text-brand-dark">Couldn&apos;t confirm payment</h3>
+          <h3 className="text-lg font-bold text-brand-dark">Your booking is being confirmed</h3>
           <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">
-            We couldn&apos;t verify your payment with the server. You can start the booking again — you won&apos;t be charged twice for the same completed payment.
+            We couldn&apos;t verify your payment with the server yet. You can start the booking again — you won&apos;t be charged twice for the same completed payment.
           </p>
         </div>
         <button type="button" onClick={onClose} className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0">
@@ -120,7 +142,7 @@ export function BookingSuccessPanel({
           </svg>
         </div>
         <div className="min-w-0">
-          <h3 className="text-lg font-bold text-brand-dark">Payment received — confirmation pending</h3>
+          <h3 className="text-lg font-bold text-brand-dark">Your booking is being confirmed</h3>
           <p className="text-sm text-brand-muted mt-2 max-w-[320px] mx-auto">{paymentError ?? "Your payment was successful, but we couldn't complete the booking confirmation. Please contact us with your email so we can confirm your reservation."}</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
@@ -140,6 +162,28 @@ export function BookingSuccessPanel({
     );
   }
 
+  const dateLine =
+    selectedDateStr && selectedSlotStartIso
+      ? `${new Date(selectedDateStr + "T12:00:00").toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })} · ${formatBookingTimeFromIso(selectedSlotStartIso)}`
+      : selectedDateStr
+        ? new Date(selectedDateStr + "T12:00:00").toLocaleDateString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          })
+        : null;
+
+  const successReceiptHref =
+    receiptClaimToken != null && receiptClaimToken.length > 0
+      ? `/booking/success?receipt_token=${encodeURIComponent(receiptClaimToken)}`
+      : null;
+
   // paymentPhase === "success"
   return (
     <div className="py-4 sm:py-8 flex flex-col items-center gap-3 sm:gap-5 text-center">
@@ -148,9 +192,23 @@ export function BookingSuccessPanel({
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
         </svg>
       </div>
-      <div className="min-w-0">
+      <div className="min-w-0 w-full space-y-2">
         <h3 className="text-lg sm:text-xl font-bold text-brand-dark">You&apos;re all set!</h3>
-        <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[280px] mx-auto">
+        {discountLimitExceeded && (
+          <p className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3 text-left max-w-[min(100%,360px)] mx-auto">
+            Note: your discount code could not be applied — a partial refund will be processed within 1–2 business days.
+          </p>
+        )}
+        {selectedExperience && (
+          <p className="text-sm font-semibold text-brand-dark">{selectedExperience.title}</p>
+        )}
+        {dateLine && <p className="text-sm text-brand-muted">{dateLine}</p>}
+        {completedBookingId != null && (
+          <p className="text-sm text-brand-muted">
+            Booking reference: <span className="font-mono font-medium text-brand-dark">#{completedBookingId}</span>
+          </p>
+        )}
+        <p className="text-xs sm:text-sm text-brand-muted mt-1 sm:mt-1.5 max-w-[320px] mx-auto">
           {selectedExperience && (priceSummary.totalCents > 0 || totalCentsFromServer != null) ? (
             (() => {
               const serverSaysDeposit = isDepositFromServer === true;
@@ -158,8 +216,7 @@ export function BookingSuccessPanel({
                 depositCentsFromServer != null &&
                 totalCentsFromServer != null &&
                 depositCentsFromServer < totalCentsFromServer;
-              const showDeposit =
-                serverSaysDeposit || amountsShowDeposit || (isDepositFromServer === null && !isTicketed && !payFullAmount);
+              const showDeposit = serverSaysDeposit || amountsShowDeposit;
               const paymentModeUnknown = isDepositFromServer === null && !amountsShowDeposit && !serverSaysDeposit;
               if (showDeposit) {
                 const depositCents = Math.max(
@@ -175,23 +232,62 @@ export function BookingSuccessPanel({
                   remainingCents = Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
                 }
                 remainingCents = Math.max(0, remainingCents);
+                const ambiguousRemainingBalance =
+                  (finalCentsFromServer == null || finalCentsFromServer <= 0) &&
+                  depositCents > 0 &&
+                  remainingCents === depositCents;
+                const detailsHref = successReceiptHref;
                 return (
                   <>
                     We&apos;ve received your <strong>50% deposit</strong> of{" "}
-                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span> for {selectedExperience.title}. The remaining balance of{" "}
-                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(remainingCents)}</span> will be charged 48 hours before your trip. Your receipt has been sent to your confirmation email.
+                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span>.
+                    {ambiguousRemainingBalance ? (
+                      <>
+                        {" "}
+                        <span className="font-semibold text-brand-dark">The remaining balance</span> will be charged 48 hours before your trip.
+                        {detailsHref ? (
+                          <>
+                            {" "}
+                            <Link
+                              href={detailsHref}
+                              className="font-semibold text-brand-primary underline underline-offset-2"
+                            >
+                              View booking details
+                            </Link>
+                            .
+                          </>
+                        ) : null}{" "}
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        The remaining balance of{" "}
+                        <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(remainingCents)}</span> will be charged 48 hours before your trip.{" "}
+                      </>
+                    )}
+                    Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
                   </>
                 );
               }
               if (paymentModeUnknown) {
-                return <>We&apos;ve received your payment for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>;
+                return (
+                  <>
+                    We&apos;ve received your payment for {selectedExperience.title}. Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
+                  </>
+                );
               }
               return (
-                <>We&apos;ve received your <strong>full payment</strong> of <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for {selectedExperience.title}. Your receipt has been sent to your confirmation email.</>
+                <>
+                  We&apos;ve received your <strong>full payment</strong> of{" "}
+                  <span className="font-semibold text-brand-dark">${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}</span> for{" "}
+                  {selectedExperience.title}. Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
+                </>
               );
             })()
           ) : (
-            <>We&apos;ve received your payment. Your receipt has been sent to your confirmation email.</>
+            <>
+              We&apos;ve received your payment. Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
+            </>
           )}
         </p>
       </div>
@@ -207,8 +303,6 @@ export function BookingSuccessPanel({
           Book another experience
         </button>
       </div>
-      {completedBookingId != null && <p className="text-xs text-brand-muted">Booking #{completedBookingId}</p>}
     </div>
   );
 }
-

@@ -1,33 +1,59 @@
 /**
- * POST /api/booking/receipt — JSON body { receipt_token } (claim token `c.*` or booking receipt `r.*`).
- * GET — query receipt_token required. Session / payment_intent mint paths removed; use claim token from success_url / email.
+ * POST /api/booking/receipt — JSON body { receipt_token } (signed claim `c.*` or booking receipt `r.*`),
+ * or when RECEIPT_TOKEN_SECRET is unset: { payment_intent_id } (resolved via Stripe + hold metadata).
+ * GET — query receipt_token, or payment_intent_id when receipt signing is disabled.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
-import { signReceiptToken, verifyReceiptToken, verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import {
+  signReceiptToken,
+  verifyReceiptToken,
+  verifyReceiptClaimToken,
+  verifyReceiptClaimTokenIgnoreExpiry,
+  type ReceiptClaimPayload,
+} from "@/lib/booking/receiptToken";
+import { hasReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
+import { checkRateLimitPostPayment, getClientKey } from "@/lib/booking/rate-limit";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import type { Booking, Slot, Boat, Rate, ExperienceAddon, Addon } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, BoatRate } from "@/lib/booking/types";
 import { isDepositMode } from "@/lib/booking/deposit-mode";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { tryResolvePendingReceiptViaCheckoutSession } from "@/lib/booking/receipt-checkout-resolution";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 export async function GET(request: NextRequest) {
   const receiptTokenQuery = request.nextUrl.searchParams.get("receipt_token")?.trim() || null;
-  if (!receiptTokenQuery) {
+  const checkoutSessionId = request.nextUrl.searchParams.get("checkout_session_id")?.trim() || null;
+  const paymentIntentIdGet =
+    request.nextUrl.searchParams.get("payment_intent_id")?.trim() ||
+    request.nextUrl.searchParams.get("payment_intent")?.trim() ||
+    null;
+  if (!receiptTokenQuery && !paymentIntentIdGet) {
     return NextResponse.json(
       {
         error:
-          "receipt_token is required. Use the link from your confirmation email or POST with body { receipt_token: \"...\" }.",
+          "receipt_token or payment_intent_id is required. Use your confirmation link or include payment_intent_id.",
       },
       { status: 400 }
     );
   }
-  const checkoutSessionId = request.nextUrl.searchParams.get("checkout_session_id")?.trim() || null;
-  return handleReceipt(request, receiptTokenQuery, checkoutSessionId, null);
+  if (!receiptTokenQuery && paymentIntentIdGet && !hasReceiptTokenSecretConfigured()) {
+    return handleReceipt(request, "", checkoutSessionId, paymentIntentIdGet);
+  }
+  if (!receiptTokenQuery) {
+    return NextResponse.json(
+      {
+        error:
+          "receipt_token is required unless payment_intent_id is used (unsigned receipt mode only).",
+      },
+      { status: 400 }
+    );
+  }
+  return handleReceipt(request, receiptTokenQuery, checkoutSessionId, paymentIntentIdGet);
 }
 
 export async function POST(request: NextRequest) {
@@ -37,17 +63,20 @@ export async function POST(request: NextRequest) {
   } catch {
     // invalid or empty body
   }
-  const receiptToken = typeof body.receipt_token === "string" ? body.receipt_token.trim() || null : null;
-  if (!receiptToken) {
-    return NextResponse.json(
-      { error: "receipt_token is required in the JSON body." },
-      { status: 400 }
-    );
-  }
   const checkoutSessionId =
     typeof body.checkout_session_id === "string" ? body.checkout_session_id.trim() || null : null;
   const paymentIntentId =
     typeof body.payment_intent_id === "string" ? body.payment_intent_id.trim() || null : null;
+  const receiptToken = typeof body.receipt_token === "string" ? body.receipt_token.trim() || null : null;
+  if (!receiptToken) {
+    if (!hasReceiptTokenSecretConfigured() && paymentIntentId) {
+      return handleReceipt(request, "", checkoutSessionId, paymentIntentId);
+    }
+    return NextResponse.json(
+      { error: "receipt_token is required in the JSON body (or payment_intent_id when receipt signing is disabled)." },
+      { status: 400 }
+    );
+  }
   return handleReceipt(request, receiptToken, checkoutSessionId, paymentIntentId);
 }
 
@@ -75,20 +104,18 @@ async function handleReceipt(
   paymentIntentId: string | null = null
 ) {
   try {
-    const secret =
-      process.env.RECEIPT_TOKEN_SECRET?.trim() || process.env.MANAGE_BOOKING_SECRET?.trim();
-    if (!secret) {
-      return NextResponse.json(
-        {
-          error:
-            "Receipt and manage-booking links are temporarily unavailable. Please try again later or contact support.",
-        },
-        { status: 503 }
-      );
-    }
-
-    const rl = await checkRateLimit(getClientKey(request));
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
+    const rl = await checkRateLimitPostPayment(getClientKey(request));
     if (!rl.allowed) {
+      if (rl.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
       return NextResponse.json(
         { error: "Too many requests" },
         {
@@ -112,8 +139,54 @@ async function handleReceipt(
       doc = bookingSnap as import("firebase-admin/firestore").QueryDocumentSnapshot;
       customerVerified = true;
     } else {
-      const claim = verifyReceiptClaimToken(receiptToken);
+      let claim: ReceiptClaimPayload | null = verifyReceiptClaimToken(receiptToken);
+      if (!claim && !hasReceiptTokenSecretConfigured() && paymentIntentId) {
+        try {
+          const stripe = getStripe();
+          const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+          if (pi.status === "succeeded" && typeof pi.metadata?.holdId === "string") {
+            claim = { holdId: pi.metadata.holdId.trim(), exp: Math.floor(Date.now() / 1000) };
+          }
+        } catch (piErr) {
+          console.error("[receipt] payment intent lookup failed (tokenless path)", piErr);
+        }
+      }
+      if (!claim) {
+        const stale = verifyReceiptClaimTokenIgnoreExpiry(receiptToken);
+        if (stale) {
+          if (!paymentIntentId) {
+            return NextResponse.json(
+              { error: "Invalid or expired receipt link. Open the link from your confirmation email, or add your payment reference to the URL." },
+              { status: 401 }
+            );
+          }
+          claim = stale;
+        }
+      }
       if (claim) {
+        if (paymentIntentId) {
+          try {
+            const stripe = getStripe();
+            const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+            const metaHold =
+              typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
+            if (metaHold !== claim.holdId) {
+              return NextResponse.json(
+                {
+                  error:
+                    "Receipt claim does not match this payment. Use the link from your confirmation email.",
+                },
+                { status: 401 }
+              );
+            }
+          } catch (piErr) {
+            console.error("[receipt] payment intent lookup failed", piErr);
+            return NextResponse.json(
+              { error: "Could not verify payment reference. Try again or use your confirmation email link." },
+              { status: 502 }
+            );
+          }
+        }
         let holdSnap = await db.collection("holds").doc(claim.holdId).get();
         if (!holdSnap.exists) {
           return NextResponse.json(
@@ -153,7 +226,21 @@ async function handleReceipt(
             }
           }
           if (holdData.status !== "converted" || !holdData.bookingId) {
-            return NextResponse.json({ pending: true }, { status: 202 });
+            const latestForExpiry = holdSnap.exists ? holdSnap.data() : null;
+            const st = (latestForExpiry as { status?: string } | null)?.status;
+            const expAt = (latestForExpiry as { expiresAt?: { toDate(): Date } } | null)?.expiresAt;
+            const expiredByStatus = st === "expired";
+            const expiredByTime =
+              expAt && typeof expAt.toDate === "function" ? expAt.toDate().getTime() <= Date.now() : false;
+            if (expiredByStatus || expiredByTime) {
+              return NextResponse.json({ error: "Hold expired", holdExpired: true }, { status: 410 });
+            }
+            const holdExpiresAtIso =
+              expAt && typeof expAt.toDate === "function" ? expAt.toDate().toISOString() : undefined;
+            return NextResponse.json(
+              { pending: true, ...(holdExpiresAtIso ? { holdExpiresAt: holdExpiresAtIso } : {}) },
+              { status: 202 }
+            );
           }
         }
         const bookingSnap = await db.collection("bookings").doc(holdData.bookingId).get();
@@ -282,16 +369,32 @@ async function handleReceipt(
     const isDeposit = isDepositMode(booking);
     let mode: "event_deposit" | "event_full" | "state_fallback" | "state_fallback_deposit";
     let paidNowCents: number;
+    let usedDepositHeuristic = false;
     if (isDeposit && typeof depositAmountCents === "number") {
       mode = "state_fallback_deposit";
       paidNowCents = depositAmountCents;
     } else if (isDeposit) {
       mode = "state_fallback_deposit";
       const stripePaid = stripe?.amountTotalCents;
-      if (typeof stripePaid === "number" && stripePaid > 0) {
+      if (typeof stripePaid === "number" && stripePaid > 0 && stripePaid < totalAmountCents) {
+        paidNowCents = stripePaid;
+      } else if (typeof stripePaid === "number" && stripePaid > 0) {
         paidNowCents = Math.min(stripePaid, totalAmountCents);
       } else {
         const fallbackDeposit = Math.round(totalAmountCents * DEPOSIT_FRACTION);
+        usedDepositHeuristic = true;
+        try {
+          await writeOperationalAlert({
+            type: "receipt_deposit_missing_used_heuristic",
+            bookingId: doc.id,
+            totalAmountCents,
+            fallbackDeposit,
+            stripeAmountTotalCents: stripePaid ?? null,
+            source: "receipt",
+          });
+        } catch {
+          /* non-fatal */
+        }
         console.warn("[receipt] depositAmountCents absent; using 50% heuristic for paidNowCents", {
           bookingId: doc.id,
           totalAmountCents,
@@ -307,15 +410,34 @@ async function handleReceipt(
 
     const paymentSummary: Record<string, unknown> = {
       mode,
-      paidNowCents,
       totalAmountCents,
     };
+    if (!(isDeposit && usedDepositHeuristic)) {
+      paymentSummary.paidNowCents = paidNowCents;
+    } else {
+      paymentSummary.depositPaidLabel = "Deposit paid";
+    }
     if (isDeposit && typeof depositAmountCents !== "number") {
-      const recovered = typeof stripe?.amountTotalCents === "number" && stripe.amountTotalCents > 0;
-      if (!recovered) paymentSummary.depositAmountIsEstimate = true;
+      const recoveredFromStripe =
+        typeof stripe?.amountTotalCents === "number" &&
+        stripe.amountTotalCents > 0 &&
+        stripe.amountTotalCents < totalAmountCents;
+      if (usedDepositHeuristic || !recoveredFromStripe) paymentSummary.depositAmountIsEstimate = true;
     }
     if (depositAmountCents != null) paymentSummary.depositAmountCents = depositAmountCents;
-    if (stripe?.finalAmountCents != null) paymentSummary.finalAmountCents = stripe.finalAmountCents;
+    if (isDeposit) {
+      const depositForFinal =
+        typeof depositAmountCents === "number" ? depositAmountCents : typeof paidNowCents === "number" ? paidNowCents : undefined;
+      const derivedFinal =
+        typeof stripe?.finalAmountCents === "number"
+          ? stripe.finalAmountCents
+          : typeof depositForFinal === "number" && typeof totalAmountCents === "number"
+            ? Math.max(0, totalAmountCents - depositForFinal)
+            : undefined;
+      if (derivedFinal != null) paymentSummary.finalAmountCents = derivedFinal;
+    } else if (stripe?.finalAmountCents != null) {
+      paymentSummary.finalAmountCents = stripe.finalAmountCents;
+    }
     if (
       booking.finalChargeAt != null &&
       typeof (booking.finalChargeAt as { toDate?: () => Date }).toDate === "function"

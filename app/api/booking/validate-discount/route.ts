@@ -3,6 +3,7 @@ import { getDb } from "@/lib/booking/firebase-admin";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitValidateDiscount, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
+import { computeValidateDiscountTotalCents } from "@/lib/booking/compute-validate-discount-total";
 import type { Discount } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,10 @@ const MIN_CODE_LENGTH = 4;
 /** Constant-time delay (ms) when returning invalid to avoid timing-based oracles. */
 const INVALID_RESPONSE_DELAY_MS = 80;
 
-/** Discount base contract: totalCents must be the pre-tip subtotal (rate + addons + tax). Tip is excluded so client display and server charge agree. */
+/** Reject obviously manipulated client totals when a fallback path is used. */
+const MIN_TOTAL_CENTS_SANITY = 100;
+
+/** Discount base = `pricing.totalCents` (subtotal before tip including tax and fees, excluding tip and discount). Must match `computePricing()` output. */
 
 export async function POST(request: NextRequest) {
   const clientKey = getClientKey(request);
@@ -37,8 +41,38 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const codeRaw = typeof body.code === "string" ? body.code.trim() : "";
-    const totalCents = typeof body.totalCents === "number" ? Math.max(0, Math.floor(body.totalCents)) : 0;
     const code = codeRaw.toUpperCase();
+
+    const slotId = typeof body.slotId === "string" ? body.slotId.trim() : "";
+    const rateId = typeof body.rateId === "string" ? body.rateId.trim() : "";
+    const experienceId = typeof body.experienceId === "string" ? body.experienceId.trim() : "";
+    if (!slotId || !rateId || !experienceId) {
+      await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
+      return NextResponse.json(
+        { valid: false, error: "slotId, rateId, and experienceId are required" },
+        { status: 400 }
+      );
+    }
+
+    const boatId = typeof body.boatId === "string" ? body.boatId.trim() : "";
+    const partySize =
+      typeof body.partySize === "number" && Number.isFinite(body.partySize)
+        ? Math.max(1, Math.floor(body.partySize))
+        : 1;
+    const bookingMode = body.bookingMode === "charter" ? ("charter" as const) : ("shared" as const);
+    const addonSelectionsRaw = body.addonSelections;
+    const addonSelections = Array.isArray(addonSelectionsRaw)
+      ? addonSelectionsRaw
+          .map((row: unknown) => {
+            if (!row || typeof row !== "object") return null;
+            const o = row as { addonId?: unknown; qty?: unknown };
+            const addonId = typeof o.addonId === "string" ? o.addonId.trim() : "";
+            const qty = typeof o.qty === "number" && Number.isFinite(o.qty) ? Math.max(0, Math.floor(o.qty)) : 0;
+            if (!addonId || qty <= 0) return null;
+            return { addonId, qty };
+          })
+          .filter((x): x is { addonId: string; qty: number } => x != null)
+      : [];
 
     if (!code || code.length < MIN_CODE_LENGTH) {
       await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
@@ -46,6 +80,31 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
+    const serverTotal = await computeValidateDiscountTotalCents(db, {
+      slotId,
+      rateId,
+      experienceId,
+      boatId: boatId || null,
+      partySize,
+      bookingMode,
+      addonSelections,
+    });
+    if (serverTotal == null) {
+      await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
+      return NextResponse.json(
+        { valid: false, error: "Could not verify order total; please try again" },
+        { status: 422 }
+      );
+    }
+    const totalCents = serverTotal;
+    if (totalCents < MIN_TOTAL_CENTS_SANITY) {
+      await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
+      return NextResponse.json(
+        { valid: false, error: "Could not compute a valid order total for this code" },
+        { status: 400 }
+      );
+    }
+
     const discountSnap = await db.collection("discounts").where("code", "==", code).limit(1).get();
     const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as Discount);
 

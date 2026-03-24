@@ -6,13 +6,15 @@ export type CreateHold503Code =
   | "rate_limit_unavailable"
   | "firebase_config_unavailable"
   | "firestore_transient"
-  | "block_check_unavailable";
+  | "block_check_unavailable"
+  | "legacy_scan_limit_reached";
 
 /** 503 codes where bounded client retry is appropriate. */
 const RETRYABLE_503_CODES = new Set<string>([
   "rate_limit_unavailable",
   "firestore_transient",
   "block_check_unavailable",
+  "legacy_scan_limit_reached",
 ]);
 
 export function isRetryableCreateHold503Code(code: string | undefined): boolean {

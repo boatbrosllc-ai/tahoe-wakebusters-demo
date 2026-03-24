@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
       { rates },
       {
         headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=7200",
         },
       }
     );

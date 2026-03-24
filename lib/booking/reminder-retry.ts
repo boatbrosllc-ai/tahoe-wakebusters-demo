@@ -93,12 +93,33 @@ export async function getDueRetries(
   });
 }
 
-export async function markRetrySent(db: Firestore, bookingId: string, templateKey: string): Promise<void> {
+export async function markRetrySent(
+  db: Firestore,
+  bookingId: string,
+  templateKey: string,
+  opts?: { providerMessageId?: string }
+): Promise<void> {
   const { FieldValue } = getFirestoreExports();
   const ref = db.collection(COLLECTION).doc(docId(bookingId, templateKey));
   await ref.update({
     status: "sent",
     sentAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    ...(opts?.providerMessageId ? { providerMessageId: opts.providerMessageId } : {}),
+  });
+}
+
+export async function markRetrySkipped(
+  db: Firestore,
+  bookingId: string,
+  templateKey: ReminderTemplateKey,
+  reason: string
+): Promise<void> {
+  const { FieldValue } = getFirestoreExports();
+  const ref = db.collection(COLLECTION).doc(docId(bookingId, templateKey));
+  await ref.update({
+    status: "skipped",
+    skipReason: reason,
     updatedAt: FieldValue.serverTimestamp(),
   });
 }
@@ -124,4 +145,85 @@ export async function markRetryFailed(
     lastAttemptAt: Timestamp.now(),
     updatedAt: FieldValue.serverTimestamp(),
   });
+}
+
+const ALL_TEMPLATE_KEYS: ReminderTemplateKey[] = [
+  "reminder_1week",
+  "reminder_24h",
+  "reminder_dayof",
+  "final_payment_request",
+  "final_charge_success",
+];
+
+export type ReminderRetryPerTemplateStats = {
+  pending: number;
+  sent: number;
+  deadLetter: number;
+  skipped: number;
+  /** Recent error text for failed / queued retries (admin visibility). */
+  lastErrorSnippet?: string;
+};
+
+/** Counts and last error snippet per template for admin health dashboards. */
+export async function getReminderRetryQueueStatsByTemplate(
+  db: Firestore
+): Promise<Record<ReminderTemplateKey, ReminderRetryPerTemplateStats>> {
+  const empty = (): ReminderRetryPerTemplateStats => ({
+    pending: 0,
+    sent: 0,
+    deadLetter: 0,
+    skipped: 0,
+  });
+  const out: Record<ReminderTemplateKey, ReminderRetryPerTemplateStats> = {
+    reminder_1week: empty(),
+    reminder_24h: empty(),
+    reminder_dayof: empty(),
+    final_payment_request: empty(),
+    final_charge_success: empty(),
+  };
+
+  const countTasks = ALL_TEMPLATE_KEYS.flatMap((templateKey) =>
+    (["pending", "sent", "dead_letter", "skipped"] as ReminderRetryStatus[]).map(async (status) => {
+      const snap = await db
+        .collection(COLLECTION)
+        .where("templateKey", "==", templateKey)
+        .where("status", "==", status)
+        .count()
+        .get();
+      const n = snap.data().count;
+      if (status === "pending") out[templateKey].pending = n;
+      else if (status === "sent") out[templateKey].sent = n;
+      else if (status === "dead_letter") out[templateKey].deadLetter = n;
+      else out[templateKey].skipped = n;
+    })
+  );
+
+  const snippetTasks = ALL_TEMPLATE_KEYS.map(async (templateKey) => {
+    const dead = await db
+      .collection(COLLECTION)
+      .where("templateKey", "==", templateKey)
+      .where("status", "==", "dead_letter")
+      .orderBy("lastAttemptAt", "desc")
+      .limit(1)
+      .get();
+    if (!dead.empty) {
+      const err = (dead.docs[0].data() as ReminderRetryEntry).lastError;
+      if (err) out[templateKey].lastErrorSnippet = err.slice(0, 220);
+      return;
+    }
+    const pend = await db
+      .collection(COLLECTION)
+      .where("templateKey", "==", templateKey)
+      .where("status", "==", "pending")
+      .orderBy("lastAttemptAt", "desc")
+      .limit(1)
+      .get();
+    if (!pend.empty) {
+      const err = (pend.docs[0].data() as ReminderRetryEntry).lastError;
+      if (err) out[templateKey].lastErrorSnippet = err.slice(0, 220);
+    }
+  });
+
+  await Promise.all([...countTasks, ...snippetTasks]);
+  return out;
 }

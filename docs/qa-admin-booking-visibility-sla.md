@@ -9,6 +9,8 @@ This checklist validates the **1-minute admin visibility SLA** for modal-created
 
 Visibility must be achieved within **60 seconds** of the booking being created.
 
+The same **60-second** window is defined in code as `ADMIN_BOOKING_VISIBILITY_SLA_SECONDS` / `ADMIN_BOOKING_VISIBILITY_SLA_MS` in `lib/admin-booking-visibility-sla.ts`, which the admin bookings page uses for automatic list/calendar refresh (≤ SLA). Regression coverage ties this module to `tests/admin-booking-visibility-sla.integration.test.ts`.
+
 ## When to use this checklist
 
 - After changes to admin bookings or calendar-events APIs, Firestore indexes, or booking write paths.

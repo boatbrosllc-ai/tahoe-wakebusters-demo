@@ -147,7 +147,9 @@ export async function POST(
       addonsSummary,
     };
 
-    const subject = await sendBookingConfirmationEmail(booking, emailContext);
+    const { subject } = await sendBookingConfirmationEmail(booking, emailContext, {
+      idempotencyKey: `${bookingId}_booking_confirmation_resend`,
+    });
     await logEmailSent({
       to: booking.customer?.email ?? "",
       toName: booking.customer?.name,

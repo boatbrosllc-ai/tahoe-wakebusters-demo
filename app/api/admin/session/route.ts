@@ -5,6 +5,7 @@ import {
   getAllowedAdminEmails,
   getAdminSessionCookieName,
   getAdminSessionVerifyOutcome,
+  verifyAdminSessionCookie,
 } from "@/lib/admin-auth-firebase";
 import { createEdgeSessionCookie } from "@/lib/admin-edge-session-create";
 import { ADMIN_EDGE_COOKIE_NAME } from "@/lib/admin-edge-session-verify";
@@ -13,6 +14,13 @@ import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 import { getResolvedFirebaseProjectId } from "@/lib/booking/env";
 
 const COOKIE_MAX_AGE = 5 * 24 * 60 * 60; // 5 days in seconds
+
+/** Login page when not privileged: no domain hints. */
+export type AdminSessionConfigPublicPayload = {
+  adminEmailSet: boolean;
+  firebaseConfigured: boolean;
+  projectIdsMatch: boolean;
+};
 
 export type AdminSessionConfigPayload = {
   adminEmailSet: boolean;
@@ -27,6 +35,27 @@ export type AdminSessionConfigPayload = {
   adminPrimaryDomain?: string;
   adminPrimaryLocalLength?: number;
 };
+
+/** Public login page config: no email domain, local-part length, or address count. */
+function buildSessionConfigPayloadPublic(): AdminSessionConfigPublicPayload {
+  const full = buildSessionConfigPayload();
+  return {
+    adminEmailSet: full.adminEmailSet,
+    firebaseConfigured: full.firebaseConfigured,
+    projectIdsMatch: full.projectIdsMatch,
+  };
+}
+
+async function isPrivilegedForSessionConfig(request: NextRequest): Promise<boolean> {
+  const internalSecret = process.env.HEALTH_INTERNAL_SECRET?.trim();
+  if (internalSecret) {
+    const h = request.headers.get("x-internal-health-secret")?.trim();
+    if (h && h === internalSecret) return true;
+  }
+  const cookie = request.headers.get("cookie");
+  if (cookie && (await verifyAdminSessionCookie(cookie))) return true;
+  return false;
+}
 
 /** GET: Check if admin is signed in (for navbar). Returns { signedIn: boolean }. Optional ?config=1 returns safe config status for login page. */
 function buildSessionConfigPayload(): AdminSessionConfigPayload {
@@ -71,7 +100,7 @@ export async function GET(request: NextRequest) {
         verificationUnavailable: true;
         code: string;
         hint: string;
-        config?: AdminSessionConfigPayload;
+        config?: AdminSessionConfigPayload | AdminSessionConfigPublicPayload;
       } = {
         signedIn: false,
         verificationUnavailable: true,
@@ -80,7 +109,8 @@ export async function GET(request: NextRequest) {
       };
       if (wantConfig) {
         try {
-          payload.config = buildSessionConfigPayload();
+          const priv = await isPrivilegedForSessionConfig(request);
+          payload.config = priv ? buildSessionConfigPayload() : buildSessionConfigPayloadPublic();
         } catch {
           // keep config undefined
         }
@@ -89,21 +119,27 @@ export async function GET(request: NextRequest) {
     }
     const payload: {
       signedIn: boolean;
-      config?: AdminSessionConfigPayload;
+      config?: AdminSessionConfigPayload | AdminSessionConfigPublicPayload;
     } = {
       signedIn: outcome === "valid",
     };
     if (wantConfig) {
-      payload.config = buildSessionConfigPayload();
+      try {
+        const priv = await isPrivilegedForSessionConfig(request);
+        payload.config = priv ? buildSessionConfigPayload() : buildSessionConfigPayloadPublic();
+      } catch {
+        payload.config = buildSessionConfigPayloadPublic();
+      }
     }
     return NextResponse.json(payload);
   } catch {
-    const payload: { signedIn: boolean; config?: AdminSessionConfigPayload } = {
+    const payload: { signedIn: boolean; config?: AdminSessionConfigPayload | AdminSessionConfigPublicPayload } = {
       signedIn: false,
     };
     if (wantConfig) {
       try {
-        payload.config = buildSessionConfigPayload();
+        const priv = await isPrivilegedForSessionConfig(request);
+        payload.config = priv ? buildSessionConfigPayload() : buildSessionConfigPayloadPublic();
       } catch {
         // keep config undefined
       }

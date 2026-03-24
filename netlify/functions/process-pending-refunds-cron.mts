@@ -22,7 +22,10 @@ export const handler = schedule("*/15 * * * *", async () => {
   try {
     const res = await fetch(`${baseUrl}/api/admin/cron/process-pending-refunds`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${cronSecret}` },
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+        "X-Cron-Timestamp": String(Math.floor(Date.now() / 1000)),
+      },
       signal: controller.signal,
     });
     const body = await res.json().catch(() => ({}));

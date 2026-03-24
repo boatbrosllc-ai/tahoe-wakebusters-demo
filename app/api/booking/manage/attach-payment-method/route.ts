@@ -10,6 +10,7 @@ import { getStripe } from "@/lib/booking/stripe-client";
 import { verifyManageToken } from "@/lib/booking/manageToken";
 import { checkRateLimit, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
 import type { Booking } from "@/lib/booking/types";
+import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 
 function getTokenFromRequest(request: NextRequest): string | null {
   const auth = request.headers.get("authorization");
@@ -18,15 +19,6 @@ function getTokenFromRequest(request: NextRequest): string | null {
     return t || null;
   }
   return null;
-}
-
-function parseBody(body: unknown): { token: string; paymentMethodId: string } | null {
-  if (body == null || typeof body !== "object") return null;
-  const o = body as Record<string, unknown>;
-  const token = typeof o.token === "string" ? o.token.trim() : null;
-  const paymentMethodId = typeof o.paymentMethodId === "string" ? o.paymentMethodId.trim() : null;
-  if (!token || !paymentMethodId) return null;
-  return { token, paymentMethodId };
 }
 
 export async function POST(request: NextRequest) {
@@ -44,19 +36,21 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
       );
     }
-    let token = getTokenFromRequest(request);
     const body = await request.json().catch(() => null);
-    const input = parseBody(body);
-    if (!token && input) token = input.token;
-    if (!token || !input?.paymentMethodId) {
+    const o = body != null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    let token = getTokenFromRequest(request) ?? (typeof o.token === "string" ? o.token.trim() : null);
+    const paymentMethodId = typeof o.paymentMethodId === "string" ? o.paymentMethodId.trim() : null;
+    const bodyEmail = typeof o.customerEmail === "string" ? o.customerEmail.trim().toLowerCase() : null;
+    if (!token || !paymentMethodId) {
       return NextResponse.json({ error: "Missing token or paymentMethodId" }, { status: 400 });
     }
     const payload = verifyManageToken(token);
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
-    if (!payload.email) {
-      return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+    const customerEmail = resolveManageCustomerEmail(request, payload.bookingId, bodyEmail);
+    if (!customerEmail) {
+      return NextResponse.json({ error: "customerEmail is required in the request body" }, { status: 400 });
     }
     const rlManage = await checkRateLimit(getManageRateLimitKey(payload.bookingId));
     if (!rlManage.allowed) {
@@ -79,7 +73,7 @@ export async function POST(request: NextRequest) {
     }
     const booking = bookingSnap.data() as Booking;
     const bookingEmail = booking.customer?.email?.trim().toLowerCase();
-    if (!bookingEmail || bookingEmail !== payload.email) {
+    if (!bookingEmail || bookingEmail !== customerEmail) {
       return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
     }
     const ACTIVE_STATUSES = ["paid", "final_due", "final_failed", "final_requires_action", "final_processing"];
@@ -91,15 +85,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No customer on booking" }, { status: 400 });
     }
     const stripe = getStripe();
-    const pm = await stripe.paymentMethods.retrieve(input.paymentMethodId);
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
     if (pm.customer && pm.customer !== customerId) {
       return NextResponse.json({ error: "Payment method belongs to another customer" }, { status: 400 });
     }
     if (!pm.customer) {
-      await stripe.paymentMethods.attach(input.paymentMethodId, { customer: customerId });
+      await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
     }
     await stripe.customers.update(customerId, {
-      invoice_settings: { default_payment_method: input.paymentMethodId },
+      invoice_settings: { default_payment_method: paymentMethodId },
     });
     const card = pm.card;
     const cardDisplay = card
@@ -111,7 +105,7 @@ export async function POST(request: NextRequest) {
         }
       : undefined;
     await db.collection("bookings").doc(payload.bookingId).update({
-      "stripe.paymentMethodId": input.paymentMethodId,
+      "stripe.paymentMethodId": paymentMethodId,
       ...(cardDisplay && { card: cardDisplay }),
       updatedAt: FieldValue.serverTimestamp(),
       "stripe.cardUpdatedAt": FieldValue.serverTimestamp(),

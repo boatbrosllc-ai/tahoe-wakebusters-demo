@@ -2,12 +2,14 @@
 # For GA4 boatbrosatx.com stream: set NEXT_PUBLIC_GA_MEASUREMENT_ID=G-1QM1E4C1BB in Netlify env.
 # so rate limiting is active in production (see lib/booking/rate-limit.ts and GET /api/health).
 # Verify GET /api/health returns HTTP 200 with rateLimit: 'ok' after deployment.
-# Set RATE_LIMIT_FAIL_CLOSED=1 so that if Redis becomes unavailable, checkout returns 503 with incidentCode instead of failing open.
-# Optionally set RATE_LIMIT_DEGRADED_USE_MEMORY=1 as a secondary backstop when Redis is down.
+# Set RATE_LIMIT_FAIL_CLOSED=1 so that if Redis becomes unavailable, endpoints can return 503 instead of failing open.
+# Production defaults to in-memory degraded limiting when Redis errors (RATE_LIMIT_DEGRADED_USE_MEMORY=0 disables).
+# Set RATE_LIMIT_MUTATION_FAIL_CLOSED=1 for stricter create-hold / create-payment-intent behavior on Redis failures.
 # Set DISABLE_LEGACY_BOOKING_FALLBACK=true and DISABLE_LEGACY_HOLDS_FALLBACK=true once startDateStr backfill
 # is complete on bookings and holds (run /api/admin/backfill-start-date-str; verify Firestore; then enable both).
+# Prioritize DISABLE_LEGACY_HOLDS_FALLBACK=true in production after holds are backfilled — reduces legacy scans that can 504 slot pagination.
 #
-# Cron: scheduled functions must call the admin cron URLs with Authorization: Bearer CRON_SECRET.
+# Cron: scheduled functions must call the admin cron URLs with Authorization: Bearer CRON_SECRET and X-Cron-Timestamp (Unix seconds).
 # Set CRON_SECRET in Netlify (e.g. 32+ random bytes, base64 or hex). Endpoints:
 #   POST /api/admin/cron/cleanup-holds
 #   POST /api/admin/cron/run-final-charges
@@ -23,6 +25,9 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+[[plugins]]
+  package = "./netlify/plugins/deploy-health-check"
 
 [functions]
   # Next.js API routes (/api/booking/slots, /api/booking/date-prices) use maxDuration=26 in route.ts.
@@ -57,6 +62,8 @@
 [functions."api-admin-cron-process-pending-refunds"]
   timeout = 60
 
+# Scheduled in netlify/functions/warm-booking.mts via schedule("*/10 * * * *") — every 10 minutes, under typical
+# Netlify idle cold-start windows (~10–15 min) so booking API routes stay warm.
 [functions."warm-booking"]
   timeout = 10
 

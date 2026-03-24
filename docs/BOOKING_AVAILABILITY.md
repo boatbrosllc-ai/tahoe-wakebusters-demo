@@ -152,7 +152,10 @@ Bookings that have a slot-taken status but missing or empty `boatId` are no long
    Use the slots API response header `X-Unresolved-Booking-Count` and server logs (`unresolved_booking_no_boat_id` telemetry) until the count is zero. Re-run the backfill after fixing any bookings that could not be inferred automatically (e.g. set `boatId` manually in Firestore or via admin).
 
 3. **Production deploy runbook**  
-   After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "applyUpdates": true }` or `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Do not use `ENABLE_BLOCK_CHECK_FAIL_OPEN` as a substitute for deploying Firestore indexes for **blocks** — that flag skips block checks and can allow holds during maintenance blocks.
+   After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "applyUpdates": true }` or `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Deploy **blocks** composites from `firestore.indexes.json`; overlap checks fail closed (503) if the query cannot complete. `ENABLE_BLOCK_CHECK_FAIL_OPEN` is obsolete.
+
+4. **`DISABLE_LEGACY_BOOKING_FALLBACK` and `startDateStr` completeness**  
+   Turning on **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** before every booking document has a populated **`startDateStr`** can cause `assertSlotAvailable` to miss legacy rows and allow double-booking. Before enabling the flag in production: run the **`startDateStr` backfill** for the `bookings` collection until no documents remain with `startDateStr == null`. After deploy, **`GET /api/health`** with a privileged request (`X-Internal-Health-Secret` or admin cookie) runs a probe when the flag is true: if any such booking exists, the server logs a **production error** and (for privileged callers) reports `legacyBookingStartDateStrBackfill: "incomplete"`. **`npm run check-env`** (`scripts/check-production-env.js`) warns when the flag is set so operators verify backfill completeness before release.
 
 ## Checkout consistency (site + mobile)
 

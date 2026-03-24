@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { sanitizeTermsHtml } from "@/lib/waiver/sanitize-terms-html";
 
 interface TermsAcceptProps {
   termsHtml: string;
@@ -22,6 +23,7 @@ export function TermsAccept({
   const [scrolledToBottom, setScrolledToBottom] = useState(false);
   const [checked, setChecked] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const safeTermsHtml = useMemo(() => sanitizeTermsHtml(termsHtml), [termsHtml]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -36,7 +38,7 @@ export function TermsAccept({
     handleScroll();
     el.addEventListener("scroll", handleScroll);
     return () => el.removeEventListener("scroll", handleScroll);
-  }, [termsHtml]);
+  }, [safeTermsHtml]);
 
   const canAccept = requiredScrollToBottom ? scrolledToBottom : true;
   const accepted = checked && canAccept;
@@ -49,7 +51,7 @@ export function TermsAccept({
       <div
         ref={scrollRef}
         className="max-h-[50vh] sm:max-h-80 overflow-y-auto overflow-x-hidden rounded-xl border border-brand-dark/20 bg-brand-bg/30 p-4 text-sm text-brand-dark prose prose-sm max-w-none overscroll-contain touch-pan-y"
-        dangerouslySetInnerHTML={{ __html: termsHtml }}
+        dangerouslySetInnerHTML={{ __html: safeTermsHtml }}
       />
       {requiredScrollToBottom && !scrolledToBottom && (
         <p className="text-sm text-amber-700" role="status">

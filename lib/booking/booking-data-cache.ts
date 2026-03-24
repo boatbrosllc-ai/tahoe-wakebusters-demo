@@ -102,11 +102,11 @@ const STALE_MS = {
   slots: STALE_MS_SLOTS,
   /** Shorter TTL for ticketed experiences so departure/slot config changes are picked up quickly. */
   slotsTicketed: 1_000,
-  /** Display lag for admin pricing calendar changes; payment-time price is authoritative via create-payment-intent. */
-  datePrices: 12_000,
+  /** Same short TTL as slots so calendar prices refresh with availability/slot cache bumps. */
+  datePrices: STALE_MS_SLOTS,
   experienceDetail: 60_000,
   experienceBySlug: 60_000,
-  experienceRates: 60_000, // 1 min — consistent with other booking-critical data; reduce stale prices during session
+  experienceRates: 3_600_000, // 1 h — aligns with CDN s-maxage; rates static within a session
   boats: 60_000,
 } as const;
 
@@ -163,9 +163,11 @@ function fetchCached<T>(
   url: string,
   staleMs: number,
   signal?: AbortSignal,
+  /** Use `default` for CDN-friendly routes (e.g. `/api/experiences`); default `no-store` for availability. */
+  fetchCache: RequestCache = "no-store",
 ): Promise<T> {
   if (typeof window === "undefined") {
-    return fetch(url, { cache: "no-store" }).then((r) => r.json() as Promise<T>);
+    return fetch(url, { cache: fetchCache }).then((r) => r.json() as Promise<T>);
   }
   if (signal?.aborted) return Promise.reject(new DOMException("", "AbortError"));
 
@@ -186,22 +188,25 @@ function fetchCached<T>(
         typeof window !== "undefined" && (!base || base === window.location.origin);
       const fetchOpts: RequestInit = {
         credentials: isSameOrigin ? "include" : "omit",
-        cache: "no-store",
+        cache: fetchCache,
       };
       // Run without signal so the response is always cached even when a caller
       // aborts early. Per-caller abort is handled by the wrapper below.
       const startMs = Date.now();
       const rawFetchPromise = fetch(fullUrl, fetchOpts);
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let p!: Promise<T>;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-          inFlight.delete(key);
-          const err = new Error(`[booking-data-cache] fetch timeout after ${FETCH_TIMEOUT_MS}ms: ${key}`);
-          (err as Error & { name?: string }).name = "TimeoutError";
-          reject(err);
+          if (inFlight.get(key) === p) {
+            inFlight.delete(key);
+            const err = new Error("Request timed out");
+            (err as Error & { name?: string }).name = "TimeoutError";
+            reject(err);
+          }
         }, FETCH_TIMEOUT_MS);
       });
-      const p = Promise.race([rawFetchPromise, timeoutPromise])
+      p = Promise.race([rawFetchPromise, timeoutPromise])
         .finally(() => {
           if (timeoutId != null) clearTimeout(timeoutId);
         })
@@ -239,11 +244,11 @@ function fetchCached<T>(
           dataCache.delete(key); // remove then re-insert to update insertion order (LRU)
           dataCache.set(key, { data, fetchedAt: Date.now() });
           evictOldestIfNeeded();
-          inFlight.delete(key);
+          if (inFlight.get(key) === p) inFlight.delete(key);
           return data;
         })
         .catch((err: unknown) => {
-          inFlight.delete(key);
+          if (inFlight.get(key) === p) inFlight.delete(key);
           const durationMs = Date.now() - startMs;
           const isAbort = (err as { name?: string })?.name === "AbortError";
           if (isAbort) throw err;
@@ -339,6 +344,8 @@ export interface DatePricesResult {
   prices: Record<string, number>;
   holidayDateStrings: string[];
   ticketsAvailableByDate: Record<string, number>;
+  /** True when legacy hold pagination timed out (ticketed path); counts may omit some legacy holds. */
+  partialData?: boolean;
 }
 
 export interface ExperienceDetailResult {
@@ -395,7 +402,7 @@ export interface ExperienceBySlugResult {
 export function fetchExperiences(
   signal?: AbortSignal,
 ): Promise<{ experiences: ExperienceListItem[] }> {
-  return fetchCached("experiences", "/api/experiences", STALE_MS.experiences, signal);
+  return fetchCached("experiences", "/api/experiences", STALE_MS.experiences, signal, "default");
 }
 
 export function fetchSlots(
@@ -410,6 +417,14 @@ export function fetchSlots(
   const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}&v=${encodeURIComponent(v)}`;
   const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;
   return fetchCached(key, url, staleMs, signal);
+}
+
+/** Milliseconds since epoch when the current in-memory slots cache entry was stored (for staleness checks in the booking modal). */
+export function getSlotsCacheFetchedAt(experienceId: string, startDate: string, endDate: string): number | null {
+  const v = getSlotCacheVersion();
+  const key = `slots|${experienceId}|${startDate}|${endDate}|${v}`;
+  const entry = dataCache.get(key) as CacheEntry<unknown> | undefined;
+  return entry?.fetchedAt ?? null;
 }
 
 export function fetchDatePrices(

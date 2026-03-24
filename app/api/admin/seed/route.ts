@@ -1,19 +1,17 @@
 /**
- * Seed Firestore with boats (Long Pontoon, Wake Board, Lake Austin Pontoon), rates (3–8h), addons, and open slots for the next 14 days.
- * Call with POST and Authorization: Bearer <SEED_SECRET>. In production, SEED_SECRET must be set; cron endpoints use CRON_SECRET only.
- * Idempotent: creates each boat only if none exist (by name), then rates/addons/slots.
+ * Seed Firestore with boats, rates, addons, and open slots (next 14 days).
+ * Requires admin session (middleware + requireAdminSession). No production Bearer backdoor.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { buildSlotId } from "@/lib/booking/experience-slots";
 
-const SLOT_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours per slot
+const SLOT_DURATION_MS = 4 * 60 * 60 * 1000;
 const FIRST_SLOT_HOUR = 9;
 const LAST_SLOT_HOUR = 17;
 
-/** Slug for public /boats page; must be set for boats to appear on "Our Boats". */
 function slugFromName(name: string): string {
   return name
     .trim()
@@ -68,26 +66,9 @@ const ADDONS = [
 ];
 
 export async function POST(request: NextRequest) {
+  const deny = await requireAdminSession(request.headers.get("cookie"));
+  if (deny) return deny;
   try {
-    if (process.env.NODE_ENV === "production" && process.env.ALLOW_SEED_IN_PRODUCTION !== "true") {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    const seedSecret = process.env.SEED_SECRET;
-    const openDev =
-      process.env.SEED_OPEN_DEV === "1" &&
-      process.env.NODE_ENV === "development" &&
-      !process.env.VERCEL &&
-      !process.env.NETLIFY;
-
-    if (!openDev) {
-      if (!seedSecret) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      const authHeader = request.headers.get("authorization") ?? "";
-      if (!timingSafeStringEqual(authHeader, `Bearer ${seedSecret}`)) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-    }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const boatIds: string[] = [];
@@ -100,7 +81,6 @@ export async function POST(request: NextRequest) {
         boatId = boatsSnap.docs[0].id;
         const boatRef = db.collection("boats").doc(boatId);
         const existing = boatsSnap.docs[0].data();
-        // Ensure existing seed boats appear on public /boats page (isListingBoat + slug)
         const updates: Record<string, unknown> = {};
         if (existing.isListingBoat !== true) updates.isListingBoat = true;
         if (!existing.slug || typeof existing.slug !== "string") updates.slug = slug;
@@ -180,7 +160,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, boatIds });
   } catch (err) {
-    console.error("[seed]", err);
+    console.error("[admin/seed]", err);
     return NextResponse.json({ error: "Seed failed" }, { status: 500 });
   }
 }

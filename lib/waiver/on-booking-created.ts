@@ -2,6 +2,11 @@
  * Create waiver request when a booking is created.
  * Does not send emails; caller adds waiver link to confirmation and/or sends separate invite based on template flags.
  * Call from convertHoldToBooking (Stripe/webhook flow) and admin POST booking.
+ *
+ * Product intent: a signed waiver is encouraged for legal/ops visibility but is not a hard gate for completing
+ * payment or running the trip — bookings confirm and proceed without it unless you add business rules elsewhere
+ * (e.g. pay-remaining, ops alerts). Reconciliation and confirmation outbox retries reduce orphaned bookings without
+ * a waiver request when creation fails transiently.
  */
 
 import "server-only";
@@ -18,6 +23,7 @@ import {
 import { sendWaiverTemplateMissingAlert } from "@/lib/booking/brevo";
 import { waiverEmailBrevo } from "./email-brevo";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 export interface CreateWaiverForBookingInput {
   bookingId: string;
@@ -135,6 +141,13 @@ export async function createWaiverForBooking(
     };
   } catch (err) {
     console.error("[waiver] createWaiverForBooking failed", input.bookingId, err);
+    const message = err instanceof Error ? err.message : String(err);
+    await writeOperationalAlert({
+      type: "waiver_creation_failed",
+      bookingId: input.bookingId,
+      error: message,
+      source: "createWaiverForBooking",
+    });
     return null;
   }
 }

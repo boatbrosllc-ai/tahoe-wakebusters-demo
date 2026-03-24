@@ -65,7 +65,8 @@ export function BookingCTA({
             variant="default"
             size="default"
             className={buttonClass}
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               handleBookClick();
               onBookNowClick();
             }}

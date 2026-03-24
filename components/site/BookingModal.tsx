@@ -16,7 +16,7 @@ import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
-import { slugMatches } from "@/lib/booking/experience-aliases";
+import { slugMatches, isTicketedExperienceForBooking } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
@@ -27,10 +27,23 @@ import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
 import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
 import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
+import {
+  openSlotsForDateFromMonthSlots,
+  availableDateSetFromMonthSlots,
+  step2SelectedSlotVerifiedOpen,
+} from "@/lib/booking/partial-slots-calendar-derivation";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
-import type { CompleteAfterPaymentClientOutcome } from "@/lib/booking/complete-after-payment-client";
+import {
+  completeAfterPaymentWithPolling,
+  COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
+  type CompleteAfterPaymentClientOutcome,
+} from "@/lib/booking/complete-after-payment-client";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { DEPOSIT_FRACTION, TAX_RATE } from "@/lib/booking/constants";
+import { TrustLine } from "@/components/site/TrustLine";
+import { loadConfetti } from "@/lib/client/load-confetti";
+import { analytics } from "@/lib/analytics";
+import { location } from "@/content/location";
+import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
 import { AddonSelector } from "@/components/site/booking-modal-steps/AddonSelector";
@@ -38,10 +51,10 @@ import { BookingStep4PaymentForm } from "@/components/site/booking-modal-steps/B
 import { BookingSuccessPanel } from "@/components/site/booking-modal-steps/BookingSuccessPanel";
 import { WEEKDAY_LABELS } from "@/components/site/booking-modal-steps/booking-calendar-constants";
 import { usePriceSummary } from "@/components/site/usePriceSummary";
+import { usePaymentSummary } from "@/components/site/usePaymentSummary";
 import { useDiscountValidation } from "@/components/site/useDiscountValidation";
-import type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption } from "@/lib/booking/booking-modal-types";
+import type { ExperienceItem, BoatOption, SlotDto, AddonOption } from "@/lib/booking/booking-modal-types";
 
-const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 /** Session key for persisting success state so close/reopen shows receipt and booking ID. */
 const SESSION_SUCCESS_KEY = "bb_booking_success";
 /** Success snapshot is only for immediate post-booking UX; claim token remains valid longer server-side. */
@@ -75,6 +88,8 @@ import {
   type ModalHoldRecoveryPayloadV1,
   clearModalHoldRecoverySession,
 } from "@/components/site/useHoldCreation";
+import { releaseHoldFromModalSessionStorage } from "@/lib/booking/release-hold-client";
+import { runCreatePaymentIntentForHold } from "@/lib/booking/run-create-hold-and-payment";
 import { usePaymentCompletion } from "@/components/site/usePaymentCompletion";
 import {
   bookingModalReducer,
@@ -82,6 +97,22 @@ import {
   bookingModalEffectsPhase,
   type BookingModalPaymentPhase,
 } from "@/lib/booking/booking-modal-state";
+
+/** Keeps `handleBack` (step 4) and `handleHoldExpired` navigation aligned for calendar-first vs multi-boat. */
+function resolveNavigateAfterStep4PaymentExit(
+  isTicketed: boolean,
+  isCalendarFirstFlow: boolean,
+  boatsLength: number
+): "close" | 2 | 3 {
+  if (isTicketed) {
+    if (isCalendarFirstFlow) return "close";
+    return 2;
+  }
+  if (isCalendarFirstFlow && boatsLength <= 1) return "close";
+  if (isCalendarFirstFlow) return 3;
+  if (boatsLength === 1) return 2;
+  return 3;
+}
 
 type BookingModalProps = {
   open: boolean;
@@ -98,6 +129,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [bookingState, dispatchBooking] = useReducer(bookingModalReducer, BOOKING_MODAL_INITIAL_STATE);
   const step = bookingState.step;
   const paymentPhase = bookingState.paymentPhase as BookingModalPaymentPhase;
+  /** Load Stripe.js only when the card form mounts — avoids competing with slots/date-prices for ticketed flows. */
+  const stripePromise = useMemo(
+    () =>
+      stripePublishableKey && paymentPhase === "stripe"
+        ? loadStripe(stripePublishableKey)
+        : null,
+    [stripePublishableKey, paymentPhase],
+  );
   const setStep = useCallback((s: 1 | 2 | 3 | 4) => dispatchBooking({ type: "SET_STEP", step: s }), []);
   const setPaymentPhase = useCallback(
     (p: BookingModalPaymentPhase) => dispatchBooking({ type: "SET_PAYMENT_PHASE", paymentPhase: p }),
@@ -106,6 +145,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const stepRef = useRef(step);
   stepRef.current = step;
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
+  const selectedExperienceIdRef = useRef<string | undefined>(undefined);
+  selectedExperienceIdRef.current = selectedExperience?.id;
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const today = useMemo(() => {
@@ -126,29 +167,26 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
   const [addonQtyModalAddon, setAddonQtyModalAddon] = useState<AddonOption | null>(null);
   const [addonQtyModalQty, setAddonQtyModalQty] = useState(0);
-  const [tipChoice, setTipChoice] = useState<"now" | "later" | null>(null);
-  const [tipPercent, setTipPercent] = useState(20); // 20–100 when "Tip now"
-  const [tipModalPercent, setTipModalPercent] = useState(20); // value while tip-amount modal is open
-  const [tipNowModalOpen, setTipNowModalOpen] = useState(false);
-  const [tipLaterMessageOpen, setTipLaterMessageOpen] = useState(false);
-  const tipLaterWasOpenRef = useRef(false);
-  const tipLaterIntendedRef = useRef(false);
+  const [optionalFieldsOpen, setOptionalFieldsOpen] = useState(false);
+  const [tipChoice, setTipChoice] = useState<"now" | "later" | null>("later");
+  const [tipPercent, setTipPercent] = useState(20); // 20–30 when "Tip now" (inline presets)
   const [howDidYouHear, setHowDidYouHear] = useState("");
   const [comments, setComments] = useState("");
   const [discountCode, setDiscountCode] = useState("");
   const [discountRemovedNotice, setDiscountRemovedNotice] = useState<string | null>(null);
-  const prevPartySizeForDiscountRef = useRef(partySize);
-  const appliedDiscountRef = useRef<{ discountCents: number; code: string } | null>(null);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [payFullAmount, setPayFullAmount] = useState(true);
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
   const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
+  const [discountLimitExceededFromServer, setDiscountLimitExceededFromServer] = useState(false);
   const [holdId, setHoldId] = useState<string | null>(null);
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
   // Persists the last successfully-created holdId per slot across back-navigation so
   // subsequent create-hold calls for the same slot can include resumeHoldId.
   const lastHoldRef = useRef<{ slotId: string; holdId: string } | null>(null);
+  /** Filled after `useHoldCreation` returns so `holdModalCallbacks` can forward `onHoldConflict` without circular deps. */
+  const handleHoldConflictRef = useRef<(ctx: HoldConflictContext) => void>(() => {});
   /** After hold recovery, apply `selectedBoat` once `boats` loads. */
   const pendingRecoveryBoatIdRef = useRef<string | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
@@ -169,10 +207,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   successRecoveryPaymentCapturedRef.current = successRecoveryPaymentCaptured;
   /** Brief notice when close is blocked while create-hold is in flight (Comment 1). */
   const [pendingCloseWhileProceedMessage, setPendingCloseWhileProceedMessage] = useState<string | null>(null);
+  /** Brief overlay while re-fetching slots before advancing toward payment (stale or partial slot data). */
+  const [confirmingAvailability, setConfirmingAvailability] = useState(false);
   const [completeAfterRetryInFlight, setCompleteAfterRetryInFlight] = useState(false);
   const completeAfterRetryInFlightRef = useRef(false);
   /** While true, complete-after-payment is polling Stripe "processing" — match BookingStripeReturnHandler copy. */
   const [stripePaymentProcessing, setStripePaymentProcessing] = useState(false);
+  /** Survives `<Elements>` remounts so Pay cannot flash enabled mid–payment phase transition. */
+  const [stripePaymentSubmitInProgress, setStripePaymentSubmitInProgress] = useState(false);
   const openRef = useRef(open);
   openRef.current = open;
   /** Receipt fetch failed transiently during hold recovery — session kept for retry. */
@@ -185,7 +227,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const releaseOnCloseDoneRef = useRef(false);
   /** Captured when user clicks "Proceed to payment": true if they had selected deposit (payFullAmount was false). Used to show notice when server returns full payment. */
   const userChoseDepositRef = useRef(false);
-  /** Refs for cleanup effect to see current hold/payment state when modal unmounts. */
+  /** Refs for cleanup effect to see current hold/payment state when modal unmounts (updated synchronously each render). */
   const paymentPhaseRef = useRef(paymentPhase);
   const holdIdRef = useRef(holdId);
   const releaseTokenRef = useRef(releaseToken);
@@ -193,9 +235,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   holdIdRef.current = holdId;
   releaseTokenRef.current = releaseToken;
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker — only after experience detail loads. */
-  const isTicketed = selectedExperience != null && selectedExperience.pricingType === "ticketed";
+  const isTicketed = selectedExperience != null && isTicketedExperienceForBooking(selectedExperience);
   /** Listing hint before `selectedExperience` is set; do not use for booking logic or data effects. */
-  const isTicketedFromSelection = initialSelection?.pricingType === "ticketed";
+  const isTicketedFromSelection =
+    initialSelection?.pricingType === "ticketed" ||
+    (!!initialSelection?.experienceSlug &&
+      isTicketedExperienceForBooking({
+        pricingType: initialSelection?.pricingType,
+        slug: initialSelection.experienceSlug,
+      }));
   /** Ticketed step chrome while experience is still loading (display only). */
   const showTicketedFlow = isTicketed || (selectedExperience === null && !!isTicketedFromSelection);
   const [bookingMode, setBookingMode] = useState<"shared" | "charter">(
@@ -229,12 +277,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
     if (prevId === id) return;
     prevExperienceIdForBookingModeRef.current = id;
-    if (selectedExperience.pricingType === "ticketed") {
+    if (isTicketed) {
       setBookingMode("shared");
     } else {
       setBookingMode("charter");
     }
-  }, [open, selectedExperience?.id, selectedExperience?.pricingType]);
+  }, [open, selectedExperience?.id, isTicketed]);
 
   const bookingEffectsPhase = useMemo(() => bookingModalEffectsPhase(bookingState), [bookingState]);
 
@@ -252,17 +300,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     slotsLoadError,
     slotsLoading,
     slotsPartialData,
+    slotsFetchedAt,
     datePrices,
     datePricesLoading,
+    datePricesPartialData,
     holidayDateStrings,
     ticketsAvailableByDate,
     ratesSummary,
     ratesLoadError,
-    monthDataRangeStart,
     ticketCounts,
     ticketCountsLoading,
     ticketCountsError,
-    ticketCountsRetryTrigger,
     effectiveRateCents,
     effectivePriceLoading,
     viewMonthForPrefetchRef,
@@ -270,6 +318,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     experienceDetailPatch,
     clearExperienceDetailPatch,
     retrySlots,
+    confirmSlotsFresh,
+    retryBoats,
+    retryEffectivePrice,
     retryTicketCounts,
     resetBookingDataForModalOpen,
     invalidateAfterConflict,
@@ -282,31 +333,51 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [experienceDetailPatch, clearExperienceDetailPatch]);
 
   /** Open slots for the selected date only — derived synchronously to avoid glitch on date click. Ticketed: exclude sold-out slots (spotsRemaining === 0). */
-  const openSlotsForDate = useMemo(() => {
-    if (!selectedDate) return [];
-    return monthSlots.filter((s) => {
-      if (isoToChicagoDateStr(s.startAt) !== selectedDate || s.status !== "open") return false;
-      if (selectedExperience?.pricingType === "ticketed" && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) return false;
-      return true;
-    });
-  }, [selectedDate, monthSlots, selectedExperience?.pricingType]);
+  const openSlotsForDate = useMemo(
+    () => openSlotsForDateFromMonthSlots(monthSlots, selectedDate, isTicketed),
+    [selectedDate, monthSlots, isTicketed],
+  );
+
+  /** True when the user's selected slot is present in loaded open slots for that date (safe to proceed even if API partialData). */
+  const selectedSlotVerifiedOpen = step2SelectedSlotVerifiedOpen(
+    monthSlots,
+    selectedDate,
+    selectedSlot,
+    isTicketed,
+  );
 
   /** Max sellable tickets (ticketed) or max guests (charter). */
   const ticketMax = isTicketed ? (selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36) : (selectedExperience?.maxGuests ?? 14);
+  /** Ticketed: per-date availability from date-prices (same window as calendar). Used when ticket-availability fails so the flow is not dead-ended. */
+  const ticketedCalendarAvail =
+    isTicketed && selectedDate != null && typeof ticketsAvailableByDate[selectedDate] === "number"
+      ? ticketsAvailableByDate[selectedDate]
+      : null;
+  /** When date-prices returned partialData (legacy hold pagination timed out), do not allow selecting more than this until checkout confirms. */
+  const DATE_PRICES_PARTIAL_TICKET_CAP = 2;
   /**
-   * Ticketed: cap party/tickets to live API counts only. While loading we allow up to `ticketMax`;
-   * if counts are unavailable (error / unresolved), cap is 0 so Continue stays blocked until retry succeeds.
+   * Ticketed: prefer `/api/booking/ticket-availability`; while loading allow up to `ticketMax`.
+   * If that request fails, fall back to calendar counts from date-prices so customers can still checkout.
    */
   const effectiveTicketMax = isTicketed
     ? Math.min(
         ticketMax,
-        ticketCounts != null
-          ? ticketCounts.available
-          : ticketCountsLoading
-            ? ticketMax
-            : ticketCountsError && ticketCountsRetryTrigger > 0
+        datePricesPartialData
+          ? Math.min(
+              DATE_PRICES_PARTIAL_TICKET_CAP,
+              ticketCounts != null && ticketCounts.conservativeEstimate !== true
+                ? ticketCounts.available
+                : DATE_PRICES_PARTIAL_TICKET_CAP
+            )
+          : ticketCounts != null
+            ? ticketCounts.conservativeEstimate === true
               ? ticketMax
-              : 0
+              : ticketCounts.available
+            : ticketCountsLoading
+              ? ticketMax
+              : ticketedCalendarAvail != null
+                ? Math.min(ticketMax, ticketedCalendarAvail)
+                : 0
       )
     : ticketMax;
 
@@ -385,7 +456,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [chicagoDateTick]);
   /** Month key YYYY-MM for deterministic indexing (no Date keys). */
   const viewMonthKey = useMemo(() => toMonthKey(viewMonthYear, viewMonthMonth), [viewMonthYear, viewMonthMonth]);
-  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when view month or date options change; calendarRenderKey forces remount when slot/price data changes. */
+  /** Step 3: calendar grid with leading blanks so day 1 aligns under correct weekday (7 columns, Sun–Sat). Recompute when view month or date options change; `calendarRenderKey` remounts on month/rate changes only. */
   const step3CalendarGrid = useMemo(() => {
     const first = new Date(viewMonthYear, viewMonthMonth - 1, 1);
     const leadingBlanks = first.getDay();
@@ -424,7 +495,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         ...(initialSelection.departureHour != null && { departureHour: initialSelection.departureHour }),
         ...(initialSelection.departureMinute != null && { departureMinute: initialSelection.departureMinute }),
       });
-      if (exp.pricingType === "ticketed" && initialSelection.bookingMode != null) {
+      if (isTicketedExperienceForBooking(exp) && initialSelection.bookingMode != null) {
         setBookingMode(initialSelection.bookingMode);
       }
       if (initialSelection.partySize != null) {
@@ -485,7 +556,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // When ticketed/charter mode flips (not on first selection from empty), clear slot so we don't mix flows
   const prevPricingTypeRef = useRef<"charter" | "ticketed" | null | undefined>(undefined);
   useEffect(() => {
-    const pt = selectedExperience?.pricingType === "ticketed" ? "ticketed" : selectedExperience ? "charter" : null;
+    const pt = isTicketed ? "ticketed" : selectedExperience ? "charter" : null;
     if (prevPricingTypeRef.current === undefined) {
       prevPricingTypeRef.current = pt;
       return;
@@ -494,7 +565,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setSelectedSlot(null);
     }
     prevPricingTypeRef.current = pt;
-  }, [selectedExperience?.pricingType, selectedExperience?.id]);
+  }, [isTicketed, selectedExperience?.id]);
 
   // When experience has a booking window and current view month is outside it, snap to the start of the window
   useEffect(() => {
@@ -556,7 +627,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   /** Single-pass derivation of all three boat-availability sets for the selected time slot.
    * Only considers slots with the SAME duration as selectedSlot so we don't show boats that have
    * a different duration open (e.g. 2hr open but 3hr held). Matches the duration-filtered time list. */
-  const ticketedForSlot = selectedExperience?.pricingType === "ticketed";
+  const ticketedForSlot = isTicketed;
   const {
     availableBoatIdsForSelectedSlot,
     unavailableBoatIdsForSelectedSlot,
@@ -604,10 +675,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       blockedBoatIdsForSelectedSlot: blocked,
     };
   }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots, ticketedForSlot]);
-  const slotsByDate = useMemo(
-    () => aggregateSlotsByDate(monthSlots, selectedExperience?.pricingType === "ticketed"),
-    [monthSlots, selectedExperience?.pricingType]
-  );
+  const slotsByDate = useMemo(() => aggregateSlotsByDate(monthSlots, isTicketed), [monthSlots, isTicketed]);
+
+  /** Ticketed: dates where the slots API could not load hold counts — calendar shows uncertain styling. */
+  const holdDataMissingByDate = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of monthSlots) {
+      if (s.holdDataMissing) {
+        const day = isoToChicagoDateStr(s.startAt);
+        if (day) set.add(day);
+      }
+    }
+    return set;
+  }, [monthSlots]);
 
   /** Ticketed: booked count per date from slot.spotsBooked (API). Used so calendar shows yellow when there are bookings. */
   const ticketsBookedByDate = useMemo(() => {
@@ -626,29 +706,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
    * Advisory-only: dates that appear to have ≥1 open slot from cached `monthSlots`.
    * May be up to STALE_MS_SLOTS ms stale (see `lib/booking/booking-data-cache`); create-hold conflict response is authoritative.
    */
-  const availableDateSet = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of monthSlots) {
-      if (s.status !== "open") continue;
-      if (selectedExperience?.pricingType === "ticketed" && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) {
-        continue;
-      }
-      const day = isoToChicagoDateStr(s.startAt);
-      if (day) set.add(day);
-    }
-    return set;
-  }, [monthSlots, selectedExperience?.pricingType]);
+  const availableDateSet = useMemo(
+    () => availableDateSetFromMonthSlots(monthSlots, isTicketed),
+    [monthSlots, isTicketed],
+  );
 
-  /** Force calendar grid to remount when month or data changes (fixes prod memo/closure not updating when slots/prices arrive). */
-  const calendarRenderKey = `${viewMonthKey}|${monthDataRangeStart ?? ""}|s:${monthSlots.length}|a:${availableDateSet.size}|p:${Object.keys(datePrices).length}|r:${selectedRateIdForCalendar ?? ""}`;
+  /** Remount calendar when month or selected rate changes (scroll/state reset); slot/price updates reconcile without remounting. */
+  const calendarRenderKey = `${viewMonthKey}|${selectedRateIdForCalendar ?? ""}`;
 
   /** Open slot count per date per duration (avoids O(days × slots) filter in each cell). Ticketed: only count slots with spotsRemaining > 0 so sold-out dates don't show as available. */
   const openCountByDateAndDuration = useMemo(() => {
     const map = new Map<string, Map<number, number>>();
-    const ticketed = selectedExperience?.pricingType === "ticketed";
     for (const s of monthSlots) {
       if (s.status !== "open") continue;
-      if (ticketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) continue;
+      if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) continue;
       const day = isoToChicagoDateStr(s.startAt);
       const dur = parseSlotId(s.id)?.durationHours;
       if (dur == null) continue;
@@ -657,7 +728,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       byDur.set(dur, (byDur.get(dur) ?? 0) + 1);
     }
     return map;
-  }, [monthSlots, selectedExperience?.pricingType]);
+  }, [monthSlots, isTicketed]);
   // One row per start time (multiple boats can have same slot); use first slot per time for selection. Sorted chronologically by time of day.
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
@@ -696,13 +767,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   // Price ready for step 4: either effective rate from API or selected rate from cache (avoids $0.00 before fetch)
   const priceReady = effectiveRateCents != null || selectedRate != null;
-  /** Advisory: price may still be loading; checkout is not blocked on this alone (server confirms at create-hold). */
-  const paymentPriceBlocked =
-    effectiveRateCents == null && (datePricesLoading || effectivePriceLoading);
 
-  // Add-ons to show (exclude sunscreen)
   const displayAddons = useMemo(
-    () => addons.filter((a) => !/sunscreen/i.test(a.name)),
+    () =>
+      addons.filter((a) => {
+        if (a.hiddenFromBookingUI === true) return false;
+        // Legacy: sunscreen was hidden by name until Firestore sets `hiddenFromBookingUI` on the add-on doc.
+        if (/sunscreen/i.test(a.name)) return false;
+        return true;
+      }),
     [addons]
   );
 
@@ -712,6 +785,26 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   );
   const phoneValid = useMemo(() => validatePhone(customerPhone.trim()).valid, [customerPhone]);
   const phoneError = useMemo(() => formatPhoneHint(customerPhone.trim()), [customerPhone]);
+
+  const discountDriverAddonKey = useMemo(
+    () =>
+      Object.keys(addonSelections)
+        .sort()
+        .map((k) => `${k}:${addonSelections[k] ?? 0}`)
+        .join("|"),
+    [addonSelections]
+  );
+
+  const discountValidationContext = useMemo(
+    () => ({
+      slotId: selectedSlot?.id ?? null,
+      experienceId: selectedExperience?.id,
+      rateId: selectedRateId,
+      boatId: selectedBoat?.id ?? null,
+      bookingMode,
+    }),
+    [selectedSlot?.id, selectedExperience?.id, selectedRateId, selectedBoat?.id, bookingMode]
+  );
 
   const {
     applyDiscount,
@@ -725,9 +818,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     isTicketed,
     partySize,
     effectiveRateCents,
-    selectedRate?.priceCents,
     displayAddons,
-    addonSelections
+    addonSelections,
+    discountValidationContext,
+    discountDriverAddonKey
   );
 
   const priceSummary = usePriceSummary({
@@ -740,41 +834,35 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     tipChoice,
     tipPercent,
     appliedDiscount,
+    effectivePriceLoading,
   });
-  appliedDiscountRef.current = appliedDiscount;
 
-  const rawDepositCents =
-    depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
-  const displayDepositCents = Math.max(0, Number.isFinite(rawDepositCents) ? rawDepositCents : 0);
-  const rawFinalCents =
-    finalCentsFromServer ??
-    (totalCentsFromServer != null
-      ? totalCentsFromServer - rawDepositCents
-      : Math.max(0, priceSummary.totalCents - rawDepositCents));
-  const displayFinalCents = Math.max(0, Number.isFinite(rawFinalCents) ? rawFinalCents : 0);
-  const depositAmountIsEstimate = depositCentsFromServer == null;
-  const finalAmountIsEstimate = finalCentsFromServer == null;
+  const multiBoatListing = boats.length > 1;
+  /** Multi-boat: merged calendar vs per-boat effective rate — hide authoritative summary until effective price resolves. */
+  const priceSummaryAwaitingBoatRate = multiBoatListing && selectedBoat != null && effectiveRateCents == null;
 
-  /** Hide client-estimated totals for pay-in-full until authoritative rate is known. */
-  const payFullTotalPending = paymentPriceBlocked || priceSummary.priceIsEstimate;
+  const {
+    displayDepositCents,
+    displayFinalCents,
+    depositAmountIsEstimate,
+    finalAmountIsEstimate,
+    paymentPriceBlocked,
+    payFullTotalPending,
+    tipBlockedForEstimate,
+  } = usePaymentSummary({
+    priceSummary,
+    depositCentsFromServer,
+    totalCentsFromServer,
+    finalCentsFromServer,
+    datePricesLoading,
+    effectivePriceLoading,
+    effectiveRateCents,
+    tipChoice,
+  });
 
-  const handleHoldConflict = useCallback(
-    (ctx: HoldConflictContext) => {
-      invalidateAfterConflict();
-      if (ctx.isTicketed) setPartySize(1);
-      else if (ctx.boats.length > 1) {
-        setStep(3);
-        setSelectedBoat(null);
-      } else if (ctx.boats.length > 0) {
-        setStep(3);
-        setSelectedSlot(null);
-      } else {
-        setStep(2);
-        setSelectedDate(null);
-      }
-    },
-    [invalidateAfterConflict, setStep, setSelectedBoat, setSelectedSlot, setSelectedDate, setPartySize],
-  );
+  const orderSummaryPriceBlocked = !priceReady || paymentPriceBlocked;
+  const showPriceRetry =
+    paymentPriceBlocked && !datePricesLoading && !effectivePriceLoading && priceReady;
 
   const holdBookingContext: HoldCreationBookingContext = useMemo(
     () => ({
@@ -909,17 +997,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           window.setTimeout(() => setPendingCloseWhileProceedMessage(null), 4000);
         }
       },
-      onHoldConflict: handleHoldConflict,
+      onHoldConflict: (ctx) => handleHoldConflictRef.current(ctx),
     }),
-    [
-      onOpenChange,
-      setStep,
-      setSelectedBoat,
-      setSelectedDate,
-      setSelectedSlot,
-      setPartySize,
-      handleHoldConflict,
-    ],
+    [onOpenChange, setStep, setSelectedBoat, setSelectedDate, setSelectedSlot, setPartySize],
   );
 
   const holdInfrastructure: HoldCreationInfrastructureRefs = useMemo(
@@ -937,8 +1017,73 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     [open],
   );
 
-  const { handleProceedToPayment, releaseCreatedHold, handleModalOpenChange, proceedToPaymentInFlight } =
-    useHoldCreation(holdBookingContext, holdFormValues, holdPaymentCallbacks, holdModalCallbacks, holdInfrastructure);
+  const {
+    handleProceedToPayment,
+    releaseCreatedHold,
+    handleModalOpenChange,
+    proceedToPaymentInFlight,
+    resetSharedTicketHoldRequestId,
+    resetCharterHoldRequestId,
+  } = useHoldCreation(holdBookingContext, holdFormValues, holdPaymentCallbacks, holdModalCallbacks, holdInfrastructure);
+
+  const handleHoldConflict = useCallback(
+    (ctx: HoldConflictContext) => {
+      resetCharterHoldRequestId();
+      invalidateAfterConflict();
+      if (ctx.isTicketed) setPartySize(1);
+      else if (ctx.boats.length > 1) {
+        setStep(3);
+        setSelectedBoat(null);
+      } else if (ctx.boats.length > 0) {
+        setStep(3);
+        setSelectedSlot(null);
+      } else {
+        setStep(2);
+        setSelectedDate(null);
+      }
+    },
+    [
+      resetCharterHoldRequestId,
+      invalidateAfterConflict,
+      setStep,
+      setSelectedBoat,
+      setSelectedSlot,
+      setSelectedDate,
+      setPartySize,
+    ],
+  );
+  handleHoldConflictRef.current = handleHoldConflict;
+
+  useEffect(() => {
+    if (step < 4) {
+      resetSharedTicketHoldRequestId();
+      resetCharterHoldRequestId();
+    }
+  }, [step, resetSharedTicketHoldRequestId, resetCharterHoldRequestId]);
+
+  useEffect(() => {
+    resetCharterHoldRequestId();
+  }, [selectedSlot?.id, resetCharterHoldRequestId]);
+
+  const addonSelectionsKey = JSON.stringify(addonSelections);
+  useEffect(() => {
+    if (step !== 4) return;
+    resetCharterHoldRequestId();
+  }, [
+    step,
+    partySize,
+    petsCount,
+    addonSelectionsKey,
+    tipChoice,
+    tipPercent,
+    discountCode,
+    marketingOptIn,
+    payFullAmount,
+    customerName,
+    customerEmail,
+    customerPhone,
+    resetCharterHoldRequestId,
+  ]);
 
   const handleCompleteAfterPaymentOutcome = useCallback((outcome: CompleteAfterPaymentClientOutcome) => {
     setStripePaymentProcessing(false);
@@ -949,7 +1094,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         const expIdForCache =
           typeof data.experienceId === "string" && data.experienceId
             ? data.experienceId
-            : selectedExperience?.id;
+            : selectedExperienceIdRef.current;
         if (expIdForCache) bookingCache.invalidateBookingCaches(expIdForCache);
         const bid = data.bookingId ?? null;
         const tok = receiptTokenFromCompleteAfterPaymentPayload(data);
@@ -967,6 +1112,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           setIsDepositFromServer(true);
           setPayFullAmount(false);
         }
+        setDiscountLimitExceededFromServer(data.discountLimitExceeded === true);
         if (canConfirmSuccess) {
           try {
             if (typeof window !== "undefined") {
@@ -1000,7 +1146,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         const expIdForCache =
           typeof outcome.experienceId === "string" && outcome.experienceId
             ? outcome.experienceId
-            : selectedExperience?.id;
+            : selectedExperienceIdRef.current;
         if (expIdForCache) bookingCache.invalidateBookingCaches(expIdForCache);
         setPaymentError(
           outcome.message ||
@@ -1010,7 +1156,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         break;
       }
       case "terminal_error": {
-        if (selectedExperience?.id) bookingCache.invalidateBookingCaches(selectedExperience.id);
+        const expId = selectedExperienceIdRef.current;
+        if (expId) bookingCache.invalidateBookingCaches(expId);
         setPaymentError(outcome.message);
         setPaymentPhase("successWithWarning");
         break;
@@ -1027,7 +1174,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       case "aborted":
         break;
     }
-  }, [selectedExperience?.id]);
+  }, []);
 
   const { runCompleteAfterPaymentForModal, completeAfterAbortRef } = usePaymentCompletion({
     holdId,
@@ -1038,7 +1185,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setStripePaymentProcessing,
     setCompletedBookingId,
     handleCompleteAfterPaymentOutcome,
-    selectedExperienceId: selectedExperience?.id,
+    selectedExperienceIdRef,
   });
 
   useEffect(() => {
@@ -1048,17 +1195,33 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [open]);
 
-  // Reset modal when opening; sync reset first, then async session recovery (Comment 7).
+  useEffect(() => {
+    if (paymentPhase !== "stripe") {
+      setStripePaymentSubmitInProgress(false);
+    }
+  }, [paymentPhase]);
+
+  // Reset modal when opening — synchronous state reset only (session recovery runs in the following effect).
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
     setHoldReleaseWarning(null);
     setHoldSessionVerifyError(null);
     pendingRecoveryBoatIdRef.current = null;
 
     const applyModalOpenSyncReset = () => {
+      if (typeof sessionStorage !== "undefined") {
+        try {
+          sessionStorage.removeItem(SESSION_SUCCESS_KEY);
+          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
       if (initialSelection?.date) {
-        const isTicketedPreselect = initialSelection.pricingType === "ticketed";
+        const isTicketedPreselect = isTicketedExperienceForBooking({
+          pricingType: initialSelection.pricingType,
+          slug: initialSelection.experienceSlug,
+        });
         setStep(initialSelection?.slotId ? (isTicketedPreselect ? 4 : 3) : 2);
       } else if (initialSelection?.experienceId || initialSelection?.experienceSlug) {
         setStep(2);
@@ -1080,10 +1243,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setCustomerEmail("");
       setCustomerPhone("");
       setAddonSelections({});
-      setTipChoice(null);
-      setTipLaterMessageOpen(false);
-      tipLaterIntendedRef.current = false;
-      tipLaterWasOpenRef.current = false;
+      setTipChoice("later");
       setHowDidYouHear("");
       setComments("");
       setDiscountCode("");
@@ -1103,6 +1263,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setPayFullAmount(true);
       setCompletedBookingId(null);
       setCompletedReceiptToken(null);
+      setDiscountLimitExceededFromServer(false);
       setHoldId(null);
       setReleaseToken(null);
       setHoldExpiresAt(null);
@@ -1111,17 +1272,45 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setClientSecret(null);
       setReceiptClaimToken(null);
       setPaymentError(null);
+      resetSharedTicketHoldRequestId();
+      resetCharterHoldRequestId();
     };
 
     applyModalOpenSyncReset();
+  }, [
+    open,
+    selectionKey,
+    initialSelection?.experienceId,
+    initialSelection?.date,
+    initialSelection?.pricingType,
+    initialSelection?.slotId,
+    initialSelection?.experienceSlug,
+    clearDiscount,
+    resetBookingDataForModalOpen,
+    resetSharedTicketHoldRequestId,
+    resetCharterHoldRequestId,
+  ]);
+
+  // Session recovery (hold + receipt) and success snapshot hydration — runs after sync reset in the same open cycle.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let recoveryNoReceiptAbort: AbortController | null = null;
+    let recoveryDelayTimer: number | null = null;
 
     void (async () => {
       const skipSessionHydration = Boolean(initialSelection?.experienceId);
 
       if (skipSessionHydration && typeof sessionStorage !== "undefined") {
         try {
-          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
-        } catch (_) {}
+          if (sessionStorage.getItem(SESSION_HOLD_ID_KEY)) {
+            void releaseHoldFromModalSessionStorage().catch((err) => {
+              bookingError("client", "best-effort release of persisted modal hold failed (initial selection skips hydration)", err, {});
+            });
+          }
+        } catch (err) {
+          bookingError("client", "sessionStorage read for hold release failed (skip hydration)", err, {});
+        }
       }
 
       if (cancelled) return;
@@ -1140,8 +1329,51 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               parsed.v === 1 &&
               parsed.holdId &&
               typeof parsed.clientSecret === "string" &&
+              parsed.clientSecret.trim() &&
               parsed.receiptClaimToken?.trim()
             ) {
+              const expIdRecover = parsed.experienceSnapshot?.id;
+              if (expIdRecover) {
+                bookingCache.invalidate(`slots|${expIdRecover}|`);
+                retrySlots();
+              }
+              if (typeof parsed.paymentIntentId === "string" && parsed.paymentIntentId.trim()) {
+                recoveryNoReceiptAbort = new AbortController();
+                const acRecover = recoveryNoReceiptAbort;
+                const timeoutSigRecover =
+                  typeof AbortSignal !== "undefined" &&
+                  "timeout" in AbortSignal &&
+                  typeof AbortSignal.timeout === "function"
+                    ? AbortSignal.timeout(30_000)
+                    : (() => {
+                        const c = new AbortController();
+                        window.setTimeout(() => c.abort(), 30_000);
+                        return c.signal;
+                      })();
+                const pollSignalRecover =
+                  typeof AbortSignal !== "undefined" &&
+                  "any" in AbortSignal &&
+                  typeof AbortSignal.any === "function"
+                    ? AbortSignal.any([timeoutSigRecover, acRecover.signal])
+                    : acRecover.signal;
+                try {
+                  const preOutcome = await completeAfterPaymentWithPolling({
+                    paymentIntentId: parsed.paymentIntentId.trim(),
+                    holdId: parsed.holdId,
+                    receiptClaimToken: parsed.receiptClaimToken.trim(),
+                    signal: pollSignalRecover,
+                    onEnteredProcessing: () => setStripePaymentProcessing(true),
+                  });
+                  if (cancelled) return;
+                  setStripePaymentProcessing(false);
+                  if (preOutcome.kind === "success" || preOutcome.kind === "reconciliation_pending") {
+                    handleCompleteAfterPaymentOutcome(preOutcome);
+                    return;
+                  }
+                } catch {
+                  if (!cancelled) setStripePaymentProcessing(false);
+                }
+              }
               let recoveryRes: Response | null = null;
               let recoveryBody: Record<string, unknown> = {};
               try {
@@ -1165,7 +1397,33 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 }
               }
               if (recoveryRes && !cancelled) {
+                if (recoveryRes.status === 410 || recoveryBody?.holdExpired === true) {
+                  clearModalHoldRecoverySession();
+                  return;
+                }
                 if (recoveryRes.status === 202 && recoveryBody?.pending === true) {
+                  const recoveryPayloadExpMs = parsed.holdExpiresAt ? new Date(parsed.holdExpiresAt).getTime() : NaN;
+                  if (Number.isFinite(recoveryPayloadExpMs) && recoveryPayloadExpMs <= Date.now()) {
+                    clearModalHoldRecoverySession();
+                    if (!cancelled) {
+                      setHoldSessionVerifyError("Your saved session has expired. Please start a new booking.");
+                    }
+                    return;
+                  }
+                  const holdExpiresIso =
+                    typeof recoveryBody.holdExpiresAt === "string"
+                      ? recoveryBody.holdExpiresAt
+                      : parsed.holdExpiresAt ?? null;
+                  const expMs = holdExpiresIso ? new Date(holdExpiresIso).getTime() : NaN;
+                  if (Number.isFinite(expMs) && expMs - Date.now() < 3 * 60 * 1000) {
+                    clearModalHoldRecoverySession();
+                    if (!cancelled) {
+                      setHoldSessionVerifyError(
+                        "Your hold is about to expire. Please start a new booking.",
+                      );
+                    }
+                    return;
+                  }
                   setSelectedExperience(parsed.experienceSnapshot);
                   setSelectedDate(parsed.selectedDate);
                   setViewMonthYear(parsed.viewMonthYear);
@@ -1176,9 +1434,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   setHoldId(parsed.holdId);
                   setReleaseToken(parsed.releaseToken);
                   setReceiptClaimToken(parsed.receiptClaimToken);
-                  setClientSecret(parsed.clientSecret);
-                  setPaymentIntentId(parsed.paymentIntentId);
-                  setHoldExpiresAt(parsed.holdExpiresAt);
+                  setClientSecret(null);
+                  setPaymentIntentId(null);
                   if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
                   if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
                   if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
@@ -1187,6 +1444,35 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
                   pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
                   setStep(4);
+                  setPaymentPhase("loading");
+                  const payFull = parsed.isTicketed ? true : parsed.payFullAmount;
+                  const pi = await runCreatePaymentIntentForHold({
+                    holdId: parsed.holdId,
+                    payFullAmount: payFull,
+                    releaseToken: parsed.releaseToken,
+                  });
+                  if (cancelled) return;
+                  if (!pi.ok) {
+                    clearModalHoldRecoverySession();
+                    setHoldSessionVerifyError(
+                      typeof pi.error === "string"
+                        ? pi.error
+                        : "Could not resume payment. Please start a new booking.",
+                    );
+                    setPaymentPhase("form");
+                    return;
+                  }
+                  setClientSecret(pi.clientSecret);
+                  setPaymentIntentId(pi.paymentIntentId);
+                  setReleaseToken(pi.releaseToken ?? null);
+                  if (typeof pi.expiresAtFromIntent === "string" && pi.expiresAtFromIntent) {
+                    setHoldExpiresAt(pi.expiresAtFromIntent);
+                  } else if (parsed.holdExpiresAt) {
+                    setHoldExpiresAt(parsed.holdExpiresAt);
+                  }
+                  if (typeof pi.receiptClaimToken === "string" && pi.receiptClaimToken.trim()) {
+                    setReceiptClaimToken(pi.receiptClaimToken.trim());
+                  }
                   setPaymentPhase("stripe");
                   return;
                 }
@@ -1234,6 +1520,185 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   clearModalHoldRecoverySession();
                 } else if (!recoveryRes.ok) {
                   clearModalHoldRecoverySession();
+                } else if (recoveryRes.ok && recoveryRes.status === 200) {
+                  clearModalHoldRecoverySession();
+                  if (!cancelled) {
+                    setHoldSessionVerifyError(
+                      "We couldn't restore your saved payment session. You can continue booking, or check your confirmation email if you already paid.",
+                    );
+                  }
+                }
+              }
+            } else if (
+              parsed.v === 1 &&
+              parsed.holdId &&
+              typeof parsed.clientSecret === "string" &&
+              parsed.clientSecret.trim() &&
+              typeof parsed.paymentIntentId === "string" &&
+              parsed.paymentIntentId.trim() &&
+              (!parsed.receiptClaimToken || !String(parsed.receiptClaimToken).trim())
+            ) {
+              const expIdRecoverPi = parsed.experienceSnapshot?.id;
+              if (expIdRecoverPi) {
+                bookingCache.invalidate(`slots|${expIdRecoverPi}|`);
+                retrySlots();
+              }
+              recoveryNoReceiptAbort = new AbortController();
+              const ac = recoveryNoReceiptAbort;
+              const cancelAc = () => {
+                if (!ac.signal.aborted) ac.abort();
+              };
+              const timeoutSig =
+                typeof AbortSignal !== "undefined" &&
+                "timeout" in AbortSignal &&
+                typeof AbortSignal.timeout === "function"
+                  ? AbortSignal.timeout(30_000)
+                  : (() => {
+                      const c = new AbortController();
+                      window.setTimeout(() => c.abort(), 30_000);
+                      return c.signal;
+                    })();
+              const pollSignal =
+                typeof AbortSignal !== "undefined" &&
+                "any" in AbortSignal &&
+                typeof AbortSignal.any === "function"
+                  ? AbortSignal.any([timeoutSig, ac.signal])
+                  : ac.signal;
+              const hydrateCheckoutFromParsedNoReceipt = () => {
+                setSelectedExperience(parsed.experienceSnapshot);
+                setSelectedDate(parsed.selectedDate);
+                setViewMonthYear(parsed.viewMonthYear);
+                setViewMonthMonth(parsed.viewMonthMonth);
+                setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
+                setSelectedSlot(parsed.selectedSlot);
+                setPartySize(parsed.partySize);
+                setHoldId(parsed.holdId);
+                setReleaseToken(parsed.releaseToken);
+                setReceiptClaimToken(
+                  typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
+                    ? parsed.receiptClaimToken.trim()
+                    : null,
+                );
+                setClientSecret(parsed.clientSecret.trim());
+                setPaymentIntentId(
+                  typeof parsed.paymentIntentId === "string" && parsed.paymentIntentId.trim()
+                    ? parsed.paymentIntentId.trim()
+                    : null,
+                );
+                if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
+                if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
+                if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
+                if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
+                setPayFullAmount(parsed.payFullAmount);
+                lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
+                pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
+                if (parsed.holdExpiresAt) setHoldExpiresAt(parsed.holdExpiresAt);
+                setStep(4);
+                setPaymentPhase("stripe");
+              };
+              try {
+                if (cancelled) {
+                  cancelAc();
+                  return;
+                }
+                let outcome = await completeAfterPaymentWithPolling({
+                  paymentIntentId: parsed.paymentIntentId.trim(),
+                  holdId: parsed.holdId,
+                  receiptClaimToken:
+                    typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
+                      ? parsed.receiptClaimToken.trim()
+                      : null,
+                  signal: pollSignal,
+                  onEnteredProcessing: () => setStripePaymentProcessing(true),
+                });
+                if (cancelled) return;
+
+                const finishIfTerminal = (o: CompleteAfterPaymentClientOutcome) => {
+                  if (o.kind === "success" || o.kind === "reconciliation_pending" || o.kind === "terminal_error") {
+                    setStripePaymentProcessing(false);
+                    handleCompleteAfterPaymentOutcome(o);
+                    return true;
+                  }
+                  return false;
+                };
+                if (finishIfTerminal(outcome)) return;
+                if (outcome.kind === "aborted") {
+                  setStripePaymentProcessing(false);
+                  return;
+                }
+
+                if (outcome.kind === "stall_timeout" || outcome.kind === "processing_timeout") {
+                  setPaymentPhase("completing");
+                  const delayMs = Math.min(
+                    30_000,
+                    Math.max(15_000, Math.floor((outcome.pollHardTimeoutMs ?? 180_000) / 9)),
+                  );
+                  await new Promise<void>((resolve) => {
+                    recoveryDelayTimer = window.setTimeout(() => {
+                      recoveryDelayTimer = null;
+                      resolve();
+                    }, delayMs);
+                  });
+                  if (cancelled) {
+                    setStripePaymentProcessing(false);
+                    return;
+                  }
+                  const ac2 = new AbortController();
+                  recoveryNoReceiptAbort = ac2;
+                  const longMs = Math.max(
+                    outcome.pollHardTimeoutMs ?? COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
+                    60_000,
+                  );
+                  const longSig =
+                    typeof AbortSignal !== "undefined" &&
+                    "any" in AbortSignal &&
+                    typeof AbortSignal.any === "function" &&
+                    "timeout" in AbortSignal &&
+                    typeof AbortSignal.timeout === "function"
+                      ? AbortSignal.any([ac2.signal, AbortSignal.timeout(longMs)])
+                      : ac2.signal;
+                  outcome = await completeAfterPaymentWithPolling({
+                    paymentIntentId: parsed.paymentIntentId.trim(),
+                    holdId: parsed.holdId,
+                    receiptClaimToken:
+                      typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
+                        ? parsed.receiptClaimToken.trim()
+                        : null,
+                    signal: longSig,
+                    onEnteredProcessing: () => setStripePaymentProcessing(true),
+                  });
+                  if (cancelled) {
+                    setStripePaymentProcessing(false);
+                    return;
+                  }
+                  setStripePaymentProcessing(false);
+                  if (finishIfTerminal(outcome)) return;
+                  if (outcome.kind === "aborted") {
+                    return;
+                  }
+                  if (outcome.kind === "stall_timeout" || outcome.kind === "processing_timeout") {
+                    handleCompleteAfterPaymentOutcome(outcome);
+                    return;
+                  }
+                } else {
+                  setStripePaymentProcessing(false);
+                }
+
+                if (outcome.kind === "fetch_error") {
+                  hydrateCheckoutFromParsedNoReceipt();
+                  setPaymentError(outcome.message);
+                  return;
+                }
+                hydrateCheckoutFromParsedNoReceipt();
+                setHoldSessionVerifyError(
+                  "We couldn't confirm your payment status yet. If you already paid, check your email — otherwise complete payment below.",
+                );
+              } catch {
+                if (!cancelled) {
+                  setStripePaymentProcessing(false);
+                  setHoldSessionVerifyError(
+                    "We couldn't verify your saved session. Check your connection and try again, or continue booking.",
+                  );
                 }
               }
             } else {
@@ -1321,39 +1786,33 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
     return () => {
       cancelled = true;
+      if (recoveryDelayTimer) {
+        clearTimeout(recoveryDelayTimer);
+        recoveryDelayTimer = null;
+      }
+      recoveryNoReceiptAbort?.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when open or selection changes (selectionKey forces reset when openWithSelection called again)
-  }, [open, selectionKey, initialSelection?.experienceId, clearDiscount, resetBookingDataForModalOpen]);
-
-  // Clear or revalidate applied discount whenever price drivers or experience change so checkout totals don't drift from server repricing.
-  useEffect(() => {
-    if (
-      paymentPhase === "stripe" ||
-      paymentPhase === "loading" ||
-      paymentPhase === "completing" ||
-      paymentPhase === "completeAfterPaymentRetry" ||
-      paymentPhase === "success" ||
-      paymentPhase === "successWithWarning"
-    )
-      return;
-    const prevPs = prevPartySizeForDiscountRef.current;
-    prevPartySizeForDiscountRef.current = partySize;
-    const hadDiscount = appliedDiscountRef.current != null;
-    clearDiscount();
-    if (hadDiscount && prevPs !== partySize) {
-      setDiscountRemovedNotice("Discount removed — party size changed");
-    }
   }, [
-    partySize,
-    addonSelections,
-    tipChoice,
-    tipPercent,
-    selectedRateId,
-    selectedDate,
-    payFullAmount,
-    selectedExperience?.id,
-    clearDiscount,
+    open,
+    selectionKey,
+    initialSelection?.experienceId,
+    retrySlots,
+    handleCompleteAfterPaymentOutcome,
   ]);
+
+  /** Drop stale success snapshot from session on mount (full hydration runs in the recovery effect when the modal opens). */
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const raw = sessionStorage.getItem(SESSION_SUCCESS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { bookedAt?: number };
+      const stale = typeof parsed.bookedAt === "number" && Date.now() - parsed.bookedAt > SESSION_SUCCESS_MAX_AGE_MS;
+      if (stale) sessionStorage.removeItem(SESSION_SUCCESS_KEY);
+    } catch (_) {
+      /* ignore */
+    }
+  }, []);
 
   // When opened with initialSelection (slot pre-picked):
   // - Charter + boatId pre-picked → go directly to step 4
@@ -1383,13 +1842,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setStep(2);
   }, [open, initialSelection?.date, initialSelection?.slotId, selectedExperience, selectedDate]);
 
-  // When tip-later popup closes (Got it, overlay, or Escape), ensure "Tip later" stays selected
-  useEffect(() => {
-    if (tipLaterWasOpenRef.current && !tipLaterMessageOpen) setTipChoice("later");
-    tipLaterWasOpenRef.current = tipLaterMessageOpen;
-  }, [tipLaterMessageOpen]);
-
-  // Auto-select the only tip option when listing allows only one
+  // Auto-select tip: single option, or both — default "Tip later" (no modal; gratuity to captain at trip end).
   const allowTipNow = selectedExperience?.allowTipNow !== false;
   const allowTipLater = selectedExperience?.allowTipLater !== false;
   const tipSectionRequired = allowTipNow || allowTipLater;
@@ -1398,6 +1851,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!tipSectionRequired) return;
     if (allowTipNow && !allowTipLater) setTipChoice("now");
     else if (!allowTipNow && allowTipLater) setTipChoice("later");
+    else if (allowTipNow && allowTipLater) setTipChoice("later");
   }, [selectedExperience, tipSectionRequired, allowTipNow, allowTipLater]);
 
   // Confetti when booking is confirmed (payment success) — dynamic import to avoid SSR resolution
@@ -1405,8 +1859,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (step !== 4 || paymentPhase !== "success") return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    import("canvas-confetti").then(({ default: confetti }) => {
-      if (cancelled) return;
+    void loadConfetti().then((confetti) => {
+      if (cancelled || !confetti) return;
       const duration = 2500;
       const end = Date.now() + duration;
       const frame = () => {
@@ -1437,6 +1891,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       if (timeoutId != null) clearTimeout(timeoutId);
     };
   }, [step, paymentPhase]);
+
+  useEffect(() => {
+    if (paymentPhase === "success") analytics.bookingCompleted();
+  }, [paymentPhase]);
+
+  useEffect(() => {
+    if (appliedDiscountError && discountCode.trim()) {
+      setDiscountRemovedNotice(`Could not apply "${discountCode.trim()}" — pricing or availability changed.`);
+    }
+  }, [appliedDiscountError, discountCode]);
+
+  useEffect(() => {
+    if (appliedDiscount != null) setDiscountRemovedNotice(null);
+  }, [appliedDiscount]);
 
   /** Calendar-first flow: date + slot chosen on listing, so modal only shows boat → details (no step 1 or 3). */
   const isCalendarFirstFlow = !!initialSelection?.slotId;
@@ -1490,14 +1958,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
             setIsDepositFromServer(null);
             setPaymentIntentId(null);
             setPaymentError(null);
-            setTipChoice(null);
-            setTipLaterMessageOpen(false);
+            setTipChoice("later");
             clearDiscount();
           }
         } else {
           lastHoldRef.current = null;
-          // Calendar-first flow only uses steps 3–4; never send users to step 2 (date) — that breaks the stepper and layout.
-          setStep(isCalendarFirstFlow ? 3 : boats.length === 1 ? 2 : 3);
+          const target = resolveNavigateAfterStep4PaymentExit(isTicketed, isCalendarFirstFlow, boats.length);
+          if (target === "close") {
+            onOpenChange(false);
+            return;
+          }
+          setStep(target);
           setPaymentPhase("form");
           setClientSecret(null);
           setReceiptClaimToken(null);
@@ -1509,17 +1980,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           setIsDepositFromServer(null);
           setPaymentIntentId(null);
           setPaymentError(null);
-          setTipChoice(null);
-          setTipLaterMessageOpen(false);
+          setTipChoice("later");
           clearDiscount();
         }
       };
       if ((paymentPhase === "stripe" || paymentPhase === "loading") && holdId) {
-        void releaseCreatedHold().then(() => {
-          // Always leave the payment step after a best-effort release. If release failed
-          // (e.g. missing RELEASE_TOKEN_SECRET on the server), holdReleaseWarning is set
-          // so the user is not trapped on checkout.
-          navigateFromStep4();
+        void releaseCreatedHold().then((ok) => {
+          if (ok) navigateFromStep4();
+          // If release failed, keep paymentPhase on 'stripe' and holdReleaseWarning (set by releaseCreatedHold).
         });
         return;
       }
@@ -1537,22 +2005,53 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setViewMonthMonth(now.getMonth() + 1);
     setSelectedExperience(exp);
     setStep(2);
+    analytics.bookingStep1CategorySelected();
   };
 
-  /** Step 2 (date & time): continue to boat selection (charter) or directly to step 4 (ticketed). */
+  /**
+   * Step 2 continue: ticketed flow prefers ticket-availability counts; when that API fails or is empty,
+   * fall back to date-prices (`ticketedCalendarAvail`) or a verified open slot from the slots response.
+   */
+  const ticketedDateStepCountsOk =
+    !isTicketed ||
+    (ticketCounts != null
+      ? ticketCounts.available > 0
+      : !ticketCountsLoading &&
+        ((ticketedCalendarAvail != null && ticketedCalendarAvail > 0) ||
+          (openSlotsForDate.length > 0 &&
+            selectedSlot != null &&
+            openSlotsForDate.some((s) => s.id === selectedSlot.id))));
   const canGoFromStep2 =
     !!(selectedDate && selectedSlot) &&
-    (!isTicketed ||
-      (!ticketCountsLoading &&
-        ((ticketCounts == null && !ticketCountsError) ||
-          (ticketCounts != null && ticketCounts.available > 0) ||
-          (ticketCountsError && ticketCountsRetryTrigger > 0))));
-  const handleStep2Next = () => {
+    (!slotsPartialData || selectedSlotVerifiedOpen) &&
+    !slotsLoading &&
+    !confirmingAvailability &&
+    (!isTicketed || (!ticketCountsLoading && ticketedDateStepCountsOk));
+  const handleStep2Next = async () => {
     if (!canGoFromStep2) return;
     if (selectedExperience?.id) {
-      bookingCache.invalidate(`slots|${selectedExperience.id}|`);
-      retrySlots();
+      setConfirmingAvailability(true);
+      setPaymentError(null);
+      try {
+        const { slots } = await confirmSlotsFresh();
+        if (selectedSlot && selectedDate) {
+          const stillOpen = slots.some((s) => {
+            if (s.id !== selectedSlot.id || s.status !== "open") return false;
+            if (isoToChicagoDateStr(s.startAt) !== selectedDate) return false;
+            if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0)
+              return false;
+            return true;
+          });
+          if (!stillOpen) {
+            setPaymentError("That time slot is no longer available. Please choose another time.");
+            return;
+          }
+        }
+      } finally {
+        setConfirmingAvailability(false);
+      }
     }
+    analytics.bookingStep2DateSelected();
     if (isTicketed) {
       setStep(4);
       setPaymentPhase("form");
@@ -1566,15 +2065,37 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   /** Step 3 (boat): continue only when an available boat is chosen (or experience has no boats). */
   const canGoFromStep3 =
-    boats.length === 0 ||
-    (!!selectedBoat &&
-      availableBoatIdsForSelectedSlot.has(selectedBoat.id) &&
-      !unavailableBoatIdsForSelectedSlot.has(selectedBoat.id));
-  const handleStep3Next = () => {
-    if (canGoFromStep3) {
-      setStep(4);
-      setPaymentPhase("form");
+    (boats.length === 0 ||
+      (!!selectedBoat &&
+        availableBoatIdsForSelectedSlot.has(selectedBoat.id) &&
+        !unavailableBoatIdsForSelectedSlot.has(selectedBoat.id))) &&
+    !confirmingAvailability;
+  const handleStep3Next = async () => {
+    if (!canGoFromStep3) return;
+    if (selectedExperience?.id) {
+      setConfirmingAvailability(true);
+      setPaymentError(null);
+      try {
+        const { slots } = await confirmSlotsFresh();
+        if (selectedSlot && selectedDate) {
+          const stillOpen = slots.some((s) => {
+            if (s.id !== selectedSlot.id || s.status !== "open") return false;
+            if (isoToChicagoDateStr(s.startAt) !== selectedDate) return false;
+            if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0)
+              return false;
+            return true;
+          });
+          if (!stillOpen) {
+            setPaymentError("That time slot is no longer available. Please choose another time.");
+            return;
+          }
+        }
+      } finally {
+        setConfirmingAvailability(false);
+      }
     }
+    setStep(4);
+    setPaymentPhase("form");
   };
 
   const canGoToStep4 =
@@ -1629,19 +2150,40 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (holdExpiresAt && new Date(holdExpiresAt).getTime() > Date.now()) setIsHoldExpired(false);
     if (holdId != null) setIsHoldExpired(false);
   }, [holdExpiresAt, holdId]);
-  const handleHoldExpired = useCallback(() => setIsHoldExpired(true), []);
-  useEffect(() => {
-    if (!isHoldExpired) return;
-    if (paymentPhase !== "stripe" && paymentPhase !== "loading") return;
-    setClientSecret(null);
-    setHoldId(null);
-    setReleaseToken(null);
-    setHoldExpiresAt(null);
-    setPaymentIntentId(null);
-    setReceiptClaimToken(null);
-    setPaymentPhase("form");
-    setPaymentError("Your hold expired. Please re-submit your payment details to reserve this slot.");
-  }, [isHoldExpired, paymentPhase]);
+  const handleHoldExpired = useCallback(() => {
+    setIsHoldExpired(true);
+    void releaseCreatedHold().then(() => {
+      if (selectedExperience?.id) {
+        bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+        retrySlots();
+      }
+      setClientSecret(null);
+      setHoldId(null);
+      setReleaseToken(null);
+      setHoldExpiresAt(null);
+      setPaymentIntentId(null);
+      setReceiptClaimToken(null);
+      setPaymentPhase("form");
+      setPaymentError("Your hold expired. Choose your time again, then proceed to payment.");
+      lastHoldRef.current = null;
+      const target = resolveNavigateAfterStep4PaymentExit(isTicketed, isCalendarFirstFlow, boats.length);
+      if (target === "close") {
+        onOpenChange(false);
+      } else {
+        setStep(target);
+      }
+      setIsHoldExpired(false);
+    });
+  }, [
+    releaseCreatedHold,
+    selectedExperience?.id,
+    retrySlots,
+    isCalendarFirstFlow,
+    isTicketed,
+    boats.length,
+    setStep,
+    onOpenChange,
+  ]);
 
   /** Step 4 form/stripe: nested scroll regions; outer dialog body must not scroll or flex-1 collapses to zero height. */
   const step4UsesInnerScroll =
@@ -1845,12 +2387,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
                 )}
                 {ratesLoadError && (
-                  <p className="text-sm text-amber-700 py-2">{ratesLoadError} Try again or contact us.</p>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-3 mb-2 text-sm text-amber-950">
+                    <p>{ratesLoadError} Try again or contact us.</p>
+                    <button
+                      type="button"
+                      onClick={() => retryBoats()}
+                      className="mt-2 font-semibold text-brand-primary underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 )}
                 {experienceDetailLoadError && (
-                  <p className="text-sm text-amber-700 py-2">{experienceDetailLoadError} Check /api/health for details.</p>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-3 mb-2 text-sm text-amber-950">
+                    <p>Could not load booking details. Please try again or contact us.</p>
+                    <button
+                      type="button"
+                      onClick={() => retryBoats()}
+                      className="mt-2 font-semibold text-brand-primary underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 )}
-                {ratesForSelection.length > 0 && !isTicketed && (
+                      {ratesForSelection.length > 0 && !isTicketed && (
                   <div className="min-w-0">
                     <p className="text-xs sm:text-sm font-semibold text-brand-dark mb-1.5 sm:mb-2 md:mb-3">Duration</p>
                     <div className="grid grid-cols-3 gap-1.5 sm:gap-2 sm:flex sm:flex-wrap md:gap-3">
@@ -1874,7 +2434,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       })}
                     </div>
                     {!selectedRateIdForCalendar && (
-                      <p className="mt-2 text-xs text-brand-muted">Select a duration to see available dates and prices.</p>
+                      <p className="mt-2 text-xs text-brand-muted">Select a duration to see available dates.</p>
                     )}
                   </div>
                 )}
@@ -1937,8 +2497,26 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     </p>
                   )}
                   {slotsPartialData && (
-                    <p className="text-sm text-amber-700 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200" role="alert">
-                      Availability may be incomplete — refresh or contact us to confirm.
+                    <div
+                      className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
+                      role="status"
+                    >
+                      <p>
+                        Availability data may be slightly delayed — your slot will be confirmed at checkout.
+                        {" "}
+                        <button
+                          type="button"
+                          onClick={() => retrySlots()}
+                          className="font-semibold text-brand-primary underline underline-offset-2"
+                        >
+                          Refresh
+                        </button>
+                      </p>
+                    </div>
+                  )}
+                  {multiBoatListing && !isTicketed && (
+                    <p className="text-[10px] text-brand-muted text-center mb-2 px-1">
+                      Calendar prices may vary by boat; your final price updates after you select a boat.
                     </p>
                   )}
                   <div key={calendarRenderKey} className="w-full min-w-0 max-w-full">
@@ -1957,31 +2535,36 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       const { dateStr, label, weekday } = cell;
                       const isSelected = selectedDate === dateStr;
                       const isPast = dateStr < chicagoTodayStr;
-                      const dataMatchesView = monthDataRangeStart === viewMonthStartStr;
-                      const entry = dataMatchesView ? slotsByDate.get(dateStr) : undefined;
+                      const entry = slotsByDate.get(dateStr);
                       const openForDuration =
                         isTicketed
                           ? (entry?.open ?? 0)
                           : (rateForCalendar?.durationHours != null
                             ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
                             : (entry?.open ?? 0));
-                      const ticketsLeft = dataMatchesView && isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
+                      const ticketsLeft = isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
                       const dateSeasonalAllowed = !selectedExperience?.seasonal?.enabled || isSeasonalAllowed(selectedExperience.seasonal, new Date(dateStr + "T12:00:00"), dateStr);
                       const isAvailable = !isPast && dateSeasonalAllowed && (isTicketed
                         ? openForDuration > 0
                         : openForDuration > 0);
                       const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
                       const bookedCount = entry?.booked ?? 0;
-                      const ticketsBooked = dataMatchesView && isTicketed ? (ticketsBookedByDate[dateStr] ?? 0) : 0;
+                      const ticketsBooked = isTicketed ? (ticketsBookedByDate[dateStr] ?? 0) : 0;
                       const displayBookedCount = isTicketed ? ticketsBooked : bookedCount;
                       const isFullyBooked = !isPast && (isTicketed
                         ? (entry != null && (ticketsLeft === 0 || (ticketsLeft == null && (entry?.open ?? 0) === 0)))
                         : (takenCount > 0 && openForDuration === 0));
-                      const hasBookingsUrgency = !isPast && dataMatchesView && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
+                      const hasBookingsUrgency = !isPast && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
                       const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
                       const isOutsideSeasonal = selectedExperience?.seasonal?.enabled && !dateSeasonalAllowed;
-                      const priceCents = dataMatchesView ? datePrices[dateStr] : undefined;
-                      const isHoliday = dataMatchesView && holidayDateStrings.has(dateStr);
+                      const priceCents = datePrices[dateStr];
+                      const isHoliday = holidayDateStrings.has(dateStr);
+                      const holdUncertain =
+                        isTicketed &&
+                        isAvailable &&
+                        !isPast &&
+                        !isFullyBooked &&
+                        holdDataMissingByDate.has(dateStr);
                       const a11yStatus = isPast
                         ? "past date"
                         : isOutsideSeasonal
@@ -1990,7 +2573,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             ? "fully booked"
                             : !isAvailable
                               ? "unavailable"
-                              : "available";
+                              : holdUncertain
+                                ? "available, hold counts may be incomplete"
+                                : "available";
                       const priceA11y =
                         typeof priceCents === "number" && isAvailable
                           ? `, $${(priceCents / 100).toFixed(0)}${isTicketed ? " per ticket" : ""}`
@@ -2000,7 +2585,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         hasBookingsUrgency && !isFullyBooked && !isPast
                           ? `, ${displayBookedCount} already booked this day`
                           : "";
-                      const dateAriaLabel = `${weekday} ${label}, ${viewMonthLabel}. ${a11yStatus}${priceA11y}${holidayA11y}${urgencyA11y}`;
+                      const dateAriaLabel = `${weekday} ${label}, ${viewMonthLabel}. ${a11yStatus}${priceA11y}${holidayA11y}${urgencyA11y}${
+                        holdUncertain ? ", availability uncertain" : ""
+                      }`;
                       return (
                         <button
                           key={dateStr}
@@ -2027,7 +2614,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               "bg-amber-50/90 text-amber-950 border-amber-400/50 border-dashed hover:bg-amber-100/90 active:scale-[0.98]",
                             isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-1 sm:ring-2 ring-brand-primary/40",
-                            isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5"
+                            isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5",
+                            holdUncertain && "border-dashed border-amber-500/70 ring-1 ring-amber-400/40"
                           )}
                         >
                           <span className="hidden sm:block text-[10px] md:text-xs text-brand-muted uppercase leading-tight">{weekday}</span>
@@ -2056,16 +2644,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     })}
                     </div>
                   </div>
-                  {slotsLoading && (
+                  {(slotsLoading || datePricesLoading) && (
                     <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">
                       <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                      <span className="text-sm font-medium text-brand-muted">Loading availability…</span>
-                    </div>
-                  )}
-                  {datePricesLoading && !slotsLoading && (
-                    <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">
-                      <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                      <span className="text-sm font-medium text-brand-muted">Loading dates &amp; prices…</span>
+                      <span className="text-sm font-medium text-brand-muted text-center px-2">
+                        {slotsLoading && datePricesLoading
+                          ? "Loading availability & prices…"
+                          : slotsLoading
+                            ? "Loading availability…"
+                            : "Loading dates & prices…"}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -2084,16 +2672,32 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           )}
                           {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length > 0 && ticketCounts && (
                             <div className="mt-2 flex items-center gap-2">
-                              <div className="flex-1 h-1.5 rounded-full bg-brand-dark/10 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-brand-primary transition-all"
-                                  style={{ width: `${Math.round(((ticketCounts.total - ticketCounts.available) / ticketCounts.total) * 100)}%` }}
-                                />
-                              </div>
-                              <p className="text-xs font-semibold text-brand-dark whitespace-nowrap">
-                                {ticketCounts.available} / {ticketCounts.total} tickets left
-                              </p>
+                              {ticketCounts.conservativeEstimate === true ? (
+                                <p className="text-xs font-medium text-brand-dark flex-1" role="status">
+                                  {ticketCounts.availabilityNote ??
+                                    "Availability may be limited — your selection will be confirmed at checkout"}
+                                </p>
+                              ) : (
+                                <>
+                                  <div className="flex-1 h-1.5 rounded-full bg-brand-dark/10 overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-brand-primary transition-all"
+                                      style={{
+                                        width: `${Math.round(((ticketCounts.total - ticketCounts.available) / ticketCounts.total) * 100)}%`,
+                                      }}
+                                    />
+                                  </div>
+                                  <p className="text-xs font-semibold text-brand-dark whitespace-nowrap">
+                                    {ticketCounts.available} / {ticketCounts.total} tickets left
+                                  </p>
+                                </>
+                              )}
                             </div>
+                          )}
+                          {datePricesPartialData && (
+                            <p className="text-[11px] text-amber-800/90 mt-1.5" role="status">
+                              Exact availability will be confirmed at checkout.
+                            </p>
                           )}
                           {!slotsLoading &&
                             !ticketCountsLoading &&
@@ -2112,13 +2716,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 onClick={() => retryTicketCounts()}
                                 className="w-full rounded-lg bg-brand-primary text-white text-sm font-semibold py-2.5 px-3 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
                               >
-                                Retry availability
+                                Retry
                               </button>
-                              {ticketCountsRetryTrigger > 0 && (
-                                <p className="text-xs text-amber-800/90">
-                                  You can still continue — final ticket availability is confirmed when you complete booking.
-                                </p>
-                              )}
                             </div>
                           )}
                         </div>
@@ -2166,11 +2765,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               </div>
               <button
                 type="button"
-                onClick={handleStep2Next}
+                onClick={() => void handleStep2Next()}
                 disabled={!canGoFromStep2}
                 className="mt-3 sm:mt-4 mb-[max(1rem,env(safe-area-inset-bottom))] sm:mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3 sm:py-3.5 px-4 min-h-[44px] sm:min-h-[48px] touch-manipulation hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
               >
-                Continue
+                {confirmingAvailability ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent shrink-0" aria-hidden />
+                    Confirming availability…
+                  </span>
+                ) : (
+                  "Continue"
+                )}
               </button>
               {!isTicketed && boats.length > 1 && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
             </div>
@@ -2250,11 +2856,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               )}
               <button
                 type="button"
-                onClick={handleStep3Next}
+                onClick={() => void handleStep3Next()}
                 disabled={!canGoFromStep3}
                 className="mt-auto mb-[max(1rem,env(safe-area-inset-bottom))] sm:mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[48px] touch-manipulation md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 text-base"
               >
-                Continue to checkout
+                {confirmingAvailability ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent shrink-0" aria-hidden />
+                    Confirming availability…
+                  </span>
+                ) : (
+                  "Continue to checkout"
+                )}
               </button>
             </div>
 
@@ -2282,6 +2895,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     role="region"
                     aria-label="Booking details form"
                   >
+                    <div className="space-y-2 mb-4" aria-live="polite">
+                      {discountRemovedNotice && (
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                          <span className="flex-1">{discountRemovedNotice}</span>
+                          {discountCode.trim() ? (
+                            <button
+                              type="button"
+                              onClick={() => void applyDiscount()}
+                              disabled={appliedDiscountLoading || effectiveRateCents == null}
+                              className="shrink-0 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                            >
+                              Re-apply {discountCode.trim()}
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                     {/* Tickets & add-ons — shown first for ticketed experiences */}
                     {isTicketed && (
                       <div>
@@ -2296,10 +2926,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               value={Math.min(partySize, Math.max(effectiveTicketMax, 1))}
                               onChange={(e) => setPartySize(Math.min(parseInt(e.target.value, 10) || 1, effectiveTicketMax))}
                               required
-                              disabled={
-                                isTicketed &&
-                                (!!ticketCountsError || (ticketCounts == null && ticketCountsLoading))
-                              }
+                              disabled={isTicketed && ticketCountsLoading && ticketCounts == null}
                               className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               aria-describedby="booking-party-size-ticketed-hint"
                             >
@@ -2311,12 +2938,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             </select>
                             <p id="booking-party-size-ticketed-hint" className="text-[11px] text-brand-muted mt-0.5">
                               {ticketCounts != null
-                                ? `${ticketCounts.available} of ${ticketCounts.total} tickets available`
+                                ? ticketCounts.conservativeEstimate
+                                  ? ticketCounts.availabilityNote ??
+                                    "Availability may be limited — your selection will be confirmed at checkout"
+                                  : `${ticketCounts.available} of ${ticketCounts.total} tickets available`
                                 : ticketCountsLoading
                                   ? "Confirming availability — you can select your ticket count now."
-                                  : ticketCountsError
-                                    ? "Could not confirm availability — use Retry on the date step or go back to refresh."
-                                    : `Max ${ticketMax} tickets`}
+                                  : ticketCountsError && ticketedCalendarAvail != null
+                                    ? `Using calendar estimate: up to ${ticketedCalendarAvail} tickets may be available. Tap Retry on the date step for a live count.`
+                                    : ticketCountsError
+                                      ? "Could not confirm availability — use Retry on the date step or go back to refresh."
+                                      : ticketedCalendarAvail != null
+                                        ? `Up to ${ticketedCalendarAvail} tickets available (calendar).`
+                                        : `Max ${ticketMax} tickets`}
                             </p>
                           </div>
                           {rateForCalendar && (
@@ -2332,6 +2966,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           <AddonSelector
                             displayAddons={displayAddons}
                             addonSelections={addonSelections}
+                            onAddonToggle={(addon) => {
+                              const max = addon.maxQty ?? 10;
+                              if (max > 1) return;
+                              setAddonSelections((prev) => ({
+                                ...prev,
+                                [addon.id]: (prev[addon.id] ?? 0) > 0 ? 0 : 1,
+                              }));
+                            }}
                             onAddonClick={(addon, qty) => {
                               setAddonQtyModalAddon(addon);
                               setAddonQtyModalQty(qty);
@@ -2342,7 +2984,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     )}
 
                     {/* Order summary — always at top so user sees what they're booking */}
+                    <TrustLine className="text-[11px] sm:text-xs max-w-md" />
                     {selectedExperience && selectedDate && selectedSlot && selectedRate && (
+                      priceSummaryAwaitingBoatRate ? (
+                      <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden shrink-0 p-6 space-y-3" aria-busy>
+                        <div className="h-4 w-40 animate-pulse rounded bg-brand-dark/10" />
+                        <div className="h-8 w-full animate-pulse rounded bg-brand-dark/10" />
+                        <div className="h-4 w-full animate-pulse rounded bg-brand-dark/10" />
+                        <p className="text-xs text-brand-muted">Loading exact price for your boat…</p>
+                      </div>
+                      ) : (
                       <div className="rounded-2xl border-2 border-brand-dark/10 bg-white shadow-sm overflow-hidden shrink-0">
                         <div className="p-4 bg-gradient-to-br from-brand-primary/8 to-brand-primary/4 border-b border-brand-dark/5">
                           <p className="text-[10px] font-semibold uppercase tracking-widest text-brand-primary/90 mb-1">Booking summary</p>
@@ -2373,16 +3024,33 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           </p>
                         </div>
                         <div className="p-4 space-y-2">
-                          {paymentPriceBlocked && (
-                            <p className="text-xs text-brand-muted rounded-lg bg-brand-primary/5 border border-brand-primary/15 px-2.5 py-2">
-                              Loading exact price for your date…
-                            </p>
-                          )}
-                          {priceSummary.priceIsEstimate && !paymentPriceBlocked && (
-                            <p className="text-xs text-amber-800/90 rounded-lg bg-amber-50 border border-amber-200/80 px-2.5 py-2">
-                              Price is an estimate — exact price loading…
-                            </p>
-                          )}
+                          {orderSummaryPriceBlocked ? (
+                            <div className="space-y-2 py-1" aria-busy>
+                              <div className="h-4 w-full animate-pulse rounded bg-brand-dark/10" />
+                              <div className="h-4 w-4/5 animate-pulse rounded bg-brand-dark/10" />
+                              <div className="h-4 w-2/3 animate-pulse rounded bg-brand-dark/10" />
+                              <p className="text-xs text-brand-muted pt-1">Loading price…</p>
+                            </div>
+                          ) : showPriceRetry ? (
+                            <div className="rounded-lg border border-brand-dark/15 bg-brand-bg/50 px-3 py-3 text-sm text-brand-dark">
+                              <p className="font-medium">Could not load price — tap to retry</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (selectedExperience?.id) {
+                                    bookingCache.invalidate(`date-prices|${selectedExperience.id}|`);
+                                    bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+                                  }
+                                  retrySlots();
+                                  retryEffectivePrice();
+                                }}
+                                className="mt-2 w-full rounded-lg bg-brand-primary text-white font-semibold py-2.5 text-sm hover:bg-brand-primary/90"
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          ) : (
+                            <>
                           <div className="flex justify-between items-baseline text-sm">
                           <span className="text-brand-muted">{priceSummary.rateLabel}</span>
                           {priceReady ? (
@@ -2417,7 +3085,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               </div>
                             );
                           })}
-                        {priceSummary.salesTaxCents > 0 && (
+                        {priceReady && (
                           <div className="flex justify-between items-baseline text-sm">
                             <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
                             <span className="font-medium text-brand-dark">+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
@@ -2425,7 +3093,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         )}
                         {priceSummary.tipCents > 0 && (
                           <div className="flex justify-between items-center gap-2 text-sm group">
-                            <span className="text-brand-muted">Tip ({Math.min(35, Math.max(20, tipPercent))}%)</span>
+                            <span className="text-brand-muted">Tip ({Math.min(TIP_MAX_PERCENT, Math.max(20, tipPercent))}%)</span>
                             <span className="flex items-center gap-1.5 shrink-0">
                               <span className="font-medium text-brand-dark">+${(priceSummary.tipCents / 100).toFixed(2)}</span>
                               <button
@@ -2486,14 +3154,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
                                 {priceReady ? (
                                   <span className="text-xl font-bold text-brand-primary">
-                                    {depositAmountIsEstimate ? "~" : ""}
+                                    {depositCentsFromServer == null ? "~" : ""}
                                     {formatMoneyNonNegative(displayDepositCents)}
                                   </span>
                                 ) : (
                                   <span className="h-6 w-20 animate-pulse rounded bg-brand-primary/20" aria-hidden />
                                 )}
                               </div>
-                              {(depositAmountIsEstimate || finalAmountIsEstimate) && priceReady && (
+                              {depositCentsFromServer == null && finalAmountIsEstimate && priceReady && (
                                 <p className="text-[10px] text-brand-muted">Exact amount confirmed at checkout</p>
                               )}
                               <div className="flex justify-between items-baseline text-sm">
@@ -2510,9 +3178,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             </>
                           )}
                         </div>
+                            </>
+                          )}
                       </div>
                     </div>
-                  )}
+                    )
+                    )}
 
                   {/* Contact details — first so user can fill before party/add-ons */}
                   <div>
@@ -2608,6 +3279,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <AddonSelector
                         displayAddons={displayAddons}
                         addonSelections={addonSelections}
+                        onAddonToggle={(addon) => {
+                          const max = addon.maxQty ?? 10;
+                          if (max > 1) return;
+                          setAddonSelections((prev) => ({
+                            ...prev,
+                            [addon.id]: (prev[addon.id] ?? 0) > 0 ? 0 : 1,
+                          }));
+                        }}
                         onAddonClick={(addon, qty) => {
                           setAddonQtyModalAddon(addon);
                           setAddonQtyModalQty(qty);
@@ -2630,7 +3309,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <>
                         <h3 className="text-lg font-bold text-brand-dark mb-1">How many?</h3>
                         <p className="text-sm text-brand-muted mb-4">
-                          {addonQtyModalAddon.name} — +${(addonQtyModalAddon.priceCents / 100).toFixed(0)} each
+                          {addonQtyModalAddon.name} — +${(addonQtyModalAddon.priceCents / 100).toFixed(2)} each
                           {effectiveMax < 10 && <span className="block text-xs mt-1">Max {effectiveMax} per rental</span>}
                         </p>
                         <div className="mb-4">
@@ -2665,59 +3344,57 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     );})()}
                   </Dialog>
 
-                  {/* Tip — shown only when listing allows at least one of Tip now / Tip later */}
+                  {/* Tip — inline presets (after payment you can still tip captain directly if you chose Tip later) */}
                   {tipSectionRequired && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
-                      Tip {allowTipNow && allowTipLater ? <span className="text-red-500 font-semibold normal-case" aria-hidden>*</span> : null}
+                      Captain gratuity
                     </p>
-                    <div className="flex gap-2">
-                      {allowTipNow && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
-                          setTipNowModalOpen(true);
-                        }}
-                        className={cn(
-                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-transparent",
-                          tipChoice === "now"
-                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary/50"
-                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
-                        )}
-                        title="Choose tip amount (20–35%)"
-                      >
-                        Tip now
-                      </button>
-                      )}
+                    <div className="flex flex-wrap gap-2">
+                      {allowTipNow &&
+                        ([20, 25, 30] as const).map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => {
+                              setTipPercent(pct);
+                              setTipChoice("now");
+                            }}
+                            className={cn(
+                              "min-w-[4.5rem] flex-1 rounded-xl border-2 py-3 px-2 text-sm font-semibold transition-all text-center",
+                              tipChoice === "now" && tipPercent === pct
+                                ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/40"
+                                : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25"
+                            )}
+                          >
+                            {pct}%
+                          </button>
+                        ))}
                       {allowTipLater && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          tipLaterIntendedRef.current = true;
-                          setTipChoice("later");
-                          setTipLaterMessageOpen(true);
-                        }}
-                        className={cn(
-                          "flex-1 min-w-[7rem] rounded-xl border-2 py-3.5 px-3 text-sm font-semibold transition-all text-center ring-2 ring-transparent",
-                          tipChoice === "later"
-                            ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-brand-primary/50"
-                            : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
-                        )}
-                        title="Tip your crew later"
-                      >
-                        Tip later
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setTipChoice("later")}
+                          className={cn(
+                            "min-w-[4.5rem] flex-1 rounded-xl border-2 py-3 px-2 text-sm font-semibold transition-all text-center",
+                            tipChoice === "later"
+                              ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/40"
+                              : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25"
+                          )}
+                        >
+                          Tip later
+                        </button>
                       )}
                     </div>
                     {tipChoice === "now" && priceSummary.tipCents > 0 && (
-                      <p className="text-xs text-brand-muted mt-1.5">{Math.min(35, Math.max(20, tipPercent))}% tip — +${(priceSummary.tipCents / 100).toFixed(2)} added to total</p>
+                      <p className="text-xs text-brand-muted mt-1.5">
+                        {Math.min(TIP_MAX_PERCENT, Math.max(20, tipPercent))}% added to total (+${(priceSummary.tipCents / 100).toFixed(2)})
+                      </p>
                     )}
                     {tipChoice === "later" && (
-                      <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly.</p>
+                      <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly at the end of the trip.</p>
                     )}
                     {tipChoice === null && allowTipNow && allowTipLater && paymentError?.toLowerCase().includes("tip") && (
-                      <p className="text-xs text-red-600 mt-1.5">Please choose Tip now or Tip later.</p>
+                      <p className="text-xs text-red-600 mt-1.5">Please choose a tip option above.</p>
                     )}
                   </div>
                   )}
@@ -2741,10 +3418,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       >
                         <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
-                          {priceReady
-                            ? `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)} now`
-                            : "Loading…"}{" "}
-                          — we&apos;ll charge the remaining 50% 48 hours before your trip
+                          {priceReady ? (
+                            depositCentsFromServer == null ? (
+                              <>
+                                <span className="inline-block h-3 w-12 animate-pulse rounded bg-brand-muted/30 align-middle mr-1" aria-hidden />
+                                Approx. ~{formatMoneyNonNegative(displayDepositCents)} now — exact amount confirmed at checkout
+                              </>
+                            ) : (
+                              <>
+                                {formatMoneyNonNegative(displayDepositCents)} now — we&apos;ll charge the remaining 50% 48
+                                hours before your trip
+                              </>
+                            )
+                          ) : (
+                            "Loading…"
+                          )}
                         </span>
                       </button>
                       <button
@@ -2771,7 +3459,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         </span>
                       </button>
                     </div>
-                    {depositAmountIsEstimate && priceReady && (
+                    {depositCentsFromServer == null && priceReady && (
                       <p className="text-[10px] text-brand-muted mt-1.5">Exact deposit amount confirmed at checkout</p>
                     )}
                   </div>
@@ -2811,11 +3499,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             : "Apply"}
                       </button>
                     </div>
-                    {discountRemovedNotice && (
-                      <p className="text-xs text-amber-800/90 rounded-lg bg-amber-50 border border-amber-200/80 px-2.5 py-2" role="status">
-                        {discountRemovedNotice}
-                      </p>
-                    )}
                     {appliedDiscountError && <p className="text-xs text-red-600">{appliedDiscountError}</p>}
                     {appliedDiscount && (
                       <p className="text-xs text-emerald-600 font-medium">
@@ -2823,28 +3506,38 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </p>
                     )}
                   </div>
-                  {/* Optional (other) */}
+                  {/* Optional — above cancellation so policy ack is last before pay */}
                   <div className="space-y-2 pt-1">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Optional</p>
-                    <input
-                      id="booking-how-hear"
-                      type="text"
-                      value={howDidYouHear}
-                      onChange={(e) => setHowDidYouHear(e.target.value)}
-                      placeholder="How did you hear about us?"
-                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
-                    />
-                    <textarea
-                      id="booking-comments"
-                      value={comments}
-                      onChange={(e) => setComments(e.target.value)}
-                      placeholder="Special requests or notes"
-                      rows={2}
-                      className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base resize-none touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setOptionalFieldsOpen((o) => !o)}
+                      className="text-xs font-semibold text-brand-primary hover:underline"
+                    >
+                      {optionalFieldsOpen ? "Hide" : "Add special requests"}{" "}
+                      <span className="text-brand-muted font-normal">(optional)</span>
+                    </button>
+                    {optionalFieldsOpen && (
+                      <>
+                        <input
+                          id="booking-how-hear"
+                          type="text"
+                          value={howDidYouHear}
+                          onChange={(e) => setHowDidYouHear(e.target.value)}
+                          placeholder="How did you hear about us?"
+                          className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                        />
+                        <textarea
+                          id="booking-comments"
+                          value={comments}
+                          onChange={(e) => setComments(e.target.value)}
+                          placeholder="Special requests or notes"
+                          rows={2}
+                          className="w-full rounded-xl border border-brand-dark/10 bg-white px-3 py-2.5 text-base resize-none touch-manipulation placeholder:text-brand-muted focus:border-brand-dark/20 focus:outline-none transition-colors"
+                        />
+                      </>
+                    )}
                   </div>
 
-                  {/* Cancellation */}
                   <div className="rounded-xl border-2 border-amber-200/60 bg-amber-50/50 p-4">
                     <p className="text-xs font-semibold text-brand-dark mb-1.5">Cancellation policy</p>
                     <p className="text-[11px] text-brand-muted leading-relaxed">
@@ -2880,7 +3573,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                   `$${(priceSummary.totalCents / 100).toFixed(2)}`
                                 )
                               : priceReady
-                                ? `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`
+                                ? `${depositCentsFromServer == null ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`
                                 : null}
                             {!isTicketed && !payFullAmount && !priceReady && (
                               <span className="inline-block h-6 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
@@ -2894,23 +3587,40 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         {!isTicketed && !payFullAmount && (
                           <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
                             Remaining 50% charged 48 hours before your trip
-                            {depositAmountIsEstimate && priceReady ? " · Exact amount confirmed at checkout" : ""}
+                            {depositCentsFromServer == null && priceReady ? " · Exact amount confirmed at checkout" : ""}
                           </p>
                         )}
                       </div>
                       <button
                         type="button"
                         onClick={() => {
+                          analytics.bookingStep4PaymentStarted();
                           userChoseDepositRef.current = !payFullAmount;
                           handleProceedToPayment();
                         }}
-                        disabled={!isStripeCheckoutReady || !priceReady || paymentPhase !== "form"}
-                        className="shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-5 min-h-[48px] touch-manipulation sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-base disabled:opacity-60 disabled:cursor-not-allowed w-full sm:w-auto"
+                        disabled={
+                          !isStripeCheckoutReady ||
+                          !priceReady ||
+                          paymentPhase !== "form" ||
+                          tipBlockedForEstimate ||
+                          !cancellationAck
+                        }
+                        className="inline-flex items-center justify-center gap-2 shrink-0 rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-5 min-h-[48px] touch-manipulation sm:py-3.5 sm:px-6 hover:bg-brand-primary/90 active:scale-[0.99] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 shadow-lg shadow-brand-primary/20 text-base disabled:opacity-60 disabled:cursor-not-allowed w-full sm:w-auto"
                       >
-                        {paymentPriceBlocked ? "Loading price…" : "Proceed to payment"}
+                        {(paymentPriceBlocked || !priceReady) && (
+                          <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden />
+                        )}
+                        {paymentPriceBlocked ? "Preparing…" : !priceReady ? "Loading price…" : "Proceed to payment"}
                       </button>
                     </div>
-                    <p className="text-center text-[10px] sm:text-[11px] text-brand-muted mt-1.5 sm:mt-2">Secure payment via Stripe · Card, Apple Pay, Google Pay</p>
+                    <p className="text-center text-[10px] sm:text-[11px] text-brand-muted mt-1.5 sm:mt-2" aria-live="polite">
+                      {paymentPriceBlocked || !priceReady
+                        ? "Calculating your date's exact price…"
+                        : "Secure payment via Stripe · Card, Apple Pay, Google Pay"}
+                    </p>
+                    <div className="mt-2 flex justify-center">
+                      <TrustLine className="text-[10px] sm:text-[11px] max-w-md justify-center" />
+                    </div>
                   </div>
                 </div>
                 </>
@@ -2918,7 +3628,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               {paymentPhase === "loading" && (
                 <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 py-8 px-2">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                  <p className="text-sm text-brand-muted text-center">Preparing checkout…</p>
+                  <p className="text-sm text-brand-muted text-center">Reserving your slot…</p>
                 </div>
               )}
               {paymentPhase === "completing" && (
@@ -2945,8 +3655,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="flex flex-col sm:flex-row gap-2">
                     <button
                       type="button"
-                      onClick={() => void runCompleteAfterPaymentForModal()}
-                      className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                      disabled={completeAfterRetryInFlight}
+                      onClick={async () => {
+                        if (completeAfterRetryInFlightRef.current) return;
+                        completeAfterRetryInFlightRef.current = true;
+                        setCompleteAfterRetryInFlight(true);
+                        setPaymentError(null);
+                        try {
+                          await runCompleteAfterPaymentForModal();
+                        } finally {
+                          completeAfterRetryInFlightRef.current = false;
+                          setCompleteAfterRetryInFlight(false);
+                        }
+                      }}
+                      className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-60 disabled:pointer-events-none"
                     >
                       Try again
                     </button>
@@ -3009,7 +3731,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 isTicketed={isTicketed}
                 payFullAmount={payFullAmount}
                 completedBookingId={completedBookingId}
+                selectedDateStr={selectedDate}
+                selectedSlotStartIso={selectedSlot?.startAt ?? null}
+                receiptClaimToken={receiptClaimToken}
                 priceSummary={priceSummary}
+                discountLimitExceeded={discountLimitExceededFromServer}
               />
               {paymentPhase === "stripe" && stripePromise && selectedExperience && selectedSlot && selectedRate && (
                 <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
@@ -3034,6 +3760,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             expiresAt={holdExpiresAt}
                             label="Complete payment in"
                             compact
+                            presentation="softStripe"
                             expiredLabel="Expired"
                             onExpired={handleHoldExpired}
                             className="font-medium text-brand-dark"
@@ -3055,9 +3782,22 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold text-brand-primary">
-                          {(isTicketed || payFullAmount)
-                            ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`}
+                          {(isTicketed || payFullAmount) ? (
+                            payFullTotalPending && totalCentsFromServer == null ? (
+                              <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
+                            ) : (
+                              `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
+                            )
+                          ) : depositAmountIsEstimate && depositCentsFromServer == null && totalCentsFromServer == null ? (
+                            <span className="block text-base font-semibold leading-snug max-w-[12rem] ml-auto">
+                              Exact deposit shown in Stripe
+                            </span>
+                          ) : (
+                            <>
+                              {depositAmountIsEstimate ? "~" : ""}
+                              {formatMoneyNonNegative(displayDepositCents)}
+                            </>
+                          )}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
                           )}
@@ -3082,7 +3822,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           <span>+${(line.priceCents / 100).toFixed(2)}</span>
                         </div>
                       ))}
-                      {priceSummary.salesTaxCents > 0 && (
+                      {priceReady && (
                         <div className="flex justify-between text-brand-dark">
                           <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
                           <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
@@ -3090,16 +3830,27 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       )}
                       {priceSummary.tipCents > 0 && (
                         <div className="flex justify-between text-brand-dark">
-                          <span className="text-brand-muted">Tip ({Math.min(35, Math.max(20, tipPercent))}%)</span>
+                          <span className="text-brand-muted">Tip ({Math.min(TIP_MAX_PERCENT, Math.max(20, tipPercent))}%)</span>
                           <span>+${(priceSummary.tipCents / 100).toFixed(2)}</span>
                         </div>
                       )}
                       <div className="flex justify-between font-semibold text-brand-dark pt-1.5 border-t border-brand-dark/10">
                         <span>{(isTicketed || payFullAmount) ? "Total due" : "Deposit due now"}</span>
                         <span>
-                          {(isTicketed || payFullAmount)
-                            ? `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
-                            : `${depositAmountIsEstimate ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`}
+                          {(isTicketed || payFullAmount) ? (
+                            payFullTotalPending && totalCentsFromServer == null ? (
+                              <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />
+                            ) : (
+                              `$${((totalCentsFromServer ?? priceSummary.totalCents) / 100).toFixed(2)}`
+                            )
+                          ) : depositAmountIsEstimate && depositCentsFromServer == null && totalCentsFromServer == null ? (
+                            "—"
+                          ) : (
+                            <>
+                              {depositAmountIsEstimate ? "~" : ""}
+                              {formatMoneyNonNegative(displayDepositCents)}
+                            </>
+                          )}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />
                           )}
@@ -3139,9 +3890,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     </div>
                   ) : (
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
-                    <Elements stripe={stripePromise} options={{ clientSecret }}>
+                    <Elements key={clientSecret ?? ""} stripe={stripePromise} options={{ clientSecret }}>
+                      <p className="text-center text-xs text-brand-muted mb-3 px-2 leading-snug order-first">
+                        ⭐ {location.rating} · {location.reviewCount}+ Google reviews · Cancel within 48 hours for a full refund.
+                      </p>
                       <BookingStep4PaymentForm
                         receiptClaimToken={receiptClaimToken}
+                        submitting={stripePaymentSubmitInProgress}
+                        onPaymentSubmitStart={() => setStripePaymentSubmitInProgress(true)}
                         onSuccess={async (paymentIntentFromConfirm?: PaymentIntent | null) => {
                           setStripePaymentProcessing(false);
                           setPaymentPhase("completing");
@@ -3181,90 +3937,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
                 </div>
               )}
-              {/* Tip amount modal — 20% minimum, up to 100%; presets + custom */}
-              <Dialog
-                open={tipNowModalOpen}
-                onOpenChange={(open) => {
-                  setTipNowModalOpen(open);
-                  if (!open) setTipModalPercent(tipChoice === "now" ? tipPercent : 20);
-                }}
-                className="max-w-sm"
-              >
-                <h3 className="text-lg font-bold text-brand-dark mb-1">Choose tip amount</h3>
-                <p className="text-xs text-brand-muted mb-4">20–35%. Tips go directly to your captain and crew.</p>
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {[20, 22, 25, 28, 30, 35].map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setTipModalPercent(p)}
-                      className={cn(
-                        "rounded-xl border-2 px-4 py-2.5 text-sm font-semibold transition-all",
-                        tipModalPercent === p
-                          ? "border-brand-primary bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/30"
-                          : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
-                      )}
-                    >
-                      {p}%
-                    </button>
-                  ))}
-                </div>
-                <div className="mb-4">
-                  <label htmlFor="tip-custom-pct" className="block text-xs font-medium text-brand-dark mb-1.5">Or enter custom % (20–35)</label>
-                  <input
-                    id="tip-custom-pct"
-                    type="number"
-                    min={20}
-                    max={35}
-                    value={tipModalPercent}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10);
-                      if (!Number.isNaN(v)) setTipModalPercent(Math.min(35, Math.max(20, v)));
-                    }}
-                    className="w-full rounded-xl border-2 border-brand-dark/15 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTipPercent(Math.min(35, Math.max(20, tipModalPercent)));
-                    setTipChoice("now");
-                    setTipNowModalOpen(false);
-                  }}
-                  className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
-                >
-                  Apply {tipModalPercent}% tip
-                </button>
-              </Dialog>
-              {/* Tip later message dialog — when closing, keep "Tip later" selected */}
-              <Dialog
-                open={tipLaterMessageOpen}
-                onOpenChange={(open) => {
-                  setTipLaterMessageOpen(open);
-                  if (!open && tipLaterIntendedRef.current) {
-                    setTipChoice("later");
-                  }
-                }}
-                className="max-w-sm"
-              >
-                <h3 className="text-lg font-bold text-brand-dark mb-2">Captain gratuity</h3>
-                <p className="text-sm text-brand-dark leading-relaxed mb-2">
-                  To ensure exceptional service, a 20% gratuity is required for all private charters. Gratuity is paid directly to your captain at the end of the trip via Venmo, Zelle, Cash App, or cash.
-                </p>
-                <p className="text-xs text-brand-muted leading-relaxed mb-4">
-                  If any part of your experience does not meet expectations, contact us immediately and we&apos;ll take care of it.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTipLaterMessageOpen(false);
-                    setTipChoice("later");
-                  }}
-                  className="w-full rounded-xl bg-brand-primary text-white font-semibold py-3 px-4 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
-                >
-                  Got it
-                </button>
-              </Dialog>
             </div>
           </div>
         </div>

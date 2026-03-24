@@ -43,6 +43,20 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
     .where("active", "==", true)
     .get();
 
+  const expIdSet = new Set<string>();
+  for (const doc of snap.docs) {
+    const boat = doc.data() as ListingBoat;
+    const experienceIds = Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [];
+    const first = experienceIds[0];
+    if (first) expIdSet.add(first);
+  }
+  const expRefs = Array.from(expIdSet, (id) => db.collection("experiences").doc(id));
+  const expSnaps = expRefs.length > 0 ? await db.getAll(...expRefs) : [];
+  const expById = new Map<string, Experience>();
+  for (const es of expSnaps) {
+    if (es.exists) expById.set(es.id, es.data() as Experience);
+  }
+
   const list: PublicBoatListItem[] = [];
   for (const doc of snap.docs) {
     const boat = doc.data() as ListingBoat;
@@ -53,13 +67,10 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
     let firstLinkedExperienceSlug: string | undefined;
     const firstExpId = experienceIds[0];
     if (firstExpId) {
-      const expSnap = await db.collection("experiences").doc(firstExpId).get();
-      if (expSnap.exists) {
-        const exp = expSnap.data() as Experience;
-        if (exp.active !== false && typeof exp.slug === "string") {
-          const s = exp.slug.trim();
-          if (s) firstLinkedExperienceSlug = s;
-        }
+      const exp = expById.get(firstExpId);
+      if (exp && exp.active !== false && typeof exp.slug === "string") {
+        const s = exp.slug.trim();
+        if (s) firstLinkedExperienceSlug = s;
       }
     }
     list.push({

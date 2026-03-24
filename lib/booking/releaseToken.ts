@@ -56,7 +56,10 @@ export function signReleaseToken(holdId: string, exp: number): string {
 /**
  * Verify and decode a release token. Returns payload or null if invalid/expired or secret unset.
  */
-export function verifyReleaseToken(token: string): ReleaseTokenPayload | null {
+function verifyReleaseTokenInner(
+  token: string,
+  options: { enforceExpiry: boolean }
+): ReleaseTokenPayload | null {
   const secret = getReleaseSecret();
   if (!secret) return null;
   try {
@@ -74,11 +77,24 @@ export function verifyReleaseToken(token: string): ReleaseTokenPayload | null {
     const holdId = segments[1];
     const exp = parseInt(segments[2], 10);
     if (!holdId || Number.isNaN(exp)) return null;
-    if (exp < Math.floor(Date.now() / 1000)) return null;
+    if (options.enforceExpiry && exp < Math.floor(Date.now() / 1000)) return null;
     return { holdId, exp };
   } catch {
     return null;
   }
+}
+
+export function verifyReleaseToken(token: string): ReleaseTokenPayload | null {
+  return verifyReleaseTokenInner(token, { enforceExpiry: true });
+}
+
+/**
+ * Same as verifyReleaseToken but does not reject when the token's embedded `exp` is in the past.
+ * Used by release-hold when the hold was extended after create-hold (token was signed with the
+ * pre-extension expiry). Callers must still confirm the hold is active in Firestore.
+ */
+export function verifyReleaseTokenIgnoreExpiry(token: string): ReleaseTokenPayload | null {
+  return verifyReleaseTokenInner(token, { enforceExpiry: false });
 }
 
 if (process.env.NODE_ENV !== "production") {

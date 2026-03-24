@@ -13,11 +13,13 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import {
+  ADMIN_BOOKING_VISIBILITY_SLA_MS,
+  ADMIN_BOOKING_VISIBILITY_SLA_SECONDS,
+} from "../lib/admin-booking-visibility-sla";
 import { getExperienceIdVariants } from "../lib/booking/experience-aliases";
 import { buildSlotId } from "../lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "../lib/booking/types";
-
-const VISIBILITY_SLA_SECONDS = 60;
 
 /** Trip date range used by admin list/calendar queries (YYYY-MM-DD). */
 function inTripDateRange(dateStr: string, fromStr: string, toStr: string): boolean {
@@ -25,8 +27,13 @@ function inTripDateRange(dateStr: string, fromStr: string, toStr: string): boole
 }
 
 describe("admin booking visibility SLA (1-minute)", () => {
-  it("SLA window is 60 seconds", () => {
-    assert.strictEqual(VISIBILITY_SLA_SECONDS, 60, "Admin visibility SLA must be 60 seconds");
+  it("SLA window is 60 seconds (shared with admin bookings page poll cadence)", () => {
+    assert.strictEqual(ADMIN_BOOKING_VISIBILITY_SLA_SECONDS, 60, "Admin visibility SLA must be 60 seconds");
+    assert.strictEqual(
+      ADMIN_BOOKING_VISIBILITY_SLA_MS,
+      60_000,
+      "Admin bookings automatic refresh interval must stay at or below the SLA (see app/(site)/admin/(dashboard)/bookings/page.tsx)"
+    );
   });
 
   it("booking-shaped record (matching modal output) satisfies visibility criteria for admin list and calendar", () => {

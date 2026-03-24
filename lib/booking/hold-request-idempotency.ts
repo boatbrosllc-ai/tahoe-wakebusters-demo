@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import type { CreateHoldInput } from "@/lib/booking/types";
 
+/** Top-level collection; `expireAt` is set on writes (create-hold) for Firestore TTL — see firestore.indexes.json. */
 export const HOLD_REQUEST_CLAIMS_COLLECTION = "holdRequestClaims";
 
 /** Stable hash of booking-defining fields; used to detect holdRequestId reuse with a different payload. */
@@ -30,4 +31,50 @@ export function computeHoldRequestFingerprint(input: CreateHoldInput): string {
     marketingOptIn: input.marketingOptIn,
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+/** Canonical JSON payload for direct-checkout idempotency (must match client `getOrCreateDirectCheckoutHoldRequestId`). */
+export function directCheckoutFingerprintPayload(input: {
+  experienceId: string;
+  slotId: string;
+  boatId?: string;
+  partySize: number;
+  petsCount: number;
+  discountCode?: string;
+  /** Normalized (trim + lower case); empty when unknown (e.g. charter direct checkout before contact step). */
+  customerEmail?: string;
+}): {
+  source: "direct_checkout_v1";
+  experienceId: string;
+  slotId: string;
+  boatId: string | null;
+  partySize: number;
+  petsCount: number;
+  discountCode: string | null;
+  customerEmail: string;
+} {
+  const raw = typeof input.customerEmail === "string" ? input.customerEmail.trim().toLowerCase() : "";
+  return {
+    source: "direct_checkout_v1",
+    experienceId: input.experienceId,
+    slotId: input.slotId,
+    boatId: input.boatId ?? null,
+    partySize: input.partySize,
+    petsCount: input.petsCount,
+    discountCode: input.discountCode ?? null,
+    customerEmail: raw,
+  };
+}
+
+/** Fingerprint for POST /api/booking/create-checkout-session-direct (no customerDraft); must match claim checks for the same holdRequestId. */
+export function computeDirectCheckoutHoldRequestFingerprint(input: {
+  experienceId: string;
+  slotId: string;
+  boatId?: string;
+  partySize: number;
+  petsCount: number;
+  discountCode?: string;
+  customerEmail?: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify(directCheckoutFingerprintPayload(input))).digest("hex");
 }

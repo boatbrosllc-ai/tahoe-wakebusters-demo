@@ -20,6 +20,8 @@ type EmailLogEntry = {
   bookingId: string | null;
   sentAt: string | null;
   channel?: string;
+  audience?: string;
+  deliveryState?: string | null;
 };
 
 export default function AdminEmailsPage() {
@@ -35,6 +37,16 @@ export default function AdminEmailsPage() {
     pending: number;
     deadLetter: number;
     stuckClaims: number;
+    byType?: {
+      booking_confirmation: { pending: number; deadLetter: number; stuckClaims: number };
+      final_charge_success: { pending: number; deadLetter: number; stuckClaims: number };
+      discount_limit_exceeded_notification?: { pending: number; deadLetter: number; stuckClaims: number };
+    };
+    reminderRetryQueue?: Record<
+      string,
+      { pending: number; sent: number; deadLetter: number; skipped: number; lastErrorSnippet?: string }
+    >;
+    staleClaimCountsByTemplate?: Record<string, number>;
   } | null>(null);
   const [outboxStatsLoading, setOutboxStatsLoading] = useState(true);
 
@@ -80,6 +92,9 @@ export default function AdminEmailsPage() {
         pending: typeof data.pending === "number" ? data.pending : 0,
         deadLetter: typeof data.deadLetter === "number" ? data.deadLetter : 0,
         stuckClaims: typeof data.stuckClaims === "number" ? data.stuckClaims : 0,
+        byType: data.byType,
+        reminderRetryQueue: data.reminderRetryQueue,
+        staleClaimCountsByTemplate: data.staleClaimCountsByTemplate,
       });
     } catch {
       setOutboxStats(null);
@@ -138,31 +153,123 @@ export default function AdminEmailsPage() {
         </div>
       )}
 
-      <div className="rounded-2xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm">
+      <div className="rounded-2xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm space-y-6">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-brand-muted mb-3">
           <Inbox className="h-4 w-4" />
-          Confirmation outbox (Firestore)
+          Notification pipelines (Firestore)
         </h2>
         {outboxStatsLoading ? (
           <p className="text-sm text-brand-muted">Loading…</p>
         ) : outboxStats ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-6 text-sm">
+          <>
             <div>
-              <p className="text-brand-muted">Pending</p>
-              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.pending}</p>
-              <p className="text-xs text-brand-muted mt-0.5">Awaiting send or retry</p>
+              <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-2">Outbox by type</p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+                <div className="rounded-xl border border-brand-dark/10 p-3 bg-brand-bg/30">
+                  <p className="font-medium text-brand-dark">Booking confirmation</p>
+                  <div className="mt-2 grid grid-cols-3 gap-2 tabular-nums">
+                    <span>
+                      <span className="block text-xs text-brand-muted">Pending</span>
+                      {outboxStats.byType?.booking_confirmation?.pending ?? outboxStats.pending}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Dead letter</span>
+                      {outboxStats.byType?.booking_confirmation?.deadLetter ?? outboxStats.deadLetter}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Stuck</span>
+                      {outboxStats.byType?.booking_confirmation?.stuckClaims ?? outboxStats.stuckClaims}
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-brand-dark/10 p-3 bg-brand-bg/30">
+                  <p className="font-medium text-brand-dark">Final charge success (receipt)</p>
+                  <div className="mt-2 grid grid-cols-3 gap-2 tabular-nums">
+                    <span>
+                      <span className="block text-xs text-brand-muted">Pending</span>
+                      {outboxStats.byType?.final_charge_success?.pending ?? "—"}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Dead letter</span>
+                      {outboxStats.byType?.final_charge_success?.deadLetter ?? "—"}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Stuck</span>
+                      {outboxStats.byType?.final_charge_success?.stuckClaims ?? "—"}
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-brand-dark/10 p-3 bg-brand-bg/30">
+                  <p className="font-medium text-brand-dark">Discount limit notifications</p>
+                  <div className="mt-2 grid grid-cols-3 gap-2 tabular-nums">
+                    <span>
+                      <span className="block text-xs text-brand-muted">Pending</span>
+                      {outboxStats.byType?.discount_limit_exceeded_notification?.pending ?? "—"}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Dead letter</span>
+                      {outboxStats.byType?.discount_limit_exceeded_notification?.deadLetter ?? "—"}
+                    </span>
+                    <span>
+                      <span className="block text-xs text-brand-muted">Stuck</span>
+                      {outboxStats.byType?.discount_limit_exceeded_notification?.stuckClaims ?? "—"}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div>
-              <p className="text-brand-muted">Dead letter</p>
-              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.deadLetter}</p>
-              <p className="text-xs text-brand-muted mt-0.5">Max retries exceeded</p>
-            </div>
-            <div>
-              <p className="text-brand-muted">Stuck claims</p>
-              <p className="text-lg font-semibold text-brand-dark tabular-nums">{outboxStats.stuckClaims}</p>
-              <p className="text-xs text-brand-muted mt-0.5">Lease expired; reset on next cron</p>
-            </div>
-          </div>
+
+            {outboxStats.reminderRetryQueue && Object.keys(outboxStats.reminderRetryQueue).length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-2">
+                  Reminder / pay-link retry queue (by template)
+                </p>
+                <div className="overflow-x-auto rounded-xl border border-brand-dark/10">
+                  <table className="w-full text-sm min-w-[640px]">
+                    <thead>
+                      <tr className="border-b border-brand-dark/10 bg-brand-bg/50 text-left">
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Template</th>
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Pending</th>
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Sent</th>
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Dead letter</th>
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Skipped</th>
+                        <th className="py-2 px-3 font-semibold text-brand-dark">Last error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(outboxStats.reminderRetryQueue).map(([key, row]) => (
+                        <tr key={key} className="border-b border-brand-dark/5">
+                          <td className="py-2 px-3 font-mono text-xs text-brand-dark">{key}</td>
+                          <td className="py-2 px-3 tabular-nums">{row.pending}</td>
+                          <td className="py-2 px-3 tabular-nums">{row.sent}</td>
+                          <td className="py-2 px-3 tabular-nums">{row.deadLetter}</td>
+                          <td className="py-2 px-3 tabular-nums">{row.skipped}</td>
+                          <td className="py-2 px-3 text-xs text-brand-muted max-w-[280px] truncate" title={row.lastErrorSnippet}>
+                            {row.lastErrorSnippet ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {outboxStats.staleClaimCountsByTemplate && Object.keys(outboxStats.staleClaimCountsByTemplate).length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-brand-muted uppercase tracking-wide mb-2">
+                  Stale send claims (expired lease, by template key)
+                </p>
+                <ul className="flex flex-wrap gap-2 text-sm">
+                  {Object.entries(outboxStats.staleClaimCountsByTemplate).map(([k, n]) => (
+                    <li key={k} className="rounded-lg bg-amber-50 border border-amber-200 px-2 py-1">
+                      <span className="font-mono text-xs">{k}</span>: {n}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
         ) : (
           <p className="text-sm text-brand-muted">Could not load outbox stats.</p>
         )}
@@ -254,6 +361,7 @@ export default function AdminEmailsPage() {
               <thead>
                 <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">To</th>
+                  <th className="text-left py-3 px-4 font-semibold text-brand-dark">Audience</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Channel</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Template</th>
                   <th className="text-left py-3 px-4 font-semibold text-brand-dark">Subject</th>
@@ -269,6 +377,16 @@ export default function AdminEmailsPage() {
                       {entry.toName && (
                         <span className="block text-xs text-brand-muted">{entry.to}</span>
                       )}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span
+                        className={cn(
+                          "inline-flex rounded px-2 py-0.5 text-xs font-medium",
+                          entry.audience === "staff" ? "bg-violet-100 text-violet-800" : "bg-slate-100 text-slate-700"
+                        )}
+                      >
+                        {entry.audience === "staff" ? "Staff" : "Customer"}
+                      </span>
                     </td>
                     <td className="py-3 px-4">
                       <span

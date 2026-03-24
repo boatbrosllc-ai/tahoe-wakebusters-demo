@@ -59,6 +59,12 @@ describe("getSlotStartEnd", () => {
     assert.strictEqual(durationMs, 2 * 60 * 60 * 1000);
   });
 
+  it("produces a stable UTC instant on US spring-forward Sunday (America/Chicago)", () => {
+    // 2025-03-09 is DST start (2am → 3am); 10:00 local after the transition is unambiguous.
+    const { start } = getSlotStartEnd("2025-03-09", 10, 2, 0);
+    assert.strictEqual(start.toISOString(), "2025-03-09T15:00:00.000Z");
+  });
+
   it("round-trips with parseSlotId and buildSlotId", () => {
     const slotId = "2025-03-10-10-30-3";
     const parsed = parseSlotId(slotId);

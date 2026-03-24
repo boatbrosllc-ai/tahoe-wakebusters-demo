@@ -4,6 +4,7 @@ import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 import { getTokenById, getRequestById, getTemplateById, getGroupTokenById, isTokenValid } from "@/lib/waiver/firestore";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
+import { sanitizeTermsHtml } from "@/lib/waiver/sanitize-terms-html";
 
 async function buildBookingSummary(bookingId: string): Promise<{ experienceName: string; tripDate: string; startTime?: string; endTime?: string; partySize?: number }> {
   const db = getDb();
@@ -59,7 +60,7 @@ export async function GET(request: NextRequest) {
         bookingSummary: { ...bookingSummary, partySize: bookingSummary.partySize ?? groupDoc.partySize },
         template: {
           title: template.title,
-          termsHtml: template.termsHtml,
+          termsHtml: sanitizeTermsHtml(template.termsHtml),
           requiredFields: template.requiredFields,
           clauses: template.clauses,
           signature: template.signature,
@@ -107,7 +108,7 @@ export async function GET(request: NextRequest) {
       },
       template: {
         title: template.title,
-        termsHtml: template.termsHtml,
+        termsHtml: sanitizeTermsHtml(template.termsHtml),
         requiredFields: template.requiredFields,
         clauses: template.clauses,
         signature: template.signature,

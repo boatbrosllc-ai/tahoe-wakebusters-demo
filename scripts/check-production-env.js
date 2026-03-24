@@ -1,7 +1,7 @@
 /**
  * Check that production-required env vars are set (names only; no values printed).
  * Run before deploy or in CI to catch missing config. Usage: node scripts/check-production-env.js
- * Requires Node; uses fs/path only (no npm deps).
+ * Requires Node; uses fs/path; optional firebase-admin for legacy backfill gate when real credentials exist.
  *
  * Firebase: follows same contract as lib/booking/env.ts (hasFirebaseConfig).
  * - Path mode: FIREBASE_SERVICE_ACCOUNT_JSON_PATH set (file must exist); FIREBASE_PROJECT_ID and
@@ -14,10 +14,11 @@ const required = [
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
   "BREVO_API_KEY",
+  "CONTACT_EMAIL",
+  "STAFF_OPERATIONS_EMAIL",
   "APP_BASE_URL",
   "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
   "MANAGE_BOOKING_SECRET",
-  "RECEIPT_TOKEN_SECRET",
   "RELEASE_TOKEN_SECRET",
   "ADMIN_EMAIL",
   "NEXT_PUBLIC_FIREBASE_API_KEY",
@@ -33,6 +34,16 @@ const firebaseCredentialVars = [
   // One of:
   "FIREBASE_PRIVATE_KEY",
   "FIREBASE_PRIVATE_KEY_PATH",
+];
+
+/** Same set as BOOKING_STATUSES_SLOT_TAKEN in lib/booking/types.ts (slot-taking rows). */
+const BOOKING_STATUSES_SLOT_TAKEN = [
+  "paid",
+  "final_due",
+  "final_paid",
+  "final_processing",
+  "final_requires_action",
+  "final_failed",
 ];
 
 function hasValue(name) {
@@ -51,10 +62,81 @@ function fileExists(resolvedPath) {
   }
 }
 
-function main() {
+/**
+ * When DISABLE_LEGACY_BOOKING_FALLBACK=true, refuse deploy if any slot-taking booking lacks a valid startDateStr.
+ * Skipped for emulator, placeholder credentials, or when CHECK_PRODUCTION_SKIP_FIRESTORE_START_DATE_STR=1.
+ */
+async function assertSlotTakenBookingsHaveStartDateStrWhenLegacyDisabled() {
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") return;
+  if (process.env.CHECK_PRODUCTION_SKIP_FIRESTORE_START_DATE_STR === "1") return;
+  if (process.env.FIRESTORE_EMULATOR_HOST?.trim()) return;
+  const pk = process.env.FIREBASE_PRIVATE_KEY ?? "";
+  if (!pk.trim() || pk === "placeholder" || pk.includes("placeholder") || pk.length < 80) return;
+
+  let admin;
+  try {
+    admin = require("firebase-admin");
+  } catch {
+    console.warn("[check-production-env] firebase-admin not available; skip startDateStr Firestore check.");
+    return;
+  }
+
+  if (!admin.apps.length) {
+    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_PATH?.trim();
+    if (serviceAccountPath) {
+      const resolved = path.isAbsolute(serviceAccountPath) ? serviceAccountPath : path.join(process.cwd(), serviceAccountPath);
+      const json = JSON.parse(fs.readFileSync(resolved, "utf8"));
+      admin.initializeApp({ credential: admin.credential.cert(json) });
+    } else {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: String(process.env.FIREBASE_PRIVATE_KEY).replace(/\\n/g, "\n"),
+        }),
+      });
+    }
+  }
+
+  const db = admin.firestore();
+  let lastDoc = null;
+  const PAGE = 200;
+  for (let page = 0; page < 100; page++) {
+    let q = db
+      .collection("bookings")
+      .where("status", "in", BOOKING_STATUSES_SLOT_TAKEN)
+      .orderBy("createdAt", "desc")
+      .limit(PAGE);
+    if (lastDoc) q = q.startAfter(lastDoc);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      const s = typeof d.startDateStr === "string" ? d.startDateStr.trim() : "";
+      if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        console.error(
+          `[check-production-env] Booking ${doc.id} is missing valid startDateStr while DISABLE_LEGACY_BOOKING_FALLBACK=true. ` +
+            `Run POST /api/admin/backfill-start-date-str until zero remaining (see docs/BOOKING_AVAILABILITY.md).`
+        );
+        process.exit(1);
+      }
+    }
+    lastDoc = snap.docs[snap.docs.length - 1];
+    if (snap.size < PAGE) break;
+  }
+}
+
+async function main() {
   const missing = [];
   for (const name of required) {
     if (!hasValue(name)) missing.push(name);
+  }
+  if (hasValue("APP_BASE_URL")) {
+    const u = String(process.env.APP_BASE_URL).trim();
+    if (!u.startsWith("https://") && !u.startsWith("http://")) {
+      missing.push("APP_BASE_URL must be an absolute URL (https://... or http:// for local dev) so waiver and email links work");
+    }
   }
   // Firebase: path mode (preferred) OR credential-variable mode — same contract as lib/booking/env.ts
   const hasFirebasePath = hasValue(firebasePathVar);
@@ -90,6 +172,21 @@ function main() {
         "In production set DISABLE_LEGACY_BOOKING_FALLBACK=true and DISABLE_LEGACY_HOLDS_FALLBACK=true (required from day one; see SECURITY.md)."
       );
     }
+    if (disableBooking) {
+      console.warn(
+        "[check-production-env] With DISABLE_LEGACY_BOOKING_FALLBACK=true, ensure all bookings have startDateStr backfilled " +
+          "(no documents with startDateStr==null). GET /api/health (privileged) and server logs flag gaps; see docs/BOOKING_AVAILABILITY.md."
+      );
+    } else {
+      const parsedLim = parseInt(process.env.LEGACY_BOOKING_SCAN_LIMIT ?? "2000", 10);
+      const cap =
+        Number.isFinite(parsedLim) && parsedLim >= 500 ? Math.min(parsedLim, 50_000) : 2000;
+      const warnAt = Math.floor(cap * 0.8);
+      console.warn(
+        `[check-production-env] Legacy booking fallback is on — run app/api/admin/backfill-start-date-str until complete ` +
+          `before any experience variant approaches ${warnAt} paid bookings in the legacy scan (80% of LEGACY_BOOKING_SCAN_LIMIT=${cap}).`
+      );
+    }
     const hasRedis =
       hasValue("RATE_LIMIT_REDIS_REST_URL") && hasValue("RATE_LIMIT_REDIS_REST_TOKEN");
     const hasUpstash =
@@ -103,12 +200,17 @@ function main() {
       );
     }
     if (process.env.ENABLE_BLOCK_CHECK_FAIL_OPEN === "true") {
-      console.warn(
-        "WARNING: ENABLE_BLOCK_CHECK_FAIL_OPEN=true — block overlap checks may be skipped when the blocks index is missing. Deploy Firestore indexes and unset this flag; never leave enabled in production.",
+      missing.push(
+        "ENABLE_BLOCK_CHECK_FAIL_OPEN must be absent or false in production (obsolete flag; block queries now fail closed on index errors).",
       );
     }
     if (!hasValue("ADMIN_EDGE_SECRET")) {
       missing.push("ADMIN_EDGE_SECRET (required in production for admin Edge session cookie)");
+    }
+    if (!hasValue("NEXT_PUBLIC_GA_MEASUREMENT_ID")) {
+      console.warn(
+        "[check-production-env] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset — production still uses the default boatbrosatx.com GA4 stream from lib/ga-measurement-id.ts. Set this var to override (e.g. new stream or staging).",
+      );
     }
   }
   if (missing.length > 0) {
@@ -116,7 +218,13 @@ function main() {
     missing.forEach((m) => console.error("  -", m));
     process.exit(1);
   }
+
+  await assertSlotTakenBookingsHaveStartDateStrWhenLegacyDisabled();
+
   console.log("Production env check passed (required vars present).");
 }
 
-main();
+main().catch((err) => {
+  console.error("[check-production-env]", err);
+  process.exit(1);
+});

@@ -7,15 +7,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { processPendingRefundsBatch } from "@/lib/booking/process-pending-refunds";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get("authorization") ?? "";
-    const cronSecret = process.env.CRON_SECRET;
-    if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const authErr = await assertCronPostAuthorized(request);
+    if (authErr) return authErr;
     const db = getDb();
     const stripe = getStripe();
     const stats = await processPendingRefundsBatch(db, stripe);

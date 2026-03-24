@@ -1953,12 +1953,18 @@ export default function CalendarsPage() {
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
                           bookingDetail.waiver.status === "signed"
                             ? "bg-green-100 text-green-800"
-                            : bookingDetail.waiver.status === "pending"
-                              ? "bg-blue-100 text-blue-800"
-                              : "bg-gray-100 text-gray-600"
+                            : bookingDetail.waiver.status === "partial"
+                              ? "bg-amber-100 text-amber-900"
+                              : bookingDetail.waiver.status === "pending"
+                                ? "bg-blue-100 text-blue-800"
+                                : "bg-gray-100 text-gray-600"
                         }`}
                       >
-                        {bookingDetail.waiver.status === "signed" ? "Signed" : bookingDetail.waiver.status}
+                        {bookingDetail.waiver.status === "signed"
+                          ? "Signed"
+                          : bookingDetail.waiver.status === "partial"
+                            ? "Partial"
+                            : bookingDetail.waiver.status}
                       </span>
                       <Link
                         href={`/admin/waivers/requests/${bookingDetail.waiver.requestId}`}
@@ -1966,14 +1972,14 @@ export default function CalendarsPage() {
                       >
                         View request
                       </Link>
-                      {bookingDetail.waiver.status === "signed" && (
+                      {(bookingDetail.waiver.status === "signed" || bookingDetail.waiver.status === "partial") && (
                         <a
                           href={`/api/waiver/pdf/${bookingDetail.waiver.requestId}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm text-brand-primary hover:underline"
                         >
-                          View PDF
+                          View waiver document
                         </a>
                       )}
                     </div>

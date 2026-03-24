@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -21,6 +22,8 @@ const bullets = [
 
 export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
+  const [posterHidden, setPosterHidden] = useState(false);
+  const onVideoReady = useCallback(() => setPosterHidden(true), []);
   return (
     <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
       {/* Background: video when assets exist under public/videos/; gradient fallback always underneath. */}
@@ -29,14 +32,32 @@ export function Hero() {
           className="absolute inset-0 bg-gradient-to-br from-brand-dark via-[#0a1628] to-brand-dark"
           aria-hidden
         />
+        {/* LCP: static poster image until video can play (poster + preload="metadata" on video). */}
+        <div
+          className={`absolute inset-0 z-[1] transition-opacity duration-500 ${posterHidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
+          aria-hidden
+        >
+          <Image
+            src={HERO_VIDEO_POSTER}
+            alt=""
+            fill
+            priority
+            className="object-cover"
+            sizes="100vw"
+          />
+        </div>
         <video
           autoPlay
           muted
           loop
           playsInline
+          preload="metadata"
           poster={HERO_VIDEO_POSTER}
-          className="absolute inset-0 w-full h-full object-cover"
+          width={1920}
+          height={1080}
+          className="absolute inset-0 z-[2] w-full h-full object-cover"
           aria-hidden
+          onCanPlay={onVideoReady}
         >
           <source src={HERO_VIDEO_WEBM} type="video/webm" />
         </video>
@@ -80,6 +101,8 @@ export function Hero() {
                   src={brand.logoPinkPath}
                   alt=""
                   fill
+                  loading="lazy"
+                  fetchPriority="low"
                   className="object-contain object-center opacity-0 transition-opacity duration-200 group-hover:opacity-100"
                   sizes="(max-width: 1024px) 90vw, 1000px"
                   aria-hidden

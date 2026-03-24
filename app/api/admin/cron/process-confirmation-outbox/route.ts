@@ -7,18 +7,21 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { processNextPendingConfirmation, processStaleClaims } from "@/lib/booking/notification-outbox";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import {
+  processNextPendingConfirmation,
+  processNextPendingDiscountLimitExceeded,
+  processNextPendingFinalChargeSuccess,
+  processNextPendingWaiverInvite,
+  processStaleClaims,
+} from "@/lib/booking/notification-outbox";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 
 const MAX_PER_RUN = 10;
 
 export async function POST(request: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = request.headers.get("authorization") ?? "";
-  if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const authErr = await assertCronPostAuthorized(request);
+  if (authErr) return authErr;
 
   const db = getDb();
   const staleClaimsReset = await processStaleClaims(db);
@@ -37,10 +40,50 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (failedCount > 0) {
+  let finalChargeSentCount = 0;
+  let finalChargeFailedCount = 0;
+  let finalChargeNoneCount = 0;
+
+  for (let i = 0; i < MAX_PER_RUN; i++) {
+    const result = await processNextPendingFinalChargeSuccess(db);
+    if (result === "sent") finalChargeSentCount++;
+    else if (result === "failed" || result === "dead_letter") finalChargeFailedCount++;
+    else {
+      finalChargeNoneCount++;
+      break;
+    }
+  }
+
+  let discountLimitSentCount = 0;
+  let discountLimitFailedCount = 0;
+  let discountLimitNoneCount = 0;
+  for (let i = 0; i < MAX_PER_RUN; i++) {
+    const result = await processNextPendingDiscountLimitExceeded(db);
+    if (result === "sent") discountLimitSentCount++;
+    else if (result === "failed" || result === "dead_letter") discountLimitFailedCount++;
+    else {
+      discountLimitNoneCount++;
+      break;
+    }
+  }
+
+  let waiverInviteSentCount = 0;
+  let waiverInviteFailedCount = 0;
+  let waiverInviteNoneCount = 0;
+  for (let i = 0; i < MAX_PER_RUN; i++) {
+    const result = await processNextPendingWaiverInvite(db);
+    if (result === "sent") waiverInviteSentCount++;
+    else if (result === "failed" || result === "dead_letter") waiverInviteFailedCount++;
+    else {
+      waiverInviteNoneCount++;
+      break;
+    }
+  }
+
+  if (failedCount > 0 || finalChargeFailedCount > 0 || discountLimitFailedCount > 0 || waiverInviteFailedCount > 0) {
     await writeOperationalAlert({
       type: "confirmation_outbox_cron_failures",
-      failedCount,
+      failedCount: failedCount + finalChargeFailedCount + discountLimitFailedCount + waiverInviteFailedCount,
       source: "process-confirmation-outbox",
     });
   }
@@ -51,5 +94,14 @@ export async function POST(request: NextRequest) {
     sentCount,
     failedCount,
     noneCount,
+    finalChargeSentCount,
+    finalChargeFailedCount,
+    finalChargeNoneCount,
+    discountLimitSentCount,
+    discountLimitFailedCount,
+    discountLimitNoneCount,
+    waiverInviteSentCount,
+    waiverInviteFailedCount,
+    waiverInviteNoneCount,
   });
 }

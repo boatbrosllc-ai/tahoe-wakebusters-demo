@@ -17,15 +17,11 @@
 
 ## 2. Critical issues
 
-### 2.1 Shared/ticketed: `checkout.session.completed` does not release departure capacity
+### 2.1 Shared/ticketed: `checkout.session.completed` and departure capacity — **FIXED**
 
-**Location:** `app/api/stripe/webhook/route.ts` — `checkout.session.completed` branch.
+**Location:** `app/api/stripe/webhook/route.ts` — paid `checkout.session.completed` for an **active** hold.
 
-**Issue:** When a **shared** (ticketed) hold is paid via **Stripe Checkout** (redirect flow), the webhook creates the booking and marks the hold converted but **never** calls `checkCapacityAndRelease` on `departureInventory`. Capacity was reserved at create-hold via `reserveCapacity`; on conversion we must decrement `reservedSeats` (and validate sold count). `convertHoldToBooking` does this; the inline `checkout.session.completed` handler does not.
-
-**Impact:** For the deprecated redirect Checkout path with shared/ticketed holds, `reservedSeats` stays inflated. Availability can show “sold out” incorrectly or capacity accounting is wrong.
-
-**Recommendation:** Either (a) call the same shared-departure release logic used in `convert-hold-to-booking` inside the `checkout.session.completed` transaction (compute sold, call `checkCapacityAndRelease`), or (b) refactor so `checkout.session.completed` delegates to `convertHoldToBooking` for consistency and reuse.
+**Resolution:** The active-hold path uses `runCheckoutSessionActiveHoldConversion`, which calls **`convertHoldToBooking`** (same as Payment Element / async paths). Shared/ticketed capacity release remains inside `convertHoldToBooking` / shared-departure helpers. Ticketed experiences are not routed through `create-checkout-session-direct` (that endpoint returns `ticketedFlowRequired`).
 
 ---
 

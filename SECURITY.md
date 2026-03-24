@@ -10,7 +10,7 @@
    - **Firebase:** Generate a new service account key in [Firebase Console → Project settings → Service accounts](https://console.firebase.google.com/), then revoke the old key.
    - **Stripe:** Roll the secret key in [Stripe Dashboard → Developers → API keys](https://dashboard.stripe.com/apikeys).
    - **Brevo:** Delete and recreate the API key in Brevo → SMTP & API → API Keys.
-   - **App secrets:** Regenerate `CRON_SECRET`, `SEED_SECRET`, `BLOCK_SECRET`, `ADMIN_EDGE_SECRET`, `MANAGE_BOOKING_SECRET`, `RECEIPT_TOKEN_SECRET`, and `RELEASE_TOKEN_SECRET` and set the new values in Netlify.
+   - **App secrets:** Regenerate `CRON_SECRET`, `SEED_SECRET`, `BLOCK_SECRET`, `RELEASE_HOLD_INTERNAL_SECRET`, `ADMIN_EDGE_SECRET`, `MANAGE_BOOKING_SECRET`, `RECEIPT_TOKEN_SECRET`, `BOOKING_CALENDAR_FEED_SECRET`, and `RELEASE_TOKEN_SECRET` and set the new values in Netlify.
 
 2. **Confirm `.env.local` was never committed:**  
    Run: `git log --all -- .env.local`  
@@ -47,8 +47,9 @@ Required composite indexes for the booking APIs are defined in `firestore.indexe
    ```bash
    firebase deploy --only firestore:indexes --project boat-bros-app
    ```
-2. **Confirm in Firebase Console:** Firestore → Indexes. Every index from `firestore.indexes.json` should show status **Enabled** (not Building — building can take several minutes).
+2. **Confirm in Firebase Console:** Firestore → Indexes. Every index from `firestore.indexes.json` should show status **Enabled** (not Building — building can take several minutes). CI runs `npm run verify-firestore-blocks-index` so the repo always defines the blocks triple-field composite; after deploy, verify **blocks** indexes are READY before accepting booking traffic.
 3. **Disable legacy fallback in production:** Set `DISABLE_LEGACY_BOOKING_FALLBACK=true` and `DISABLE_LEGACY_HOLDS_FALLBACK=true` in Netlify → Site → Environment variables **from day one** (required; `npm run check-env` fails in production if unset). This enables fast indexed queries and disables O(n) legacy Firestore scans. If you have existing bookings/holds without `startDateStr`, run the startDateStr backfill (e.g. `/api/admin/backfill-booking-boat-ids` dry-run) and then set these vars before or immediately after first deployment.
+4. **`ENABLE_BLOCK_CHECK_FAIL_OPEN`:** Do **not** set this in production or staging. It is obsolete (ignored); block overlap checks always fail closed when the Firestore blocks query cannot complete. We cannot read Netlify env from the repo — operators must confirm this flag is unset in each environment.
 
 ---
 
@@ -67,4 +68,46 @@ Booking mutation endpoints (create-hold, create-payment-intent, create-checkout-
 2. Use a **privileged** `GET /api/health` (header `X-Internal-Health-Secret: <HEALTH_INTERNAL_SECRET>` or admin session) to read `rateLimitDetail`.  
 3. Restore Redis or temporarily unset `RATE_LIMIT_FAIL_CLOSED` so the default fail-open allows bookings while you fix connectivity; then re-enable fail-closed if desired.
 
-**Optional in-memory fallback:** Set `RATE_LIMIT_DEGRADED_USE_MEMORY=1` so that when Redis is down (and not fail-closed), a stricter in-memory limit is used instead of full fail-open. Operational logs include `[rate-limit] DEGRADED_ALLOW` / `DEGRADED_LIMIT` for monitoring.
+**In-memory fallback (default in production):** When Redis is down and the route is not fail-closed, production uses a bounded in-memory limiter by default (`RATE_LIMIT_DEGRADED_USE_MEMORY=0` disables). Operational logs include `[rate-limit] DEGRADED_ALLOW` / `DEGRADED_LIMIT` for monitoring.
+
+**Mutation endpoints:** Set `RATE_LIMIT_MUTATION_FAIL_CLOSED=1` so `create-hold` and `create-payment-intent` return 503 when Redis errors (in addition to optional global `RATE_LIMIT_FAIL_CLOSED`).
+
+---
+
+## Receipt vs manage secrets
+
+`RECEIPT_TOKEN_SECRET` and `MANAGE_BOOKING_SECRET` must be **different** random values. A single leaked secret must not allow forging both receipt links and manage-booking links. Production health (`GET /api/health` with privilege) reports `receiptAndManageSecretsDistinct`.
+
+**`RECEIPT_TOKEN_SECRET` is required in production** (enforced at server startup). Without it, receipt claim tokens and signed success links cannot be issued; customers would see degraded confirmation UIs only.
+
+**`CONTACT_EMAIL` and `STAFF_OPERATIONS_EMAIL` are required in production** (enforced at server startup). `CONTACT_EMAIL` receives business copies and operational notices; `STAFF_OPERATIONS_EMAIL` receives staff booking and pipeline alerts.
+
+---
+
+## `BOOKING_CALENDAR_FEED_SECRET`
+
+The bulk calendar feed URL embeds this token. Anyone with the URL can pull booking metadata for the requested range. **Rotate this secret in Netlify if the URL is leaked** (same urgency as other bearer-capable secrets).
+
+---
+
+## Manage booking URLs and `?token=`
+
+Manage links include a signed token in the query string. That can surface in referrers, history, and logs. The manage page strips `token` from the URL after load, but that does not protect against capture before the client runs. Prefer short TTL (`MANAGE_BOOKING_LINK_TTL_DAYS`, default 3). A future one-time redirect exchange would avoid putting the long-lived secret in the query string entirely.
+
+---
+
+## Admin on staging and preview
+
+Set **`ADMIN_EDGE_SECRET`** on every Netlify/Vercel deployment that serves `/admin` or `/api/admin/*`, including previews. Without it, hosted non-production deployments block admin routes (503) or return 401, matching production-like expectations.
+
+---
+
+## Cron replay protection
+
+Scheduled callers must send **`X-Cron-Timestamp`** (Unix seconds) within ±5 minutes of server time, in addition to `Authorization: Bearer CRON_SECRET`. Captured bearer tokens cannot be replayed indefinitely.
+
+---
+
+## Legacy manage tokens (3-segment)
+
+Old URLs embedded email in the signed payload. Verification logs a deprecation warning; after the sunset date, those tokens are rejected. Regenerate links using the current `signManageToken` (2-segment) format.

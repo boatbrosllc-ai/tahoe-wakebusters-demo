@@ -24,7 +24,10 @@ export interface DiscountValidationInvalid {
 
 export type DiscountValidation = DiscountValidationResult | DiscountValidationInvalid;
 
-/** Validate discount and compute discount amount for a given total. Returns valid + discountCents or invalid + error. */
+/**
+ * Validate discount and compute discount amount.
+ * Discount base = `pricing.totalCents` (subtotal before tip including tax and fees, excluding tip and discount). Must match `computePricing()` output.
+ */
 export function validateAndApplyDiscount(
   discount: Discount | null,
   totalCents: number,

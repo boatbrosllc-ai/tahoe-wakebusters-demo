@@ -2,11 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { sendBookingConfirmationEmail, sendFinalChargeFailedEmail, upsertBrevoContact } from "@/lib/booking/brevo";
+import {
+  sendAmountIntegrityMismatchCustomerEmail,
+  sendAmountIntegrityMismatchOpsEmail,
+  sendFinalChargeFailedEmail,
+  upsertBrevoContact,
+} from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { bookingEnv, validateWebhookEnv } from "@/lib/booking/env";
-import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
+import {
+  convertHoldToBooking,
+  isBookingBlockedByOperatorError,
+  type ConvertHoldInput,
+} from "@/lib/booking/convert-hold-to-booking";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { signManageToken } from "@/lib/booking/manageToken";
@@ -17,7 +27,6 @@ import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
-import type { ConvertHoldInput } from "@/lib/booking/convert-hold-to-booking";
 import {
   buildConvertHoldInputFromSucceededPaymentIntent,
   checkoutIncomingMismatchAgainstHold,
@@ -25,7 +34,6 @@ import {
   patchBookingCustomerIfPlaceholderFromCheckoutSession,
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
-import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import { sendBookingConfirmationCopyToBusiness } from "@/lib/booking/brevo";
 import {
   tryBeginFinalFailureNotificationSend,
@@ -37,10 +45,29 @@ import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
 import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
-import { notifyFinalChargeSuccess } from "@/lib/booking/notify-final-charge-success";
+import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
-import type { DocumentData, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import type { BookingStatus } from "@/lib/booking/types";
+import {
+  incrementStripeWebhookRetryCounter,
+  webhookTransientFailureShouldRetry,
+  WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR,
+  WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND,
+  WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI,
+  WH_RETRY_ASYNC_PAYMENT_NOT_PAID,
+  WH_RETRY_CHECKOUT_ACTIVE_HOLD_CONVERT_ERR,
+  WH_RETRY_CHECKOUT_ACTIVE_HOLD_HOLD_NOT_ACTIVE,
+  WH_RETRY_CHECKOUT_ACTIVE_HOLD_HOLD_NOT_FOUND,
+  WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_HOLD_ID,
+  WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_PI,
+  WH_RETRY_CHECKOUT_COMPLETED_HOLD_NOT_FOUND,
+  WH_RETRY_CHECKOUT_COMPLETED_NO_PI,
+  WH_RETRY_FINAL_BOOKING_DOC_NOT_FOUND,
+  WH_RETRY_FINAL_PI_MISSING_BOOKING_ID,
+  WH_RETRY_PI_SUCCEEDED_CONVERT_ERR,
+  WH_RETRY_PI_SUCCEEDED_HOLD_MISSING,
+  STRIPE_WEBHOOK_PI_HOLD_MISSING_RETRY_THRESHOLD,
+} from "@/lib/booking/webhook/stripe-webhook-retry";
 
 /** Booking statuses that may transition to final_paid via final-stage PaymentIntent webhook. */
 const FINAL_PAYMENT_ACTIVE_STATUSES = new Set<BookingStatus>([
@@ -49,6 +76,20 @@ const FINAL_PAYMENT_ACTIVE_STATUSES = new Set<BookingStatus>([
   "final_requires_action",
   "final_failed",
 ]);
+
+/** Non-blocking: idempotent checkout paths may skip coupon delete on hold; clean up after placeholder patch. */
+function deleteStripeCouponFromHoldIfSet(stripe: Stripe, hold: Hold, holdId: string): void {
+  const stripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
+  if (stripeCouponId) {
+    stripe.coupons.del(stripeCouponId).catch((delErr) => {
+      console.error("[stripe-webhook] failed to delete coupon after idempotent customer patch", {
+        holdId,
+        stripeCouponId,
+        error: delErr,
+      });
+    });
+  }
+}
 
 export async function POST(request: NextRequest) {
   let event: Stripe.Event | undefined;
@@ -76,7 +117,11 @@ export async function POST(request: NextRequest) {
     const { FieldValue, Timestamp } = getFirestoreExports();
     const eventId = event.id;
     const eventsRef = db.collection("stripeEvents");
-    const PROCESSING_LEASE_MS = 10 * 60 * 1000; // 10 min — encompass cold serverless worst case before lease reclaim
+    /** Bumps per-path retry counters on `stripeEvents/{eventId}`; use with `webhookTransientFailureShouldRetry`. */
+    const recordWebhookRetryAttempt = (counterField: string) =>
+      incrementStripeWebhookRetryCounter(db, eventsRef, eventId, counterField);
+    /** 2 minutes blocks the ~1-minute Stripe retry window from concurrent duplicate processing; ~5-minute Stripe retries proceed after a crashed handler. */
+    const PROCESSING_LEASE_MS = 5 * 60 * 1000;
 
     type ClaimResult = { runHandler: boolean; alreadyCompleted: boolean; reclaimedStale?: boolean };
     const claimResult = await db.runTransaction(async (tx): Promise<ClaimResult> => {
@@ -106,7 +151,15 @@ export async function POST(request: NextRequest) {
         return { runHandler: true, alreadyCompleted: false };
       }
       const leaseExpiresAt = Timestamp.fromDate(new Date(Date.now() + PROCESSING_LEASE_MS));
-      tx.set(ref, { receivedAt: now, status: "processing", eventType: event!.type, leaseExpiresAt, updatedAt: FieldValue.serverTimestamp() });
+      const expireAt = Timestamp.fromDate(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000));
+      tx.set(ref, {
+        receivedAt: now,
+        status: "processing",
+        eventType: event!.type,
+        leaseExpiresAt,
+        updatedAt: FieldValue.serverTimestamp(),
+        expireAt,
+      });
       return { runHandler: true, alreadyCompleted: false };
     });
 
@@ -144,7 +197,15 @@ export async function POST(request: NextRequest) {
         currency?: string;
       }
     ) => {
-      await eventsRef.doc(docId).set({ ...data, updatedAt: FieldValue.serverTimestamp(), leaseExpiresAt: FieldValue.delete() }, { merge: true });
+      await eventsRef.doc(docId).set(
+        {
+          ...data,
+          webhookHandlerResultWriteCount: FieldValue.increment(1),
+          updatedAt: FieldValue.serverTimestamp(),
+          leaseExpiresAt: FieldValue.delete(),
+        },
+        { merge: true }
+      );
     };
 
     const rejectStaleCheckoutIds = async (
@@ -215,23 +276,94 @@ export async function POST(request: NextRequest) {
       const currency = session.currency ?? undefined;
       const holdId = session.metadata?.holdId;
       if (!holdId) {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_HOLD_ID);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Missing holdId in session metadata",
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_active_hold_missing_hold_id_dead_letter",
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            { sessionId, paymentIntentId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_active_hold_missing_hold_id_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_active_hold_missing_hold_id_dead_letter",
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt,
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "checkout_active_hold_missing_hold_id_dead_letter",
           error: "Missing holdId in session metadata",
           sessionId,
           paymentIntentId,
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_ACTIVE_HOLD_HOLD_NOT_FOUND);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Hold not found",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_active_hold_hold_not_found_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            { holdId, sessionId, paymentIntentId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_active_hold_hold_not_found_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_active_hold_hold_not_found_dead_letter",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt,
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "checkout_active_hold_hold_not_found_dead_letter",
           error: "Hold not found",
           holdId,
           sessionId,
@@ -239,13 +371,50 @@ export async function POST(request: NextRequest) {
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       const hold = holdSnap.data() as Hold;
       if (hold.status !== "active") {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_ACTIVE_HOLD_HOLD_NOT_ACTIVE);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Hold not active for conversion",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_active_hold_hold_not_active_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            { holdId, sessionId, paymentIntentId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_active_hold_hold_not_active_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_active_hold_hold_not_active_dead_letter",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt,
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "checkout_active_hold_hold_not_active_dead_letter",
           error: "Hold not active for conversion",
           holdId,
           sessionId,
@@ -253,19 +422,54 @@ export async function POST(request: NextRequest) {
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       if (!paymentIntentId) {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_PI);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Missing payment_intent",
+            holdId,
+            sessionId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_active_hold_missing_pi_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: null,
+            },
+            { holdId, sessionId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_active_hold_missing_pi_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_active_hold_missing_pi_dead_letter",
+          holdId,
+          sessionId,
+          source: "stripe-webhook",
+          attempt,
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "checkout_active_hold_missing_pi_dead_letter",
           error: "Missing payment_intent",
           holdId,
           sessionId,
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       const piActiveGuard = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["payment_method"] });
       const holdPricingActive = {
@@ -329,6 +533,34 @@ export async function POST(request: NextRequest) {
       try {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("amountIntegrityMismatch" in result) {
+          await writeOperationalAlert({
+            type: "stripe_webhook_amount_integrity_mismatch",
+            holdId,
+            paymentIntentId,
+            sessionId,
+            source: `stripe-webhook_${outcomePrefix}_amount_integrity`,
+          });
+          try {
+            await sendAmountIntegrityMismatchOpsEmail({
+              holdId,
+              paymentIntentId,
+              source: `stripe-webhook_${outcomePrefix}_amount_integrity`,
+            });
+          } catch (e) {
+            console.error("[stripe-webhook] sendAmountIntegrityMismatchOpsEmail", e);
+          }
+          const em = customerOverride.email?.trim();
+          if (em) {
+            try {
+              await sendAmountIntegrityMismatchCustomerEmail({
+                to: em,
+                customerName: customerOverride.name?.trim() || "Guest",
+                holdId,
+              });
+            } catch (e) {
+              console.error("[stripe-webhook] sendAmountIntegrityMismatchCustomerEmail", e);
+            }
+          }
           await writeEventResult(evId, {
             status: "completed",
             processedAt: Timestamp.now(),
@@ -375,25 +607,164 @@ export async function POST(request: NextRequest) {
             currency,
           });
         }
-        const stripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
-        if (stripeCouponId) {
-          stripe.coupons.del(stripeCouponId).catch((delErr) => {
-            console.error("[stripe-webhook] failed to delete coupon after conversion", { holdId, stripeCouponId, error: delErr });
-          });
-        }
         await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+        deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
         return true;
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+        if (convertErr instanceof BlockCheckUnavailableError) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "BLOCK_CHECK_UNAVAILABLE",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        if (isBookingBlockedByOperatorError(convertErr)) {
+          try {
+            const customerEmail = hold.customerDraft?.email;
+            await upsertPendingRefundRecord(
+              db,
+              {
+                reason: "operator_date_blocked_at_conversion",
+                holdId,
+                paymentIntentId: paymentIntentId ?? null,
+              },
+              {
+                holdId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+                ...(customerEmail && { customerEmail }),
+              }
+            );
+          } catch (refundFlagErr) {
+            console.error("[stripe-webhook] pendingRefunds operator_date_blocked_at_conversion (active hold)", refundFlagErr);
+          }
+          await writeOperationalAlert({
+            type: "stripe_webhook_operator_date_blocked_at_conversion",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            source: "stripe-webhook",
+            outcomePrefix,
+          });
+          await writeEventResult(evId, {
+            status: "completed",
+            processedAt: Timestamp.now(),
+            outcome: `${outcomePrefix}_operator_date_blocked`,
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return true;
+        }
+        if (errMsg === "Hold has expired") {
+          try {
+            const customerEmail = hold.customerDraft?.email;
+            await upsertPendingRefundRecord(
+              db,
+              {
+                reason: "hold_expired_after_checkout_payment",
+                holdId,
+                sessionId,
+                paymentIntentId: paymentIntentId ?? null,
+              },
+              {
+                holdId,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+                ...(customerEmail && { customerEmail }),
+              }
+            );
+          } catch (refundFlagErr) {
+            console.error("[stripe-webhook] pendingRefunds hold_expired_after_checkout_payment (active hold conversion)", refundFlagErr);
+          }
+          await writeOperationalAlert({
+            type: "hold_expired_after_checkout_payment",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            source: "stripe-webhook",
+            outcomePrefix,
+          });
+          await writeEventResult(evId, {
+            status: "completed",
+            processedAt: Timestamp.now(),
+            outcome: "hold_expired_refund_flagged",
+            error: errMsg,
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return true;
+        }
         bookingError("stripe-webhook", `${outcomePrefix} convertHoldToBooking failed`, convertErr, {
           holdId,
           sessionId,
           paymentIntentId,
           error: errMsg,
         });
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_ACTIVE_HOLD_CONVERT_ERR);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: errMsg,
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_active_hold_convert_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            {
+              holdId,
+              sessionId,
+              paymentIntentId,
+              amountTotal,
+              currency,
+              convertError: errMsg.slice(0, 500),
+              ...(hold.customerDraft?.email && { customerEmail: hold.customerDraft.email }),
+            }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_active_hold_convert_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_active_hold_convert_dead_letter",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt,
+          error: errMsg.slice(0, 300),
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "checkout_active_hold_convert_dead_letter",
           error: errMsg,
           holdId,
           sessionId,
@@ -401,7 +772,7 @@ export async function POST(request: NextRequest) {
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
     };
 
@@ -426,14 +797,51 @@ export async function POST(request: NextRequest) {
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       const holdRef = db.collection("holds").doc(holdId);
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Hold not found",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "async_checkout_hold_not_found_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            { holdId, sessionId, paymentIntentId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds async_checkout_hold_not_found_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "async_checkout_hold_not_found_dead_letter",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt,
+        });
         await writeEventResult(evId, {
-          status: "failed_retryable",
+          status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "async_checkout_hold_not_found_dead_letter",
           error: "Hold not found",
           holdId,
           sessionId,
@@ -441,7 +849,7 @@ export async function POST(request: NextRequest) {
           amountTotal,
           currency,
         });
-        return false;
+        return true;
       }
       const hold = holdSnap.data() as Hold;
       if (hold.status !== "active") {
@@ -462,16 +870,51 @@ export async function POST(request: NextRequest) {
             return true;
           }
           if (!paymentIntentId) {
+            const attempt = await recordWebhookRetryAttempt(WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI);
+            if (webhookTransientFailureShouldRetry(attempt)) {
+              await writeEventResult(evId, {
+                status: "failed_retryable",
+                processedAt: Timestamp.now(),
+                error: "Missing payment_intent for converted hold",
+                holdId,
+                sessionId,
+                amountTotal,
+                currency,
+              });
+              return false;
+            }
+            try {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "async_converted_hold_missing_pi_dead_letter",
+                  holdId,
+                  sessionId,
+                  paymentIntentId: null,
+                },
+                { holdId, sessionId, amountTotal, currency }
+              );
+            } catch (e) {
+              console.error("[stripe-webhook] pendingRefunds async_converted_hold_missing_pi_dead_letter", e);
+            }
+            await writeOperationalAlert({
+              type: "async_converted_hold_missing_pi_dead_letter",
+              holdId,
+              sessionId,
+              source: "stripe-webhook",
+              attempt,
+            });
             await writeEventResult(evId, {
-              status: "failed_retryable",
+              status: "failed_permanent",
               processedAt: Timestamp.now(),
+              outcome: "async_converted_hold_missing_pi_dead_letter",
               error: "Missing payment_intent for converted hold",
               holdId,
               sessionId,
               amountTotal,
               currency,
             });
-            return false;
+            return true;
           }
           const piConvGuard = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["payment_method"] });
           const holdPricingConv = {
@@ -535,6 +978,34 @@ export async function POST(request: NextRequest) {
           try {
             const result = await convertHoldToBooking(db, holdId, convertInput);
             if ("amountIntegrityMismatch" in result) {
+              await writeOperationalAlert({
+                type: "stripe_webhook_amount_integrity_mismatch",
+                holdId,
+                paymentIntentId,
+                sessionId,
+                source: `stripe-webhook_async_${outcomePrefix}_amount_integrity`,
+              });
+              try {
+                await sendAmountIntegrityMismatchOpsEmail({
+                  holdId,
+                  paymentIntentId,
+                  source: `stripe-webhook_async_${outcomePrefix}_amount_integrity`,
+                });
+              } catch (e) {
+                console.error("[stripe-webhook] sendAmountIntegrityMismatchOpsEmail", e);
+              }
+              const em2 = customerOverride.email?.trim();
+              if (em2) {
+                try {
+                  await sendAmountIntegrityMismatchCustomerEmail({
+                    to: em2,
+                    customerName: customerOverride.name?.trim() || "Guest",
+                    holdId,
+                  });
+                } catch (e) {
+                  console.error("[stripe-webhook] sendAmountIntegrityMismatchCustomerEmail", e);
+                }
+              }
               await writeEventResult(evId, {
                 status: "completed",
                 processedAt: Timestamp.now(),
@@ -571,25 +1042,164 @@ export async function POST(request: NextRequest) {
                 currency,
               });
             }
-            const stripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
-            if (stripeCouponId) {
-              stripe.coupons.del(stripeCouponId).catch((delErr) => {
-                console.error("[stripe-webhook] failed to delete coupon after conversion", { holdId, stripeCouponId, error: delErr });
-              });
-            }
             await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+            deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
             return true;
           } catch (convertErr) {
             const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+            if (convertErr instanceof BlockCheckUnavailableError) {
+              await writeEventResult(evId, {
+                status: "failed_retryable",
+                processedAt: Timestamp.now(),
+                error: "BLOCK_CHECK_UNAVAILABLE",
+                holdId,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+              });
+              return false;
+            }
+            if (isBookingBlockedByOperatorError(convertErr)) {
+              try {
+                const customerEmail = hold.customerDraft?.email;
+                await upsertPendingRefundRecord(
+                  db,
+                  {
+                    reason: "operator_date_blocked_at_conversion",
+                    holdId,
+                    paymentIntentId: paymentIntentId ?? null,
+                  },
+                  {
+                    holdId,
+                    paymentIntentId,
+                    amountTotal,
+                    currency,
+                    ...(customerEmail && { customerEmail }),
+                  }
+                );
+              } catch (refundFlagErr) {
+                console.error("[stripe-webhook] pendingRefunds operator_date_blocked_at_conversion (async hold)", refundFlagErr);
+              }
+              await writeOperationalAlert({
+                type: "stripe_webhook_operator_date_blocked_at_conversion",
+                holdId,
+                sessionId,
+                paymentIntentId,
+                source: "stripe-webhook",
+                outcomePrefix,
+              });
+              await writeEventResult(evId, {
+                status: "completed",
+                processedAt: Timestamp.now(),
+                outcome: `${outcomePrefix}_operator_date_blocked`,
+                holdId,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+              });
+              return true;
+            }
+            if (errMsg === "Hold has expired") {
+              try {
+                const customerEmail = hold.customerDraft?.email;
+                await upsertPendingRefundRecord(
+                  db,
+                  {
+                    reason: "hold_expired_after_checkout_payment",
+                    holdId,
+                    sessionId,
+                    paymentIntentId: paymentIntentId ?? null,
+                  },
+                  {
+                    holdId,
+                    sessionId,
+                    paymentIntentId,
+                    amountTotal,
+                    currency,
+                    ...(customerEmail && { customerEmail }),
+                  }
+                );
+              } catch (refundFlagErr) {
+                console.error("[stripe-webhook] pendingRefunds hold_expired_after_checkout_payment (async converted hold)", refundFlagErr);
+              }
+              await writeOperationalAlert({
+                type: "hold_expired_after_checkout_payment",
+                holdId,
+                sessionId,
+                paymentIntentId,
+                source: "stripe-webhook",
+                outcomePrefix,
+              });
+              await writeEventResult(evId, {
+                status: "completed",
+                processedAt: Timestamp.now(),
+                outcome: "hold_expired_refund_flagged",
+                error: errMsg,
+                holdId,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+              });
+              return true;
+            }
             bookingError("stripe-webhook", `${outcomePrefix} convertHoldToBooking failed (converted hold)`, convertErr, {
               holdId,
               sessionId,
               paymentIntentId,
               error: errMsg,
             });
+            const attempt = await recordWebhookRetryAttempt(WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR);
+            if (webhookTransientFailureShouldRetry(attempt)) {
+              await writeEventResult(evId, {
+                status: "failed_retryable",
+                processedAt: Timestamp.now(),
+                error: errMsg,
+                holdId,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+              });
+              return false;
+            }
+            try {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "async_checkout_convert_dead_letter",
+                  holdId,
+                  sessionId,
+                  paymentIntentId: paymentIntentId ?? null,
+                },
+                {
+                  holdId,
+                  sessionId,
+                  paymentIntentId,
+                  amountTotal,
+                  currency,
+                  convertError: errMsg.slice(0, 500),
+                  ...(hold.customerDraft?.email && { customerEmail: hold.customerDraft.email }),
+                }
+              );
+            } catch (e) {
+              console.error("[stripe-webhook] pendingRefunds async_checkout_convert_dead_letter", e);
+            }
+            await writeOperationalAlert({
+              type: "async_checkout_convert_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId,
+              source: "stripe-webhook",
+              attempt,
+              error: errMsg.slice(0, 300),
+            });
             await writeEventResult(evId, {
-              status: "failed_retryable",
+              status: "failed_permanent",
               processedAt: Timestamp.now(),
+              outcome: "async_checkout_convert_dead_letter",
               error: errMsg,
               holdId,
               sessionId,
@@ -597,7 +1207,7 @@ export async function POST(request: NextRequest) {
               amountTotal,
               currency,
             });
-            return false;
+            return true;
           }
         }
         if (hold.status === "expired") {
@@ -686,8 +1296,60 @@ export async function POST(request: NextRequest) {
       const holdSnap = await holdRef.get();
       if (!holdSnap.exists) {
         console.error("[stripe-webhook] checkout.session.completed hold not found", { holdId, sessionId });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Hold not found", holdId, sessionId, paymentIntentId, amountTotal, currency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        const notFoundAttempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_COMPLETED_HOLD_NOT_FOUND);
+        if (webhookTransientFailureShouldRetry(notFoundAttempt)) {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Hold not found",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_completed_hold_permanently_missing",
+              holdId,
+              sessionId,
+              paymentIntentId: paymentIntentId ?? null,
+            },
+            {
+              holdId,
+              sessionId,
+              paymentIntentId,
+              amountTotal,
+              currency,
+            }
+          );
+        } catch (refundErr) {
+          console.error("[stripe-webhook] pendingRefunds checkout_completed_hold_permanently_missing", refundErr);
+        }
+        await writeOperationalAlert({
+          type: "checkout_completed_hold_permanently_missing",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          source: "stripe-webhook",
+          attempt: notFoundAttempt,
+        });
+        await writeEventResult(eventId, {
+          status: "failed_permanent",
+          processedAt: Timestamp.now(),
+          outcome: "checkout_completed_hold_permanently_missing",
+          error: "Hold not found after retry threshold",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          amountTotal,
+          currency,
+        });
+        return NextResponse.json({ received: true });
       }
       const hold = holdSnap.data() as Hold;
       if (hold.status !== "active") {
@@ -708,6 +1370,44 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ received: true });
           }
           const recordedPiId = (hold as { fullPaymentIntentId?: string }).fullPaymentIntentId;
+          if (!recordedPiId && paymentIntentId) {
+            const bid = hold.bookingId;
+            if (bid) {
+              const bookingSnap = await db.collection("bookings").doc(bid).get();
+              if (bookingSnap.exists) {
+                const bookingRow = bookingSnap.data() as Booking;
+                const mainPi = bookingRow.stripe?.paymentIntentId;
+                const depPi = bookingRow.stripe?.depositPaymentIntentId;
+                if (mainPi !== paymentIntentId && depPi !== paymentIntentId) {
+                  await rejectStaleCheckoutIds(
+                    eventId,
+                    holdId,
+                    hold,
+                    session,
+                    sessionId,
+                    paymentIntentId,
+                    amountTotal,
+                    currency,
+                    "checkout_session_completed_converted_hold_pi_mismatch_no_full_pi_on_hold"
+                  );
+                  return NextResponse.json({ received: true });
+                }
+              } else {
+                await rejectStaleCheckoutIds(
+                  eventId,
+                  holdId,
+                  hold,
+                  session,
+                  sessionId,
+                  paymentIntentId,
+                  amountTotal,
+                  currency,
+                  "checkout_session_completed_converted_hold_booking_missing"
+                );
+                return NextResponse.json({ received: true });
+              }
+            }
+          }
           if (recordedPiId && paymentIntentId && paymentIntentId !== recordedPiId) {
             try {
               await upsertPendingRefundRecord(
@@ -748,6 +1448,7 @@ export async function POST(request: NextRequest) {
               currency,
             });
             await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+            deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
             return NextResponse.json({ received: true });
           }
           bookingLog("stripe-webhook", "checkout.session.completed hold already converted (idempotent)", { holdId });
@@ -762,6 +1463,7 @@ export async function POST(request: NextRequest) {
             currency,
           });
           await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
           return NextResponse.json({ received: true });
         }
         if (hold.status === "expired") {
@@ -856,8 +1558,51 @@ export async function POST(request: NextRequest) {
       }
       if (!paymentIntentId) {
         console.error("[stripe-webhook] checkout.session.completed missing payment_intent", { sessionId, holdId });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing payment_intent", holdId, sessionId, amountTotal, currency });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_CHECKOUT_COMPLETED_NO_PI);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Missing payment_intent",
+            holdId,
+            sessionId,
+            amountTotal,
+            currency,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "checkout_completed_missing_pi_dead_letter",
+              holdId,
+              sessionId,
+              paymentIntentId: null,
+            },
+            { holdId, sessionId, amountTotal, currency }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds checkout_completed_missing_pi_dead_letter", e);
+        }
+        await writeOperationalAlert({
+          type: "checkout_completed_missing_pi_dead_letter",
+          holdId,
+          sessionId,
+          source: "stripe-webhook",
+          attempt,
+        });
+        await writeEventResult(eventId, {
+          status: "failed_permanent",
+          processedAt: Timestamp.now(),
+          outcome: "checkout_completed_missing_pi_dead_letter",
+          error: "Missing payment_intent",
+          holdId,
+          sessionId,
+          amountTotal,
+          currency,
+        });
+        return NextResponse.json({ received: true });
       }
       const okCompleted = await runCheckoutSessionActiveHoldConversion(session, eventId, "checkout_session_completed");
       if (!okCompleted) return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
@@ -868,8 +1613,34 @@ export async function POST(request: NextRequest) {
       const session = event.data.object as Stripe.Checkout.Session;
       if (session.payment_status !== "paid") {
         bookingLog("stripe-webhook", "checkout.session.async_payment_succeeded payment_status not paid", { sessionId: session.id, payment_status: session.payment_status });
-        await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "payment_status not paid", sessionId: session.id });
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_ASYNC_PAYMENT_NOT_PAID);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "payment_status not paid",
+            sessionId: session.id,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        const piAsync = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+        await writeOperationalAlert({
+          type: "async_payment_succeeded_status_not_paid_dead_letter",
+          sessionId: session.id,
+          paymentIntentId: piAsync,
+          source: "stripe-webhook",
+          attempt,
+          payment_status: session.payment_status,
+        });
+        await writeEventResult(eventId, {
+          status: "failed_permanent",
+          processedAt: Timestamp.now(),
+          outcome: "async_payment_succeeded_status_not_paid_dead_letter",
+          error: "payment_status not paid after retry threshold",
+          sessionId: session.id,
+          paymentIntentId: typeof piAsync === "string" ? piAsync : undefined,
+        });
+        return NextResponse.json({ received: true });
       }
       const ok = await runCheckoutSessionConversion(session, eventId, "async_payment_succeeded");
       if (!ok) return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
@@ -887,17 +1658,7 @@ export async function POST(request: NextRequest) {
       if (holdId) {
         try {
           const holdRef = db.collection("holds").doc(holdId);
-          const holdSnapForFail = await holdRef.get();
-          if (holdSnapForFail.exists) {
-            const h = holdSnapForFail.data() as Hold;
-            if (h.status === "active") {
-              await runExpiredHoldReleaseTransaction(
-                db,
-                FieldValue,
-                holdSnapForFail as QueryDocumentSnapshot<DocumentData>
-              );
-            }
-          }
+          await runExpiredHoldReleaseTransaction(db, FieldValue, holdRef);
         } catch (releaseErr) {
           console.error("[stripe-webhook] async_payment_failed hold release failed", releaseErr);
         }
@@ -933,15 +1694,97 @@ export async function POST(request: NextRequest) {
         const bookingId = piRaw.metadata?.bookingId;
         if (!bookingId) {
           console.error("[stripe-webhook] payment_intent.succeeded final missing bookingId");
-          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Missing bookingId for final", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+          const attempt = await recordWebhookRetryAttempt(WH_RETRY_FINAL_PI_MISSING_BOOKING_ID);
+          if (webhookTransientFailureShouldRetry(attempt)) {
+            await writeEventResult(eventId, {
+              status: "failed_retryable",
+              processedAt: Timestamp.now(),
+              error: "Missing bookingId for final",
+              paymentIntentId: piId,
+              amountTotal: piAmountTotal,
+              currency: piCurrency,
+            });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+          }
+          try {
+            await upsertPendingRefundRecord(
+              db,
+              { reason: "final_pi_succeeded_missing_booking_id_dead_letter", paymentIntentId: piId },
+              {
+                paymentIntentId: piId,
+                amountTotal: piAmountTotal,
+                currency: piCurrency,
+              }
+            );
+          } catch (e) {
+            console.error("[stripe-webhook] pendingRefunds final_pi_succeeded_missing_booking_id_dead_letter", e);
+          }
+          await writeOperationalAlert({
+            type: "final_pi_succeeded_missing_booking_id_dead_letter",
+            paymentIntentId: piId,
+            source: "stripe-webhook",
+            attempt,
+          });
+          await writeEventResult(eventId, {
+            status: "failed_permanent",
+            processedAt: Timestamp.now(),
+            outcome: "final_pi_succeeded_missing_booking_id_dead_letter",
+            error: "Missing bookingId for final",
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ received: true });
         }
         const bookingRef = db.collection("bookings").doc(bookingId);
         const bookingSnap = await bookingRef.get();
         if (!bookingSnap.exists) {
           console.error("[stripe-webhook] payment_intent.succeeded final booking not found", { bookingId });
-          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: "Booking not found", bookingId, paymentIntentId: piId });
-          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+          const attempt = await recordWebhookRetryAttempt(WH_RETRY_FINAL_BOOKING_DOC_NOT_FOUND);
+          if (webhookTransientFailureShouldRetry(attempt)) {
+            await writeEventResult(eventId, {
+              status: "failed_retryable",
+              processedAt: Timestamp.now(),
+              error: "Booking not found",
+              bookingId,
+              paymentIntentId: piId,
+              amountTotal: piAmountTotal,
+              currency: piCurrency,
+            });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+          }
+          try {
+            await upsertPendingRefundRecord(
+              db,
+              { reason: "final_pi_succeeded_booking_not_found_dead_letter", bookingId, paymentIntentId: piId },
+              {
+                bookingId,
+                paymentIntentId: piId,
+                amountTotal: piAmountTotal,
+                currency: piCurrency,
+              }
+            );
+          } catch (e) {
+            console.error("[stripe-webhook] pendingRefunds final_pi_succeeded_booking_not_found_dead_letter", e);
+          }
+          await writeOperationalAlert({
+            type: "final_pi_succeeded_booking_not_found_dead_letter",
+            bookingId,
+            paymentIntentId: piId,
+            source: "stripe-webhook",
+            attempt,
+          });
+          await writeEventResult(eventId, {
+            status: "failed_permanent",
+            processedAt: Timestamp.now(),
+            outcome: "final_pi_succeeded_booking_not_found_dead_letter",
+            error: "Booking not found",
+            bookingId,
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ received: true });
         }
 
         type FinalPiTxResult =
@@ -993,7 +1836,7 @@ export async function POST(request: NextRequest) {
                 : 0;
           const alreadySummarized = stripeB?.finalRevenueSummaryApplied === true;
           if (isDepositFlow && finalRev > 0 && !alreadySummarized) {
-            applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev);
+            applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, bookingData, bookingId);
           }
 
           tx.update(bookingRef, {
@@ -1004,6 +1847,7 @@ export async function POST(request: NextRequest) {
             ...(isDepositFlow && finalRev > 0 && !alreadySummarized ? { "stripe.finalRevenueSummaryApplied": true } : {}),
             updatedAt: FieldValue.serverTimestamp(),
           });
+          await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
           return { action: "write_final_paid" };
         });
 
@@ -1087,12 +1931,6 @@ export async function POST(request: NextRequest) {
           case "write_final_paid":
             console.log("[stripe-webhook] payment_intent.succeeded final_paid", { bookingId });
             await writeEventResult(eventId, { status: "completed", processedAt: Timestamp.now(), outcome: "final_paid", bookingId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
-            try {
-              const fresh = await db.collection("bookings").doc(bookingId).get();
-              if (fresh.exists) await notifyFinalChargeSuccess(db, bookingId, fresh.data() as Booking);
-            } catch (notifyErr) {
-              console.error("[stripe-webhook] notifyFinalChargeSuccess failed", bookingId, notifyErr);
-            }
             return NextResponse.json({ received: true });
           case "event_only": {
             const ev = txResult;
@@ -1116,8 +1954,59 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       }
       if (!holdId) {
-        bookingError("stripe-webhook", "payment_intent.succeeded missing holdId in metadata (permanent; no retry)", null, { paymentIntentId: piId });
-        await writeEventResult(eventId, { status: "failed_permanent", processedAt: Timestamp.now(), error: "Missing holdId in metadata", paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+        const piMissingAttempt = await recordWebhookRetryAttempt(WH_RETRY_PI_SUCCEEDED_HOLD_MISSING);
+        try {
+          await upsertPendingRefundRecord(
+            db,
+            {
+              reason: "pi_succeeded_hold_id_missing_in_metadata",
+              paymentIntentId: piId,
+            },
+            {
+              paymentIntentId: piId,
+              amountTotal: piAmountTotal,
+              currency: piCurrency,
+              paymentStage: paymentStage ?? null,
+            }
+          );
+        } catch (e) {
+          console.error("[stripe-webhook] pendingRefunds pi_succeeded_hold_id_missing_in_metadata", e);
+        }
+        if (
+          webhookTransientFailureShouldRetry(
+            piMissingAttempt,
+            STRIPE_WEBHOOK_PI_HOLD_MISSING_RETRY_THRESHOLD
+          )
+        ) {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Missing holdId in metadata (awaiting metadata)",
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        await writeOperationalAlert({
+          type: "pi_succeeded_hold_id_missing_in_metadata",
+          paymentIntentId: piId,
+          paymentStage,
+          source: "stripe-webhook",
+          attempt: piMissingAttempt,
+        });
+        bookingError("stripe-webhook", "payment_intent.succeeded missing holdId in metadata after retry threshold", null, {
+          paymentIntentId: piId,
+        });
+        await writeEventResult(eventId, {
+          status: "failed_permanent",
+          processedAt: Timestamp.now(),
+          outcome: "pi_succeeded_hold_id_missing_dead_letter",
+          error: "Missing holdId in metadata",
+          paymentIntentId: piId,
+          amountTotal: piAmountTotal,
+          currency: piCurrency,
+        });
         return NextResponse.json({ received: true });
       }
       bookingLog("stripe-webhook", "payment_intent.succeeded resolving PI and calling convertHoldToBooking", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
@@ -1259,6 +2148,34 @@ export async function POST(request: NextRequest) {
         const result = await convertHoldToBooking(db, holdId, convertInput);
         if ("amountIntegrityMismatch" in result) {
           bookingWarn("stripe-webhook", "convertHoldToBooking amount integrity mismatch", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
+          await writeOperationalAlert({
+            type: "stripe_webhook_amount_integrity_mismatch",
+            holdId,
+            paymentIntentId: piId,
+            source: "stripe-webhook_payment_intent_succeeded",
+          });
+          try {
+            await sendAmountIntegrityMismatchOpsEmail({
+              holdId,
+              paymentIntentId: piId,
+              source: "stripe-webhook_payment_intent_succeeded",
+            });
+          } catch (e) {
+            console.error("[stripe-webhook] sendAmountIntegrityMismatchOpsEmail", e);
+          }
+          const draft = holdRow?.customerDraft;
+          const emPi = draft?.email?.trim();
+          if (emPi) {
+            try {
+              await sendAmountIntegrityMismatchCustomerEmail({
+                to: emPi,
+                customerName: draft?.name?.trim() || "Guest",
+                holdId,
+              });
+            } catch (e) {
+              console.error("[stripe-webhook] sendAmountIntegrityMismatchCustomerEmail", e);
+            }
+          }
           await writeEventResult(eventId, {
             status: "completed",
             processedAt: Timestamp.now(),
@@ -1280,6 +2197,62 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+        if (convertErr instanceof BlockCheckUnavailableError) {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "BLOCK_CHECK_UNAVAILABLE",
+            holdId,
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
+        if (isBookingBlockedByOperatorError(convertErr)) {
+          try {
+            const holdSnapForRefund = await db.collection("holds").doc(holdId).get();
+            const holdDataForRefund = holdSnapForRefund.exists
+              ? (holdSnapForRefund.data() as { customerDraft?: { email?: string } })
+              : null;
+            const customerEmail = holdDataForRefund?.customerDraft?.email;
+            await upsertPendingRefundRecord(
+              db,
+              {
+                reason: "operator_date_blocked_at_conversion",
+                holdId,
+                paymentIntentId: piId,
+              },
+              {
+                holdId,
+                paymentIntentId: piId,
+                amountTotal: piAmountTotal,
+                currency: piCurrency,
+                ...(customerEmail && { customerEmail }),
+              }
+            );
+          } catch (refundFlagErr) {
+            console.error("[stripe-webhook] pendingRefunds operator_date_blocked_at_conversion (pi succeeded)", refundFlagErr);
+          }
+          await writeOperationalAlert({
+            type: "stripe_webhook_operator_date_blocked_at_conversion",
+            holdId,
+            paymentIntentId: piId,
+            amount: piAmountTotal,
+            currency: piCurrency,
+            source: "stripe-webhook",
+          });
+          await writeEventResult(eventId, {
+            status: "completed",
+            processedAt: Timestamp.now(),
+            outcome: "operator_date_blocked_at_conversion",
+            holdId,
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ received: true });
+        }
         if (errMsg === "Hold has expired") {
           try {
             const holdSnapForRefund = await db.collection("holds").doc(holdId).get();
@@ -1314,9 +2287,54 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ received: true });
         } else {
           bookingError("stripe-webhook", "payment_intent.succeeded convertHoldToBooking failed", convertErr, { holdId, paymentIntentId: piId, error: errMsg });
-          await writeEventResult(eventId, { status: "failed_retryable", processedAt: Timestamp.now(), error: errMsg, holdId, paymentIntentId: piId, amountTotal: piAmountTotal, currency: piCurrency });
+          const attempt = await recordWebhookRetryAttempt(WH_RETRY_PI_SUCCEEDED_CONVERT_ERR);
+          if (webhookTransientFailureShouldRetry(attempt)) {
+            await writeEventResult(eventId, {
+              status: "failed_retryable",
+              processedAt: Timestamp.now(),
+              error: errMsg,
+              holdId,
+              paymentIntentId: piId,
+              amountTotal: piAmountTotal,
+              currency: piCurrency,
+            });
+            return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+          }
+          try {
+            await upsertPendingRefundRecord(
+              db,
+              { reason: "pi_succeeded_convert_dead_letter", holdId, paymentIntentId: piId },
+              {
+                holdId,
+                paymentIntentId: piId,
+                amountTotal: piAmountTotal,
+                currency: piCurrency,
+                convertError: errMsg.slice(0, 500),
+              }
+            );
+          } catch (e) {
+            console.error("[stripe-webhook] pendingRefunds pi_succeeded_convert_dead_letter", e);
+          }
+          await writeOperationalAlert({
+            type: "pi_succeeded_convert_dead_letter",
+            holdId,
+            paymentIntentId: piId,
+            source: "stripe-webhook",
+            attempt,
+            error: errMsg.slice(0, 300),
+          });
+          await writeEventResult(eventId, {
+            status: "failed_permanent",
+            processedAt: Timestamp.now(),
+            outcome: "pi_succeeded_convert_dead_letter",
+            error: errMsg,
+            holdId,
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ received: true });
         }
-        return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
       }
     }
 
@@ -1328,6 +2346,11 @@ export async function POST(request: NextRequest) {
       console.log("[stripe-webhook] payment_intent.payment_failed", { eventId, paymentStage, code: lastError?.code });
       let paymentFailedOutcome = "payment_failed_handled";
       const failedEventExtras: { paymentIntentId: string; bookingId?: string } = { paymentIntentId: piId };
+      let finalFailureEmailAfterEvent: {
+        bookingId: string;
+        bookingData: Booking;
+        requiresAction: boolean;
+      } | null = null;
 
       if (paymentStage === "final") {
         const bookingId = pi.metadata?.bookingId;
@@ -1400,54 +2423,65 @@ export async function POST(request: NextRequest) {
                 lastError?.code === "card_authentication_required" ||
                 (typeof lastError?.message === "string" && lastError.message.toLowerCase().includes("authenticate"));
               const newStatus = requiresAction ? "final_requires_action" : "final_failed";
-              await bookingRef.update({
-                status: newStatus,
-                "stripe.finalError": { code: lastError?.code ?? undefined, message: lastError?.message ?? undefined },
-                "stripe.finalChargeAttemptedAt": Timestamp.now(),
-                updatedAt: FieldValue.serverTimestamp(),
-              });
-              console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
-              paymentFailedOutcome = "final_payment_failed_applied";
-
-              const shouldSend = await tryBeginFinalFailureNotificationSend(db, bookingId, piId);
-              if (shouldSend) {
-                try {
-                  let manageLink: string | undefined;
-                  const custEmail = bookingData.customer?.email?.trim();
-                  if (bookingEnv.manageBookingSecret && custEmail) {
-                    const token = signManageToken({
-                      bookingId,
-                      customerEmail: custEmail,
-                      tripDateStr: bookingData.startDateStr,
-                    });
-                    if (token) manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
-                  }
-                  await sendFinalChargeFailedEmail(bookingData.customer.email, bookingData.customer.name, manageLink, requiresAction);
-                  const subject = requiresAction
-                    ? "Action needed to complete your booking – Boat Bros ATX"
-                    : "Payment failed for your upcoming trip – Boat Bros ATX";
-                  await logNotificationSent({
-                    channel: "email",
-                    to: bookingData.customer.email,
-                    toName: bookingData.customer.name,
-                    templateId: "final_charge_failed",
-                    subject,
-                    bookingId,
-                    eventSubtype: "final_charge_failed",
-                  }).catch((err) => console.error("[stripe-webhook] logNotificationSent failed", err));
-                  await finalizeFinalFailureNotification(db, bookingId, piId);
-                } catch (emailErr) {
-                  console.error("[stripe-webhook] final charge failed email error", emailErr);
-                  await clearFinalFailureNotificationLease(db, bookingId).catch((clearErr) =>
-                    console.error("[stripe-webhook] clearFinalFailureNotificationLease failed", clearErr)
-                  );
+              type FinalFailTxResult =
+                | { kind: "updated"; bookingData: Booking }
+                | { kind: "noop"; outcome: string };
+              const txFail: FinalFailTxResult = await db.runTransaction(async (tx): Promise<FinalFailTxResult> => {
+                const snap = await tx.get(bookingRef);
+                if (!snap.exists) {
+                  return { kind: "noop", outcome: "final_payment_failed_booking_not_found" };
                 }
+                const b = snap.data() as Booking;
+                const stIn = b.status;
+                const authIn = b.stripe?.finalPaymentIntentId?.trim();
+                if (stIn === "canceled" || stIn === "refunded") {
+                  return { kind: "noop", outcome: "final_payment_failed_terminal_booking_no_op" };
+                }
+                if (stIn === "final_paid") {
+                  return { kind: "noop", outcome: "final_payment_failed_ignored_already_final_paid" };
+                }
+                if (authIn && authIn !== piId) {
+                  return { kind: "noop", outcome: "final_payment_failed_non_authoritative_no_mutation" };
+                }
+                if (!FINAL_PAYMENT_ACTIVE_STATUSES.has(stIn)) {
+                  return { kind: "noop", outcome: "final_payment_failed_unexpected_status_no_mutation" };
+                }
+                if (!authIn) {
+                  return { kind: "noop", outcome: "final_payment_failed_no_authoritative_pi_no_mutation" };
+                }
+                if ((stIn === "final_failed" || stIn === "final_requires_action") && authIn === piId) {
+                  return { kind: "noop", outcome: "final_payment_failed_idempotent" };
+                }
+                tx.update(bookingRef, {
+                  status: newStatus,
+                  "stripe.finalError": { code: lastError?.code ?? undefined, message: lastError?.message ?? undefined },
+                  "stripe.finalChargeAttemptedAt": Timestamp.now(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                });
+                return { kind: "updated", bookingData: b };
+              });
+              if (txFail.kind === "noop") {
+                paymentFailedOutcome = txFail.outcome;
+              } else {
+                console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
+                paymentFailedOutcome = "final_payment_failed_applied";
+                finalFailureEmailAfterEvent = {
+                  bookingId,
+                  bookingData: txFail.bookingData,
+                  requiresAction,
+                };
               }
             } else if (!authoritativePiId) {
               paymentFailedOutcome = "final_payment_failed_no_authoritative_pi_no_mutation";
               bookingLog("stripe-webhook", "payment_intent.payment_failed final ignored (no authoritative PI on booking)", {
                 bookingId,
                 paymentIntentIdPrefix: piId.slice(0, 8),
+              });
+              await writeOperationalAlert({
+                type: "final_payment_failed_no_authoritative_pi_recorded",
+                bookingId,
+                paymentIntentId: piId,
+                source: "stripe-webhook",
               });
             }
           }
@@ -1460,6 +2494,42 @@ export async function POST(request: NextRequest) {
         outcome: paymentFailedOutcome,
         ...failedEventExtras,
       });
+      if (finalFailureEmailAfterEvent) {
+        const { bookingId: bid, bookingData: bd, requiresAction: reqAct } = finalFailureEmailAfterEvent;
+        const shouldSend = await tryBeginFinalFailureNotificationSend(db, bid, piId);
+        if (shouldSend) {
+          try {
+            let manageLink: string | undefined;
+            const custEmail = bd.customer?.email?.trim();
+            if (bookingEnv.manageBookingSecret && custEmail) {
+              const token = signManageToken({
+                bookingId: bid,
+                tripDateStr: bd.startDateStr,
+              });
+              if (token) manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
+            }
+            await sendFinalChargeFailedEmail(bd.customer.email, bd.customer.name, manageLink, reqAct);
+            const subject = reqAct
+              ? "Action needed to complete your booking – Boat Bros ATX"
+              : "Payment failed for your upcoming trip – Boat Bros ATX";
+            await logNotificationSent({
+              channel: "email",
+              to: bd.customer.email,
+              toName: bd.customer.name,
+              templateId: "final_charge_failed",
+              subject,
+              bookingId: bid,
+              eventSubtype: "final_charge_failed",
+            }).catch((err) => console.error("[stripe-webhook] logNotificationSent failed", err));
+            await finalizeFinalFailureNotification(db, bid, piId);
+          } catch (emailErr) {
+            console.error("[stripe-webhook] final charge failed email error", emailErr);
+            await clearFinalFailureNotificationLease(db, bid).catch((clearErr) =>
+              console.error("[stripe-webhook] clearFinalFailureNotificationLease failed", clearErr)
+            );
+          }
+        }
+      }
       return NextResponse.json({ received: true });
     }
 
@@ -1495,7 +2565,12 @@ export async function POST(request: NextRequest) {
           if (typeof obj.amount === "number") payload.amountTotal = obj.amount;
           if (typeof obj.currency === "string") payload.currency = obj.currency;
         }
-        await db.collection("stripeEvents").doc(stripeEventId).set(payload, { merge: true });
+        await db.runTransaction(async (tx) => {
+          const ref = db.collection("stripeEvents").doc(stripeEventId);
+          const snap = await tx.get(ref);
+          if (snap.exists && (snap.data() as { status?: string })?.status === "completed") return;
+          tx.set(ref, payload, { merge: true });
+        });
       } catch (_) {
         // ignore
       }

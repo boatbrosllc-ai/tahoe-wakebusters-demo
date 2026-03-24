@@ -90,9 +90,10 @@ export interface WaiverSigned {
   signedAt: FirestoreTimestamp;
   ip: string | null;
   userAgent: string | null;
-  /** Present when PDF was generated (e.g. serverless may skip). */
-  pdfUrl?: string | null;
+  /** Firebase Storage path for PDF (admin download only; never expose public URLs). */
   pdfStoragePath?: string | null;
+  /** Stored signed HTML when PDF is unavailable (e.g. serverless); admin route may serve as .html download. */
+  htmlStoragePath?: string | null;
   contentHash: string;
   signedPayload: WaiverSignedPayload;
 }
@@ -131,11 +132,16 @@ export interface WaiverSigningToken {
 // Booking waiver pointer (optional field on booking doc)
 // ---------------------------------------------------------------------------
 
+/** Booking-level waiver aggregate state (may differ from a single waiverRequest doc when party size > 1). */
+export type BookingWaiverPointerStatus = WaiverRequestStatus | "partial";
+
 export interface BookingWaiverPointer {
   requestId: string;
-  status: WaiverRequestStatus;
+  status: BookingWaiverPointerStatus;
   templateId: string;
   templateVersion: number;
+  /** Incremented when additional party members sign via the group link (primary token path sets status to signed). */
+  signedCount?: number;
 }
 
 // ---------------------------------------------------------------------------

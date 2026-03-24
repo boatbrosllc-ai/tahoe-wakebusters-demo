@@ -1,20 +1,40 @@
 /**
- * Simple event logger abstraction. No vendor hardcoding.
- * TODO: Swap implementation to send to GA4, GTM, Plausible, etc.
+ * Client-side analytics: GA4 when `gtag.js` is loaded (see `app/layout.tsx` + `lib/ga-measurement-id.ts`),
+ * plus GTM `dataLayer` and Plausible if present.
  */
 
 export type AnalyticsEvent =
   | { name: "book_cta_click"; payload: { source: string; page: string; experience?: string } }
   | { name: "call_click"; payload: { source: string; page?: string } }
   | { name: "lead_submit"; payload: { source: string; page?: string } }
-  | { name: "contact_submit"; payload: { source: string } };
+  | { name: "contact_submit"; payload: { source: string } }
+  | { name: "booking_step_1_category_selected"; payload: Record<string, never> }
+  | { name: "booking_step_2_date_selected"; payload: Record<string, never> }
+  | { name: "booking_step_4_payment_started"; payload: Record<string, never> }
+  | { name: "booking_completed"; payload: Record<string, never> };
+
+type GtagFn = (...args: unknown[]) => void;
 
 function logEvent(event: AnalyticsEvent): void {
   if (typeof window === "undefined") return;
-  // eslint-disable-next-line no-console
-  console.log("[Analytics]", event.name, event.payload);
-  // TODO: window.gtag?.("event", event.name, event.payload);
-  // TODO: window.plausible?.(event.name, { props: event.payload });
+  const w = window as Window & {
+    gtag?: GtagFn;
+    plausible?: (name: string, opts?: { props?: Record<string, unknown> }) => void;
+    dataLayer?: unknown[];
+  };
+  const payload = { ...event.payload, event_category: "booking" };
+  if (typeof w.gtag === "function") {
+    w.gtag("event", event.name, payload);
+  }
+  w.dataLayer = w.dataLayer ?? [];
+  w.dataLayer.push({ event: event.name, ...payload });
+  if (typeof w.plausible === "function") {
+    try {
+      w.plausible(event.name, { props: payload });
+    } catch {
+      /* optional third-party */
+    }
+  }
 }
 
 export const analytics = {
@@ -29,5 +49,17 @@ export const analytics = {
   },
   contactSubmit(source: string) {
     logEvent({ name: "contact_submit", payload: { source } });
+  },
+  bookingStep1CategorySelected() {
+    logEvent({ name: "booking_step_1_category_selected", payload: {} });
+  },
+  bookingStep2DateSelected() {
+    logEvent({ name: "booking_step_2_date_selected", payload: {} });
+  },
+  bookingStep4PaymentStarted() {
+    logEvent({ name: "booking_step_4_payment_started", payload: {} });
+  },
+  bookingCompleted() {
+    logEvent({ name: "booking_completed", payload: {} });
   },
 };

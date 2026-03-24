@@ -6,11 +6,18 @@
  *   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN) are set, uses Redis so
  *   limits persist across instances and cold starts.
  * - Degraded mode (production-safe): When Redis is unavailable (error or timeout),
- *   policy is controlled by env. Default is fail-open (allow requests) so Redis
- *   outages do not hard-stop checkout. Set RATE_LIMIT_FAIL_CLOSED=1 to reject
- *   with 503 when Redis is down. Optional RATE_LIMIT_DEGRADED_USE_MEMORY=1 uses
- *   in-memory fallback with stricter limit (see MAX_REQUESTS_MEMORY_FALLBACK).
- * - When Redis is not configured in production, all rate-limited endpoints return 503 until Redis is configured.
+ *   policy is controlled by env. In production, RATE_LIMIT_DEGRADED_USE_MEMORY defaults to on
+ *   (set to 0 to disable); uses in-memory fallback with stricter limit (see MAX_REQUESTS_MEMORY_FALLBACK).
+ *   Fail-open without memory fallback only when degraded memory is off. Set RATE_LIMIT_FAIL_CLOSED=1 to reject
+ *   with 503 when Redis is down. For create-hold / create-payment-intent, also set RATE_LIMIT_MUTATION_FAIL_CLOSED=1
+ *   to fail closed on Redis errors for those routes only.
+ * - When Redis is not configured in production, most rate-limited endpoints return 503; post-payment routes use
+ *   `checkRateLimitPostPayment` and fall back to in-memory limiting instead.
+ *
+ * **Which function for which routes (do not swap casually):**
+ * `checkRateLimit` — general mutations; `checkRateLimitSensitiveMutation` — create-hold / create-payment-intent /
+ * create-checkout-session-direct; `checkRateLimitPublicRead` — availability GETs; `checkRateLimitValidateDiscount`
+ * — validate-discount; `checkRateLimitPostPayment` — complete-after-payment, receipt, release-hold.
  */
 
 const WINDOW_MS = 60 * 1000; // 1 minute
@@ -23,8 +30,8 @@ const MAX_REQUESTS_PUBLIC_READ = 120;
 const MAX_REQUESTS_PUBLIC_READ_UNKNOWN = 40;
 /** Local dev: every request looks like `*:unknown` (no x-real-ip). Calendar + date-prices + HMR/Strict Mode can exceed the unknown bucket; do not throttle dev like anonymous prod traffic. */
 const MAX_REQUESTS_PUBLIC_READ_DEV = 10_000;
-/** Stricter limit for the shared "unknown" IP bucket (Redis) to reduce blast radius when proxy does not set IP headers. */
-const MAX_REQUESTS_UNKNOWN_BUCKET = 10;
+/** Shared "unknown" IP bucket (Redis) when proxy headers are missing — aligned with known-IP limit; mutation routes use stricter checks via `RATE_LIMIT_MUTATION_FAIL_CLOSED`. */
+const MAX_REQUESTS_UNKNOWN_BUCKET = 30;
 /** Stricter limit for validate-discount to reduce discount code enumeration via IP rotation. */
 const MAX_REQUESTS_VALIDATE_DISCOUNT = 5;
 /** Stricter limit when using in-memory fallback during Redis outage (RATE_LIMIT_DEGRADED_USE_MEMORY=1). */
@@ -57,6 +64,16 @@ export function getClientKey(request: Request): string {
     if (!unknownIpWarned) {
       unknownIpWarned = true;
       console.warn("[rate-limit] Client IP could not be determined (x-real-ip and x-nf-client-connection-ip missing or empty). All such clients share the same bucket; consider configuring your proxy to set a trusted IP header.");
+      void import("@/lib/booking/operational-alerts")
+        .then(({ writeOperationalAlert }) =>
+          writeOperationalAlert({
+            type: "rate_limit_unknown_ip",
+            source: "getClientKey",
+            message:
+              "Client IP could not be determined; all unknown clients share one rate-limit bucket. Configure x-real-ip or x-nf-client-connection-ip on the proxy.",
+          }),
+        )
+        .catch(() => {});
     }
   }
   return `booking:${ip}`;
@@ -68,6 +85,16 @@ export function getClientKey(request: Request): string {
  */
 export function getManageRateLimitKey(bookingId: string): string {
   return `manage:token:${bookingId}`;
+}
+
+/** Per-hold key for complete-after-payment polling so shared-IP traffic does not throttle a single booking. */
+export function getHoldRateLimitKey(holdId: string): string {
+  return `complete:hold:${holdId}`;
+}
+
+/** Rate limit key for bulk calendar.ics feed (token prefix only; avoids sharing IP bucket with unrelated traffic). */
+export function getCalendarFeedTokenRateLimitKey(tokenPrefix: string): string {
+  return `calendar:feed:${tokenPrefix}`;
 }
 
 function getRedisConfig(): { url: string; token: string } | null {
@@ -214,7 +241,10 @@ export const RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT = "booking:validate-discoun
 export async function checkRateLimitValidateDiscount(key: string): Promise<RateLimitResult> {
   const redis = getRedisConfig();
   const isProduction = process.env.NODE_ENV === "production";
-  const useMemoryFallback = process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
+  const useMemoryFallback =
+    process.env.NODE_ENV === "production"
+      ? process.env.RATE_LIMIT_DEGRADED_USE_MEMORY !== "0"
+      : process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
   const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
   const redisKey = redis ? `rl:${RATE_LIMIT_KEY_PREFIX_VALIDATE_DISCOUNT}${key}:${windowStart}` : null;
 
@@ -305,14 +335,23 @@ function redisKeyFor(kind: RateLimitKind, key: string, windowStart: number): str
   return `${ns}${key}:${windowStart}`;
 }
 
-async function checkRateLimitCore(kind: RateLimitKind, key: string): Promise<RateLimitResult> {
+type RateLimitCoreOpts = {
+  mutationSensitive?: boolean;
+  /** When true and Redis is unset in production, use in-memory limiting instead of failing closed (post-payment paths). */
+  postPaymentAllowMemoryWithoutRedis?: boolean;
+};
+
+async function checkRateLimitCore(kind: RateLimitKind, key: string, opts?: RateLimitCoreOpts): Promise<RateLimitResult> {
   const redis = getRedisConfig();
   const isProduction = process.env.NODE_ENV === "production";
-  const useMemoryFallback = process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
+  const useMemoryFallback =
+    process.env.NODE_ENV === "production"
+      ? process.env.RATE_LIMIT_DEGRADED_USE_MEMORY !== "0"
+      : process.env.RATE_LIMIT_DEGRADED_USE_MEMORY === "1";
   const windowStart = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
   const redisKey = redis ? redisKeyFor(kind, key, windowStart) : null;
 
-  if (isProduction && !redis) {
+  if (isProduction && !redis && !opts?.postPaymentAllowMemoryWithoutRedis) {
     return rateLimitBlockedProductionNoRedis();
   }
 
@@ -330,7 +369,8 @@ async function checkRateLimitCore(kind: RateLimitKind, key: string): Promise<Rat
         urlHint: redis.url.slice(0, 40),
       });
       if (isProduction) {
-        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1";
+        const mutationFailClosed = opts?.mutationSensitive === true && process.env.RATE_LIMIT_MUTATION_FAIL_CLOSED === "1";
+        const failClosed = process.env.RATE_LIMIT_FAIL_CLOSED === "1" || mutationFailClosed;
         if (failClosed) {
           return { allowed: false, retryAfterMs: WINDOW_MS, serverError: true, degraded: true };
         }
@@ -394,7 +434,21 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   return checkRateLimitCore("default", key);
 }
 
+/** Same as checkRateLimit but Redis outage can fail closed when RATE_LIMIT_MUTATION_FAIL_CLOSED=1 (create-hold / create-payment-intent). */
+export async function checkRateLimitSensitiveMutation(key: string): Promise<RateLimitResult> {
+  return checkRateLimitCore("default", key, { mutationSensitive: true });
+}
+
 /** Rate limit for idempotent public availability GETs (slots, date-prices, effective-price). Separate from mutation budget. */
 export async function checkRateLimitPublicRead(key: string): Promise<RateLimitResult> {
   return checkRateLimitCore("publicRead", key);
+}
+
+/**
+ * Post-payment customer-critical paths: complete-after-payment, receipt, release-hold.
+ * Same bucket as `checkRateLimit` when Redis is configured; in production without Redis, uses in-memory limiting
+ * instead of 503 so paid users are not stranded.
+ */
+export async function checkRateLimitPostPayment(key: string): Promise<RateLimitResult> {
+  return checkRateLimitCore("default", key, { postPaymentAllowMemoryWithoutRedis: true });
 }

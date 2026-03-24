@@ -2,7 +2,8 @@
  * GET /api/health
  * Readiness check for deployment. Returns 200 when critical config is present and Firebase is reachable; 503 otherwise.
  *
- * Public (anonymous): response is minimal to reduce reconnaissance value — only high-level status (ok/degraded).
+ * Public (anonymous): response includes high-level status (ok/degraded), rate limit readiness, and whether
+ * RELEASE_TOKEN_SECRET / RECEIPT_TOKEN_SECRET are configured (no secret values).
  * Privileged: full diagnostic fields (firebase, stripe, firebaseDetail, releaseTokenSigning, manageBookingSecret,
  * rateLimit, rateLimitDetail) for operators. Use header X-Internal-Health-Secret: <HEALTH_INTERNAL_SECRET>
  * or admin session to get detailed diagnostics.
@@ -11,7 +12,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeHasFirebaseConfig, hasStripeConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import { hasReleaseTokenSecret } from "@/lib/booking/releaseToken";
-import { isRateLimitReadyForProduction } from "@/lib/booking/rate-limit";
+import { getClientKey, isRateLimitReadyForProduction } from "@/lib/booking/rate-limit";
+import { bookingReady, isLegacyFallbackSafe } from "@/lib/booking/booking-runtime-state";
+import {
+  hasReceiptTokenSecretConfigured,
+  isReceiptAndManageSecretsDistinctInProduction,
+} from "@/lib/booking/receipt-token-secret";
 import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
 
 async function isPrivilegedHealthRequest(request: NextRequest): Promise<boolean> {
@@ -47,6 +53,28 @@ export async function GET(request: NextRequest) {
       const db = getDb();
       await db.collection("experiences").limit(1).get();
       checks.firebase = "ok";
+
+      if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
+        try {
+          const legacyBackfillSnap = await db.collection("bookings").where("startDateStr", "==", null).limit(1).get();
+          if (!legacyBackfillSnap.empty) {
+            console.error(
+              "[health] DISABLE_LEGACY_BOOKING_FALLBACK=true but at least one booking has startDateStr==null. " +
+                "Run the startDateStr backfill to completion before relying on assertSlotAvailability without legacy scans; " +
+                "see docs/BOOKING_AVAILABILITY.md."
+            );
+            if (privileged) {
+              checks.legacyBookingStartDateStrBackfill = "incomplete";
+            }
+          } else if (privileged) {
+            checks.legacyBookingStartDateStrBackfill = "ok";
+          }
+        } catch (backfillErr) {
+          console.error("[health] legacy booking backfill probe failed", backfillErr);
+        }
+      } else if (privileged) {
+        checks.legacyBookingStartDateStrBackfill = "not_required";
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       checks.firebase = msg.includes("missing") || msg.includes("config") ? "not_configured" : "error";
@@ -58,8 +86,11 @@ export async function GET(request: NextRequest) {
   if (checks.stripe !== "ok") ok = false;
 
   if (privileged) {
+    checks.rateLimitClientKey = getClientKey(request);
     checks.releaseTokenSigning = hasReleaseTokenSecret() ? "ok" : "not_configured";
     checks.manageBookingSecret = process.env.MANAGE_BOOKING_SECRET?.trim() ? "ok" : "not_configured";
+    checks.receiptTokenSecret = hasReceiptTokenSecretConfigured() ? "ok" : "not_configured";
+    checks.receiptAndManageSecretsDistinct = isReceiptAndManageSecretsDistinctInProduction() ? "ok" : "not_configured";
     const isProduction = process.env.NODE_ENV === "production";
     checks.disableLegacyBookingFallback = isProduction
       ? (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true" ? "configured" : "not_configured")
@@ -75,6 +106,22 @@ export async function GET(request: NextRequest) {
   const rateLimitReady = isRateLimitReadyForProduction();
   checks.rateLimitReady = rateLimitReady;
   checks.rateLimit = rateLimitReady ? "ok" : "degraded";
+  checks.bookingReady = bookingReady ? "ok" : "degraded";
+  checks.legacyFallbackSafe = isLegacyFallbackSafe ? "ok" : "degraded";
+  if (!bookingReady) ok = false;
+  if (!isLegacyFallbackSafe) ok = false;
+  const releaseTokenConfigured = hasReleaseTokenSecret();
+  const receiptTokenConfigured = hasReceiptTokenSecretConfigured();
+  checks.releaseTokenSecret = releaseTokenConfigured ? "ok" : "not_configured";
+  checks.receiptTokenSecret = receiptTokenConfigured ? "ok" : "not_configured";
+  if (process.env.NODE_ENV === "production") {
+    if (!releaseTokenConfigured) {
+      ok = false;
+    }
+    if (receiptTokenConfigured && !isReceiptAndManageSecretsDistinctInProduction()) {
+      ok = false;
+    }
+  }
   if (!rateLimitReady) {
     if (privileged) {
       checks.rateLimitDetail =
@@ -87,7 +134,19 @@ export async function GET(request: NextRequest) {
 
   const status = ok ? "ok" : "degraded";
   const rateLimit = rateLimitReady ? "ok" : "degraded";
-  const body = privileged ? { status, rateLimit, ...checks } : { status, rateLimit, rateLimitReady };
+  const body = privileged
+    ? { status, rateLimit, ...checks }
+    : {
+        status,
+        rateLimit,
+        rateLimitReady,
+        releaseTokenSecret: checks.releaseTokenSecret,
+        receiptTokenSecret: checks.receiptTokenSecret,
+        bookingReady: checks.bookingReady,
+        legacyFallbackSafe: checks.legacyFallbackSafe,
+        firebase: checks.firebase,
+        stripe: checks.stripe,
+      };
   const statusCode = ok ? 200 : 503;
   return NextResponse.json(body, { status: statusCode });
 }

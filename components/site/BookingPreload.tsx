@@ -3,17 +3,27 @@
 import { useEffect } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 
-const MAX_WARM_EXPERIENCES = 4;
-/** Delay after each experience (after the first) so we do not burst the server. */
-const STAGGER_MS = 400;
+const MAX_WARM_EXPERIENCES = 1;
+/** Only warm the primary pontoon listing; `useBookingModalData` loads detail/slots when the modal opens. */
+const PREFERRED_WARM_SLUG = "pontoon";
+
+function scheduleWhenIdle(cb: () => void): void {
+  if (typeof window === "undefined") return;
+  const ric = (
+    window as Window & {
+      requestIdleCallback?: (fn: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+    }
+  ).requestIdleCallback;
+  if (typeof ric === "function") {
+    ric(cb, { timeout: 4000 });
+  } else {
+    setTimeout(cb, 1);
+  }
+}
 
 /**
- * Preloads booking data on site load so the booking modal can show the calendar
- * and dates immediately when opened (FareHarbor-style seamless experience).
- *
- * Fetches: experiences list → up to the first four experiences' detail + rates + first month
- * date-prices + slots. All go into the shared booking cache; the modal reads
- * from the same cache so no visible loading when user opens Book.
+ * Light booking warm on idle: experiences list → pontoon (or first listing) gets
+ * `fetchExperienceRates` + `prefetchDatePrices` only. No detail/slots prefetch (modal loads those lazily).
  *
  * Retries the initial experiences fetch once after a short delay on failure
  * (e.g. "Failed to fetch" when API isn't ready yet on cold load).
@@ -34,30 +44,16 @@ export function BookingPreload() {
       const startStr = `${year}-${String(month + 1).padStart(2, "0")}-01`;
       const lastDay = new Date(year, month + 1, 0);
       const daysInMonth = lastDay.getDate();
-      const endStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDay.getDate()).padStart(2, "0")}`;
 
-      return Promise.all([
-        bookingCache.fetchExperienceDetail(experienceId),
-        bookingCache.fetchExperienceRates(experienceId),
-      ])
-        .then(([detail, ratesData]) => {
+      return bookingCache
+        .fetchExperienceRates(experienceId)
+        .then((ratesData) => {
           if (cancelled) return;
-          const rates = (detail?.rates ?? ratesData?.rates ?? []) as Array<{ id: string }>;
-          const firstRateId = rates.length > 0 ? rates[0].id : undefined;
-          const restRateIds = rates.slice(1).map((r) => r.id).filter(Boolean);
-
-          const datePricesPromise =
-            firstRateId != null
-              ? bookingCache.fetchDatePrices(experienceId, startStr, daysInMonth, firstRateId)
-              : Promise.resolve();
-          if (restRateIds.length > 0) {
-            bookingCache.prefetchDatePrices(experienceId, startStr, daysInMonth, restRateIds);
+          const rates = (ratesData?.rates ?? []) as Array<{ id: string }>;
+          const allRateIds = rates.map((r) => r.id).filter(Boolean);
+          if (allRateIds.length > 0) {
+            bookingCache.prefetchDatePrices(experienceId, startStr, daysInMonth, allRateIds, undefined);
           }
-          const promises: Promise<unknown>[] = [
-            datePricesPromise,
-            bookingCache.fetchSlots(experienceId, startStr, endStr),
-          ];
-          return Promise.allSettled(promises);
         })
         .then(() => {})
         .catch(() => {});
@@ -66,20 +62,20 @@ export function BookingPreload() {
     const runAfterExperiences = (data: Awaited<ReturnType<typeof bookingCache.fetchExperiences>>) => {
       if (cancelled) return;
       const experiences = data?.experiences ?? [];
+      const preferred = experiences.find((e) => e.slug === PREFERRED_WARM_SLUG);
       const cap = Math.min(MAX_WARM_EXPERIENCES, experiences.length);
+      const toWarm =
+        preferred?.id != null ? [preferred] : experiences.slice(0, cap).filter((e) => e?.id);
 
-      const runChain = async () => {
-        for (let i = 0; i < cap; i++) {
-          if (cancelled) return;
-          if (i > 0) await new Promise<void>((r) => setTimeout(r, STAGGER_MS));
-          if (cancelled) return;
-          const exp = experiences[i];
+      const queue = toWarm.filter((e) => e?.id);
+      const worker = async (): Promise<void> => {
+        while (queue.length > 0 && !cancelled) {
+          const exp = queue.shift();
           if (!exp?.id) continue;
           await warmExperience(exp.id);
         }
       };
-
-      void runChain();
+      void Promise.all([worker(), worker()]);
     };
 
     const attempt = () =>
@@ -98,7 +94,9 @@ export function BookingPreload() {
           }, retryMs);
         });
 
-    attempt();
+    scheduleWhenIdle(() => {
+      if (!cancelled) attempt();
+    });
 
     return () => {
       cancelled = true;

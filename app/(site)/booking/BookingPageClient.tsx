@@ -14,7 +14,9 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { availableDateSetFromSlotsWithBoat } from "@/lib/booking/partial-slots-calendar-derivation";
 import { cn } from "@/lib/utils";
+import { TrustRow } from "@/components/site/TrustRow";
 import { bookingDebugLog } from "@/lib/booking/debug";
 import type { ExperienceItem, BoatOption } from "@/lib/booking/booking-modal-types";
 
@@ -44,6 +46,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const [boatsLoading, setBoatsLoading] = useState(false);
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [boatsLoadError, setBoatsLoadError] = useState<string | null>(null);
+  const [boatsRetryTrigger, setBoatsRetryTrigger] = useState(0);
 
   // One-shot initialization from deep-link params. Cleared after first boats load so user
   // edits (e.g. switching experience) don't re-trigger auto-selection.
@@ -70,7 +74,14 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
   const lastSlotsRetryForRef = useRef<string | null>(null);
+  /** Bounded auto-retries per visible date range (failed fetch); reset when range or experience changes. */
+  const slotsAutoRetryCountRef = useRef(0);
+  const slotsLoadingRef = useRef(slotsLoading);
   const [chicagoDateTick, setChicagoDateTick] = useState(0);
+
+  useEffect(() => {
+    slotsLoadingRef.current = slotsLoading;
+  }, [slotsLoading]);
 
   useEffect(() => {
     const id = setInterval(() => setChicagoDateTick((t) => t + 1), 60_000);
@@ -146,7 +157,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       setSelectedBoat(null);
       return;
     }
+    lastSlotsRetryForRef.current = null;
+    slotsAutoRetryCountRef.current = 0;
     setBoatsLoading(true);
+    setBoatsLoadError(null);
     setSelectedBoat(null);
     setSelectedDate(null);
     const controller = new AbortController();
@@ -154,6 +168,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
       .then((data) => {
         const boatList = data.boats && Array.isArray(data.boats) ? (data.boats as BoatOption[]) : [];
         setBoats(boatList);
+        setBoatsLoadError(null);
         // Single boat: auto-assign so we don't force the user to "select" the only option.
         if (boatList.length === 1) {
           setSelectedBoat(boatList[0]);
@@ -174,12 +189,14 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         }
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setBoats([]);
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setBoats([]);
+        setBoatsLoadError("Could not load boat options — please try again.");
         initRef.current = null;
       })
       .finally(() => setBoatsLoading(false));
     return () => controller.abort();
-  }, [selectedExperience]);
+  }, [selectedExperience, boatsRetryTrigger]);
 
   // Date options for the currently visible month (month-based pagination).
   const dateOptions = useMemo(
@@ -201,6 +218,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     const rangeKey = `${startDate}|${endDate}`;
     if (slotsRequestRangeRef.current?.start !== startDate || slotsRequestRangeRef.current?.end !== endDate) {
       lastSlotsRetryForRef.current = null;
+      slotsAutoRetryCountRef.current = 0;
     }
     slotsRequestRangeRef.current = { start: startDate, end: endDate };
     bookingDebugLog("BookingPageClient", "slots fetch start", { experienceId: selectedExperience.id, startDate, endDate });
@@ -216,6 +234,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         bookingDebugLog("BookingPageClient", "slots fetch success", { slotCount: slots.length, startDate, endDate });
         setAllSlots(slots);
         setSlotsLoadError(null);
+        slotsAutoRetryCountRef.current = 0;
         setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
         const ur = (data as { unresolvedBookingCount?: number })?.unresolvedBookingCount;
         if (typeof ur === "number" && ur > 0) {
@@ -229,11 +248,16 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
         console.warn("[booking] slots fetch failed (BookingPageClient)", { startDate, endDate, status, error: apiBody?.error, hint: apiBody?.hint });
         bookingDebugLog("BookingPageClient", "slots fetch failed", { error: apiBody?.error, hint: apiBody?.hint });
         setAllSlots([]);
-        const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
-        setSlotsLoadError(apiBody?.hint ? `${msg}. ${apiBody.hint}` : msg);
-        if (lastSlotsRetryForRef.current !== rangeKey) {
-          lastSlotsRetryForRef.current = rangeKey;
-          retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
+        let msg = apiBody?.error ?? (err instanceof Error ? err.message : "Unable to load availability");
+        if ((err as { name?: string })?.name === "TimeoutError") {
+          msg = "Availability is taking a moment to load. Please try again.";
+        }
+        setSlotsLoadError(apiBody?.hint && (err as { name?: string })?.name !== "TimeoutError" ? `${msg}. ${apiBody.hint}` : msg);
+        const MAX_AUTO_RETRIES = 2;
+        if (slotsAutoRetryCountRef.current < MAX_AUTO_RETRIES) {
+          slotsAutoRetryCountRef.current += 1;
+          const delayMs = 1500 * 2 ** (slotsAutoRetryCountRef.current - 1);
+          retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), delayMs);
         }
       })
       .finally(() => {
@@ -249,6 +273,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     if (typeof document === "undefined") return;
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible" && selectedExperience) {
+        if (slotsLoadingRef.current) return;
         bookingCache.invalidate(`slots|${selectedExperience.id}|`);
         setSlotsRetryTrigger((t) => t + 1);
       }
@@ -260,18 +285,10 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   // Derive available dates in-memory from the cached slot dataset.
   // Switching boats re-derives this set without any API call.
   // Advisory-only: may be up to `STALE_MS_SLOTS` ms stale (see `lib/booking/booking-data-cache`); create-hold conflict response is authoritative.
-  const availableDateSet = useMemo<Set<string> | null>(() => {
-    if (allSlots === null) return null;
-    const available = new Set<string>();
-    for (const slot of allSlots) {
-      if (slot.status !== "open") continue;
-      if (typeof (slot as { spotsRemaining?: number }).spotsRemaining === "number" && (slot as { spotsRemaining: number }).spotsRemaining === 0) continue;
-      if (selectedBoat && slot.boatId && slot.boatId !== selectedBoat.id) continue;
-      const dateStr: string = slot.dateStr ?? (slot.startAt ? isoToChicagoDateStr(slot.startAt) : "");
-      if (dateStr) available.add(dateStr);
-    }
-    return available;
-  }, [allSlots, selectedBoat]);
+  const availableDateSet = useMemo(
+    () => availableDateSetFromSlotsWithBoat(allSlots, selectedBoat),
+    [allSlots, selectedBoat],
+  );
 
   // Clear a previously-selected date if it is no longer available for the current boat.
   useEffect(() => {
@@ -289,8 +306,15 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const isAtCurrentMonth = displayMonth.year === currentYear && displayMonth.month === currentMonth;
   const useExperiencePicker = experiences != null && experiences.length > 0;
 
+  const selectedDateVerifiedInPartial =
+    Boolean(selectedDate) && (availableDateSet?.has(selectedDate!) ?? false);
+
   const canContinue =
-    selectedExperience && !boatsLoading && (selectedBoat || boats.length === 0) && selectedDate;
+    selectedExperience &&
+    !boatsLoading &&
+    (selectedBoat || boats.length === 0) &&
+    selectedDate &&
+    (!slotsPartialData || selectedDateVerifiedInPartial);
 
   const handleContinueToCheckout = () => {
     if (!canContinue || !selectedExperience) return;
@@ -341,6 +365,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
             Pick a category, boat, and date — then choose your time and checkout.
           </p>
         </header>
+
+        <TrustRow tone="light" className="mb-8 sm:mb-10" />
 
         {loading ? (
           <div className="py-16 flex flex-col items-center justify-center gap-4">
@@ -399,11 +425,26 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
             </section>
 
             {/* 2. Select your boat – only when category selected and more than one boat (single boat is auto-assigned) */}
-            {selectedExperience && boats.length > 1 && (
+            {selectedExperience && (boats.length > 1 || boatsLoadError) && (
               <section ref={boatsSectionRef}>
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your boat
                 </h2>
+                {boatsLoadError && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-3 mb-3 text-sm text-amber-950">
+                    <p>{boatsLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBoatsLoadError(null);
+                        setBoatsRetryTrigger((t) => t + 1);
+                      }}
+                      className="mt-2 font-semibold text-brand-primary underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
                 {boatsLoading ? (
                   <p className="text-brand-muted text-sm py-2">Loading boats…</p>
                 ) : boats.length === 0 ? (
@@ -494,9 +535,26 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                   </button>
                 </div>
                 {slotsPartialData && (
-                  <p className="text-sm text-amber-700 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200" role="alert">
-                    Availability may be incomplete — refresh or contact us to confirm.
-                  </p>
+                  <div
+                    className="text-sm text-amber-950 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200/80"
+                    role="status"
+                  >
+                    <p className="font-medium">Availability data may be slightly delayed — your slot will be confirmed at checkout.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        lastSlotsRetryForRef.current = null;
+                        slotsAutoRetryCountRef.current = 0;
+                        if (selectedExperience?.id) {
+                          bookingCache.invalidate(`slots|${selectedExperience.id}|`);
+                        }
+                        setSlotsRetryTrigger((t) => t + 1);
+                      }}
+                      className="mt-2 text-sm font-semibold text-brand-primary hover:underline"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 )}
                 {slotsLoadError ? (
                   <p className="text-sm text-amber-700 py-4 px-2">{slotsLoadError}</p>

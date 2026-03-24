@@ -8,32 +8,122 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { checkRateLimitPostPayment, getClientKey, getHoldRateLimitKey } from "@/lib/booking/rate-limit";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 import {
   convertHoldToBooking,
+  isBookingBlockedByOperatorError,
   isConvertHoldInputDeposit,
   type ConvertHoldInput,
   type ConvertHoldInputDeposit,
 } from "@/lib/booking/convert-hold-to-booking";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import {
   buildConvertHoldInputFromSucceededPaymentIntent,
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
-import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
+import { signReceiptClaimToken, verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
+import type { BookingPricing } from "@/lib/booking/types";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
-import type { Booking, Hold } from "@/lib/booking/types";
+import type { Booking, Experience, Hold } from "@/lib/booking/types";
 import type Stripe from "stripe";
 import type { Firestore } from "firebase-admin/firestore";
+import {
+  sendAmountIntegrityMismatchCustomerEmail,
+  sendAmountIntegrityMismatchOpsEmail,
+} from "@/lib/booking/brevo";
+import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 
-function parseBody(body: unknown): { holdId: string | null; paymentIntentId: string } | null {
+const PI_MISMATCH_DELAY_MS = 80;
+const PI_MISMATCH_RETRY_ATTEMPTS = 3;
+const PI_MISMATCH_RETRY_DELAY_MS = 500;
+
+/** Firestore propagation: empty PI fields on hold while PI succeeded — re-read before returning 202. */
+const PROPAGATION_LAG_RETRY_ATTEMPTS = 5;
+const PROPAGATION_LAG_RETRY_DELAY_MS = 1500;
+
+async function propagationLagDelayMs(zeroBasedStep: number): Promise<void> {
+  const base = PROPAGATION_LAG_RETRY_DELAY_MS * 2 ** zeroBasedStep;
+  const capped = Math.min(10_000, base);
+  await new Promise((r) => setTimeout(r, capped));
+}
+
+async function hasDiscountLimitExceededPendingRefund(db: Firestore, bookingId: string): Promise<boolean> {
+  const snap = await db
+    .collection("pendingRefunds")
+    .where("bookingId", "==", bookingId)
+    .where("reason", "==", "discount_limit_exceeded")
+    .limit(1)
+    .get();
+  return !snap.empty;
+}
+
+async function loadDegradedConfirmationPayload(
+  db: Firestore,
+  bookingId: string
+): Promise<{
+  bookingId: string;
+  startDateStr?: string;
+} | null> {
+  const snap = await db.collection("bookings").doc(bookingId).get();
+  if (!snap.exists) return null;
+  const booking = snap.data() as Booking;
+  return {
+    bookingId,
+    startDateStr: booking.startDateStr,
+  };
+}
+
+async function appendReceiptSuccessExtras(
+  db: Firestore,
+  bookingId: string,
+  payload: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const hasToken =
+    (typeof payload.receiptClaimToken === "string" && payload.receiptClaimToken.length > 0) ||
+    (typeof payload.receiptToken === "string" && payload.receiptToken.length > 0);
+  const [discountFlag, degraded] = await Promise.all([
+    hasDiscountLimitExceededPendingRefund(db, bookingId),
+    !hasToken ? loadDegradedConfirmationPayload(db, bookingId) : Promise.resolve(null),
+  ]);
+  return {
+    ...payload,
+    ...(discountFlag ? { discountLimitExceeded: true } : {}),
+    ...(degraded && !hasToken ? { degradedConfirmation: degraded } : {}),
+  };
+}
+
+function stripeCustomerIdFromPaymentIntent(pi: Stripe.PaymentIntent): string | null {
+  const c = pi.customer;
+  if (typeof c === "string" && c.trim()) return c.trim();
+  if (c && typeof c === "object" && "id" in c && typeof (c as Stripe.Customer).id === "string") {
+    return (c as Stripe.Customer).id;
+  }
+  return null;
+}
+
+function parseBody(body: unknown): {
+  holdId: string | null;
+  paymentIntentId: string;
+  receiptClaimToken: string | null;
+} | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   const paymentIntentId = typeof o.paymentIntentId === "string" ? o.paymentIntentId : null;
   if (!paymentIntentId) return null;
-  return { holdId, paymentIntentId };
+  const rawClaim =
+    typeof o.receipt_claim_token === "string"
+      ? o.receipt_claim_token
+      : typeof o.receiptToken === "string"
+        ? o.receiptToken
+        : null;
+  const receiptClaimToken = rawClaim != null && rawClaim.trim() ? rawClaim.trim() : null;
+  return { holdId, paymentIntentId, receiptClaimToken };
 }
 
 async function resolveBookingIdFromPaymentSignals(
@@ -41,29 +131,47 @@ async function resolveBookingIdFromPaymentSignals(
   paymentIntentId: string,
   pi: Stripe.PaymentIntent
 ): Promise<string | null> {
-  const byFull = await db.collection("bookings").where("stripe.paymentIntentId", "==", paymentIntentId).limit(1).get();
-  if (!byFull.empty) return byFull.docs[0].id;
-  const byDep = await db.collection("bookings").where("stripe.depositPaymentIntentId", "==", paymentIntentId).limit(1).get();
-  if (!byDep.empty) return byDep.docs[0].id;
   const checkoutMeta =
     typeof pi.metadata?.checkoutSessionId === "string"
       ? pi.metadata.checkoutSessionId
       : typeof pi.metadata?.checkout_session_id === "string"
         ? pi.metadata.checkout_session_id
         : undefined;
-  if (checkoutMeta) {
-    const byCs = await db.collection("bookings").where("stripe.checkoutSessionId", "==", checkoutMeta).limit(1).get();
-    if (!byCs.empty) {
-      const doc = byCs.docs[0];
-      const b = doc.data() as Booking;
-      const s = b.stripe;
-      if (
-        s?.paymentIntentId === paymentIntentId ||
-        s?.depositPaymentIntentId === paymentIntentId ||
-        s?.checkoutSessionId === checkoutMeta
-      ) {
-        return doc.id;
-      }
+
+  const qFull = db.collection("bookings").where("stripe.paymentIntentId", "==", paymentIntentId).limit(1).get();
+  const qDep = db.collection("bookings").where("stripe.depositPaymentIntentId", "==", paymentIntentId).limit(1).get();
+  const qCs = checkoutMeta
+    ? db.collection("bookings").where("stripe.checkoutSessionId", "==", checkoutMeta).limit(1).get()
+    : Promise.resolve(null as import("firebase-admin/firestore").QuerySnapshot | null);
+
+  const [rFull, rDep, rCs] = await Promise.allSettled([qFull, qDep, qCs]);
+
+  const snapFull = rFull.status === "fulfilled" ? rFull.value : null;
+  if (rFull.status === "rejected") {
+    bookingWarn("complete-after-payment", "reconcile query failed (paymentIntentId)", { err: rFull.reason });
+  }
+  if (snapFull && !snapFull.empty) return snapFull.docs[0].id;
+
+  const snapDep = rDep.status === "fulfilled" ? rDep.value : null;
+  if (rDep.status === "rejected") {
+    bookingWarn("complete-after-payment", "reconcile query failed (depositPaymentIntentId)", { err: rDep.reason });
+  }
+  if (snapDep && !snapDep.empty) return snapDep.docs[0].id;
+
+  const byCs = rCs.status === "fulfilled" ? rCs.value : null;
+  if (rCs.status === "rejected") {
+    bookingWarn("complete-after-payment", "reconcile query failed (checkoutSessionId)", { err: rCs.reason });
+  }
+  if (checkoutMeta && byCs && !byCs.empty) {
+    const doc = byCs.docs[0];
+    const b = doc.data() as Booking;
+    const s = b.stripe;
+    if (
+      s?.paymentIntentId === paymentIntentId ||
+      s?.depositPaymentIntentId === paymentIntentId ||
+      s?.checkoutSessionId === checkoutMeta
+    ) {
+      return doc.id;
     }
   }
   return null;
@@ -88,7 +196,27 @@ export async function POST(request: NextRequest) {
   let holdIdForAlert: string | null = null;
   let paymentIntentIdForAlert: string | null = null;
   try {
-    const rl = await checkRateLimit(getClientKey(request));
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
+    try {
+      assertReceiptTokenSecretConfigured();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      bookingError("complete-after-payment", "RECEIPT_TOKEN_SECRET missing in non-development — refusing post-payment completion", null, {
+        nodeEnv: process.env.NODE_ENV ?? "",
+        message: msg,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Booking confirmations are temporarily unavailable (server configuration: RECEIPT_TOKEN_SECRET). Please try again shortly.",
+        },
+        { status: 503 }
+      );
+    }
+    const rl = await checkRateLimitPostPayment(getClientKey(request));
     if (!rl.allowed) {
       if (rl.serverError) {
         return NextResponse.json(
@@ -108,18 +236,64 @@ export async function POST(request: NextRequest) {
       bookingLog("complete-after-payment", "invalid body: paymentIntentId required");
       return NextResponse.json({ error: "paymentIntentId required" }, { status: 400 });
     }
+    /**
+     * Idempotent conversion is also driven by Stripe `payment_intent.succeeded` → webhook when configured;
+     * this route is the client fast path when the webhook is delayed or misconfigured.
+     */
     const stripe = getStripe();
     let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
-    const metadataHoldId = pi.metadata?.holdId as string | undefined;
-    const holdId = input.holdId ?? metadataHoldId ?? null;
-    if (!holdId) {
-      bookingLog("complete-after-payment", "no holdId in body or PI metadata");
-      return NextResponse.json({ error: "Payment intent has no associated hold" }, { status: 400 });
+
+    let holdId: string;
+    if (input.receiptClaimToken) {
+      const claimPayload = verifyReceiptClaimToken(input.receiptClaimToken);
+      if (!claimPayload) {
+        bookingLog("complete-after-payment", "invalid or expired receipt_claim_token");
+        return NextResponse.json({ error: "Invalid or expired receipt claim token" }, { status: 401 });
+      }
+      holdId = claimPayload.holdId;
+      if (input.holdId && input.holdId.trim() !== holdId) {
+        return NextResponse.json({ error: "receipt_claim_token does not match holdId" }, { status: 400 });
+      }
+      const metadataHoldId = pi.metadata?.holdId as string | undefined;
+      if (metadataHoldId != null && metadataHoldId !== holdId) {
+        bookingLog("complete-after-payment", "PI metadata holdId does not match receipt claim");
+        return NextResponse.json({ error: "Payment intent does not match this hold" }, { status: 400 });
+      }
+    } else {
+      const metaHold = typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
+      if (!metaHold) {
+        bookingLog("complete-after-payment", "PI missing holdId metadata and no receipt_claim_token — reconciliation pending");
+        return NextResponse.json(
+          {
+            reconciliationPending: true,
+            message:
+              "Your payment was received. We are confirming your booking; you will receive a confirmation email shortly.",
+          },
+          { status: 200 }
+        );
+      }
+      if (input.holdId?.trim() && input.holdId.trim() !== metaHold) {
+        return NextResponse.json({ error: "holdId does not match this payment" }, { status: 400 });
+      }
+      holdId = metaHold;
     }
     bookingLog("complete-after-payment", "parsed input", {
       holdId,
       paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24) + "...",
     });
+    const rlHold = await checkRateLimitPostPayment(getHoldRateLimitKey(holdId));
+    if (!rlHold.allowed) {
+      if (rlHold.serverError) {
+        return NextResponse.json(
+          { error: "Rate limit service temporarily unavailable. Please try again shortly." },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429, headers: rlHold.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rlHold.retryAfterMs / 1000)) } : undefined }
+      );
+    }
     bookingLog("complete-after-payment", "PaymentIntent retrieved", {
       holdId,
       piStatus: pi.status,
@@ -132,11 +306,14 @@ export async function POST(request: NextRequest) {
           typeof pi.payment_method === "object" && pi.payment_method && "type" in pi.payment_method
             ? (pi.payment_method as { type?: string }).type
             : undefined;
+        const asyncPmTypes = new Set(["us_bank_account", "acss_debit", "customer_balance", "sepa_debit"]);
+        const isSyncForPolling = pmType == null ? true : !asyncPmTypes.has(pmType);
+        const pollHardTimeoutMs = isSyncForPolling ? 30_000 : 300_000;
         return NextResponse.json(
           {
             processing: true,
             message: "Payment is processing. Your booking will be confirmed shortly.",
-            pollHardTimeoutMs: 300_000,
+            pollHardTimeoutMs,
             ...(pmType ? { paymentMethodType: pmType } : {}),
           },
           { status: 202 }
@@ -148,10 +325,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const piMetadataHoldId = pi.metadata?.holdId;
-    if (piMetadataHoldId !== holdId) {
+    const piMetadataHoldIdAfterSuccess = pi.metadata?.holdId;
+    if (piMetadataHoldIdAfterSuccess != null && piMetadataHoldIdAfterSuccess !== holdId) {
       bookingError("complete-after-payment", "holdId mismatch", null, {
-        metadataHoldId: piMetadataHoldId ?? null,
+        metadataHoldId: piMetadataHoldIdAfterSuccess ?? null,
         inputHoldId: holdId,
       });
       return NextResponse.json(
@@ -162,7 +339,7 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     const holdRef = db.collection("holds").doc(holdId);
-    const holdSnap = await holdRef.get();
+    let holdSnap = await holdRef.get();
     if (!holdSnap.exists) {
       bookingWarn("complete-after-payment", "hold not found; reconciling by payment intent / checkout session", {
         holdId,
@@ -207,14 +384,16 @@ export async function POST(request: NextRequest) {
           bSnap.exists && typeof (bSnap.data() as Booking).experienceId === "string"
             ? (bSnap.data() as Booking).experienceId
             : undefined;
-        return NextResponse.json({
-          success: true,
-          alreadyConverted: true,
-          bookingId: recoveredBookingId,
-          ...(receiptClaimToken ? { receiptClaimToken } : {}),
-          paymentSummary: paymentSummaryRecovered,
-          ...(recoveredExp ? { experienceId: recoveredExp } : {}),
-        });
+        return NextResponse.json(
+          await appendReceiptSuccessExtras(db, recoveredBookingId, {
+            success: true,
+            alreadyConverted: true,
+            bookingId: recoveredBookingId,
+            ...(receiptClaimToken ? { receiptClaimToken } : {}),
+            paymentSummary: paymentSummaryRecovered,
+            ...(recoveredExp ? { experienceId: recoveredExp } : {}),
+          })
+        );
       }
       await writeOperationalAlert({
         type: "complete_after_payment_hold_missing_no_booking",
@@ -238,7 +417,10 @@ export async function POST(request: NextRequest) {
       typeof (holdSnap.data() as Hold).experienceId === "string"
         ? (holdSnap.data() as Hold).experienceId!.trim()
         : undefined;
-    const holdStripeIds = holdSnap.data() as {
+    let holdRow = holdSnap.data() as Hold & {
+      stripe?: { customerId?: string };
+    };
+    let holdStripeIds = holdRow as {
       depositPaymentIntentId?: string;
       fullPaymentIntentId?: string;
       paymentAttemptVersion?: number;
@@ -246,27 +428,140 @@ export async function POST(request: NextRequest) {
       tipCents?: number;
       discountCents?: number;
     };
-    const holdForPricing = holdSnap.data() as {
+    let holdForPricing = holdSnap.data() as {
       pricing?: { totalCents?: number };
       tipCents?: number;
       discountCents?: number;
     };
+    let piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+    if (!piMatchesHold) {
+      const holdVerEarly = typeof holdStripeIds.paymentAttemptVersion === "number" ? holdStripeIds.paymentAttemptVersion : 0;
+      /** Version bumped: empty PI fields on hold, or PI ids present but stale vs this PaymentIntent — do not block; client polls. */
+      const likelyPropagationLagEarly = holdVerEarly >= 1;
+      if (likelyPropagationLagEarly) {
+        for (let lagAttempt = 0; lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS && !piMatchesHold; lagAttempt++) {
+          if (lagAttempt > 0) {
+            await propagationLagDelayMs(lagAttempt - 1);
+          }
+          const lagSnap = await holdRef.get();
+          if (!lagSnap.exists) break;
+          holdSnap = lagSnap;
+          holdRow = holdSnap.data() as Hold & { stripe?: { customerId?: string } };
+          holdStripeIds = holdRow as typeof holdStripeIds;
+          holdForPricing = holdSnap.data() as typeof holdForPricing;
+          piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+        }
+        if (!piMatchesHold) {
+          bookingLog("complete-after-payment", "returning 202 — hold paymentAttemptVersion>=1 and PI not matched after server retries", {
+            holdId,
+          });
+          await writeOperationalAlert({
+            type: "complete_after_payment_pi_mismatch_likely_hold_read_lag",
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+            holdPaymentAttemptVersion: holdVerEarly,
+            source: "complete-after-payment",
+          });
+          return NextResponse.json(
+            {
+              processing: true,
+              message: "Payment is being confirmed. Your booking will be finalized shortly.",
+              pollHardTimeoutMs: 30_000,
+            },
+            { status: 202 }
+          );
+        }
+      }
+      for (let attempt = 0; attempt < PI_MISMATCH_RETRY_ATTEMPTS - 1 && !piMatchesHold; attempt++) {
+        await new Promise((r) => setTimeout(r, PI_MISMATCH_RETRY_DELAY_MS));
+        const snapRetry = await holdRef.get();
+        if (!snapRetry.exists) break;
+        holdSnap = snapRetry;
+        holdRow = holdSnap.data() as Hold & { stripe?: { customerId?: string } };
+        holdStripeIds = holdRow as typeof holdStripeIds;
+        holdForPricing = holdSnap.data() as typeof holdForPricing;
+        piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+      }
+    }
+    let holdCustomerId = typeof holdRow.stripe?.customerId === "string" ? holdRow.stripe.customerId.trim() : "";
+    if (!holdCustomerId && holdRow.customerDraft?.email) {
+      const emailKey = holdRow.customerDraft.email.trim().toLowerCase();
+      if (emailKey) {
+        try {
+          const idxRef = db.collection("stripeCustomerIndex").doc(emailKey);
+          const idxSnap = await idxRef.get();
+          const cid = idxSnap.exists ? (idxSnap.data() as { customerId?: string | null })?.customerId : undefined;
+          if (typeof cid === "string" && cid.trim()) {
+            const verified = await verifyIndexedStripeCustomerOrClear(
+              getStripe(),
+              idxRef,
+              emailKey,
+              cid,
+              "complete-after-payment"
+            );
+            if (verified) holdCustomerId = verified;
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+    }
+    const piCustomerId = stripeCustomerIdFromPaymentIntent(pi);
+    if (holdCustomerId && piCustomerId && holdCustomerId !== piCustomerId) {
+      bookingError("complete-after-payment", "payment intent customer does not match hold", null, {
+        holdId,
+        holdCustomerIdPrefix: holdCustomerId.slice(0, 8),
+        piCustomerIdPrefix: piCustomerId.slice(0, 8),
+      });
+      await new Promise((r) => setTimeout(r, PI_MISMATCH_DELAY_MS));
+      return NextResponse.json({ error: "Payment intent does not match this reservation" }, { status: 400 });
+    }
     const convertInput: ConvertHoldInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, holdForPricing);
     const useDepositInput = isConvertHoldInputDeposit(convertInput);
     const amountCharged = pi.amount ?? 0;
-    const totalCents = useDepositInput
-      ? (convertInput as ConvertHoldInputDeposit).stripe.totalCents
-      : (() => {
-          const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-          if (fromMeta > 0) return fromMeta;
-          if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
-            const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
-            const discountCents =
-              typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
-            return Math.max(0, holdForPricing.pricing.totalCents + tipCents - discountCents);
-          }
-          return amountCharged;
-        })();
+    let totalCents: number;
+    if (useDepositInput) {
+      const depStripe = (convertInput as ConvertHoldInputDeposit).stripe;
+      const fromConvert = depStripe.totalCents;
+      const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+      if (typeof fromConvert === "number" && fromConvert > 0) {
+        totalCents = fromConvert;
+      } else if (fromMeta > 0) {
+        totalCents = fromMeta;
+      } else if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
+        const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
+        const discountCents =
+          typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
+        totalCents = computeFinalChargeTotalCentsFromHoldPricing(
+          holdForPricing.pricing as BookingPricing,
+          tipCents,
+          discountCents
+        );
+      } else {
+        totalCents = 0;
+        bookingWarn("complete-after-payment", "deposit flow: totalCents unresolved (no convert total, metadata, or hold pricing)", {
+          holdId,
+          paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
+        });
+      }
+    } else {
+      const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+      if (fromMeta > 0) totalCents = fromMeta;
+      else if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
+        const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
+        const discountCents =
+          typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
+        totalCents = Math.max(0, holdForPricing.pricing.totalCents + tipCents - discountCents);
+      } else totalCents = amountCharged;
+    }
+    const finalCentsComputed = useDepositInput ? Math.max(0, totalCents - amountCharged) : 0;
+    if (useDepositInput && totalCents > 0 && finalCentsComputed === 0) {
+      bookingWarn("complete-after-payment", "deposit flow: finalCents would be zero while totalCents > 0 — check PI metadata and hold pricing", {
+        holdId,
+        totalCents,
+        amountCharged,
+      });
+    }
     bookingLog("complete-after-payment", "PI metadata and convert decision", {
       holdId,
       paymentStage: (pi.metadata?.payment_stage ?? null) as string | null,
@@ -279,10 +574,9 @@ export async function POST(request: NextRequest) {
       isDeposit: useDepositInput,
       depositCents: useDepositInput ? amountCharged : totalCents,
       totalCents,
-      finalCents: useDepositInput ? Math.max(0, totalCents - amountCharged) : 0,
+      finalCents: finalCentsComputed,
     };
 
-    const piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
     if (!piMatchesHold) {
       let recoveredBookingId: string | null = null;
       try {
@@ -304,21 +598,24 @@ export async function POST(request: NextRequest) {
           bSnapRec.exists && typeof (bSnapRec.data() as Booking).experienceId === "string"
             ? (bSnapRec.data() as Booking).experienceId
             : undefined;
-        return NextResponse.json({
-          success: true,
-          alreadyConverted: true,
-          bookingId: recoveredBookingId,
-          ...(receiptClaimToken ? { receiptClaimToken } : {}),
-          paymentSummary: paymentSummaryForClient,
-          ...(recoveredExp ? { experienceId: recoveredExp } : {}),
-        });
+        return NextResponse.json(
+          await appendReceiptSuccessExtras(db, recoveredBookingId, {
+            success: true,
+            alreadyConverted: true,
+            bookingId: recoveredBookingId,
+            ...(receiptClaimToken ? { receiptClaimToken } : {}),
+            paymentSummary: paymentSummaryForClient,
+            ...(recoveredExp ? { experienceId: recoveredExp } : {}),
+          })
+        );
       }
       bookingError("complete-after-payment", "payment intent not recorded on hold", null, {
         holdId,
         paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24),
       });
+      await new Promise((r) => setTimeout(r, PI_MISMATCH_DELAY_MS));
+      const holdRow = holdSnap.data() as Hold;
       try {
-        const holdRow = holdSnap.data() as Hold;
         await upsertPendingRefundRecord(
           db,
           {
@@ -332,6 +629,8 @@ export async function POST(request: NextRequest) {
             holdDepositPaymentIntentId: holdStripeIds.depositPaymentIntentId ?? null,
             holdFullPaymentIntentId: holdStripeIds.fullPaymentIntentId ?? null,
             ...(holdRow.customerDraft?.email && { customerEmail: holdRow.customerDraft.email }),
+            // Always require manual review before auto-refund (webhook may still create the booking).
+            requiresReview: true,
           }
         );
       } catch (prErr) {
@@ -359,6 +658,34 @@ export async function POST(request: NextRequest) {
 
     if ("amountIntegrityMismatch" in result) {
       bookingWarn("complete-after-payment", "amount integrity mismatch — conversion blocked", { holdId });
+      await writeOperationalAlert({
+        type: "complete_after_payment_amount_integrity_mismatch",
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+        source: "complete-after-payment",
+      });
+      try {
+        await sendAmountIntegrityMismatchOpsEmail({
+          holdId,
+          paymentIntentId: input.paymentIntentId,
+          source: "complete-after-payment",
+        });
+      } catch (e) {
+        console.error("[complete-after-payment] sendAmountIntegrityMismatchOpsEmail", e);
+      }
+      const holdData = holdSnap.data() as Hold;
+      const custEmail = holdData.customerDraft?.email?.trim();
+      if (custEmail) {
+        try {
+          await sendAmountIntegrityMismatchCustomerEmail({
+            to: custEmail,
+            customerName: holdData.customerDraft?.name?.trim() ?? "Guest",
+            holdId,
+          });
+        } catch (e) {
+          console.error("[complete-after-payment] sendAmountIntegrityMismatchCustomerEmail", e);
+        }
+      }
       return NextResponse.json(
         {
           success: false,
@@ -366,7 +693,7 @@ export async function POST(request: NextRequest) {
           bookingConfirmed: false,
           amountMismatch: true,
           message:
-            "We are confirming your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+            "We received your payment. Your booking is under review — we will contact you within 2 hours with next steps. If you do not hear from us by then, please contact us.",
         },
         { status: 200 }
       );
@@ -417,14 +744,18 @@ export async function POST(request: NextRequest) {
           holdId,
         });
       }
-      return NextResponse.json({
-        success: true,
-        alreadyConverted: true,
-        bookingId: resolvedBookingId,
-        ...(receiptClaimToken ? { receiptClaimToken } : {}),
-        paymentSummary: paymentSummaryForClient,
-        ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
-      });
+      holdIdForAlert = null;
+      paymentIntentIdForAlert = null;
+      return NextResponse.json(
+        await appendReceiptSuccessExtras(db, resolvedBookingId, {
+          success: true,
+          alreadyConverted: true,
+          bookingId: resolvedBookingId,
+          ...(receiptClaimToken ? { receiptClaimToken } : {}),
+          paymentSummary: paymentSummaryForClient,
+          ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
+        })
+      );
     }
     bookingLog("complete-after-payment", "booking created", { bookingId: result.bookingId, holdId });
     const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
@@ -434,13 +765,17 @@ export async function POST(request: NextRequest) {
         holdId,
       });
     }
-    return NextResponse.json({
-      success: true,
-      bookingId: result.bookingId,
-      ...(receiptClaimToken ? { receiptClaimToken } : {}),
-      paymentSummary: paymentSummaryForClient,
-      ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
-    });
+    holdIdForAlert = null;
+    paymentIntentIdForAlert = null;
+    return NextResponse.json(
+      await appendReceiptSuccessExtras(db, result.bookingId, {
+        success: true,
+        bookingId: result.bookingId,
+        ...(receiptClaimToken ? { receiptClaimToken } : {}),
+        paymentSummary: paymentSummaryForClient,
+        ...(holdExperienceId ? { experienceId: holdExperienceId } : {}),
+      })
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to complete booking";
     // Log full error and stack for debugging (server logs / Netlify)
@@ -448,6 +783,64 @@ export async function POST(request: NextRequest) {
     bookingError("complete-after-payment", "complete after payment failed", err, { message, stack: stack ? stack.slice(0, 500) : undefined });
     if (process.env.NODE_ENV === "development" && stack) {
       console.error("[booking:complete-after-payment] stack:", stack);
+    }
+
+    if (err instanceof BlockCheckUnavailableError) {
+      return NextResponse.json(
+        { error: "Unable to verify availability. Please try again shortly." },
+        { status: 503 }
+      );
+    }
+
+    if (isBookingBlockedByOperatorError(err)) {
+      bookingWarn("complete-after-payment", "operator block overlap — conversion blocked", {
+        holdId: holdIdForAlert,
+      });
+      try {
+        if (holdIdForAlert && paymentIntentIdForAlert) {
+          const dbAlert = getDb();
+          let customerEmail: string | undefined;
+          try {
+            const hs = await dbAlert.collection("holds").doc(holdIdForAlert).get();
+            if (hs.exists) {
+              customerEmail = (hs.data() as Hold)?.customerDraft?.email;
+            }
+          } catch {
+            /* non-fatal */
+          }
+          await upsertPendingRefundRecord(
+            dbAlert,
+            {
+              reason: "operator_date_blocked_at_conversion",
+              holdId: holdIdForAlert,
+              paymentIntentId: paymentIntentIdForAlert,
+            },
+            {
+              holdId: holdIdForAlert,
+              paymentIntentId: paymentIntentIdForAlert,
+              ...(customerEmail && { customerEmail }),
+            }
+          );
+          await writeOperationalAlert({
+            type: "complete_after_payment_operator_date_blocked",
+            holdId: holdIdForAlert,
+            paymentIntentId: paymentIntentIdForAlert,
+            source: "complete-after-payment",
+          });
+        }
+      } catch (opErr) {
+        console.error("[complete-after-payment] operator block pendingRefunds/alert", opErr);
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          reconciliationPending: true,
+          bookingConfirmed: false,
+          message:
+            "We received your payment. Your booking is under review — we will contact you within 2 hours with next steps. If you do not hear from us by then, please contact us.",
+        },
+        { status: 200 }
+      );
     }
 
     if (message === "Hold has expired") {
@@ -500,6 +893,15 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    const isConfigError =
+      /missing required env|firebase config|FIREBASE_|STRIPE_|BREVO_|config missing/i.test(message) ||
+      (err instanceof Error && (message.includes("private key") || message.includes("PEM")));
+    if (isConfigError) {
+      return NextResponse.json(
+        { error: "Server configuration error. Please try again or contact support." },
+        { status: 500 }
+      );
+    }
     if (message.startsWith("DISCOUNT_LIMIT_REACHED:")) {
       const userMessage = message.slice("DISCOUNT_LIMIT_REACHED:".length).trim();
       return NextResponse.json(
@@ -507,13 +909,54 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    // Don't expose env/config errors to the client; return generic message and log real error
-    const isConfigError =
-      /missing required env|firebase config|FIREBASE_|STRIPE_|BREVO_|config missing/i.test(message) ||
-      (err instanceof Error && (message.includes("private key") || message.includes("PEM")));
-    const clientMessage = isConfigError
-      ? "Server configuration error. Please try again or contact support."
-      : message;
-    return NextResponse.json({ error: clientMessage }, { status: 500 });
+    if (holdIdForAlert && paymentIntentIdForAlert) {
+      const reconMessage =
+        "We received your payment. Our team is reconciling your booking and will contact you shortly. If you do not hear from us within one business day, please reach out with your confirmation email.";
+      try {
+        const dbRecon = getDb();
+        let customerEmail: string | undefined;
+        try {
+          const hs = await dbRecon.collection("holds").doc(holdIdForAlert).get();
+          if (hs.exists) {
+            customerEmail = (hs.data() as Hold)?.customerDraft?.email;
+          }
+        } catch {
+          /* non-fatal */
+        }
+        await upsertPendingRefundRecord(
+          dbRecon,
+          {
+            reason: "complete_after_payment_conversion_failed",
+            holdId: holdIdForAlert,
+            paymentIntentId: paymentIntentIdForAlert,
+          },
+          {
+            holdId: holdIdForAlert,
+            paymentIntentId: paymentIntentIdForAlert,
+            convertError: message.slice(0, 500),
+            ...(customerEmail && { customerEmail }),
+          }
+        );
+        await writeOperationalAlert({
+          type: "complete_after_payment_convert_failed",
+          holdId: holdIdForAlert,
+          paymentIntentId: paymentIntentIdForAlert,
+          source: "complete-after-payment",
+          error: message.slice(0, 500),
+        });
+      } catch (reconErr) {
+        bookingWarn("complete-after-payment", "reconciliation path failed", { err: reconErr });
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          reconciliationPending: true,
+          bookingConfirmed: false,
+          message: reconMessage,
+        },
+        { status: 200 }
+      );
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

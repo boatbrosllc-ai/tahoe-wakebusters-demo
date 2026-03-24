@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
  * Thin progress bar at top of viewport during client-side navigation.
  * Shows when user clicks a same-origin link; hides when pathname has updated (new page ready).
  */
-const NAV_SAFETY_TIMEOUT_MS = 12_000;
+const NAV_SAFETY_TIMEOUT_MS = 6_000;
 
 export function NavProgress() {
   const pathname = usePathname();

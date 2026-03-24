@@ -32,6 +32,8 @@ export async function GET(request: NextRequest) {
         bookingId: data.bookingId ?? null,
         sentAt: toIso(data.sentAt),
         channel: data.channel ?? "email",
+        audience: data.audience ?? "customer",
+        deliveryState: data.deliveryState ?? null,
       };
     });
     if (templateFilter) docs = docs.filter((d) => d.templateId === templateFilter);

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import Link from "next/link";
+import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
@@ -33,10 +34,12 @@ function setStoredManageToken(token: string | null): void {
   }
 }
 
+
 /** Only clear the stored token when the server proves the link is wrong — not on network/5xx blips. */
 function shouldClearStoredManageToken(status: number, errorMessage: string): boolean {
   if (status === 401 || status === 403 || status === 404) return true;
   if (status === 400 && errorMessage.toLowerCase().includes("missing token")) return true;
+  if (status === 400 && errorMessage.toLowerCase().includes("customeremail")) return true;
   return false;
 }
 
@@ -82,11 +85,13 @@ type ManageData = {
 
 function UpdateCardForm({
   token,
+  customerEmail,
   clientSecret,
   onSuccess,
   onCancel,
 }: {
   token: string;
+  customerEmail: string;
   clientSecret: string;
   onSuccess: () => void;
   onCancel: () => void;
@@ -123,7 +128,8 @@ function UpdateCardForm({
       const attachRes = await fetch("/api/booking/manage/attach-payment-method", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, paymentMethodId: pmId }),
+        credentials: "include",
+        body: JSON.stringify({ token, paymentMethodId: pmId, customerEmail }),
       });
       if (!attachRes.ok) {
         const d = await attachRes.json().catch(() => ({}));
@@ -184,10 +190,13 @@ function PayRemainingForm({
   const elements = useElements();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitInFlightRef = useRef(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setError(null);
     setLoading(true);
     try {
@@ -199,13 +208,13 @@ function PayRemainingForm({
       });
       if (confirmError) {
         setError(confirmError.message ?? "Payment failed");
-        setLoading(false);
         return;
       }
       onSuccess();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed");
     } finally {
+      submitInFlightRef.current = false;
       setLoading(false);
     }
   };
@@ -241,6 +250,9 @@ function PayRemainingForm({
 export function ManageBookingClient() {
   const searchParams = useSearchParams();
   const [token, setToken] = useState<string | null>(null);
+  const [manageCustomerEmail, setManageCustomerEmail] = useState<string | null>(null);
+  const [emailDraft, setEmailDraft] = useState("");
+  const [emailGateError, setEmailGateError] = useState<string | null>(null);
   const [data, setData] = useState<ManageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -256,6 +268,7 @@ export function ManageBookingClient() {
   const [finalPaymentVerifyMessage, setFinalPaymentVerifyMessage] = useState<string | null>(null);
   const [pendingStripeReturnVerify, setPendingStripeReturnVerify] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
     const redirectStatus = searchParams.get("redirect_status");
@@ -279,6 +292,7 @@ export function ManageBookingClient() {
       }
       setTokenExpired(false);
       setToken(raw);
+      setManageCustomerEmail(null);
       if (urlToken) {
         setStoredManageToken(urlToken);
       }
@@ -292,6 +306,8 @@ export function ManageBookingClient() {
         u.searchParams.delete("payment_intent");
         u.searchParams.delete("payment_intent_client_secret");
         const next = u.pathname + (u.search && u.search !== "?" ? u.search : "");
+        // Removing the token from the visible URL reduces accidental leakage via referrers and shared links.
+        // This does not protect against tokens captured before this effect runs (e.g. other scripts, extensions, or pre-navigation logging).
         window.history.replaceState({}, "", next || MANAGE_RETURN_PATH);
       }
       setLoading(true);
@@ -302,15 +318,18 @@ export function ManageBookingClient() {
   }, [searchParams]);
 
   const fetchBooking = useCallback(
-    async (opts?: { silent?: boolean }): Promise<ManageData | null> => {
+    async (opts?: { silent?: boolean; customerEmail?: string }): Promise<ManageData | null> => {
       if (!token) return null;
       if (!opts?.silent) setLoading(true);
       setError(null);
       try {
+        const email = opts?.customerEmail ?? manageCustomerEmail;
+        if (!email) return null;
         const res = await fetch("/api/booking/manage/get", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
+          credentials: "include",
+          body: JSON.stringify({ token, customerEmail: email }),
         });
         let body: Record<string, unknown> = {};
         try {
@@ -334,6 +353,7 @@ export function ManageBookingClient() {
           setData(null);
           if (/invalid|expired|not found|not valid for this booking/i.test(d.error)) {
             setStoredManageToken(null);
+            setManageCustomerEmail(null);
           }
           return null;
         }
@@ -347,7 +367,7 @@ export function ManageBookingClient() {
         if (!opts?.silent) setLoading(false);
       }
     },
-    [token]
+    [token, manageCustomerEmail]
   );
 
   const startFinalPaidPoll = useCallback(() => {
@@ -360,6 +380,7 @@ export function ManageBookingClient() {
     let elapsedSec = 0;
     const tick = async () => {
       const d = await fetchBooking({ silent: true });
+      if (unmountedRef.current) return;
       if (d?.status === "final_paid") {
         setVerifyingFinalPayment(false);
         setFinalPaymentVerifyMessage(null);
@@ -367,12 +388,14 @@ export function ManageBookingClient() {
       }
       elapsedSec += 3;
       if (elapsedSec >= 30) {
+        if (unmountedRef.current) return;
         setVerifyingFinalPayment(false);
         setFinalPaymentVerifyMessage(
           "Your payment was received. Your booking status will be updated shortly."
         );
         return;
       }
+      if (unmountedRef.current) return;
       pollTimerRef.current = setTimeout(() => void tick(), 3000);
     };
     void tick();
@@ -385,10 +408,12 @@ export function ManageBookingClient() {
       setPayProcessingMessage(null);
       setPayLoading(true);
       try {
+        if (!manageCustomerEmail) return;
         const res = await fetch("/api/booking/manage/pay-remaining", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, skipSavedPaymentMethod }),
+          credentials: "include",
+          body: JSON.stringify({ token, skipSavedPaymentMethod, customerEmail: manageCustomerEmail }),
         });
         const d = await res.json().catch(() => ({})) as {
           clientSecret?: string;
@@ -423,18 +448,19 @@ export function ManageBookingClient() {
         setPayLoading(false);
       }
     },
-    [token, fetchBooking, startFinalPaidPoll]
+    [token, manageCustomerEmail, fetchBooking, startFinalPaidPoll]
   );
 
   useEffect(() => {
     return () => {
+      unmountedRef.current = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    if (token) void fetchBooking();
-  }, [token, fetchBooking]);
+    if (token && manageCustomerEmail) void fetchBooking();
+  }, [token, manageCustomerEmail, fetchBooking]);
 
   useEffect(() => {
     if (!pendingStripeReturnVerify || !data || !token) return;
@@ -466,10 +492,60 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Invalid link</h1>
           <p className="text-brand-muted mb-6">This manage-booking link is missing or invalid.</p>
-          <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
+          <Link
+            href="/experiences"
+            className="text-brand-primary font-medium hover:underline"
+            onClick={() => {
+              setStoredManageToken(null);
+            }}
+          >
             Back to experiences
           </Link>
         </div>
+      </div>
+    );
+  }
+
+  if (token && !manageCustomerEmail && !tokenExpired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-brand-bg/30">
+        <form
+          className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const em = emailDraft.trim().toLowerCase();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+              setEmailGateError("Enter a valid email address.");
+              return;
+            }
+            setEmailGateError(null);
+            setManageCustomerEmail(em);
+          }}
+        >
+          <h1 className="text-xl font-bold text-brand-dark mb-2">Confirm your email</h1>
+          <p className="text-sm text-brand-muted mb-4">
+            Enter the email address you used for this booking to open your manage link.
+          </p>
+          <label className="block text-sm font-medium text-brand-dark mb-1" htmlFor="manage-email">
+            Email
+          </label>
+          <input
+            id="manage-email"
+            type="email"
+            autoComplete="email"
+            value={emailDraft}
+            onChange={(e) => setEmailDraft(e.target.value)}
+            className="w-full rounded-xl border border-brand-dark/20 px-3 py-2 mb-4 text-brand-dark"
+            required
+          />
+          {emailGateError && <p className="text-sm text-red-600 mb-4">{emailGateError}</p>}
+          <button
+            type="submit"
+            className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-4 w-full hover:bg-brand-primary/90"
+          >
+            Continue
+          </button>
+        </form>
       </div>
     );
   }
@@ -488,7 +564,7 @@ export function ManageBookingClient() {
         <div className="max-w-md w-full rounded-2xl border border-brand-dark/10 bg-white p-8 shadow-soft text-center">
           <h1 className="text-xl font-bold text-brand-dark mb-2">Unable to load booking</h1>
           <p className="text-brand-muted mb-6">{error ?? "Invalid link or server error."}</p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+          <div className="flex flex-col gap-3 items-center">
             <button
               type="button"
               onClick={() => void fetchBooking()}
@@ -499,7 +575,19 @@ export function ManageBookingClient() {
             >
               Retry
             </button>
-            <Link href="/experiences" className="text-brand-primary font-medium hover:underline" onClick={() => setStoredManageToken(null)}>
+            <p className="text-sm text-brand-muted">
+              Need help? Call us at{" "}
+              <a href={`tel:${siteConfig.phoneTel}`} className="text-brand-primary font-medium hover:underline">
+                {siteConfig.phone}
+              </a>
+            </p>
+            <Link
+              href="/experiences"
+              className="text-brand-primary font-medium hover:underline"
+              onClick={() => {
+                setStoredManageToken(null);
+              }}
+            >
               Back to experiences
             </Link>
           </div>
@@ -581,6 +669,7 @@ export function ManageBookingClient() {
             <Elements stripe={stripePromise} options={{ clientSecret: setupClientSecret }}>
               <UpdateCardForm
                 token={token}
+                customerEmail={manageCustomerEmail ?? ""}
                 clientSecret={setupClientSecret}
                 onSuccess={() => { setSetupClientSecret(null); void fetchBooking(); }}
                 onCancel={() => setSetupClientSecret(null)}
@@ -594,10 +683,12 @@ export function ManageBookingClient() {
                   setSetupError(null);
                   setSetupLoading(true);
                   try {
+                    if (!manageCustomerEmail) return;
                     const res = await fetch("/api/booking/manage/create-setup-intent", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ token }),
+                      credentials: "include",
+                      body: JSON.stringify({ token, customerEmail: manageCustomerEmail }),
                     });
                     if (!res.ok) {
                       let errBody: Record<string, unknown> = {};

@@ -16,23 +16,48 @@ export async function GET(
   try {
     const req = await getRequestById(requestId);
     if (!req) return NextResponse.json({ error: "Request not found" }, { status: 404 });
-    if (req.status !== "signed" || !req.signed?.pdfStoragePath) {
-      return NextResponse.json({ error: "No signed PDF for this request" }, { status: 404 });
+    if (req.status !== "signed" || !req.signed) {
+      return NextResponse.json({ error: "No signed waiver for this request" }, { status: 404 });
+    }
+
+    const pdfPath = req.signed.pdfStoragePath;
+    const htmlPath = req.signed.htmlStoragePath;
+    if (!pdfPath && !htmlPath) {
+      return NextResponse.json({ error: "No stored waiver document for this request" }, { status: 404 });
     }
 
     const bucket = getStorageBucket();
-    const file = bucket.file(req.signed.pdfStoragePath);
-    const [exists] = await file.exists();
-    if (!exists) return NextResponse.json({ error: "PDF file not found" }, { status: 404 });
 
-    const [buffer] = await file.download();
-    const body: BodyInit = new Uint8Array(buffer);
-    return new NextResponse(body, {
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="waiver-${requestId}.pdf"`,
-      },
-    });
+    if (pdfPath) {
+      const file = bucket.file(pdfPath);
+      const [exists] = await file.exists();
+      if (exists) {
+        const [buffer] = await file.download();
+        const body: BodyInit = new Uint8Array(buffer);
+        return new NextResponse(body, {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `inline; filename="waiver-${requestId}.pdf"`,
+          },
+        });
+      }
+    }
+
+    if (htmlPath) {
+      const file = bucket.file(htmlPath);
+      const [exists] = await file.exists();
+      if (!exists) return NextResponse.json({ error: "Waiver file not found" }, { status: 404 });
+      const [buffer] = await file.download();
+      const body: BodyInit = new Uint8Array(buffer);
+      return new NextResponse(body, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Disposition": `attachment; filename="waiver-${requestId}.html"`,
+        },
+      });
+    }
+
+    return NextResponse.json({ error: "Waiver file not found" }, { status: 404 });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });

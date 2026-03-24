@@ -59,13 +59,13 @@ describe("paymentIntentMatchesHoldForConversion", () => {
     assert.equal(r.ok, false);
   });
 
-  it("allows race when no intent ids yet but payment attempt version matches", () => {
+  it("rejects when hold has paymentAttemptVersion >= 1 but no PI ids on hold yet (persist race)", () => {
     const r = paymentIntentMatchesHoldForConversion(
       { id: "pi_first", metadata: { totalCents: "10000", ...v(1) }, amount: 10_000 },
       { paymentAttemptVersion: 1 },
       pricing
     );
-    assert.equal(r.ok, true);
+    assert.equal(r.ok, false);
   });
 
   it("rejects PI when hold has no intent ids and legacy hold version (0) — both empty", () => {

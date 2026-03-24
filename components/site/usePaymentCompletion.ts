@@ -1,7 +1,7 @@
 /**
  * Post–Stripe complete-after-payment orchestration for BookingModal (Comment 8).
  */
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type RefObject } from "react";
 import {
   completeAfterPaymentWithPolling,
   type CompleteAfterPaymentClientOutcome,
@@ -22,7 +22,8 @@ export type UsePaymentCompletionOptions = {
   setStripePaymentProcessing: (v: boolean) => void;
   setCompletedBookingId: (v: string | null) => void;
   handleCompleteAfterPaymentOutcome: (outcome: CompleteAfterPaymentClientOutcome) => void;
-  selectedExperienceId: string | undefined;
+  /** Ref so complete-after-payment error path reads current experience id (avoids stale closure). */
+  selectedExperienceIdRef: RefObject<string | undefined>;
 };
 
 export function usePaymentCompletion(options: UsePaymentCompletionOptions) {
@@ -72,13 +73,15 @@ export function usePaymentCompletion(options: UsePaymentCompletionOptions) {
       const outcome = await completeAfterPaymentWithPolling({
         paymentIntentId: resolvedPiId,
         holdId: resolvedHoldId,
+        receiptClaimToken: o.receiptClaimToken,
         signal: completeAfterAbortRef.current.signal,
         onEnteredProcessing: () => o.setStripePaymentProcessing(true),
       });
       o.handleCompleteAfterPaymentOutcome(outcome);
     } catch (e) {
       bookingError("client", "complete-after-payment unexpected failure", e, { holdId: resolvedHoldId });
-      if (o.selectedExperienceId) bookingCache.invalidateBookingCaches(o.selectedExperienceId);
+      const expId = o.selectedExperienceIdRef.current;
+      if (expId) bookingCache.invalidateBookingCaches(expId);
       o.setPaymentPhase("completeAfterPaymentRetry");
       o.setPaymentError("Request failed. Please try again.");
     }

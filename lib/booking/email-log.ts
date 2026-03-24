@@ -14,7 +14,13 @@ export type NotificationEventSubtype =
   | "final_charge_failed"
   | "final_charge_success"
   | "waiver_invite"
-  | "waiver_reminder";
+  | "waiver_reminder"
+  | "staff_booking_confirmation"
+  | "staff_reminder"
+  | "staff_final_payment_request"
+  | "staff_final_charge_success";
+
+export type NotificationAudience = "customer" | "staff";
 
 export interface EmailLogEntry {
   to: string;
@@ -25,6 +31,8 @@ export interface EmailLogEntry {
   sentAt: FirebaseFirestore.Timestamp;
   channel?: NotificationChannel;
   eventSubtype?: NotificationEventSubtype;
+  /** When `staff`, internal captain/ops notification (distinct from guest sends). */
+  audience?: NotificationAudience;
 }
 
 /**
@@ -40,6 +48,9 @@ export async function logNotificationSent(params: {
   eventSubtype?: NotificationEventSubtype;
   /** For SMS: message body or snippet. */
   bodySnippet?: string;
+  audience?: NotificationAudience;
+  /** Delivery failure state for staff/ops channel (optional). */
+  deliveryState?: "sent" | "failed";
 }): Promise<void> {
   const db = getDb();
   const { Timestamp } = getFirestoreExports();
@@ -52,6 +63,8 @@ export async function logNotificationSent(params: {
     bookingId: params.bookingId ?? null,
     eventSubtype: params.eventSubtype ?? params.templateId,
     bodySnippet: params.bodySnippet ?? null,
+    audience: params.audience ?? "customer",
+    deliveryState: params.deliveryState ?? null,
     sentAt: Timestamp.now(),
   });
 }
@@ -62,19 +75,23 @@ export async function logNotificationSent(params: {
 export async function logEmailSent(params: {
   to: string;
   toName?: string;
-  templateId: EmailTemplateId;
+  templateId: EmailTemplateId | NotificationEventSubtype;
   subject: string;
   bookingId?: string;
   eventSubtype?: NotificationEventSubtype;
+  audience?: NotificationAudience;
+  deliveryState?: "sent" | "failed";
 }): Promise<void> {
   await logNotificationSent({
     channel: "email",
     to: params.to,
     toName: params.toName,
-    templateId: params.templateId,
+    templateId: params.templateId as EmailTemplateId | NotificationEventSubtype,
     subject: params.subject,
     bookingId: params.bookingId,
-    eventSubtype: params.eventSubtype ?? params.templateId,
+    eventSubtype: params.eventSubtype ?? (params.templateId as NotificationEventSubtype),
+    audience: params.audience,
+    deliveryState: params.deliveryState,
   });
 }
 

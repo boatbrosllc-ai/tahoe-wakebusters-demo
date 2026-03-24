@@ -8,7 +8,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { verifyManageToken } from "@/lib/booking/manageToken";
 import { checkRateLimit, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
+import {
+  MANAGE_BOOKING_EMAIL_BIND_COOKIE,
+  signManageBookingEmailBind,
+} from "@/lib/booking/manage-booking-bind-cookie";
+import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 import type { Booking } from "@/lib/booking/types";
+import { resolveFinalBalanceFromBooking } from "@/lib/booking/final-balance-resolver";
 
 function getTokenFromRequest(request: NextRequest): string | null {
   const auth = request.headers.get("authorization");
@@ -19,11 +25,14 @@ function getTokenFromRequest(request: NextRequest): string | null {
   return null;
 }
 
-function parseBody(body: unknown): { token: string } | null {
+function parseBody(body: unknown): { token: string; customerEmail: string | null } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const token = typeof o.token === "string" ? o.token.trim() : null;
-  return token ? { token } : null;
+  const customerEmail =
+    typeof o.customerEmail === "string" ? o.customerEmail.trim().toLowerCase() : null;
+  if (!token) return null;
+  return { token, customerEmail };
 }
 
 function toDateStr(ts: { seconds?: number; toDate?: () => Date } | string | undefined): string | null {
@@ -49,11 +58,17 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: rl.retryAfterMs != null ? { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } : undefined }
       );
     }
+    const bodyJson = await request.json().catch(() => null);
     let token = getTokenFromRequest(request);
+    let customerEmailFromBody: string | null = null;
     if (!token) {
-      const body = await request.json().catch(() => null);
-      const parsed = parseBody(body);
+      const parsed = parseBody(bodyJson);
       token = parsed?.token ?? null;
+      customerEmailFromBody = parsed?.customerEmail ?? null;
+    } else {
+      const o = bodyJson != null && typeof bodyJson === "object" ? (bodyJson as Record<string, unknown>) : {};
+      const ce = typeof o.customerEmail === "string" ? o.customerEmail.trim().toLowerCase() : null;
+      customerEmailFromBody = ce;
     }
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 });
@@ -62,8 +77,9 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
-    if (!payload.email) {
-      return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+    const customerEmail = resolveManageCustomerEmail(request, payload.bookingId, customerEmailFromBody);
+    if (!customerEmail) {
+      return NextResponse.json({ error: "customerEmail is required in the request body" }, { status: 400 });
     }
     const rlManage = await checkRateLimit(getManageRateLimitKey(payload.bookingId));
     if (!rlManage.allowed) {
@@ -85,14 +101,15 @@ export async function POST(request: NextRequest) {
     }
     const booking = bookingSnap.data() as Booking;
     const bookingEmail = booking.customer?.email?.trim().toLowerCase();
-    if (!bookingEmail || bookingEmail !== payload.email) {
+    if (!bookingEmail || bookingEmail !== customerEmail) {
       return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
     }
     const stripe = booking.stripe ?? {};
     const card = booking.card;
     const status = booking.status;
     const finalChargeAt = booking.finalChargeAt;
-    const finalCents = stripe.finalAmountCents ?? 0;
+    const finalBalance = resolveFinalBalanceFromBooking(booking);
+    const finalCents = finalBalance.authoritativeFinalCents;
     const depositCents = stripe.depositAmountCents ?? 0;
     const totalCents = stripe.totalAmountCents ?? booking.pricing?.totalCents ?? 0;
     // Allow recovery when booking has an incomplete final intent (e.g. stuck in final_processing).
@@ -103,7 +120,7 @@ export async function POST(request: NextRequest) {
         status === "final_processing") &&
       finalCents > 0;
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       bookingId: payload.bookingId,
       customerName: booking.customer?.name,
       startDateStr: booking.startDateStr,
@@ -117,6 +134,17 @@ export async function POST(request: NextRequest) {
       canPayRemaining,
       paymentMethodOnFile: typeof stripe.paymentMethodId === "string" && stripe.paymentMethodId.length > 0,
     });
+    const bind = signManageBookingEmailBind(payload.bookingId, customerEmail);
+    if (bind) {
+      res.cookies.set(MANAGE_BOOKING_EMAIL_BIND_COOKIE, bind, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60,
+      });
+    }
+    return res;
   } catch (err) {
     if (err instanceof Error && err.message.includes("MANAGE_BOOKING_SECRET")) {
       return NextResponse.json({ error: "Manage links are not configured" }, { status: 503 });

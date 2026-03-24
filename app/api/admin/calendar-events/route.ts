@@ -144,7 +144,27 @@ export async function GET(request: NextRequest) {
         .where("startDateStr", "<=", toStr)
         .get();
 
-      const bookingDocs = snap.docs;
+      const seenBookingIds = new Set<string>();
+      const bookingDocs: QueryDocumentSnapshot[] = [];
+      for (const d of snap.docs) {
+        seenBookingIds.add(d.id);
+        bookingDocs.push(d);
+      }
+
+      const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
+      if (legacyFallbackEnabled) {
+        const legacySnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(300).get();
+        for (const doc of legacySnap.docs) {
+          if (seenBookingIds.has(doc.id)) continue;
+          const d = doc.data() as { startDateStr?: string; slotId?: string };
+          if (d.startDateStr) continue;
+          const parsed = parseSlotIdRelaxed((d.slotId ?? ""));
+          const dateStr = parsed?.dateStr ?? null;
+          if (!dateStr || dateStr < fromStr || dateStr > toStr) continue;
+          seenBookingIds.add(doc.id);
+          bookingDocs.push(doc);
+        }
+      }
       const experienceIds = new Set<string>();
       const boatIds = new Set<string>();
       for (const d of bookingDocs) {

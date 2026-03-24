@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import type { Experience } from "@/content/experiences";
 import { BookingCTA } from "./BookingCTA";
@@ -25,6 +26,7 @@ export function ExperienceCard({
   className,
 }: ExperienceCardProps) {
   const href = `/experiences/${experience.slug}`;
+  const router = useRouter();
   const { openWithSelection } = useBookingModal();
 
   const handleBookNow = () => {
@@ -39,23 +41,22 @@ export function ExperienceCard({
       transition={{ duration: 0.4, delay: index * 0.06 }}
       className={className}
     >
-      <Card
+      <Link
+        href={href}
         className={cn(
-          "overflow-hidden border border-brand-dark/8 rounded-2xl shadow-soft-lg",
-          "transition-all duration-300",
-          "hover:shadow-premium hover:border-brand-primary/20 active:scale-[0.99]",
-          "flex flex-col h-full",
-          variant === "compact" && "flex-col",
-          featured && "border-2 border-brand-primary/25 shadow-md"
+          "group block h-full rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
         )}
+        aria-label={`${experience.title} — view details`}
       >
-        <Link
-          href={href}
+        <Card
           className={cn(
-            "flex flex-col flex-1 min-w-0 group",
-            variant === "compact" && "flex-col"
+            "overflow-hidden border border-brand-dark/8 rounded-2xl shadow-soft-lg",
+            "transition-all duration-300",
+            "hover:shadow-premium hover:border-brand-primary/20 active:scale-[0.99]",
+            "flex flex-col h-full",
+            variant === "compact" && "flex-col",
+            featured && "border-2 border-brand-primary/25 shadow-md"
           )}
-          aria-label={`${experience.title} — view details`}
         >
           <div
             className={cn(
@@ -74,13 +75,11 @@ export function ExperienceCard({
               sizes={variant === "compact" ? "(max-width: 1024px) 50vw, 25vw" : "(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/30 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-            {/* Featured / Most popular badge */}
             {featured && (
               <span className="absolute top-2 left-2 rounded-lg bg-brand-primary font-semibold text-brand-dark shadow-soft backdrop-blur-sm px-2.5 py-1 text-xs sm:text-sm" aria-hidden>
                 Most popular
               </span>
             )}
-            {/* Duration badge on image */}
             <span
               className={cn(
                 "absolute top-2 right-2 rounded-lg bg-white/95 font-semibold text-brand-dark shadow-soft backdrop-blur-sm",
@@ -141,37 +140,41 @@ export function ExperienceCard({
               </ul>
             </CardContent>
           </div>
-        </Link>
-        <div
-          className={cn(
-            "border-t border-brand-dark/5 flex flex-nowrap items-center justify-center gap-2 sm:gap-3 bg-brand-bg/30",
-            variant === "compact" ? "p-2 sm:p-2.5" : "p-5 sm:p-6 lg:p-7"
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <BookingCTA
-            source="experience_card"
-            page="home"
-            experience={experience.slug}
-            variant="inline"
-            showCall={false}
-            dense={variant === "compact"}
-            onBookNowClick={handleBookNow}
-          />
-          <Link
-            href={href}
+          <div
             className={cn(
-              "shrink-0 inline-flex items-center justify-center font-medium border-2 border-brand-primary text-brand-primary hover:text-brand-muted hover:bg-brand-primary/10 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-              variant === "compact"
-                ? "h-11 min-h-[44px] rounded-xl px-4 py-2.5 text-base sm:text-lg"
-                : "h-12 sm:h-14 min-h-[44px] px-5 sm:px-6 py-2.5 rounded-xl text-base sm:text-lg hover:scale-[1.02] active:scale-[0.98]"
+              "border-t border-brand-dark/5 flex flex-nowrap items-center justify-center gap-2 sm:gap-3 bg-brand-bg/30",
+              variant === "compact" ? "p-2 sm:p-2.5" : "p-5 sm:p-6 lg:p-7"
             )}
-            aria-label={`Learn more about ${experience.title}`}
           >
-            Learn more
-          </Link>
-        </div>
-      </Card>
+            <BookingCTA
+              source="experience_card"
+              page="home"
+              experience={experience.slug}
+              variant="inline"
+              showCall={false}
+              dense={variant === "compact"}
+              onBookNowClick={handleBookNow}
+            />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                router.push(href);
+              }}
+              className={cn(
+                "shrink-0 inline-flex items-center justify-center font-medium border-2 border-brand-primary text-brand-primary hover:text-brand-muted hover:bg-brand-primary/10 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                variant === "compact"
+                  ? "h-11 min-h-[44px] rounded-xl px-4 py-2.5 text-base sm:text-lg"
+                  : "h-12 sm:h-14 min-h-[44px] px-5 sm:px-6 py-2.5 rounded-xl text-base sm:text-lg hover:scale-[1.02] active:scale-[0.98]"
+              )}
+              aria-label={`Learn more about ${experience.title}`}
+            >
+              Learn more
+            </button>
+          </div>
+        </Card>
+      </Link>
     </motion.article>
   );
 }

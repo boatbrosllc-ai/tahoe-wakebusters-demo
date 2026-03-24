@@ -23,7 +23,11 @@ export const BOOKING_PREVIEW = {
   trustLine: "Instant confirmation • No hidden fees",
 };
 
-/** Starting price by duration (hours) — UI only. */
+/**
+ * Starting price by duration (hours) — static fallback / skeleton only.
+ * Authoritative charter rates live in Firestore `experiences/{id}/rates`; keep this map in sync manually or pass
+ * server-fetched `pricingDollarsByDuration` into `PricingSection` (see lake-austin-pontoon page).
+ */
 export const PRICING_MAP: Record<number, number> = {
   2: 450,
   4: 450,

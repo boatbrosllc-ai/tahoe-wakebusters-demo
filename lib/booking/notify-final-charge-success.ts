@@ -1,5 +1,5 @@
 /**
- * Idempotent final-balance success email: tryClaimSend + Brevo + logNotificationSent + retry queue on failure.
+ * Idempotent final-balance success email: tryClaimSend + Brevo + best-effort logs + retry queue on provider failure only.
  */
 
 import type { Firestore } from "firebase-admin/firestore";
@@ -12,21 +12,37 @@ import { sendFinalChargeSuccessEmail } from "@/lib/booking/brevo";
 import { isDepositMode } from "@/lib/booking/deposit-mode";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
+import { notifyStaffFinalChargeSuccess } from "@/lib/booking/staff-notifications";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 const TEMPLATE_KEY = "final_charge_success";
 
-/** Returns true on success or duplicate skip (caller may clear retry queue). */
-export async function notifyFinalChargeSuccess(db: Firestore, bookingId: string, booking: Booking): Promise<boolean> {
-  if (!isDepositMode(booking)) return true;
+export type NotifyFinalChargeSuccessOptions = {
+  /** When true, do not enqueue reminder-retry (e.g. notification outbox handles backoff). */
+  skipReminderRetryQueue?: boolean;
+};
+
+export type NotifyFinalChargeSuccessResult =
+  | { ok: true; providerMessageId?: string; duplicate?: boolean }
+  | { ok: false };
+
+/** Returns ok on success or duplicate skip (claim already sent). */
+export async function notifyFinalChargeSuccess(
+  db: Firestore,
+  bookingId: string,
+  booking: Booking,
+  options?: NotifyFinalChargeSuccessOptions
+): Promise<NotifyFinalChargeSuccessResult> {
+  if (!isDepositMode(booking)) return { ok: true };
 
   const claimed = await tryClaimSend(db, bookingId, TEMPLATE_KEY);
-  if (!claimed) return true;
+  if (!claimed) return { ok: true, duplicate: true };
 
   const toEmail = booking.customer?.email?.trim();
   const customerName = booking.customer?.name?.trim() ?? "Guest";
   if (!toEmail) {
     await markClaimFailed(db, bookingId, TEMPLATE_KEY, "No customer email");
-    return false;
+    return { ok: false };
   }
 
   const finalCents = booking.stripe?.finalAmountCents ?? 0;
@@ -36,6 +52,7 @@ export async function notifyFinalChargeSuccess(db: Firestore, bookingId: string,
   if (slotId) {
     const parsed = parseSlotId(slotId.trim());
     if (parsed) {
+      /** `tripStart` is a UTC instant from `getSlotStartEnd`; email lines below format it in America/Chicago. */
       const tripStart = getSlotStartEnd(
         parsed.dateStr,
         parsed.startHour,
@@ -71,15 +88,21 @@ export async function notifyFinalChargeSuccess(db: Firestore, bookingId: string,
   const subject = `Payment received — ${experienceName} – Boat Bros ATX`;
 
   try {
-    await sendFinalChargeSuccessEmail({
-      to: toEmail,
-      customerName,
-      experienceName,
-      tripDate: tripDateStr || "—",
-      startTime: startTimeStr || "—",
-      amountFormatted: formatMoney(finalCents),
-    });
-    await logNotificationSent({
+    const { providerMessageId } = await sendFinalChargeSuccessEmail(
+      {
+        to: toEmail,
+        customerName,
+        experienceName,
+        tripDate: tripDateStr || "—",
+        startTime: startTimeStr || "—",
+        amountFormatted: formatMoney(finalCents),
+      },
+      { idempotencyKey: `${bookingId}_final_charge_success` }
+    );
+
+    await markClaimSent(db, bookingId, TEMPLATE_KEY, { providerMessageId });
+
+    void logNotificationSent({
       channel: "email",
       to: toEmail,
       toName: customerName,
@@ -87,13 +110,36 @@ export async function notifyFinalChargeSuccess(db: Firestore, bookingId: string,
       subject,
       bookingId,
       eventSubtype: "final_charge_success",
-    });
-    await markClaimSent(db, bookingId, TEMPLATE_KEY);
-    return true;
+    }).catch((e) => console.error("[notifyFinalChargeSuccess] logNotificationSent", e));
+
+    try {
+      await notifyStaffFinalChargeSuccess({
+        bookingId,
+        experienceName,
+        tripDate: tripDateStr || "—",
+        startTime: startTimeStr || "—",
+        amountFormatted: formatMoney(finalCents),
+        customerName,
+        customerEmail: toEmail,
+      });
+    } catch (staffErr) {
+      const msg = staffErr instanceof Error ? staffErr.message : String(staffErr);
+      await writeOperationalAlert({
+        type: "staff_notification_failed",
+        bookingId,
+        templateId: "staff_final_charge_success",
+        lastError: msg,
+        source: "notify-final-charge-success",
+      });
+    }
+
+    return { ok: true, providerMessageId };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     await markClaimFailed(db, bookingId, TEMPLATE_KEY, errMsg);
-    await addToRetryQueue(db, bookingId, "final_charge_success", errMsg);
-    return false;
+    if (!options?.skipReminderRetryQueue) {
+      await addToRetryQueue(db, bookingId, "final_charge_success", errMsg);
+    }
+    return { ok: false };
   }
 }

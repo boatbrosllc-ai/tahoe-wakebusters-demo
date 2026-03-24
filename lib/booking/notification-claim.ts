@@ -33,6 +33,7 @@ export async function tryClaimSend(
     if (snap.exists) {
       const d = snap.data() as NotificationSendClaim;
       if (d.status === "sent") return false;
+      if (d.status === "skipped") return false;
       if (d.status === "claimed") {
         const claimedAt = d.claimedAt as { toDate?: () => Date };
         const atMs = claimedAt?.toDate ? claimedAt.toDate().getTime() : 0;
@@ -51,12 +52,34 @@ export async function tryClaimSend(
   });
 }
 
-export async function markClaimSent(db: Firestore, bookingId: string, templateKey: string): Promise<void> {
+export async function markClaimSent(
+  db: Firestore,
+  bookingId: string,
+  templateKey: string,
+  opts?: { providerMessageId?: string }
+): Promise<void> {
   const { FieldValue } = getFirestoreExports();
   const ref = db.collection(COLLECTION).doc(docId(bookingId, templateKey));
   await ref.update({
     status: "sent",
     sentAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    ...(opts?.providerMessageId ? { providerMessageId: opts.providerMessageId } : {}),
+  });
+}
+
+export async function markClaimSkipped(
+  db: Firestore,
+  bookingId: string,
+  templateKey: string,
+  reason: string
+): Promise<void> {
+  const { Timestamp, FieldValue } = getFirestoreExports();
+  const ref = db.collection(COLLECTION).doc(docId(bookingId, templateKey));
+  await ref.update({
+    status: "skipped",
+    skipReason: reason,
+    skippedAt: Timestamp.now(),
     updatedAt: FieldValue.serverTimestamp(),
   });
 }
@@ -75,4 +98,21 @@ export async function markClaimFailed(
     lastError: error,
     updatedAt: FieldValue.serverTimestamp(),
   });
+}
+
+/** Claims past lease window (same lease semantics as tryClaimSend). */
+export async function getStaleClaimCountsByTemplateKey(db: Firestore): Promise<Record<string, number>> {
+  const { Timestamp } = getFirestoreExports();
+  const staleBefore = Timestamp.fromMillis(Date.now() - CLAIM_LEASE_MS);
+  const snap = await db
+    .collection(COLLECTION)
+    .where("status", "==", "claimed")
+    .where("claimedAt", "<", staleBefore)
+    .get();
+  const by: Record<string, number> = {};
+  for (const d of snap.docs) {
+    const tk = (d.data() as NotificationSendClaim).templateKey ?? "unknown";
+    by[tk] = (by[tk] ?? 0) + 1;
+  }
+  return by;
 }

@@ -26,6 +26,7 @@ export const handler = schedule("15 * * * *", async () => {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cronSecret}`,
+        "X-Cron-Timestamp": String(Math.floor(Date.now() / 1000)),
       },
       signal: controller.signal,
     });

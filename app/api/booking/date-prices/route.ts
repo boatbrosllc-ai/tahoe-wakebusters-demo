@@ -1,11 +1,14 @@
 /**
  * Returns the listing price (cents) per date for the next N days for an experience.
- * Optional rateId: when set, uses that rate so step 3 calendar prices match checkout.
+ *
+ * **rateId:** When set, uses that rate’s duration/pricing so the calendar matches checkout for the selected tier.
+ * When `rateId` is omitted, the API uses the **shortest active rate by duration** (deterministic default — may not
+ * match a customer’s eventual rate until they pick one). Prefer always passing `rateId` from the booking UI.
+ *
  * Uses holiday/weekend/Fri-Sun pricing so step 3 shows true prices for each date.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { FieldPath } from "firebase-admin/firestore";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
 
@@ -14,6 +17,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 26;
 
 import { getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents, isDateInAnyHolidayRange, isDefaultUSHoliday } from "@/lib/booking/pricing";
+import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
 import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-slots";
@@ -21,31 +25,13 @@ import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug }
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
+import {
+  LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
+  scanLegacyActiveHoldsForExperience,
+} from "@/lib/booking/legacy-hold-scan";
 
-const LEGACY_HOLDS_PAGE_SIZE = 100;
-
-/** Cursor-based pagination over legacy holds (no startDateStr) for one experience until exhaustion. */
-async function fetchAllLegacyHolds(
-  db: ReturnType<typeof getDb>,
-  expId: string
-): Promise<import("firebase-admin").firestore.QuerySnapshot> {
-  const allDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
-  let lastDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
-  for (;;) {
-    let query = db
-      .collection("holds")
-      .where("experienceId", "==", expId)
-      .where("status", "==", "active")
-      .orderBy(FieldPath.documentId())
-      .limit(LEGACY_HOLDS_PAGE_SIZE);
-    if (lastDoc) query = query.startAfter(lastDoc) as typeof query;
-    const snap = await query.get();
-    allDocs.push(...snap.docs);
-    if (snap.empty || snap.docs.length < LEGACY_HOLDS_PAGE_SIZE) break;
-    lastDoc = snap.docs[snap.docs.length - 1];
-  }
-  return { docs: allDocs, empty: allDocs.length === 0, size: allDocs.length } as import("firebase-admin").firestore.QuerySnapshot;
-}
+/** Abort legacy hold pagination early so ticketed calendar can render if Firestore is slow (see `partialData`). Prefer `DISABLE_LEGACY_HOLDS_FALLBACK=true` after holds `startDateStr` backfill to remove this timeout risk. */
+const LEGACY_HOLDS_FETCH_BUDGET_MS = 8_000;
 
 /** YYYY-MM-DD in America/Chicago for consistent calendar and checkout pricing. */
 function toDateStrCentral(d: Date): string {
@@ -135,7 +121,9 @@ export async function GET(request: NextRequest) {
       start = new Date(startDateParam + "T12:00:00.000Z");
       if (isNaN(start.getTime())) start = new Date();
     } else {
-      start = new Date();
+      const chicagoToday = getChicagoToday();
+      start = new Date(chicagoToday + "T12:00:00.000Z");
+      if (isNaN(start.getTime())) start = new Date();
     }
     const prices: Record<string, number> = {};
     const holidayDateStrings: string[] = [];
@@ -163,6 +151,21 @@ export async function GET(request: NextRequest) {
       // Multi-boat listing experience with no boatId: calendar uses merged type-level rates only; per-boat
       // priceOverrides are applied after the customer selects a boat (see create-hold / effective-price).
     }
+    /** When a specific boat is selected, use that boat's boatType calendar only — not merged across all listing boats. */
+    let calendarRatesForDayLoop: Record<string, number> | undefined = mergedCalendarRates;
+    if (useListingBoatCalendar && boatIdParam) {
+      let lb: ListingBoat | null = null;
+      const fromSnap = listingBoatsSnap.docs.find((d) => d.id === boatIdParam);
+      if (fromSnap) lb = fromSnap.data() as ListingBoat;
+      else {
+        const boatSnap = await db.collection("boats").doc(boatIdParam).get();
+        if (boatSnap.exists) lb = boatSnap.data() as ListingBoat;
+      }
+      const bt = typeof lb?.boatType === "string" ? lb.boatType.trim() : "";
+      if (bt) {
+        calendarRatesForDayLoop = await fetchMergedPricingCalendarRatesForBoatTypes(db, [bt]);
+      }
+    }
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
       const dateStr = toDateStrCentral(d);
@@ -179,7 +182,7 @@ export async function GET(request: NextRequest) {
             d,
             holidayDates,
             priceOverridesForCalendar,
-            mergedCalendarRates,
+            calendarRatesForDayLoop,
             weekendDays,
             friSunDays
           )
@@ -192,6 +195,7 @@ export async function GET(request: NextRequest) {
 
     // For ticketed experiences: batch-query ticket counts so the calendar can show sold-out dates
     let ticketsAvailableByDate: Record<string, number> | undefined;
+    let legacyTimedOut = false;
     if (isTicketed) {
       const total = exp.maxCapacity ?? exp.maxGuests ?? 36;
       const dateSet = new Set(dateStrs);
@@ -200,8 +204,6 @@ export async function GET(request: NextRequest) {
       const endStr = dateStrs[dateStrs.length - 1];
 
       const allExpIds = getExperienceIdVariants(experienceId, effectiveSlug);
-      type QuerySnapshot = import("firebase-admin").firestore.QuerySnapshot;
-
       // Bookings: one query per experience ID variant, then merge (so sunset/holiday match regardless of stored experienceId)
       const bookingsSnaps = await Promise.all(
         allExpIds.map((expId) =>
@@ -225,16 +227,25 @@ export async function GET(request: NextRequest) {
       // startDateStr on holds and set DISABLE_LEGACY_HOLDS_FALLBACK=true.
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
       if (legacyFallbackEnabled) warnIfLegacyHoldsFallbackEnabled();
-      const holdsLegacySnaps = legacyFallbackEnabled
-        ? await Promise.all(allExpIds.map((expId) => fetchAllLegacyHolds(db, expId)))
-        : ([] as QuerySnapshot[]);
+      const holdsLegacyDocLists = legacyFallbackEnabled
+        ? await Promise.all(
+            allExpIds.map(async (expId) => {
+              const r = await scanLegacyActiveHoldsForExperience(db, expId, {
+                budgetMs: LEGACY_HOLDS_FETCH_BUDGET_MS,
+                emptyDocsOnTimeout: true,
+              });
+              if (r.timedOut) legacyTimedOut = true;
+              return r.docs;
+            })
+          )
+        : ([] as import("firebase-admin").firestore.QueryDocumentSnapshot[][]);
 
       const holdDocMap = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();
       for (const snap of holdsWindowedSnaps) {
         for (const doc of snap.docs) holdDocMap.set(doc.id, doc);
       }
-      for (const snap of holdsLegacySnaps) {
-        for (const doc of snap.docs) {
+      for (const legacyDocs of holdsLegacyDocLists) {
+        for (const doc of legacyDocs) {
           if (holdDocMap.has(doc.id)) continue;
           const legacyData = doc.data() as { startDateStr?: string };
           if (legacyData.startDateStr) continue;
@@ -280,7 +291,19 @@ export async function GET(request: NextRequest) {
       Expires: "0",
     };
     return NextResponse.json(
-      { prices, holidayDateStrings, pricingType: isTicketed ? "ticketed" : (exp.pricingType ?? "charter"), ticketsAvailableByDate },
+      {
+        prices,
+        holidayDateStrings,
+        pricingType: isTicketed ? "ticketed" : (exp.pricingType ?? "charter"),
+        ticketsAvailableByDate,
+        ...(legacyTimedOut
+          ? {
+              partialData: true,
+              conservativeEstimate: true as const,
+              availabilityNote: LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
+            }
+          : {}),
+      },
       { headers: noStoreHeaders }
     );
   } catch (err) {

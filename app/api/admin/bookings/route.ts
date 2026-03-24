@@ -7,12 +7,14 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, getCentralCalendarDayBounds, buildSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
-import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
+import { computePricing } from "@/lib/booking/pricing";
+import { TAX_RATE } from "@/lib/booking/constants";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -263,7 +265,17 @@ export async function POST(request: NextRequest) {
         }
       : { name: "", email: "", phone: "" };
     const partySize = typeof body.partySize === "number" ? body.partySize : parseInt(String(body.partySize), 10) || 1;
-    const totalCents = typeof body.totalCents === "number" ? body.totalCents : Math.round(parseFloat(String(body.totalCents || 0)) * 100);
+    const amountIncludesTax = body.amountIncludesTax === true;
+    const confirmZeroDollarBooking = body.confirmZeroDollarBooking === true;
+    const subtotalCentsRaw =
+      typeof body.subtotalCents === "number"
+        ? Math.max(0, Math.floor(body.subtotalCents))
+        : typeof body.totalCents === "number"
+          ? Math.max(0, Math.floor(body.totalCents))
+          : Math.max(0, Math.round(parseFloat(String(body.totalCents ?? 0)) * 100));
+    const subtotalCentsInput = amountIncludesTax
+      ? Math.max(0, Math.floor(subtotalCentsRaw / (1 + TAX_RATE)))
+      : subtotalCentsRaw;
     const source = typeof body.source === "string" ? body.source.trim() : "";
     const externalReference = typeof body.externalReference === "string" ? body.externalReference.trim() : "";
     const specialNotes = typeof body.specialNotes === "string" ? body.specialNotes.trim() : "";
@@ -299,7 +311,32 @@ export async function POST(request: NextRequest) {
     if (!customer.name || !customer.email) return NextResponse.json({ error: "customer name and email are required" }, { status: 400 });
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(customer.email)) return NextResponse.json({ error: "Invalid email format" }, { status: 400 });
-    if (totalCents < 0) return NextResponse.json({ error: "totalCents must be >= 0" }, { status: 400 });
+    if (subtotalCentsInput < 0) return NextResponse.json({ error: "subtotal must be >= 0" }, { status: 400 });
+    if (subtotalCentsInput === 0 && !confirmZeroDollarBooking) {
+      return NextResponse.json(
+        {
+          error:
+            "This booking has a $0 total. Confirm that a complimentary or zero-dollar booking is intentional (send confirmZeroDollarBooking: true).",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!amountIncludesTax && subtotalCentsInput > 0) {
+      const mod100 = subtotalCentsInput % 100;
+      if (mod100 === 25 || mod100 === 75) {
+        console.warn(
+          "[admin/bookings] manual booking subtotalCents ends in .25/.75 — confirm the admin entered pre-tax subtotal, not a tax-inclusive total",
+          { subtotalCentsInput, experienceId }
+        );
+      }
+      if (subtotalCentsInput % 100 === 0 && subtotalCentsInput >= 10_000) {
+        console.warn(
+          `[admin/bookings] manual booking subtotal is a whole-dollar amount — double-check it is subtotal before tax (${(TAX_RATE * 100).toFixed(2)}%), not an all-in total`,
+          { subtotalCentsInput, experienceId }
+        );
+      }
+    }
 
     const db = getDb();
     const { Timestamp, FieldValue } = getFirestoreExports();
@@ -350,11 +387,16 @@ export async function POST(request: NextRequest) {
     }
     const noteParts = [source, externalReference ? `Ref: ${externalReference}` : "", specialNotes].filter(Boolean);
     const notes = noteParts.join(" — ");
+    const pricingComputed = computePricing({
+      rate: { priceCents: subtotalCentsInput },
+      addons: [],
+      qty: 1,
+    });
     const pricing = {
-      subtotalCents: totalCents,
-      taxCents: 0,
-      feesCents: 0,
-      totalCents,
+      subtotalCents: pricingComputed.subtotalCents,
+      taxCents: pricingComputed.taxCents,
+      feesCents: pricingComputed.feesCents,
+      totalCents: pricingComputed.totalCents,
       currency: "usd",
     };
 
@@ -376,7 +418,7 @@ export async function POST(request: NextRequest) {
       pricing,
       status: "paid",
       stripe: {},
-      ...(totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
+      ...(pricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
       // Manual bookings do not reserve shared-departure inventory; use charter or leave unset so cancel does not release capacity that was never held.
       ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "charter" as const }),
       ...(hasBilling && billingAddress && { billingAddress }),
@@ -400,6 +442,13 @@ export async function POST(request: NextRequest) {
     );
 
     await db.runTransaction(async (tx) => {
+      let preReadReservedSeats = 0;
+      if (exp.pricingType === "ticketed" && inventoryRef !== null) {
+        const invSnapFirst = await tx.get(inventoryRef);
+        preReadReservedSeats = invSnapFirst.exists
+          ? ((invSnapFirst.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+          : 0;
+      }
       const blocked = await hasOverlappingBlock({
         db,
         Timestamp,
@@ -440,7 +489,7 @@ export async function POST(request: NextRequest) {
           }
         }
         const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
-        const reservedSeats = await getReservedSeats(tx, inventoryRef);
+        const reservedSeats = preReadReservedSeats;
         if (sold + reservedSeats + partySizeNum > capacity) {
           const available = Math.max(0, capacity - sold - reservedSeats);
           throw new Error(
@@ -449,7 +498,9 @@ export async function POST(request: NextRequest) {
               : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
           );
         }
-        // Manual booking does not mutate departureInventory: the new paid row is counted in `sold` above.
+        // Touching this document inside the transaction forces Firestore to serialize this admin booking against any concurrent create-hold that also reads/writes inventoryRef in the same transaction, preventing over-selling. reservedSeats is intentionally not modified: the new booking appears in the sold count of subsequent queries and does not need a separate reservation.
+        tx.set(inventoryRef, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        // Manual booking does not change reservedSeats; the new paid row is counted in `sold` above.
       }
 
       const slotsRef = boatId
@@ -528,14 +579,27 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      const slotSnapBeforeWrite = await tx.get(slotRef);
+      if (slotSnapBeforeWrite.exists) {
+        const slotStatus = (slotSnapBeforeWrite.data() as { status?: string }).status;
+        if (slotStatus === "held") {
+          throw Object.assign(
+            new Error(
+              "This slot is currently on hold. Release the hold or wait for it to expire before adding a manual booking."
+            ),
+            { code: "SLOT_CONFLICT" }
+          );
+        }
+      }
+
       tx.set(bookingRef, booking);
       addConfirmationOutboxInTransaction(tx, db, bookingId);
-      if (totalCents > 0) {
+      if (pricing.totalCents > 0) {
         const summaryRef = db.collection("summaries").doc("revenue");
         tx.set(
           summaryRef,
           {
-            totalRevenueCents: FieldValue.increment(totalCents),
+            totalRevenueCents: FieldValue.increment(pricing.totalCents),
             bookingCount: FieldValue.increment(1),
             customerCount: FieldValue.increment(1),
           },
@@ -546,7 +610,7 @@ export async function POST(request: NextRequest) {
         tx.set(
           db.collection("summaries").doc(monthKey),
           {
-            revenueCents: FieldValue.increment(totalCents),
+            revenueCents: FieldValue.increment(pricing.totalCents),
             bookingCount: FieldValue.increment(1),
           },
           { merge: true }
@@ -558,7 +622,7 @@ export async function POST(request: NextRequest) {
         startAt: Timestamp.fromDate(slotStart),
         endAt: Timestamp.fromDate(slotEnd),
         updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      });
       // Do not increment reservedSeats for ticketed: the new booking is already counted in sold queries from the bookings collection.
     });
     try {
@@ -572,12 +636,29 @@ export async function POST(request: NextRequest) {
         await sendWaiverInviteAndMarkSent(waiverResult);
       }
     } catch (waiverErr) {
-      console.error("[admin/bookings] waiver creation failed", waiverErr);
+      const wMsg = waiverErr instanceof Error ? waiverErr.message : String(waiverErr);
+      const wStack = waiverErr instanceof Error ? waiverErr.stack : undefined;
+      console.warn("[admin/bookings] waiver creation failed:", wMsg, wStack ?? "");
     }
     // Confirmation email (+ SMS) is sent by the process-confirmation-outbox cron
-    return NextResponse.json({ id: bookingId });
+    return NextResponse.json({
+      id: bookingId,
+      pricing,
+      totalCentsIntegrity: {
+        storedTotalCents: pricing.totalCents,
+        subtotalCentsInput,
+        amountIncludesTax,
+        taxRate: TAX_RATE,
+      },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof BlockCheckUnavailableError) {
+      return NextResponse.json(
+        { error: "Unable to verify admin blocks. Deploy Firestore indexes and try again." },
+        { status: 503 }
+      );
+    }
     if ((err as { code?: string }).code === "SLOT_CONFLICT" || (err as { code?: string }).code === "BLOCK_CONFLICT") {
       return NextResponse.json({ error: message }, { status: 409 });
     }

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { brand } from "@/content/brand";
 import { SiteChrome } from "@/components/site/SiteChrome";
 import { CommercialPageSchema } from "@/components/site/CommercialPageSchema";
+import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 
@@ -79,11 +81,13 @@ export default async function SiteLayout({
   children: React.ReactNode;
 }) {
   const jsonLd = JSON.stringify(localBusinessJsonLd());
+  const cookieStore = await cookies();
+  const adminSessionCookiePresent = Boolean(cookieStore.get(ADMIN_SESSION_COOKIE_NAME)?.value);
 
   return (
     <>
       <CommercialPageSchema jsonLd={jsonLd} />
-      <SiteChrome>{children}</SiteChrome>
+      <SiteChrome adminSessionCookiePresent={adminSessionCookiePresent}>{children}</SiteChrome>
     </>
   );
 }

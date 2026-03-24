@@ -2,9 +2,9 @@
  * Seed Firestore with 4 experiences, rates, and add-ons.
  * Run from project root: node scripts/seed-firestore.js [SEED_SECRET]
  *
- * When the seed endpoint is protected (SEED_SECRET set on the server), pass the secret:
- *   node scripts/seed-firestore.js your-secret
- * Or set SEED_SECRET in .env.local; the script will read it from there if not passed as an argument.
+ * Seeding is POST /api/admin/seed/experiences and requires an **admin session** (middleware + Firebase admin cookie).
+ * Use the admin dashboard seed action, or curl with a session cookie after signing in at /admin/login.
+ * Bearer-only seed URLs under /api/booking/ were removed.
  *
  * Requires the dev server to be running first: npm run dev
  * Then in another terminal: node scripts/seed-firestore.js
@@ -33,16 +33,14 @@ if (fs.existsSync(envPath)) {
   if (appBase) baseUrl = appBase.replace(/\/$/, "");
 }
 
-const seedSecret = process.argv[2]?.trim() || (rawEnv ? getEnv("SEED_SECRET", rawEnv) : undefined);
-
-const url = baseUrl + "/api/booking/seed-experiences";
+const url = baseUrl + "/api/admin/seed/experiences";
 
 async function main() {
   console.log("Seeding Firestore via", url, "...");
+  console.warn(
+    "Note: this endpoint requires admin session cookies. If this returns 401, use the admin dashboard seed UI or curl with Cookie from a logged-in browser."
+  );
   const headers = { "Content-Type": "application/json" };
-  if (seedSecret) {
-    headers["Authorization"] = "Bearer " + seedSecret;
-  }
   try {
     const res = await fetch(url, { method: "POST", headers });
     const data = await res.json().catch(() => ({}));

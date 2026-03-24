@@ -1,9 +1,10 @@
 /**
  * Signed receipt token for viewing booking details (ownership-bound).
- * HMAC-SHA256(bookingId + exp) with RECEIPT_TOKEN_SECRET (falls back to MANAGE_BOOKING_SECRET for migration).
+ * HMAC-SHA256(bookingId + exp) with RECEIPT_TOKEN_SECRET only (see receipt-token-secret.ts).
  */
 
 import { createHmac, timingSafeEqual } from "crypto";
+import { getReceiptTokenSecretOnly } from "@/lib/booking/receipt-token-secret";
 
 const ALG = "sha256";
 const SEP = ".";
@@ -12,12 +13,14 @@ const INNER_SEP = "\x00";
 const PREFIX = "r"; // receipt, distinct from manage token
 const PREFIX_CLAIM = "c"; // claim (holdId) for post-checkout receipt exchange
 
+/** Max age for ignore-expiry recovery path (stale bookmark + payment ref). */
+export const RECEIPT_CLAIM_MAX_STALE_SECONDS = 30 * 24 * 60 * 60;
+
+/** Default and signing TTL for receipt and claim tokens (bookmark recovery without ignore-expiry bypass). */
+const DEFAULT_RECEIPT_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 function getSecret(): string | null {
-  const dedicated = process.env.RECEIPT_TOKEN_SECRET?.trim();
-  if (dedicated) return dedicated;
-  const legacy = process.env.MANAGE_BOOKING_SECRET?.trim();
-  if (!legacy) return null;
-  return legacy;
+  return getReceiptTokenSecretOnly();
 }
 
 function b64urlEncode(buf: Buffer): string {
@@ -25,9 +28,7 @@ function b64urlEncode(buf: Buffer): string {
 }
 
 function b64urlDecode(str: string): Buffer {
-  const padded = str.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = (4 - (padded.length % 4)) % 4;
-  return Buffer.from(padded + "=".repeat(pad), "base64");
+  return Buffer.from(str, "base64url");
 }
 
 export interface ReceiptTokenPayload {
@@ -36,10 +37,10 @@ export interface ReceiptTokenPayload {
 }
 
 /**
- * Sign a receipt token for a booking. Default exp = 7 days (use shorter exp for success-page-only flows).
+ * Sign a receipt token for a booking. Default exp = 30 days (aligned with receipt-claim TTL).
  */
 export function signReceiptToken(bookingId: string, exp?: number): string | null {
-  const expSec = exp ?? Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+  const expSec = exp ?? Math.floor(Date.now() / 1000) + DEFAULT_RECEIPT_TTL_SECONDS;
   const secret = getSecret();
   if (!secret) return null;
   const data = `${PREFIX}${INNER_SEP}${bookingId}${INNER_SEP}${expSec}`;
@@ -82,9 +83,9 @@ export interface ReceiptClaimPayload {
   exp: number;
 }
 
-/** Sign a receipt-claim token for a hold (used in success_url before booking exists). Default exp = 2 hours. */
+/** Sign a receipt-claim token for a hold (used in success_url before booking exists). Default exp = 30 days. */
 export function signReceiptClaimToken(holdId: string, exp?: number): string | null {
-  const expSec = exp ?? Math.floor(Date.now() / 1000) + 2 * 60 * 60;
+  const expSec = exp ?? Math.floor(Date.now() / 1000) + DEFAULT_RECEIPT_TTL_SECONDS;
   const secret = getSecret();
   if (!secret) return null;
   const data = `${PREFIX_CLAIM}${INNER_SEP}${holdId}${INNER_SEP}${expSec}`;
@@ -119,3 +120,34 @@ export function verifyReceiptClaimToken(token: string): ReceiptClaimPayload | nu
     return null;
   }
 }
+
+/**
+ * Same as verifyReceiptClaimToken but returns payload when signature is valid even if `exp` is in the past,
+ * only if `exp` is within {@link RECEIPT_CLAIM_MAX_STALE_SECONDS} of now (rejects ancient tokens).
+ */
+export function verifyReceiptClaimTokenIgnoreExpiry(token: string): ReceiptClaimPayload | null {
+  try {
+    const secret = getSecret();
+    if (!secret) return null;
+    const parts = token.split(SEP);
+    if (parts.length !== 2) return null;
+    const [payloadB64, sigB64] = parts;
+    const data = b64urlDecode(payloadB64).toString("utf8");
+    if (!data.startsWith(PREFIX_CLAIM + INNER_SEP)) return null;
+    const expectedSig = createHmac(ALG, secret).update(data).digest();
+    const providedSig = b64urlDecode(sigB64);
+    if (expectedSig.length !== providedSig.length || !timingSafeEqual(expectedSig, providedSig)) {
+      return null;
+    }
+    const segments = data.split(INNER_SEP);
+    const holdId = segments[1];
+    const exp = parseInt(segments[2], 10);
+    if (!holdId || Number.isNaN(exp)) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (exp < now - RECEIPT_CLAIM_MAX_STALE_SECONDS) return null;
+    return { holdId, exp };
+  } catch {
+    return null;
+  }
+}
+

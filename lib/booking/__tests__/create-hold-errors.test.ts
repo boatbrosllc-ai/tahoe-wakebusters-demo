@@ -10,6 +10,7 @@ describe("create-hold 503 contract", () => {
     assert.strictEqual(isRetryableCreateHold503Code("firestore_transient"), true);
     assert.strictEqual(isRetryableCreateHold503Code("rate_limit_unavailable"), true);
     assert.strictEqual(isRetryableCreateHold503Code("block_check_unavailable"), true);
+    assert.strictEqual(isRetryableCreateHold503Code("legacy_scan_limit_reached"), true);
     assert.strictEqual(isRetryableCreateHold503Code("firebase_config_unavailable"), false);
     assert.strictEqual(isRetryableCreateHold503Code(undefined), false);
   });

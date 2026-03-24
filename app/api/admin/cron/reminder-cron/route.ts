@@ -16,35 +16,32 @@ import { getReminderSubject } from "@/lib/booking/reminder-emails";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { sendBookingReminderSms } from "@/lib/booking/sms";
 import { tryClaimSend, markClaimSent, markClaimFailed } from "@/lib/booking/notification-claim";
-import { getDueRetries, addToRetryQueue, markRetrySent, markRetryFailed, type ReminderTemplateKey } from "@/lib/booking/reminder-retry";
+import {
+  getDueRetries,
+  addToRetryQueue,
+  markRetrySent,
+  markRetryFailed,
+  markRetrySkipped,
+  type ReminderTemplateKey,
+} from "@/lib/booking/reminder-retry";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getRequestById } from "@/lib/waiver/firestore";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
+import {
+  REMINDER_PAID_STATUSES,
+  in1WeekWindow,
+  in24hWindow,
+  inDayOfWindow,
+  isBookingEligibleForReminderRetry,
+} from "@/lib/booking/reminder-eligibility";
+import { notifyStaffReminderSent } from "@/lib/booking/staff-notifications";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
 const PAGE_SIZE = 100;
-
-/** Within window for 1-week reminder (6.5–7.5 days from now). */
-function in1WeekWindow(tripStartMs: number, nowMs: number): boolean {
-  const diff = tripStartMs - nowMs;
-  return diff >= 6.5 * ONE_DAY_MS && diff <= 7.5 * ONE_DAY_MS;
-}
-
-/** Within window for 24h reminder (23–25 hours from now). */
-function in24hWindow(tripStartMs: number, nowMs: number): boolean {
-  const diff = tripStartMs - nowMs;
-  return diff >= 23 * ONE_HOUR_MS && diff <= 25 * ONE_HOUR_MS;
-}
-
-/** Within window for day-of reminder (2.5–3.5 hours from now). */
-function inDayOfWindow(tripStartMs: number, nowMs: number): boolean {
-  const diff = tripStartMs - nowMs;
-  return diff >= 2.5 * ONE_HOUR_MS && diff <= 3.5 * ONE_HOUR_MS;
-}
 
 /** Returns a YYYY-MM-DD date string from a Date (UTC calendar day). */
 function toDateStr(d: Date): string {
@@ -52,11 +49,8 @@ function toDateStr(d: Date): string {
 }
 
 export async function POST(request: NextRequest) {
-  const authHeader = request.headers.get("authorization") ?? "";
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const authErr = await assertCronPostAuthorized(request);
+  if (authErr) return authErr;
 
   const db = getDb();
   const { Timestamp } = getFirestoreExports();
@@ -69,7 +63,7 @@ export async function POST(request: NextRequest) {
   const windowStartStr = toDateStr(new Date(nowMs - ONE_DAY_MS));
   const windowEndStr = toDateStr(new Date(nowMs + 8 * ONE_DAY_MS));
 
-  const paidStatuses = ["paid", "final_paid", "final_due", "final_requires_action", "final_failed"] as const;
+  const paidStatuses = [...REMINDER_PAID_STATUSES];
 
   let matched = 0;
   let processed = 0;
@@ -92,7 +86,24 @@ export async function POST(request: NextRequest) {
   for (const { bookingId, templateKey } of dueRetries.filter((r) => reminderTemplateKeys.includes(r.templateKey))) {
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) continue;
-    const booking = bookingSnap.data() as Booking & { reminder1WeekSentAt?: unknown; reminder24hSentAt?: unknown; reminderDayOfSentAt?: unknown };
+    const booking = bookingSnap.data() as Booking & {
+      reminder1WeekSentAt?: unknown;
+      reminder24hSentAt?: unknown;
+      reminderDayOfSentAt?: unknown;
+    };
+
+    if (
+      !isBookingEligibleForReminderRetry(
+        booking,
+        templateKey as "reminder_1week" | "reminder_24h" | "reminder_dayof",
+        nowMs
+      )
+    ) {
+      await markRetrySkipped(db, bookingId, templateKey, "retry_eligibility_lost");
+      skipped++;
+      continue;
+    }
+
     const slotId = booking.slotId;
     if (!slotId) continue;
     const parsed = parseSlotId(slotId);
@@ -126,17 +137,36 @@ export async function POST(request: NextRequest) {
     if (!claimed) continue;
     try {
       const type = templateKey === "reminder_1week" ? "1week" : templateKey === "reminder_24h" ? "24h" : "dayof";
-      await sendBookingReminderEmail(type, params);
-      await logEmailSent({ to: toEmail, toName: customerName, templateId: `booking_${templateKey}` as "booking_reminder_1week" | "booking_reminder_24h" | "booking_reminder_dayof", subject: getReminderSubject(type, params.experienceName), bookingId });
+      const { providerMessageId } = await sendBookingReminderEmail(type, params, {
+        idempotencyKey: `${bookingId}_${templateKey}`,
+      });
+      await markClaimSent(db, bookingId, templateKey, { providerMessageId });
+      await markRetrySent(db, bookingId, templateKey, { providerMessageId });
+
+      void logEmailSent({
+        to: toEmail,
+        toName: customerName,
+        templateId: `booking_${templateKey}` as "booking_reminder_1week" | "booking_reminder_24h" | "booking_reminder_dayof",
+        subject: getReminderSubject(type, params.experienceName),
+        bookingId,
+      }).catch((e) => console.error("[reminder-cron] logEmailSent", e));
+
       const updateData: Record<string, unknown> =
         templateKey === "reminder_1week" ? { reminder1WeekSentAt: Timestamp.now() } : templateKey === "reminder_24h" ? { reminder24hSentAt: Timestamp.now() } : { reminderDayOfSentAt: Timestamp.now() };
       if (booking.customer?.phone?.trim()) {
         const smsSent = await sendBookingReminderSms({ phone: booking.customer.phone, customerName, experienceName, tripDate: tripDateStr, reminderType: type, bookingId, waiverSigningUrl: waiverSigningUrl ?? undefined });
         if (smsSent) (updateData as Record<string, unknown>)[templateKey === "reminder_1week" ? "reminder1WeekSmsSentAt" : templateKey === "reminder_24h" ? "reminder24hSmsSentAt" : "reminderDayOfSmsSentAt"] = Timestamp.now();
       }
-      await bookingSnap.ref.update(updateData);
-      await markClaimSent(db, bookingId, templateKey);
-      await markRetrySent(db, bookingId, templateKey);
+      await bookingSnap.ref.update(updateData).catch((e) => console.error("[reminder-cron] booking timestamp update", e));
+
+      void notifyStaffReminderSent({
+        bookingId,
+        kind: type,
+        experienceName,
+        tripDate: tripDateStr,
+        customerName,
+      });
+
       processed++;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -278,8 +308,15 @@ export async function POST(request: NextRequest) {
         try {
           const type = templateKey === "reminder_1week" ? "1week" : templateKey === "reminder_24h" ? "24h" : "dayof";
           const subject = getReminderSubject(type, params.experienceName);
-          await sendBookingReminderEmail(type, params);
-          await logEmailSent({ to: toEmail, toName: customerName, templateId: `booking_${templateKey}` as "booking_reminder_1week" | "booking_reminder_24h" | "booking_reminder_dayof", subject, bookingId: doc.id });
+          const { providerMessageId } = await sendBookingReminderEmail(type, params, {
+            idempotencyKey: `${doc.id}_${templateKey}`,
+          });
+          await markClaimSent(db, doc.id, templateKey, { providerMessageId });
+
+          void logEmailSent({ to: toEmail, toName: customerName, templateId: `booking_${templateKey}` as "booking_reminder_1week" | "booking_reminder_24h" | "booking_reminder_dayof", subject, bookingId: doc.id }).catch((e) =>
+            console.error("[reminder-cron] logEmailSent", e)
+          );
+
           const updateData: Record<string, unknown> =
             templateKey === "reminder_1week"
               ? { reminder1WeekSentAt: Timestamp.now() }
@@ -300,8 +337,16 @@ export async function POST(request: NextRequest) {
               (updateData as Record<string, unknown>)[templateKey === "reminder_1week" ? "reminder1WeekSmsSentAt" : templateKey === "reminder_24h" ? "reminder24hSmsSentAt" : "reminderDayOfSmsSentAt"] = Timestamp.now();
             }
           }
-          await doc.ref.update(updateData);
-          await markClaimSent(db, doc.id, templateKey);
+          await doc.ref.update(updateData).catch((e) => console.error("[reminder-cron] booking timestamp update", e));
+
+          void notifyStaffReminderSent({
+            bookingId: doc.id,
+            kind: type,
+            experienceName,
+            tripDate: tripDateStr,
+            customerName,
+          });
+
           processed++;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);

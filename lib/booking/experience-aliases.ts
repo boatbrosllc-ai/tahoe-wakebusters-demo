@@ -92,6 +92,26 @@ export function isTicketedExperienceSlug(slug: string): boolean {
 }
 
 /**
+ * Matches `/api/experiences` list behavior: ticketed sunset/holiday cruises unless the experience is
+ * explicitly `charter`. Use in BookingModal + slot cache flags so ticketed UI and TTL stay aligned
+ * with Firestore when `pricingType` is missing or legacy.
+ */
+export function isTicketedExperienceForBooking(exp: {
+  pricingType?: "charter" | "ticketed";
+  slug?: string;
+  title?: string;
+  name?: string;
+}): boolean {
+  if (exp.pricingType === "ticketed") return true;
+  if (exp.pricingType === "charter") return false;
+  const slug = (exp.slug ?? "").toLowerCase();
+  const title = (exp.title ?? exp.name ?? "").toLowerCase();
+  if (/sunset|cruise/.test(slug) || /sunset|cruise/.test(title)) return true;
+  if (/holiday|festive/.test(slug) || /holiday|festive/.test(title)) return true;
+  return false;
+}
+
+/**
  * Returns true if requestedSlug matches docSlug (equal or same family).
  * Use when resolving experience from list so "sunset" matches an experience with slug "sunset-cruise".
  */

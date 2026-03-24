@@ -16,8 +16,8 @@ export interface Experience {
   heroImage: string;
   gallery: string[];
   pricingNote: string;
-  /** Optional: lowest price in cents for "From $X" on cards. */
-  fromPriceCents?: number;
+  /** Optional: lowest price in cents for "From $X" on cards. Use null when pricing is only from live API. */
+  fromPriceCents?: number | null;
   faqs?: { q: string; a: string }[];
 }
 
@@ -35,7 +35,7 @@ export const experiences: Experience[] = [
     heroImage: "/photos/IMG_3160.webp",
     gallery: ["/photos/IMG_3160.webp", "/photos/IMG_9649.webp", "/photos/IMG_8614%202.webp", "/photos/IMG_5116%202.webp"],
     pricingNote: "From $450. 3–8 hour trips available.",
-    fromPriceCents: 45000,
+    fromPriceCents: null,
     faqs: [
       { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain so you can relax and enjoy the day." },
       { q: "Can we bring food and drinks?", a: "Yes. Bring your own cooler and drinks. Glass is not allowed on the boat." },
@@ -54,7 +54,7 @@ export const experiences: Experience[] = [
     heroImage: "/photos/Thomas_2.14.1.webp",
     gallery: ["/photos/Thomas_2.14.1.webp", "/photos/DSC00513%20(3).webp", "/photos/DSC00539.webp", "/photos/IMG_2123.webp"],
     pricingNote: "From $600. 3–8 hour trips. Captain included.",
-    fromPriceCents: 60000,
+    fromPriceCents: null,
     faqs: [
       { q: "Is equipment included?", a: "Yes. Wakeboards, surf board, and tubes are included. Life vests in all sizes provided." },
     ],
@@ -106,9 +106,10 @@ export function getExperienceBySlug(slug: string): Experience | undefined {
  */
 export function formatExperiencePriceLabel(
   slug: string | null | undefined,
-  fromPriceCents: number,
+  fromPriceCents: number | null | undefined,
   pricingType?: "charter" | "ticketed"
 ): string {
+  if (fromPriceCents == null || !Number.isFinite(fromPriceCents)) return "See dates for pricing";
   const price = (fromPriceCents / 100).toFixed(0);
   if (pricingType === "ticketed") return `From $${price} per ticket`;
   if (/holiday/i.test(slug ?? "")) return `$${price} per ticket`;

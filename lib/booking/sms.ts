@@ -6,7 +6,7 @@
 
 import { bookingEnv } from "./env";
 import { validatePhone } from "./validate-phone";
-import { logSmsSent, type NotificationEventSubtype } from "./email-log";
+import { logNotificationSent, logSmsSent, type NotificationEventSubtype } from "./email-log";
 import type { EmailTemplateId } from "./email-templates";
 
 const TWILIO_API_BASE = "https://api.twilio.com/2010-04-01";
@@ -107,7 +107,11 @@ export async function sendBookingConfirmationSms(params: {
 }): Promise<boolean> {
   const { phone, customerName, experienceName, tripDate, bookingId, receiptLink } = params;
   let body = `Boat Bros: You're booked! ${experienceName} on ${tripDate}.`;
-  if (receiptLink) body += ` Receipt: ${receiptLink}`;
+  if (receiptLink) {
+    body += ` Receipt: ${receiptLink}`;
+  } else {
+    body += " Check your email for your full confirmation and receipt details.";
+  }
   return sendAndLog({
     phone,
     toName: customerName,
@@ -164,6 +168,37 @@ export async function sendFinalPaymentRequestSms(params: {
     templateId: "final_payment_request",
     bookingId,
   });
+}
+
+/**
+ * Optional internal SMS to STAFF_SMS_PHONE for ops visibility (Twilio).
+ * No-op when unset or SMS disabled. Logs with audience `staff`.
+ */
+export async function sendStaffEventSms(params: {
+  bookingId: string;
+  body: string;
+  templateId: NotificationEventSubtype;
+}): Promise<boolean> {
+  const raw = process.env.STAFF_SMS_PHONE?.trim();
+  if (!raw || !bookingEnv.smsEnabled) return false;
+  const result = validatePhone(raw);
+  if (!result.valid) return false;
+  const e164 = toE164(raw);
+  if (!e164) return false;
+  const ok = await sendTwilioSms(e164, params.body);
+  if (ok) {
+    await logNotificationSent({
+      channel: "sms",
+      to: e164,
+      templateId: params.templateId,
+      bookingId: params.bookingId,
+      eventSubtype: params.templateId,
+      bodySnippet: params.body.slice(0, 100),
+      audience: "staff",
+      deliveryState: "sent",
+    }).catch((err) => console.error("[sms] staff log failed", err));
+  }
+  return ok;
 }
 
 /** Cancellation SMS. */

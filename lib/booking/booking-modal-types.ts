@@ -48,6 +48,8 @@ export interface SlotDto {
   bookingId?: string | null;
   spotsBooked?: number;
   spotsRemaining?: number;
+  /** Ticketed: holds query failed for this date — capacity may be understated; show uncertain styling. */
+  holdDataMissing?: boolean;
 }
 
 export interface RateOption {
@@ -55,6 +57,9 @@ export interface RateOption {
   durationHours: number;
   displayName: string;
   priceCents: number;
+  priceWeekendCents?: number;
+  priceFriSunCents?: number;
+  priceHolidayCents?: number;
 }
 
 export interface AddonOption {
@@ -65,6 +70,8 @@ export interface AddonOption {
   type: string;
   maxQty?: number;
   highlight?: boolean;
+  /** When true (set in Firestore), hide from customer booking UIs (replaces fragile name-based filtering). */
+  hiddenFromBookingUI?: boolean;
 }
 
 export interface BookingModalInitialSelection {

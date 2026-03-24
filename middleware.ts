@@ -76,6 +76,30 @@ export async function middleware(request: NextRequest) {
         }
         return NextResponse.redirect(new URL("/admin/login", request.url), 302);
       }
+    } else if (!isProduction && isAdminProtectedPath(pathname) && !isAdminCronPath(pathname)) {
+      const isDev = process.env.NODE_ENV === "development";
+      const isHosted = !!(process.env.NETLIFY || process.env.VERCEL);
+      if (isHosted && !isAdminEdgeSecretValid(edgeSecretRaw)) {
+        console.error(
+          "[middleware] ADMIN_EDGE_SECRET missing or too short on hosted preview/staging — admin APIs are blocked.",
+          { code: ADMIN_EDGE_SECRET_CONFIG_CODE }
+        );
+        const body = {
+          error: "Service misconfigured. Admin access is not available.",
+          code: ADMIN_EDGE_SECRET_CONFIG_CODE,
+          hint: "Set ADMIN_EDGE_SECRET in your host to a random string of at least 32 UTF-8 bytes (same as production).",
+        };
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json(body, { status: 503 });
+        }
+        return NextResponse.json(body, { status: 503 });
+      }
+      if (!isDev && !isAdminEdgeSecretValid(edgeSecretRaw)) {
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+        return NextResponse.redirect(new URL("/admin/login", request.url), 302);
+      }
     }
   }
 

@@ -3,6 +3,7 @@ const path = require('path');
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   /** Dev-only: StrictMode double-mount + HMR can trigger Suspense/webpack "moduleId is not a function". Keep strict in prod builds. */
+  /** Avoid `app/(site)/loading.tsx` at the segment root — nested Suspense + streaming + HMR commonly throws `updateDehydratedSuspenseComponent` / `__webpack_modules__[moduleId] is not a function` in dev. Use route-level loading.tsx only where needed. */
   reactStrictMode: process.env.NODE_ENV !== 'development',
   // Ensure a valid unique build ID for asset versioning (env BUILD_ID or timestamp).
   generateBuildId: async () => process.env.BUILD_ID?.trim() || String(Date.now()),
@@ -57,6 +58,15 @@ const nextConfig = {
     // Resolve missing next-response export (Next 14.2 API route bundling)
     if (!config.resolve) config.resolve = {};
     if (!config.resolve.alias) config.resolve.alias = {};
+    // canvas-confetti's package "module" points at dist/confetti.module.mjs; webpack can emit a
+    // mis-served async chunk in dev (404 → ChunkLoadError). Use the browser CJS bundle instead.
+    config.resolve.alias["canvas-confetti"] = path.join(
+      __dirname,
+      "node_modules",
+      "canvas-confetti",
+      "dist",
+      "confetti.browser.js"
+    );
     try {
       const responsePath = require.resolve('next/dist/server/web/spec-extension/response.js');
       config.resolve.alias['next/dist/server/web/exports/next-response'] = responsePath;

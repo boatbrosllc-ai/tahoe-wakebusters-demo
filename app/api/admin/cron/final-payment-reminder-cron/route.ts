@@ -17,38 +17,28 @@ import { getFinalPaymentRequestSubject } from "@/lib/booking/reminder-emails";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { sendFinalPaymentRequestSms } from "@/lib/booking/sms";
 import { tryClaimSend, markClaimSent, markClaimFailed } from "@/lib/booking/notification-claim";
-import { getDueRetries, addToRetryQueue, markRetrySent, markRetryFailed } from "@/lib/booking/reminder-retry";
+import { getDueRetries, addToRetryQueue, markRetrySent, markRetryFailed, markRetrySkipped } from "@/lib/booking/reminder-retry";
 import { formatMoney } from "@/lib/booking/format-money";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { bookingEnv } from "@/lib/booking/env";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { notifyFinalChargeSuccess } from "@/lib/booking/notify-final-charge-success";
-
-const ONE_HOUR_MS = 60 * 60 * 1000;
-const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+import { isDepositMode } from "@/lib/booking/deposit-mode";
+import {
+  getFinalPaymentCronWindowDateStrs,
+  in48hWindow,
+  isBookingEligibleForFinalPaymentRequestRetry,
+} from "@/lib/booking/reminder-eligibility";
+import { notifyStaffFinalPaymentRequestSent } from "@/lib/booking/staff-notifications";
 
 const PAGE_SIZE = 100;
 
-/** Within window for 48h reminder (46–50 hours from now). */
-function in48hWindow(tripStartMs: number, nowMs: number): boolean {
-  const diff = tripStartMs - nowMs;
-  return diff >= 46 * ONE_HOUR_MS && diff <= 50 * ONE_HOUR_MS;
-}
-
-/** Returns a YYYY-MM-DD date string from a Date (UTC calendar day). */
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 export async function POST(request: NextRequest) {
-  const authHeader = request.headers.get("authorization") ?? "";
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const authErr = await assertCronPostAuthorized(request);
+  if (authErr) return authErr;
 
   if (!bookingEnv.manageBookingSecret) {
     return NextResponse.json(
@@ -62,18 +52,13 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const nowMs = now.getTime();
 
-  // Bound startDateStr to the 46–50 h window with a 1-day margin on each side.
-  // Extend windowEndStr by 1 extra day (4 days out) so evening-departure bookings in CST
-  // are not silently skipped due to UTC calendar date boundary; in48hWindow remains the precise guard.
-  const windowStartStr = toDateStr(new Date(nowMs + 1 * ONE_DAY_MS));
-  const windowEndStr = toDateStr(new Date(nowMs + 4 * ONE_DAY_MS));
+  const { windowStartStr, windowEndStr } = getFinalPaymentCronWindowDateStrs(nowMs);
 
   let matched = 0;
   let processed = 0;
   let skipped = 0;
   let failed = 0;
 
-  // Cache experience docs by ID — each experience is fetched at most once per cron run.
   const expCache = new Map<string, Experience | null>();
   async function getExperience(expId: string): Promise<Experience | null> {
     if (expCache.has(expId)) return expCache.get(expId)!;
@@ -83,24 +68,34 @@ export async function POST(request: NextRequest) {
     return data;
   }
 
-  // Phase 0a/0b: single fetch so retries are not starved when the queue is under pressure.
   const allDue = await getDueRetries(db, 50);
   const successRetries = allDue.filter((r) => r.templateKey === "final_charge_success");
   const requestRetries = allDue.filter((r) => r.templateKey === "final_payment_request");
 
-  // Phase 0a: due retries for final_charge_success (final balance receipt email)
   for (const { bookingId, templateKey } of successRetries) {
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) continue;
     const booking = bookingSnap.data() as Booking;
-    if (booking.status !== "final_paid") {
+
+    if (!isDepositMode(booking)) {
+      await markRetrySkipped(db, bookingId, templateKey, "retry_not_deposit_flow");
       skipped++;
       continue;
     }
+    if (booking.status !== "final_paid") {
+      await markRetrySkipped(db, bookingId, templateKey, "retry_not_final_paid");
+      skipped++;
+      continue;
+    }
+
     try {
-      const ok = await notifyFinalChargeSuccess(db, bookingId, booking);
-      if (ok) await markRetrySent(db, bookingId, templateKey);
-      processed++;
+      const result = await notifyFinalChargeSuccess(db, bookingId, booking);
+      if (result.ok) {
+        await markRetrySent(db, bookingId, templateKey, { providerMessageId: result.providerMessageId });
+        processed++;
+      } else {
+        failed++;
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       await markRetryFailed(db, bookingId, templateKey, errMsg);
@@ -108,12 +103,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Phase 0b: process due retries for final_payment_request
   for (const { bookingId, templateKey } of requestRetries) {
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) continue;
-    const booking = bookingSnap.data() as Booking;
-    if (booking.finalPaymentRequestSentAt) continue;
+    const booking = bookingSnap.data() as Booking & { finalPaymentRequestSentAt?: unknown };
+
+    if (!isBookingEligibleForFinalPaymentRequestRetry(booking, nowMs)) {
+      await markRetrySkipped(db, bookingId, templateKey, "retry_eligibility_lost");
+      skipped++;
+      continue;
+    }
+
     const slotId = booking.slotId;
     if (!slotId) continue;
     const parsed = parseSlotId(slotId.trim());
@@ -131,21 +131,37 @@ export async function POST(request: NextRequest) {
       const exp = await getExperience(booking.experienceId);
       if (exp) experienceName = exp.title ?? experienceName;
     }
-    const manageToken = signManageToken({ bookingId, customerEmail: toEmail, tripDateStr: booking.startDateStr });
+    const manageToken = signManageToken({ bookingId, tripDateStr: booking.startDateStr });
     const payLink = manageToken ? `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(manageToken)}` : "";
     const claimed = await tryClaimSend(db, bookingId, templateKey);
     if (!claimed) continue;
     try {
-      await sendFinalPaymentRequestEmail({ to: toEmail, customerName, experienceName, tripDate: tripDateStr, startTime: startTimeStr, amountFormatted: formatMoney(finalCents), payLink });
-      await logEmailSent({ to: toEmail, toName: customerName, templateId: "final_payment_request", subject: getFinalPaymentRequestSubject(), bookingId });
+      const { providerMessageId } = await sendFinalPaymentRequestEmail(
+        { to: toEmail, customerName, experienceName, tripDate: tripDateStr, startTime: startTimeStr, amountFormatted: formatMoney(finalCents), payLink },
+        { idempotencyKey: `${bookingId}_final_payment_request` }
+      );
+      await markClaimSent(db, bookingId, templateKey, { providerMessageId });
+      await markRetrySent(db, bookingId, templateKey, { providerMessageId });
+
+      void logEmailSent({ to: toEmail, toName: customerName, templateId: "final_payment_request", subject: getFinalPaymentRequestSubject(), bookingId }).catch((e) =>
+        console.error("[final-payment-reminder-cron] logEmailSent", e)
+      );
+
       const updateData: Record<string, unknown> = { finalPaymentRequestSentAt: Timestamp.now() };
       if (booking.customer?.phone?.trim()) {
         const smsSent = await sendFinalPaymentRequestSms({ phone: booking.customer.phone, customerName, experienceName, tripDate: tripDateStr, amountFormatted: formatMoney(finalCents), payLink, bookingId });
         if (smsSent) updateData.finalPaymentRequestSmsSentAt = Timestamp.now();
       }
-      await bookingSnap.ref.update(updateData);
-      await markClaimSent(db, bookingId, templateKey);
-      await markRetrySent(db, bookingId, templateKey);
+      await bookingSnap.ref.update(updateData).catch((e) => console.error("[final-payment-reminder-cron] booking update", e));
+
+      void notifyStaffFinalPaymentRequestSent({
+        bookingId,
+        experienceName,
+        tripDate: tripDateStr,
+        amountFormatted: formatMoney(finalCents),
+        customerName,
+      });
+
       processed++;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -239,7 +255,7 @@ export async function POST(request: NextRequest) {
         timeZone: "America/Chicago",
       });
 
-      const manageToken = signManageToken({ bookingId: doc.id, customerEmail: toEmail, tripDateStr: booking.startDateStr });
+      const manageToken = signManageToken({ bookingId: doc.id, tripDateStr: booking.startDateStr });
       const payLink = manageToken ? `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(manageToken)}` : "";
 
       const templateKey = "final_payment_request";
@@ -250,16 +266,24 @@ export async function POST(request: NextRequest) {
       }
       try {
         const subject = getFinalPaymentRequestSubject();
-        await sendFinalPaymentRequestEmail({
-          to: toEmail,
-          customerName,
-          experienceName,
-          tripDate: tripDateStr,
-          startTime: startTimeStr,
-          amountFormatted: formatMoney(finalCents),
-          payLink,
-        });
-        await logEmailSent({ to: toEmail, toName: customerName, templateId: "final_payment_request", subject, bookingId: doc.id });
+        const { providerMessageId } = await sendFinalPaymentRequestEmail(
+          {
+            to: toEmail,
+            customerName,
+            experienceName,
+            tripDate: tripDateStr,
+            startTime: startTimeStr,
+            amountFormatted: formatMoney(finalCents),
+            payLink,
+          },
+          { idempotencyKey: `${doc.id}_final_payment_request` }
+        );
+        await markClaimSent(db, doc.id, templateKey, { providerMessageId });
+
+        void logEmailSent({ to: toEmail, toName: customerName, templateId: "final_payment_request", subject, bookingId: doc.id }).catch((e) =>
+          console.error("[final-payment-reminder-cron] logEmailSent", e)
+        );
+
         const updateData: Record<string, unknown> = { finalPaymentRequestSentAt: Timestamp.now() };
         if (booking.customer?.phone?.trim()) {
           const smsSent = await sendFinalPaymentRequestSms({
@@ -273,8 +297,16 @@ export async function POST(request: NextRequest) {
           });
           if (smsSent) updateData.finalPaymentRequestSmsSentAt = Timestamp.now();
         }
-        await doc.ref.update(updateData);
-        await markClaimSent(db, doc.id, templateKey);
+        await doc.ref.update(updateData).catch((e) => console.error("[final-payment-reminder-cron] booking update", e));
+
+        void notifyStaffFinalPaymentRequestSent({
+          bookingId: doc.id,
+          experienceName,
+          tripDate: tripDateStr,
+          amountFormatted: formatMoney(finalCents),
+          customerName,
+        });
+
         processed++;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);

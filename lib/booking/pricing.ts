@@ -81,7 +81,8 @@ export function isDefaultUSHoliday(iso: string): boolean {
   while (sepFirst.getDay() !== 1) sepFirst.setDate(sepFirst.getDate() + 1);
   if (month === 9 && day === sepFirst.getDate()) return true;
 
-  // Thanksgiving: fourth Thursday of November; cap upper bound at 30 to avoid overflow when late in month
+  // Include the day after Thanksgiving and up to the Saturday following (max 3 days after). The month===11 guard
+  // already prevents December overflow; the cap at 30 prevents day 31 which does not exist.
   const nov1 = new Date(year, 10, 1);
   const firstThu = 1 + ((4 - nov1.getDay() + 7) % 7);
   const fourthThu = firstThu + 21;

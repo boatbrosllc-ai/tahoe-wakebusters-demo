@@ -1,6 +1,5 @@
 import type { Firestore, Query, QuerySnapshot } from "firebase-admin/firestore";
 import { bookingWarn } from "@/lib/booking/debug";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 /** Timestamp-like constructor (e.g. firebase-admin/firestore Timestamp) for fromDate. */
 type TimestampConstructor = { fromDate(date: Date): unknown };
@@ -14,23 +13,12 @@ export class BlockCheckUnavailableError extends Error {
 }
 
 /**
- * When true, a failed blocks query returns "no overlap" instead of 503 (unsafe if blocks exist but can't be read).
- * - `ENABLE_BLOCK_CHECK_FAIL_OPEN=true` — explicit opt-in (staging / emergency).
- * - In development, defaults to true unless `ENABLE_BLOCK_CHECK_FAIL_OPEN=false` (so local dev works before indexes are deployed).
- */
-function shouldFailOpenBlockCheck(): boolean {
-  if (process.env.ENABLE_BLOCK_CHECK_FAIL_OPEN === "true") return true;
-  if (process.env.ENABLE_BLOCK_CHECK_FAIL_OPEN === "false") return false;
-  return process.env.NODE_ENV === "development";
-}
-
-/**
  * Shared block-overlap check for create-hold and create-checkout-session-direct.
  * Returns true if any block exists for the experience (or any id variant) that overlaps [slotStart, slotEnd],
  * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
  *
- * Uses `where("experienceId", "==", …)` only, then filters overlap in memory — no composite index required
- * (avoids 503 when the triple-field blocks index is missing or still building).
+ * Queries `blocks` by `experienceId` and filters overlap in memory. If Firestore cannot run the query
+ * (e.g. failed-precondition / index), throws `BlockCheckUnavailableError` so callers return 503.
  */
 export async function hasOverlappingBlock(opts: {
   db: Firestore;
@@ -82,30 +70,11 @@ export async function hasOverlappingBlock(opts: {
       const message = err instanceof Error ? err.message : String(err);
       const indexRelated = code === "failed-precondition" || /index/i.test(message);
       if (indexRelated) {
-        if (shouldFailOpenBlockCheck()) {
-          const explicitEnv = process.env.ENABLE_BLOCK_CHECK_FAIL_OPEN === "true";
-          bookingWarn("slot-availability", "blocks query failed (index missing or building); failing open", {
-            experienceId: expIdForQuery,
-            firestoreCode: code ?? null,
-            message: message.slice(0, 500),
-            explicitFailOpenEnv: explicitEnv,
-            devDefault: process.env.NODE_ENV === "development" && !explicitEnv,
-            hint: "Deploy indexes: firebase deploy --only firestore:indexes (see firestore.indexes.json blocks entries). Set ENABLE_BLOCK_CHECK_FAIL_OPEN=false in .env.local to enforce blocks in dev.",
-          });
-          if (explicitEnv) {
-            await writeOperationalAlert({
-              type: "block_check_fail_open_fallback",
-              source: "lib/booking/has-overlapping-block",
-              experienceId: expIdForQuery,
-              hint: "Firestore block query failed; fail-open path used because ENABLE_BLOCK_CHECK_FAIL_OPEN=true.",
-            });
-          }
-          return false;
-        }
-        bookingWarn("slot-availability", "blocks query failed; index required — see logs for Firestore link", {
+        bookingWarn("slot-availability", "blocks query failed; cannot verify admin blocks — returning 503 to callers", {
           experienceId: expIdForQuery,
           firestoreCode: code ?? null,
           message: message.slice(0, 800),
+          hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
         });
         throw new BlockCheckUnavailableError();
       }

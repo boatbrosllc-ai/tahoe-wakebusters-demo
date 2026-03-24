@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRangeWithAdjacent, getChicagoToday, toDateStr } from "@/lib/booking/booking-date-range";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -36,12 +36,11 @@ function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
 }
 
-const FALLBACK_EXPERIENCES: ExperienceOption[] = [
-  { id: null, slug: "pontoon", title: "Pontoon" },
-  { id: null, slug: "watersports", title: "Wake & Surf" },
-  { id: null, slug: "sunset", title: "Sunset Cruise" },
-  { id: null, slug: "holiday", title: "Holiday" },
-];
+function initialChicagoCalendarMonth(): Date {
+  const s = getChicagoToday();
+  const [y, m] = s.split("-").map(Number);
+  return new Date(y, m - 1, 1);
+}
 
 type CalendarModalProps = {
   open: boolean;
@@ -52,13 +51,15 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const { openWithSelection } = useBookingModal();
   const [experiences, setExperiences] = useState<ExperienceOption[]>([]);
   const [experiencesLoading, setExperiencesLoading] = useState(true);
+  const [experiencesFetchError, setExperiencesFetchError] = useState<string | null>(null);
+  const [experiencesRetryKey, setExperiencesRetryKey] = useState(0);
   const [selectedExperience, setSelectedExperience] = useState<ExperienceOption | null>(null);
   const [rates, setRates] = useState<RateOption[]>([]);
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [slotsRetryKey, setSlotsRetryKey] = useState(0);
-  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [calendarMonth, setCalendarMonth] = useState(() => initialChicagoCalendarMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
 
@@ -74,6 +75,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   useEffect(() => {
     if (!open) return;
     setExperiencesLoading(true);
+    setExperiencesFetchError(null);
     const controller = new AbortController();
     bookingCache.fetchExperiences(controller.signal)
       .then((data) => {
@@ -86,15 +88,29 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
               pricingType: (e as { pricingType?: string }).pricingType,
             }))
           );
+          setExperiencesFetchError(null);
         } else {
-          setExperiences(FALLBACK_EXPERIENCES);
+          setExperiences([]);
+          setExperiencesFetchError("No experiences are available right now. Please try again.");
         }
       })
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name !== "AbortError") setExperiences(FALLBACK_EXPERIENCES);
+        if ((err as { name?: string })?.name !== "AbortError") {
+          setExperiences([]);
+          setExperiencesFetchError("Could not load experiences. Check your connection and try again.");
+        }
       })
       .finally(() => setExperiencesLoading(false));
     return () => controller.abort();
+  }, [open, experiencesRetryKey]);
+
+  const prevOpenRef = useRef(open);
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      setSelectedDate(null);
+      setSlotModalOpen(false);
+    }
+    prevOpenRef.current = open;
   }, [open]);
 
   useEffect(() => {
@@ -122,14 +138,19 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     return () => controller.abort();
   }, [experienceId]);
 
+  /** Chicago calendar year/month (0-indexed month) for nav guards — must match `calendarMonth` semantics. */
+  const [chicagoNavYear, chicagoNavMonth0] = useMemo(() => {
+    const [y, m] = todayStr.split("-").map(Number);
+    return [y, m - 1];
+  }, [todayStr]);
+
   // Refetch slots whenever calendarMonth or experience changes. Range includes visible + adjacent months.
   // Skip fetch when the selected month is in the past to avoid wasted API calls.
   const isSelectedMonthPast = useMemo(() => {
     const y = calendarMonth.getFullYear();
     const m = calendarMonth.getMonth();
-    const [ty, tm] = todayStr.split("-").map(Number);
-    return y < ty || (y === ty && m < tm - 1);
-  }, [calendarMonth, todayStr]);
+    return y < chicagoNavYear || (y === chicagoNavYear && m < chicagoNavMonth0);
+  }, [calendarMonth, chicagoNavYear, chicagoNavMonth0]);
 
   useEffect(() => {
     if (!selectedExperience || isSelectedMonthPast) return;
@@ -192,11 +213,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     return map;
   }, [slots]);
 
-  const [currentYear, currentMonth] = useMemo(() => {
-    const [y, m] = todayStr.split("-").map(Number);
-    return [y, m - 1]; // month 0-indexed
-  }, [todayStr]);
-  const isAtCurrentMonth = calendarMonth.getFullYear() === currentYear && calendarMonth.getMonth() === currentMonth;
+  const isAtCurrentMonth =
+    calendarMonth.getFullYear() === chicagoNavYear && calendarMonth.getMonth() === chicagoNavMonth0;
   const monthLabel = calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   const calendarDays = useMemo(() => {
@@ -267,6 +285,18 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
         className="sm:max-w-lg"
       >
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          {experiencesFetchError && (
+            <div className="mb-4 shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+              <p className="font-medium">{experiencesFetchError}</p>
+              <button
+                type="button"
+                onClick={() => setExperiencesRetryKey((k) => k + 1)}
+                className="mt-2 rounded-md bg-red-100 px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-200 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {/* Pill filters: one per experience */}
           <div className="flex flex-wrap gap-2 mb-4 shrink-0">
             {experiencesLoading ? (
@@ -386,7 +416,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
       {/* Time slots sub-modal */}
       <Dialog
-        open={slotModalOpen && !!selectedDate && !!experienceSlug}
+        open={slotModalOpen && !!selectedDate && !!experienceSlug && !!selectedExperience?.id && !experiencesFetchError}
         onOpenChange={(open) => {
           if (!open) setSlotModalOpen(false);
         }}
@@ -410,16 +440,21 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                         : "";
                       const rate = parsed ? rates.find((r) => r.durationHours === parsed.durationHours) : null;
                       const priceLabel = rate ? formatPrice(rate.priceCents) : null;
-                      const canOpenBookingModal = !!experienceSlug && !!selectedDate;
+                      const canOpenBookingModal =
+                        typeof experienceSlug === "string" &&
+                        experienceSlug.trim().length > 0 &&
+                        typeof experienceId === "string" &&
+                        experienceId.trim().length > 0 &&
+                        !!selectedDate;
                       return canOpenBookingModal ? (
                         <button
                           key={slot.id}
                           type="button"
                           onClick={() => {
                             openWithSelection({
-                              experienceId: experienceId ?? undefined,
-                              experienceSlug,
-                              date: selectedDate,
+                              experienceId: experienceId.trim(),
+                              experienceSlug: experienceSlug.trim(),
+                              date: selectedDate!,
                               slotId: slot.id,
                               pricingType: (selectedExperience?.pricingType as 'charter' | 'ticketed' | undefined),
                             });

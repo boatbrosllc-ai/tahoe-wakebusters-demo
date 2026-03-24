@@ -3,13 +3,72 @@
  * with idempotency key = Firestore document id, updates status atomically.
  */
 
-import type { Firestore } from "firebase-admin/firestore";
+import { FieldPath } from "firebase-admin/firestore";
+import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import type Stripe from "stripe";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { sendPendingRefundPermanentFailureAlert } from "@/lib/booking/brevo";
+import {
+  isPendingRefundDueForProcessing,
+  PENDING_REFUND_PROCESSOR_PAGE_SIZE,
+  PENDING_REFUND_PROCESSOR_RUN_BUDGET,
+} from "@/lib/booking/pending-refund-ordering";
+import {
+  classifyStripeRefundStatus,
+  PENDING_STRIPE_REFUND_POLL_MS,
+} from "@/lib/booking/stripe-refund-status";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
-const BATCH_LIMIT = 40;
-const MAX_ATTEMPTS = 8;
+const PAGE_SIZE = PENDING_REFUND_PROCESSOR_PAGE_SIZE;
+const PER_RUN_BUDGET = PENDING_REFUND_PROCESSOR_RUN_BUDGET;
+
+export {
+  isPendingRefundDueForProcessing,
+  PENDING_REFUND_PROCESSOR_PAGE_SIZE,
+  PENDING_REFUND_PROCESSOR_RUN_BUDGET,
+} from "@/lib/booking/pending-refund-ordering";
+export const MAX_ATTEMPTS = 8;
+
+export { classifyStripeRefundStatus, PENDING_STRIPE_REFUND_POLL_MS } from "@/lib/booking/stripe-refund-status";
+
+/**
+ * Legacy rows: `orderBy("nextRetryAt")` omits documents missing the field. Sets `nextRetryAt`
+ * to now for `status === "pending"` docs that lack it (idempotent).
+ */
+export async function backfillPendingRefundsMissingNextRetryAt(
+  db: Firestore,
+  opts?: { maxDocsPerRun?: number }
+): Promise<number> {
+  const { Timestamp } = getFirestoreExports();
+  const maxDocs = opts?.maxDocsPerRun ?? 500;
+  let fixed = 0;
+  let lastDoc: QueryDocumentSnapshot | null = null;
+  const page = 100;
+
+  for (;;) {
+    let q = db
+      .collection("pendingRefunds")
+      .where("status", "==", "pending")
+      .orderBy(FieldPath.documentId())
+      .limit(page);
+    if (lastDoc) q = q.startAfter(lastDoc);
+    const snap = await q.get();
+    if (snap.empty) break;
+
+    for (const doc of snap.docs) {
+      const d = doc.data() as { nextRetryAt?: unknown };
+      if (d.nextRetryAt != null) continue;
+      await doc.ref.update({ nextRetryAt: Timestamp.now() });
+      fixed++;
+      if (fixed >= maxDocs) return fixed;
+    }
+
+    lastDoc = snap.docs[snap.docs.length - 1]!;
+    if (snap.size < page) break;
+  }
+  return fixed;
+}
 
 function isRetriableStripeError(err: unknown): boolean {
   const e = err as { statusCode?: number; type?: string; code?: string; message?: string };
@@ -23,19 +82,57 @@ function backoffMs(attempt: number): number {
   return Math.min(60_000 * Math.pow(2, Math.max(0, attempt - 1)), 4 * 60 * 60_000);
 }
 
+/** Full refund already applied in Stripe (PI or refund list). */
+async function verifyFullRefundAlreadyApplied(stripe: Stripe, piId: string): Promise<boolean> {
+  const piRaw = await stripe.paymentIntents.retrieve(piId, { expand: ["charges"] });
+  const pi = piRaw as unknown as {
+    amount_received?: number;
+    amount?: number;
+    amount_refunded?: number;
+  };
+  const received = pi.amount_received ?? pi.amount ?? 0;
+  const refunded = typeof pi.amount_refunded === "number" ? pi.amount_refunded : 0;
+  if (received > 0 && refunded >= received) return true;
+  const list = await stripe.refunds.list({ payment_intent: piId, limit: 10 });
+  let total = 0;
+  for (const r of list.data) {
+    total += typeof r.amount === "number" ? r.amount : 0;
+  }
+  return received > 0 && total >= received;
+}
+
+/** If a booking already took the slot for this PI, do not auto-refund. */
+async function bookingExistsTakingSlotForPaymentIntent(db: Firestore, piId: string): Promise<boolean> {
+  const snaps = await Promise.all([
+    db.collection("bookings").where("stripe.paymentIntentId", "==", piId).limit(1).get(),
+    db.collection("bookings").where("stripe.depositPaymentIntentId", "==", piId).limit(1).get(),
+    db.collection("bookings").where("stripe.finalPaymentIntentId", "==", piId).limit(1).get(),
+  ]);
+  for (const snap of snaps) {
+    if (snap.empty) continue;
+    const st = (snap.docs[0].data() as { status?: string }).status;
+    if (st && BOOKING_STATUSES_SLOT_TAKEN.has(st as never)) return true;
+  }
+  return false;
+}
+
 export async function processPendingRefundsBatch(
   db: Firestore,
   stripe: Stripe
 ): Promise<{ scanned: number; refunded: number; skipped: number; errors: number }> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = new Date();
-  const snap = await db.collection("pendingRefunds").where("status", "==", "pending").limit(BATCH_LIMIT).get();
+
+  await backfillPendingRefundsMissingNextRetryAt(db);
 
   let refunded = 0;
   let skipped = 0;
   let errors = 0;
+  let scanned = 0;
+  let processedThisRun = 0;
+  let lastDoc: QueryDocumentSnapshot | null = null;
 
-  for (const doc of snap.docs) {
+  const processOne = async (doc: QueryDocumentSnapshot) => {
     const data = doc.data() as {
       status?: string;
       paymentIntentId?: string;
@@ -43,19 +140,33 @@ export async function processPendingRefundsBatch(
       processorAttempts?: number;
       reason?: string;
       nextRetryAt?: { toDate?: () => Date };
+      requiresReview?: boolean;
+      refundAmountCents?: number;
+      stripeRefundId?: string;
     };
+    if (data.requiresReview === true && data.reason !== "amount_integrity_mismatch") {
+      skipped++;
+      return;
+    }
     const piId = (data.paymentIntentId || data.duplicatePaymentIntentId)?.trim();
     if (!piId) {
       skipped++;
-      continue;
-    }
-    const next = data.nextRetryAt?.toDate?.();
-    if (next && next > now) {
-      skipped++;
-      continue;
+      return;
     }
 
+    let isPartialRefundAttempt = false;
     try {
+      if (await bookingExistsTakingSlotForPaymentIntent(db, piId)) {
+        await doc.ref.update({
+          status: "resolved",
+          resolvedAt: Timestamp.now(),
+          notes: "Booking confirmed; no refund needed",
+          nextRetryAt: FieldValue.delete(),
+        });
+        refunded++;
+        return;
+      }
+
       const piRaw = await stripe.paymentIntents.retrieve(piId);
       const pi = piRaw as unknown as {
         status?: string;
@@ -65,13 +176,13 @@ export async function processPendingRefundsBatch(
       };
       if (pi.status !== "succeeded") {
         skipped++;
-        continue;
+        return;
       }
       const received = pi.amount_received ?? pi.amount ?? 0;
       const already = typeof pi.amount_refunded === "number" ? pi.amount_refunded : 0;
       if (received <= 0) {
         skipped++;
-        continue;
+        return;
       }
       if (already >= received) {
         await doc.ref.update({
@@ -81,26 +192,173 @@ export async function processPendingRefundsBatch(
           nextRetryAt: FieldValue.delete(),
         });
         refunded++;
-        continue;
+        return;
       }
 
-      const refund = await stripe.refunds.create(
-        { payment_intent: piId },
-        { idempotencyKey: doc.id }
-      );
+      const applyRefundOutcome = async (refund: Stripe.Refund) => {
+        const outcome = classifyStripeRefundStatus(refund.status ?? undefined);
+        if (outcome === "terminal_success") {
+          await doc.ref.update({
+            status: "resolved",
+            resolvedAt: Timestamp.now(),
+            stripeRefundId: refund.id,
+            lastProcessorError: FieldValue.delete(),
+            nextRetryAt: FieldValue.delete(),
+            processorAttempts: FieldValue.delete(),
+          });
+          refunded++;
+          return;
+        }
+        if (outcome === "terminal_failure") {
+          const msg = `${refund.failure_reason ?? refund.status ?? "failed"}`.slice(0, 1000);
+          await doc.ref.update({
+            status: "failed",
+            stripeRefundId: refund.id,
+            lastProcessorError: msg,
+            nextRetryAt: FieldValue.delete(),
+            processorAttempts: FieldValue.delete(),
+          });
+          await writeOperationalAlert({
+            type: "pending_refund_processor_permanent_failure",
+            source: "process-pending-refunds",
+            pendingRefundId: doc.id,
+            paymentIntentId: piId,
+            reason: data.reason,
+            error: msg.slice(0, 500),
+          });
+          await sendPendingRefundPermanentFailureAlert({
+            pendingRefundId: doc.id,
+            paymentIntentId: piId,
+            reason: data.reason,
+            error: msg.slice(0, 500),
+          });
+          errors++;
+          return;
+        }
+        await doc.ref.update({
+          status: "pending",
+          stripeRefundId: refund.id,
+          lastProcessorError: FieldValue.delete(),
+          nextRetryAt: Timestamp.fromDate(new Date(now.getTime() + PENDING_STRIPE_REFUND_POLL_MS)),
+        });
+        skipped++;
+      };
 
-      await doc.ref.update({
-        status: "resolved",
-        resolvedAt: Timestamp.now(),
-        stripeRefundId: refund.id,
-        lastProcessorError: FieldValue.delete(),
-        nextRetryAt: FieldValue.delete(),
-        processorAttempts: FieldValue.delete(),
-      });
-      refunded++;
+      const existingRefundId = data.stripeRefundId?.trim();
+      if (existingRefundId) {
+        const refund = await stripe.refunds.retrieve(existingRefundId);
+        await applyRefundOutcome(refund);
+        return;
+      }
+
+      const rawRefundAmt = data.refundAmountCents;
+      const partial =
+        typeof rawRefundAmt === "number" &&
+        Number.isFinite(rawRefundAmt) &&
+        rawRefundAmt > 0 &&
+        rawRefundAmt < received;
+      isPartialRefundAttempt = partial;
+      const refundParams: { payment_intent: string; amount?: number } = { payment_intent: piId };
+      if (partial) {
+        refundParams.amount = Math.round(rawRefundAmt);
+      }
+
+      const refund = await stripe.refunds.create(refundParams, { idempotencyKey: doc.id });
+      await applyRefundOutcome(refund);
     } catch (err) {
       const code = (err as { code?: string }).code;
       const msg = err instanceof Error ? err.message : String(err);
+      if (code === "amount_too_large") {
+        if (isPartialRefundAttempt) {
+          try {
+            await doc.ref.update({
+              status: "failed",
+              lastProcessorError: msg.slice(0, 1000),
+              nextRetryAt: FieldValue.delete(),
+              processorAttempts: FieldValue.delete(),
+            });
+            await writeOperationalAlert({
+              type: "pending_refund_amount_too_large_shortfall",
+              source: "process-pending-refunds",
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              refundAmountCents: data.refundAmountCents,
+              error: msg.slice(0, 500),
+            });
+            await sendPendingRefundPermanentFailureAlert({
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              error: msg.slice(0, 500),
+            });
+            errors++;
+          } catch {
+            errors++;
+          }
+          return;
+        }
+        try {
+          const verified = await verifyFullRefundAlreadyApplied(stripe, piId);
+          if (verified) {
+            await doc.ref.update({
+              status: "resolved",
+              resolvedAt: Timestamp.now(),
+              notes: "amount_too_large — verified full refund in Stripe",
+              nextRetryAt: FieldValue.delete(),
+              lastProcessorError: FieldValue.delete(),
+            });
+            refunded++;
+          } else {
+            await doc.ref.update({
+              status: "failed",
+              lastProcessorError: msg.slice(0, 1000),
+              nextRetryAt: FieldValue.delete(),
+              processorAttempts: FieldValue.delete(),
+            });
+            await writeOperationalAlert({
+              type: "pending_refund_amount_too_large_unverified",
+              source: "process-pending-refunds",
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              error: msg.slice(0, 500),
+            });
+            await sendPendingRefundPermanentFailureAlert({
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              error: msg.slice(0, 500),
+            });
+            errors++;
+          }
+        } catch (verifyErr) {
+          if (verifyErr instanceof Error) {
+            await doc.ref.update({
+              status: "failed",
+              lastProcessorError: verifyErr.message.slice(0, 1000),
+              nextRetryAt: FieldValue.delete(),
+              processorAttempts: FieldValue.delete(),
+            });
+            await writeOperationalAlert({
+              type: "pending_refund_amount_too_large_unverified",
+              source: "process-pending-refunds",
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              error: `verify_failed: ${verifyErr.message.slice(0, 400)}`,
+            });
+            await sendPendingRefundPermanentFailureAlert({
+              pendingRefundId: doc.id,
+              paymentIntentId: piId,
+              reason: data.reason,
+              error: `verify_failed: ${verifyErr.message.slice(0, 400)}`,
+            });
+          }
+          errors++;
+        }
+        return;
+      }
       if (code === "charge_already_refunded") {
         try {
           await doc.ref.update({
@@ -113,7 +371,7 @@ export async function processPendingRefundsBatch(
         } catch {
           errors++;
         }
-        continue;
+        return;
       }
 
       const attempts = (data.processorAttempts ?? 0) + 1;
@@ -135,7 +393,7 @@ export async function processPendingRefundsBatch(
         });
       } catch {
         errors++;
-        continue;
+        return;
       }
 
       if (giveUp) {
@@ -147,10 +405,46 @@ export async function processPendingRefundsBatch(
           reason: data.reason,
           error: msg.slice(0, 500),
         });
+        await sendPendingRefundPermanentFailureAlert({
+          pendingRefundId: doc.id,
+          paymentIntentId: piId,
+          reason: data.reason,
+          error: msg.slice(0, 500),
+        });
       }
       errors++;
     }
+  };
+
+  while (processedThisRun < PER_RUN_BUDGET) {
+
+    let q = db
+      .collection("pendingRefunds")
+      .where("status", "==", "pending")
+      .orderBy("nextRetryAt", "asc")
+      .limit(PAGE_SIZE);
+    if (lastDoc) q = q.startAfter(lastDoc);
+    const snap = await q.get();
+    if (snap.empty) break;
+
+    let stoppedAtFuture = false;
+    for (const doc of snap.docs) {
+      scanned++;
+      const data = doc.data() as { nextRetryAt?: { toDate?: () => Date } };
+      if (!isPendingRefundDueForProcessing(data, now)) {
+        stoppedAtFuture = true;
+        break;
+      }
+      await processOne(doc);
+      processedThisRun++;
+      if (processedThisRun >= PER_RUN_BUDGET) break;
+    }
+
+    if (stoppedAtFuture) break;
+
+    lastDoc = snap.docs[snap.docs.length - 1]!;
+    if (snap.size < PAGE_SIZE) break;
   }
 
-  return { scanned: snap.size, refunded, skipped, errors };
+  return { scanned, refunded, skipped, errors };
 }

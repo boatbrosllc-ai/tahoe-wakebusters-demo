@@ -22,11 +22,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Assert concurrency test files present
+        run: npm run assert-concurrency-tests
+
+      - name: Setup Java (Firestore emulator)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Lint
         run: npm run lint
 
-      - name: Booking tests
-        run: npm run test:booking
+      - name: Verify Firestore blocks index definition
+        run: npm run verify-firestore-blocks-index
+
+      - name: Booking tests (Firestore emulator)
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIREBASE_PROJECT_ID: demo-test
+          FIREBASE_CLIENT_EMAIL: demo@test.iam.gserviceaccount.com
+          FIREBASE_PRIVATE_KEY: placeholder
+        run: npx --yes firebase-tools@13 emulators:exec --only firestore --project demo-test "npm run test"
 
       - name: Build
         run: npm run build

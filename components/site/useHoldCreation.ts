@@ -2,7 +2,8 @@
  * Hold creation + Stripe PaymentIntent prep for BookingModal (`useHoldCreation`).
  * Completion after payment lives in `usePaymentCompletion`.
  *
- * Dev/staging: if `RELEASE_TOKEN_SECRET` is unset server-side, holds will not release on Back/cancel (see `lib/booking/releaseToken.ts` startup warning). The client also warns once after a successful create-hold when no `release_token` is returned.
+ * Production requires `RELEASE_TOKEN_SECRET` (validated at startup via `assertProductionReleaseTokenSecret` in `lib/booking/env.ts`).
+ * In dev, if it is unset server-side, holds will not release on Back/cancel (see `lib/booking/releaseToken.ts`). The client also warns once after a successful create-hold when no `release_token` is returned.
  */
 import { useCallback, useRef, useEffect, useState } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
@@ -57,7 +58,7 @@ export type HoldCreationFormValues = {
   tipChoice: "now" | "later" | null;
   cancellationAck: boolean;
   addonSelections: Record<string, number>;
-  priceSummary: { tipCents: number };
+  priceSummary: { tipCents: number; priceIsEstimate: boolean };
   appliedDiscount: { discountCents: number; code: string } | null;
   discountCode: string;
   marketingOptIn: boolean;
@@ -183,25 +184,37 @@ export function clearModalHoldRecoverySession(): void {
   }
 }
 
+/** When React state lost the token, sessionStorage may still hold it from the last persist. */
+export function readReleaseTokenFromModalSession(holdId: string): string | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { holdId?: string; releaseToken?: string | null };
+    if (parsed.holdId !== holdId) return null;
+    const t = typeof parsed.releaseToken === "string" ? parsed.releaseToken.trim() : "";
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
 async function postReleaseHold(
   holdId: string,
   releaseToken: string | null
 ): Promise<{ ok: true } | { ok: false; message: string; status: number }> {
-  const token = typeof releaseToken === "string" ? releaseToken.trim() : "";
-  // Without RELEASE_TOKEN_SECRET the server never returns release_token; calling the API would only 400.
+  let token = typeof releaseToken === "string" ? releaseToken.trim() : "";
   if (!token) {
-    return {
-      ok: false,
-      message:
-        "This hold could not be cancelled automatically. The slot should reopen when the hold expires; contact us if it does not.",
-      status: 0,
-    };
+    token = readReleaseTokenFromModalSession(holdId) ?? "";
   }
   try {
     const res = await fetch("/api/booking/release-hold", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ holdId, release_token: token }),
+      credentials: "same-origin",
+      body: JSON.stringify(
+        token ? { holdId, release_token: token } : { holdId }
+      ),
     });
     let body: Record<string, unknown> = {};
     try {
@@ -216,10 +229,18 @@ async function postReleaseHold(
         hint: body.hint,
         holdId,
       });
-      const msg =
+      let msg =
         typeof body.error === "string"
           ? body.error
           : `Could not release your hold (${res.status}). Please retry.`;
+      if (
+        res.status === 400 &&
+        typeof body.error === "string" &&
+        body.error.includes("release_token")
+      ) {
+        msg =
+          "This hold could not be cancelled automatically. The slot should reopen when the hold expires; contact us if it does not.";
+      }
       return { ok: false, message: msg, status: res.status };
     }
     return { ok: true };
@@ -251,12 +272,28 @@ export function useHoldCreation(
   const proceedToPaymentInFlightRef = useRef(false);
   const pendingModalCloseWhileProceedRef = useRef(false);
   const [proceedToPaymentInFlight, setProceedToPaymentInFlight] = useState(false);
+  /** Shared-ticketed: stable id for create-hold deduplication across rapid double-clicks on Step 4. */
+  const sharedTicketHoldRequestIdRef = useRef<string | null>(null);
+  /** Charter (non–shared-ticket): stable id across retries for the same booking attempt. */
+  const charterHoldRequestIdRef = useRef<string | null>(null);
+
+  const resetSharedTicketHoldRequestId = useCallback(() => {
+    sharedTicketHoldRequestIdRef.current = null;
+  }, []);
+
+  const resetCharterHoldRequestId = useCallback(() => {
+    charterHoldRequestIdRef.current = null;
+  }, []);
 
   const releaseCreatedHold = useCallback(
     async (overrideHoldId?: string | null, overrideReleaseToken?: string | null) => {
       const opts = optionsRef.current;
       const id = overrideHoldId ?? opts.holdId;
-      const token = overrideReleaseToken ?? opts.releaseToken;
+      const token =
+        overrideReleaseToken ??
+        opts.releaseToken ??
+        opts.releaseTokenRef?.current ??
+        null;
       if (!id) {
         opts.setHoldReleaseWarning?.(null);
         return true;
@@ -314,6 +351,7 @@ export function useHoldCreation(
   }, [releaseCreatedHold]);
 
   const handleProceedToPayment = useCallback(async () => {
+    resetCharterHoldRequestId();
     if (proceedToPaymentInFlightRef.current) return;
     proceedToPaymentInFlightRef.current = true;
     setProceedToPaymentInFlight(true);
@@ -353,6 +391,9 @@ export function useHoldCreation(
       lastHoldRef,
     } = opts;
 
+    /** Hold created in this invocation — used in `finally` when modal closes mid-create (ref can lag state). */
+    let createdHoldForRelease: { holdId: string; releaseToken: string | null } | null = null;
+
     try {
     if (!selectedExperience || !selectedSlot || !selectedRateId) {
       opts.setPaymentError("Missing booking details. Please try again.");
@@ -378,9 +419,12 @@ export function useHoldCreation(
       opts.setPaymentError("Please enter a valid phone number.");
       return;
     }
-    const tipRequired = opts.selectedExperience?.allowTipNow !== false || opts.selectedExperience?.allowTipLater !== false;
-    if (tipRequired && tipChoice === null) {
-      opts.setPaymentError("Please choose a tip option: Tip now or Tip later.");
+    const allowTipNow = opts.selectedExperience?.allowTipNow !== false;
+    const allowTipLater = opts.selectedExperience?.allowTipLater !== false;
+    if (!allowTipNow && !allowTipLater) {
+      /* No tip UI — nothing to validate */
+    } else if (tipChoice === null) {
+      opts.setPaymentError("Please choose a tip option above.");
       return;
     }
     if (!cancellationAck) {
@@ -405,6 +449,10 @@ export function useHoldCreation(
       opts.setPaymentError(STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE);
       return;
     }
+    if (tipChoice === "now" && priceSummary.priceIsEstimate) {
+      opts.setPaymentError("Exact price is still loading. Wait a moment, then try again — tips must match the confirmed rate.");
+      return;
+    }
     // Ticketed: only verify the selected slot is for the selected date. The slot id came from our API
     // and create-hold validates it server-side; re-deriving expectedSlotId from experience/rate caused
     // false positives when client defaults (duration/minute) differed from the server's resolved values.
@@ -419,10 +467,14 @@ export function useHoldCreation(
       }
     }
 
-    const holdRequestId =
+    const newRandomHoldRequestId = () =>
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+    const holdRequestId =
+      isTicketed && bookingMode === "shared"
+        ? (sharedTicketHoldRequestIdRef.current ??= newRandomHoldRequestId())
+        : (charterHoldRequestIdRef.current ??= newRandomHoldRequestId());
 
     opts.setPaymentError(null);
     opts.setClientSecret(null);
@@ -448,7 +500,7 @@ export function useHoldCreation(
           discountCode: (appliedDiscount?.code ?? discountCode.trim()) || undefined,
           bookingMode: isTicketed ? bookingMode : "charter",
           resumeHoldId: lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId ?? undefined : undefined,
-          ...(isTicketed ? { holdRequestId } : {}),
+          holdRequestId,
         },
         { persistHoldForResume: lastHoldRef }
       );
@@ -498,6 +550,7 @@ export function useHoldCreation(
         return;
       }
       lastHoldRef.current = { slotId: selectedSlot.id, holdId: holdResult.holdId };
+      createdHoldForRelease = { holdId: holdResult.holdId, releaseToken: holdResult.releaseToken ?? null };
       opts.setHoldId(holdResult.holdId);
       opts.setReleaseToken(holdResult.releaseToken);
       if (
@@ -545,15 +598,20 @@ export function useHoldCreation(
       const fin = optionsRef.current;
       if (pendingModalCloseWhileProceedRef.current) {
         pendingModalCloseWhileProceedRef.current = false;
-        const id = fin.holdIdRef.current;
+        const id = fin.holdId;
         if (id) {
-          void releaseCreatedHold().then(() => fin.onOpenChange(false));
+          const explicit = createdHoldForRelease;
+          const useExplicit = explicit != null && explicit.holdId === id;
+          void releaseCreatedHold(
+            useExplicit ? explicit.holdId : undefined,
+            useExplicit ? explicit.releaseToken : undefined,
+          ).then(() => fin.onOpenChange(false));
         } else {
           fin.onOpenChange(false);
         }
       }
     }
-  }, [releaseCreatedHold]);
+  }, [releaseCreatedHold, resetCharterHoldRequestId]);
 
   const paymentIntentFetchGenRef = useRef(0);
 
@@ -594,6 +652,7 @@ export function useHoldCreation(
         return;
       }
       opts.setClientSecret(pi.clientSecret);
+      opts.setReleaseToken(pi.releaseToken ?? null);
       opts.setReceiptClaimToken(
         typeof pi.receiptClaimToken === "string" && pi.receiptClaimToken.trim()
           ? pi.receiptClaimToken.trim()
@@ -637,7 +696,7 @@ export function useHoldCreation(
           depositCentsFromServer: typeof pi.depositCents === "number" ? pi.depositCents : null,
           totalCentsFromServer: typeof pi.totalCents === "number" ? pi.totalCents : null,
           finalCentsFromServer: typeof pi.finalCents === "number" ? pi.finalCents : null,
-          isDepositFromServer: null,
+          isDepositFromServer: typeof pi.payFullAmount === "boolean" ? !pi.payFullAmount : null,
           payFullAmount: typeof pi.payFullAmount === "boolean" ? pi.payFullAmount : opts.payFullAmount,
         });
       }
@@ -661,8 +720,8 @@ export function useHoldCreation(
     if (!infrastructure.open) return;
     return () => {
       const opts = optionsRef.current;
-      const h = opts.holdIdRef.current;
-      const token = opts.releaseTokenRef.current;
+      const h = opts.holdId;
+      const token = opts.releaseToken ?? opts.releaseTokenRef?.current ?? null;
       const p = opts.paymentPhaseRef.current;
       const inPaymentPhase = p === "stripe" || p === "loading";
       if (h && inPaymentPhase && !opts.releaseOnCloseDoneRef.current) {
@@ -689,5 +748,7 @@ export function useHoldCreation(
     handleModalOpenChange,
     proceedToPaymentInFlightRef,
     proceedToPaymentInFlight,
+    resetSharedTicketHoldRequestId,
+    resetCharterHoldRequestId,
   };
 }

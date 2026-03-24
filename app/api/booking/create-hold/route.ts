@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import {
   getSlotStartEnd,
-  getCentralCalendarDayBounds,
   parseSlotId,
   parseSlotIdRelaxed,
   isAllowedSlotTime,
@@ -12,31 +11,49 @@ import {
 import { buildAddonSelectionsForPricing, computePricing, getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
 import { getTicketedDepartureAndDuration, validateTicketedSlotParsed, type RateDocLike } from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
-import { assertSlotAvailable, SlotConflictError } from "@/lib/booking/slot-availability";
+import {
+  assertSlotAvailable,
+  assertLegacyBoatSlotAvailable,
+  SlotConflictError,
+  LegacyScanLimitReachedError,
+  assertNoOverlappingActiveSameDaySlots,
+  transactionGetQueryOrDoc,
+} from "@/lib/booking/slot-availability";
+import { departureTimesMatch } from "@/lib/booking/departure-match";
 import type { CreateHoldInput, CreateHoldResponse, Discount } from "@/lib/booking/types";
 import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
+import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
 import { parseCreateHoldBody } from "@/lib/booking/create-hold-validation";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, generateIncidentCode } from "@/lib/booking/debug";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { createHold503Payload, type CreateHold503Code } from "@/lib/booking/create-hold-errors";
 import { isTransientFirestoreFailure } from "@/lib/booking/firestore-transient";
 import {
   computeHoldRequestFingerprint,
   HOLD_REQUEST_CLAIMS_COLLECTION,
 } from "@/lib/booking/hold-request-idempotency";
-import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
+import { HOLD_EXPIRY_MINUTES, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-boat-resolution";
+import { assertProductionReleaseTokenSecret } from "@/lib/booking/env";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 
 type ExperienceForTicketed = import("@/lib/booking/ticketed-slot-utils").ExperienceForTicketed;
+
+/** Resume: same discount code (trimmed, case-insensitive) was already counted on original hold — do not increment/decrement again. */
+function discountCodesDifferOnResume(oldCode: string | undefined, newCode: string | undefined): boolean {
+  return (oldCode ?? "").trim().toLowerCase() !== (newCode ?? "").trim().toLowerCase();
+}
 
 function json503(incidentId: string, code: CreateHold503Code, error: string) {
   return NextResponse.json(createHold503Payload(incidentId, code, error), { status: 503 });
@@ -91,10 +108,18 @@ function validateTicketedSlotId(
   );
 }
 
+function jsonHoldCreated(response: CreateHoldResponse): NextResponse {
+  const res = NextResponse.json(response);
+  if (response.releaseToken) {
+    attachHoldReleaseCookie(res, response.releaseToken, response.expiresAt);
+  }
+  return res;
+}
+
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-hold", "request started");
-    const rl = await checkRateLimit(getClientKey(request));
+    const rl = await checkRateLimitSensitiveMutation(getClientKey(request));
     if (!rl.allowed) {
       if (rl.serverError) {
         const incidentId = generateIncidentCode();
@@ -117,6 +142,26 @@ export async function POST(request: NextRequest) {
     }
     if (rl.degraded) {
       bookingLog("create-hold", "rate limit degraded, request allowed", {});
+    }
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
+    try {
+      assertReceiptTokenSecretConfigured();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      bookingError("create-hold", "RECEIPT_TOKEN_SECRET missing in non-development — refusing create-hold", null, {
+        nodeEnv: process.env.NODE_ENV ?? "",
+        message: msg,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Booking is temporarily unavailable (server configuration: RECEIPT_TOKEN_SECRET). Set the secret and redeploy.",
+        },
+        { status: 503 }
+      );
     }
     const body = await request.json().catch(() => null);
     const parsed = parseCreateHoldBody(body);
@@ -158,6 +203,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const { FieldValue, Timestamp } = getFirestoreExports();
+    assertProductionReleaseTokenSecret();
     const hasExperience = !!input.experienceId;
     const hasBoat = !!input.boatId;
     /** Reuse when boatId auto-resolution already read this doc (avoids duplicate experience fetch in listing-boat flow). */
@@ -550,21 +596,13 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const tipCents = input.tipCents ?? 0;
-    const maxTipCents = Math.round(pricing.subtotalCents * 0.35);
-    if (tipCents > maxTipCents) {
-      return NextResponse.json(
-        { error: `Tip cannot exceed 35% of the booking subtotal before tax (maximum ${(maxTipCents / 100).toFixed(2)} for this booking).` },
-        { status: 400 }
-      );
-    }
     let discountCents = 0;
     let discountCodeApplied: string | undefined;
     let discountRef: import("firebase-admin").firestore.DocumentReference | null = null;
     if (input.discountCode) {
       const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
       const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
-      // Discount base = pre-tip subtotal (rate + addons + tax) per contract with validate-discount.
+      // Discount base = `pricing.totalCents` (subtotal before tip including tax and fees, excluding tip and discount). Must match validate-discount / `computePricing()`.
       const result = validateAndApplyDiscount(discountDoc, pricing.totalCents);
       if (!result.valid) {
         return NextResponse.json({ error: result.error }, { status: 400 });
@@ -572,6 +610,17 @@ export async function POST(request: NextRequest) {
       discountCents = result.discountCents;
       discountCodeApplied = result.discount.code;
       if (!discountSnap.empty) discountRef = discountSnap.docs[0].ref;
+    }
+    const tipCents = input.tipCents ?? 0;
+    const postDiscountTotalCents = Math.max(0, pricing.totalCents - discountCents);
+    const maxTipCents = Math.round(postDiscountTotalCents * (TIP_MAX_PERCENT_SERVER / 100));
+    if (tipCents > maxTipCents) {
+      return NextResponse.json(
+        {
+          error: `Tip cannot exceed ${TIP_MAX_PERCENT_SERVER}% of the booking total after discounts (maximum ${(maxTipCents / 100).toFixed(2)} for this booking).`,
+        },
+        { status: 400 }
+      );
     }
     const totalCentsWithTip = Math.max(0, pricing.totalCents + tipCents - discountCents);
     bookingLog("create-hold", "pricing computed", {
@@ -583,8 +632,6 @@ export async function POST(request: NextRequest) {
     });
     const holdId = db.collection("holds").doc().id;
     const holdRequestFingerprint = input.holdRequestId ? computeHoldRequestFingerprint(input) : null;
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
 
     const parsedSlotForHold = parseSlotId(input.slotId);
     const addonSelectionsSnapshot = input.addonSelections.map((s) => {
@@ -593,6 +640,9 @@ export async function POST(request: NextRequest) {
         addon && typeof (addon as { priceCents?: number }).priceCents === "number"
           ? Math.max(0, Math.floor((addon as { priceCents: number }).priceCents))
           : 0;
+      if (s.qty > 0 && addon && typeof (addon as { priceCents?: number }).priceCents !== "number") {
+        console.warn("[create-hold] addon document missing priceCents for selection with qty>0", { addonId: s.addonId });
+      }
       const name =
         addon && typeof (addon as { name?: string }).name === "string" ? (addon as { name: string }).name.trim() : "";
       return {
@@ -613,7 +663,6 @@ export async function POST(request: NextRequest) {
       customerDraft: input.customerDraft,
       marketingOptIn: input.marketingOptIn,
       status: "active",
-      expiresAt: Timestamp.fromDate(expiresAt),
       createdAt: FieldValue.serverTimestamp(),
       paymentAttemptVersion: 1,
     };
@@ -628,7 +677,11 @@ export async function POST(request: NextRequest) {
       holdPayload.discountCents = discountCents;
       if (discountRef) holdPayload.discountDocId = discountRef.id;
     }
-    holdPayload.pricing = { ...pricing, currency: pricing.currency ?? "usd" };
+    holdPayload.pricing = {
+      ...pricing,
+      totalCents: totalCentsWithTip,
+      currency: pricing.currency ?? "usd",
+    };
     holdPayload.effectiveRateCents = rateForPricing.priceCents;
 
     let reusedHoldId: string | null = null;
@@ -665,9 +718,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "This time slot is in the past" }, { status: 400 });
       }
       let effectiveHoldId = holdId;
-      let effectiveExpiresAt = expiresAt;
+      let effectiveExpiresAt!: Date;
       const sharedDiscountOut = { cents: discountCents };
       await db.runTransaction(async (tx) => {
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
+        effectiveExpiresAt = expiresAt;
         let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
         /** When the hold-request claim doc does not exist yet, defer its first write until all reads complete (Firestore rule). */
         let pendingClaimInitialWrite = false;
@@ -725,6 +781,25 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        const oppositeModeHoldSnaps = await Promise.all(
+          slugVariantsList.map((v) =>
+            tx.get(db.collection("holds").where("experienceId", "==", v).where("startDateStr", "==", dateStr))
+          )
+        );
+        for (const snap of oppositeModeHoldSnaps) {
+          for (const d of snap.docs) {
+            const h = d.data() as Hold & { expiresAt?: { toDate?: () => Date; seconds?: number } };
+            if (h.status !== "active") continue;
+            const hex = h.expiresAt;
+            const expiryDate =
+              hex?.toDate?.() ?? (typeof hex?.seconds === "number" ? new Date(hex.seconds * 1000) : new Date(0));
+            if (expiryDate <= now) continue;
+            if (h.bookingMode !== "charter") continue;
+            if (!departureTimesMatch(h.slotId, parsedForCapacity)) continue;
+            throw new Error("This departure is reserved as a private charter");
+          }
+        }
+
         if (!resumeTargetId && input.holdRequestId) {
           const idemSnap = await tx.get(
             db.collection("holds").where("clientHoldRequestId", "==", input.holdRequestId).limit(2)
@@ -759,10 +834,19 @@ export async function POST(request: NextRequest) {
               const oldPartySize = typeof existingHold.partySize === "number" ? existingHold.partySize : 0;
               const delta = input.partySize - oldPartySize;
               const oldDiscountCode = (existingHold as { discountCode?: string }).discountCode;
+              const oldDiscountDocIdTx = (existingHold as { discountDocId?: string }).discountDocId?.trim();
 
               let oldDiscountDecrementRef: import("firebase-admin").firestore.DocumentReference | null = null;
               let oldDiscountNextCount: number | null = null;
-              if (oldDiscountCode && oldDiscountCode !== discountCodeApplied) {
+              if (oldDiscountDocIdTx) {
+                const oldDiscountRefById = db.collection("discounts").doc(oldDiscountDocIdTx);
+                const oldDiscountSnapById = await tx.get(oldDiscountRefById);
+                if (oldDiscountSnapById.exists && discountCodesDifferOnResume(oldDiscountCode, discountCodeApplied)) {
+                  const d = oldDiscountSnapById.data() as { usedCount?: number };
+                  oldDiscountDecrementRef = oldDiscountRefById;
+                  oldDiscountNextCount = Math.max(0, (d.usedCount ?? 0) - 1);
+                }
+              } else if (oldDiscountCode && discountCodesDifferOnResume(oldDiscountCode, discountCodeApplied)) {
                 const oldDiscountSnap = await tx.get(db.collection("discounts").where("code", "==", oldDiscountCode).limit(1));
                 if (!oldDiscountSnap.empty) {
                   const d = oldDiscountSnap.docs[0].data() as { usedCount?: number };
@@ -772,7 +856,12 @@ export async function POST(request: NextRequest) {
               }
 
               let shouldIncrementNewDiscount = false;
-              if (discountRef && discountCodeApplied && discountCents > 0) {
+              if (
+                discountRef &&
+                discountCodeApplied &&
+                discountCents > 0 &&
+                discountCodesDifferOnResume(oldDiscountCode, discountCodeApplied)
+              ) {
                 const newDiscountSnap = await tx.get(discountRef);
                 if (newDiscountSnap.exists) {
                   const discountLive = newDiscountSnap.data() as Discount;
@@ -858,6 +947,7 @@ export async function POST(request: NextRequest) {
                       : {}),
                     holdId: effectiveHoldId,
                     updatedAt: FieldValue.serverTimestamp(),
+                    expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
                   },
                   { merge: true }
                 );
@@ -907,7 +997,10 @@ export async function POST(request: NextRequest) {
         await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold, {
           preReadReservedSeats: inventoryReservedBeforeHold,
         });
-        tx.set(db.collection("holds").doc(holdId), holdPayload);
+        tx.set(db.collection("holds").doc(holdId), {
+          ...holdPayload,
+          expiresAt: Timestamp.fromDate(expiresAt),
+        });
         if (claimRef) {
           tx.set(
             claimRef,
@@ -917,6 +1010,7 @@ export async function POST(request: NextRequest) {
                 : {}),
               holdId,
               updatedAt: FieldValue.serverTimestamp(),
+              expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
             },
             { merge: true }
           );
@@ -932,7 +1026,7 @@ export async function POST(request: NextRequest) {
         ...(discountCodeApplied ? { discountCents: sharedDiscountOut.cents, discountCode: discountCodeApplied } : {}),
       };
       bookingLog("create-hold", "shared ticketed hold created", { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), reused: effectiveHoldId !== holdId });
-      return NextResponse.json(response);
+      return jsonHoldCreated(response);
     }
 
     const experienceIdVariantsForAssert =
@@ -951,7 +1045,11 @@ export async function POST(request: NextRequest) {
 
     bookingLog("create-hold", "charter/legacy: starting transaction (slot hold + hold doc)");
     const charterDiscountOut = { cents: discountCents };
+    let charterExpiresAt!: Date;
     await db.runTransaction(async (tx) => {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
+      charterExpiresAt = expiresAt;
       let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
       let pendingClaimInitialWrite = false;
       let effectiveResumeHoldId: string | null =
@@ -989,6 +1087,26 @@ export async function POST(request: NextRequest) {
           pendingClaimInitialWrite = true;
         }
       }
+      if (!effectiveResumeHoldId && input.holdRequestId) {
+        const idemSnapCharter = await tx.get(
+          db.collection("holds").where("clientHoldRequestId", "==", input.holdRequestId).limit(2)
+        );
+        for (const d of idemSnapCharter.docs) {
+          const h = d.data() as Hold & { expiresAt?: { toDate?: () => Date; seconds?: number } };
+          const exp = h.expiresAt;
+          const expiryDate =
+            exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+          const isActive = h.status === "active" && expiryDate > now;
+          const sameSlot = h.slotId === input.slotId;
+          const charterMode = h.bookingMode !== "shared";
+          const sameExp = !input.experienceId || h.experienceId === input.experienceId;
+          const sameBoat = !input.boatId || h.boatId === input.boatId;
+          if (isActive && sameSlot && charterMode && sameExp && sameBoat) {
+            effectiveResumeHoldId = d.id;
+            break;
+          }
+        }
+      }
       const applyCharterDiscountForNewHold = async () => {
         if (discountRef && discountCodeApplied && discountCents > 0) {
           const discountSnapTx = await tx.get(discountRef);
@@ -1011,6 +1129,41 @@ export async function POST(request: NextRequest) {
           }
         }
       };
+      if (isCharterTicketed && parsedSlotForHold) {
+        const scanOppositeSharedHolds = async (
+          docs: import("firebase-admin").firestore.QueryDocumentSnapshot[]
+        ) => {
+          for (const d of docs) {
+            const h = d.data() as Hold & { expiresAt?: { toDate?: () => Date; seconds?: number } };
+            if (h.status !== "active") continue;
+            const exp = h.expiresAt;
+            const expiryDate =
+              exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+            if (expiryDate <= now) continue;
+            if (h.bookingMode !== "shared") continue;
+            if (departureTimesMatch(h.slotId, parsedSlotForHold)) {
+              throw new Error("Shared tickets have already been sold for this departure");
+            }
+          }
+        };
+        if (input.boatId) {
+          const oppSnap = await tx.get(
+            db.collection("holds").where("boatId", "==", input.boatId).where("startDateStr", "==", parsedSlotForHold.dateStr)
+          );
+          await scanOppositeSharedHolds(oppSnap.docs);
+        } else if (input.experienceId) {
+          const oppSnaps = await Promise.all(
+            experienceIdVariantsForAssert.map((v) =>
+              tx.get(
+                db.collection("holds").where("experienceId", "==", v).where("startDateStr", "==", parsedSlotForHold.dateStr)
+              )
+            )
+          );
+          for (const s of oppSnaps) {
+            await scanOppositeSharedHolds(s.docs);
+          }
+        }
+      }
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
@@ -1035,6 +1188,19 @@ export async function POST(request: NextRequest) {
                 reusedHoldId = slot.holdId;
                 reusedExpiresAt = newExpiresAt;
                 if (input.experienceId && parsedSlotForHold) {
+                  await assertNoOverlappingActiveSameDaySlots({
+                    db,
+                    Timestamp,
+                    get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+                    experienceId: input.experienceId,
+                    boatId: input.boatId,
+                    useBoatSlots: isListingBoatFlow,
+                    parsed: parsedSlotForHold,
+                    slotStart: slotStartDate,
+                    slotEnd: slotEndDate,
+                    now,
+                    ignoreSlotDocIds: [input.slotId],
+                  });
                   await assertSlotAvailable({
                     db,
                     Timestamp,
@@ -1048,12 +1214,31 @@ export async function POST(request: NextRequest) {
                     useBoatSlots: isListingBoatFlow,
                     runSameDaySlotScan: false,
                   });
+                } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
+                  await assertLegacyBoatSlotAvailable({
+                    db,
+                    Timestamp,
+                    get: (q) => tx.get(q),
+                    boatId: input.boatId,
+                    parsed: parsedSlotForHold,
+                    slotStart: slotStartDate,
+                    slotEnd: slotEndDate,
+                  });
                 }
-                const existingHoldForCharter = existingHoldSnap.data() as Hold & { discountCode?: string };
+                const existingHoldForCharter = existingHoldSnap.data() as Hold & { discountCode?: string; discountDocId?: string };
                 const oldDiscountCodeCharter = existingHoldForCharter.discountCode;
+                const oldDiscountDocIdCharter = existingHoldForCharter.discountDocId?.trim();
                 let oldDiscountDecrementRefCharter: import("firebase-admin").firestore.DocumentReference | null = null;
                 let oldDiscountNextCountCharter: number | null = null;
-                if (oldDiscountCodeCharter && oldDiscountCodeCharter !== discountCodeApplied) {
+                if (oldDiscountDocIdCharter) {
+                  const oldDiscountRefCh = db.collection("discounts").doc(oldDiscountDocIdCharter);
+                  const oldDiscountSnapCh = await tx.get(oldDiscountRefCh);
+                  if (oldDiscountSnapCh.exists && discountCodesDifferOnResume(oldDiscountCodeCharter, discountCodeApplied)) {
+                    const d = oldDiscountSnapCh.data() as { usedCount?: number };
+                    oldDiscountDecrementRefCharter = oldDiscountRefCh;
+                    oldDiscountNextCountCharter = Math.max(0, (d.usedCount ?? 0) - 1);
+                  }
+                } else if (oldDiscountCodeCharter && discountCodesDifferOnResume(oldDiscountCodeCharter, discountCodeApplied)) {
                   const oldDiscountSnapCharter = await tx.get(db.collection("discounts").where("code", "==", oldDiscountCodeCharter).limit(1));
                   if (!oldDiscountSnapCharter.empty) {
                     const d = oldDiscountSnapCharter.docs[0].data() as { usedCount?: number };
@@ -1062,7 +1247,12 @@ export async function POST(request: NextRequest) {
                   }
                 }
                 let shouldIncrementNewDiscountCharter = false;
-                if (discountRef && discountCodeApplied && discountCents > 0) {
+                if (
+                  discountRef &&
+                  discountCodeApplied &&
+                  discountCents > 0 &&
+                  discountCodesDifferOnResume(oldDiscountCodeCharter, discountCodeApplied)
+                ) {
                   const newDiscountSnapCharter = await tx.get(discountRef);
                   if (newDiscountSnapCharter.exists) {
                     const discountLive = newDiscountSnapCharter.data() as Discount;
@@ -1138,6 +1328,7 @@ export async function POST(request: NextRequest) {
                         : {}),
                       holdId: slot.holdId,
                       updatedAt: FieldValue.serverTimestamp(),
+                      expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
                     },
                     { merge: true }
                   );
@@ -1161,6 +1352,18 @@ export async function POST(request: NextRequest) {
           }
         }
         if (input.experienceId && parsedSlotForHold) {
+          await assertNoOverlappingActiveSameDaySlots({
+            db,
+            Timestamp,
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+            experienceId: input.experienceId,
+            boatId: input.boatId,
+            useBoatSlots: isListingBoatFlow,
+            parsed: parsedSlotForHold,
+            slotStart: slotStartDate,
+            slotEnd: slotEndDate,
+            now,
+          });
           await assertSlotAvailable({
             db,
             Timestamp,
@@ -1173,6 +1376,16 @@ export async function POST(request: NextRequest) {
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
+          });
+        } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
+          await assertLegacyBoatSlotAvailable({
+            db,
+            Timestamp,
+            get: (q) => tx.get(q),
+            boatId: input.boatId,
+            parsed: parsedSlotForHold,
+            slotStart: slotStartDate,
+            slotEnd: slotEndDate,
           });
         }
         await applyCharterDiscountForNewHold();
@@ -1192,75 +1405,31 @@ export async function POST(request: NextRequest) {
           parsed.durationHours,
           parsed.startMinute ?? 0
         );
-        const slotStartMs = slotStartDate.getTime();
-        const slotEndMs = slotEndDate.getTime();
-        // Prevent double-booking: reject if any existing held/booked/blocked slot overlaps this time
-        const { dayStart, dayEnd } = getCentralCalendarDayBounds(parsed.dateStr);
-        const checkSameDaySlotsForOverlap = async (
-          sameDayDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[]
-        ) => {
-          // Batch-prefetch all holds and bookings needed to determine true status — avoids N+1 reads.
-          const heldDocs = sameDayDocs.filter(d => {
-            const s = d.data() as Slot;
-            return s.status === "held" && s.holdId;
+        if (isListingBoatFlow && input.boatId && input.experienceId) {
+          await assertNoOverlappingActiveSameDaySlots({
+            db,
+            Timestamp,
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+            experienceId: input.experienceId,
+            boatId: input.boatId,
+            useBoatSlots: true,
+            parsed,
+            slotStart: slotStartDate,
+            slotEnd: slotEndDate,
+            now,
           });
-          const bookedDocs = sameDayDocs.filter(d => {
-            const s = d.data() as Slot;
-            return s.status === "booked" && s.bookingId;
-          });
-          const [holdSnaps, bookingSnaps] = await Promise.all([
-            heldDocs.length
-              ? Promise.all(heldDocs.map(d => tx.get(db.collection("holds").doc((d.data() as Slot).holdId as string))))
-              : Promise.resolve([] as import("firebase-admin").firestore.DocumentSnapshot[]),
-            bookedDocs.length
-              ? Promise.all(bookedDocs.map(d => tx.get(db.collection("bookings").doc((d.data() as Slot).bookingId as string))))
-              : Promise.resolve([] as import("firebase-admin").firestore.DocumentSnapshot[]),
-          ]);
-          const holdsById = new Map(heldDocs.map((d, i) => [(d.data() as Slot).holdId as string, holdSnaps[i]]));
-          const bookingsById = new Map(bookedDocs.map((d, i) => [(d.data() as Slot).bookingId as string, bookingSnaps[i]]));
-
-          for (const doc of sameDayDocs) {
-            const data = doc.data() as Slot;
-            if (data.status === "open") continue;
-            if (data.status === "held") {
-              if (!data.holdId) continue;
-              const hSnap = holdsById.get(data.holdId);
-              if (!hSnap?.exists) continue;
-              const hold = hSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
-              if (hold?.status !== "active") continue;
-              const exp = hold?.expiresAt?.toDate?.();
-              if (exp && exp <= now) continue;
-            } else if (data.status === "booked") {
-              if (!data.bookingId) continue;
-              const bSnap = bookingsById.get(data.bookingId);
-              if (!bSnap?.exists) continue;
-              const b = bSnap.data() as { status?: string };
-              if (!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never))) continue;
-            }
-            const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-            const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-            if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-              throw new Error("Slot no longer available");
-            }
-          }
-        };
-
-        if (isListingBoatFlow && input.boatId) {
-          const boatSlotsRef = db.collection("boats").doc(input.boatId).collection("slots");
-          const sameDaySnap = await tx.get(
-            boatSlotsRef
-              .where("startAt", ">=", Timestamp.fromDate(dayStart))
-              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-          );
-          await checkSameDaySlotsForOverlap(sameDaySnap.docs);
         } else if (isExperienceOnly && input.experienceId) {
-          const expSlotsRef = db.collection("experiences").doc(input.experienceId).collection("slots");
-          const sameDaySnap = await tx.get(
-            expSlotsRef
-              .where("startAt", ">=", Timestamp.fromDate(dayStart))
-              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-          );
-          await checkSameDaySlotsForOverlap(sameDaySnap.docs);
+          await assertNoOverlappingActiveSameDaySlots({
+            db,
+            Timestamp,
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+            experienceId: input.experienceId,
+            useBoatSlots: false,
+            parsed,
+            slotStart: slotStartDate,
+            slotEnd: slotEndDate,
+            now,
+          });
         }
         if (input.experienceId && parsed) {
           await assertSlotAvailable({
@@ -1287,7 +1456,10 @@ export async function POST(request: NextRequest) {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
-      tx.set(db.collection("holds").doc(holdId), holdPayload);
+      tx.set(db.collection("holds").doc(holdId), {
+        ...holdPayload,
+        expiresAt: Timestamp.fromDate(expiresAt),
+      });
       if (claimRef) {
         tx.set(
           claimRef,
@@ -1297,6 +1469,7 @@ export async function POST(request: NextRequest) {
               : {}),
             holdId,
             updatedAt: FieldValue.serverTimestamp(),
+            expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
           },
           { merge: true }
         );
@@ -1306,7 +1479,7 @@ export async function POST(request: NextRequest) {
     bookingLog("create-hold", "transaction completed", {
       holdId,
       reusedHoldId,
-      expiresAt: (reusedHoldId != null && reusedExpiresAt != null ? reusedExpiresAt : expiresAt).toISOString(),
+      expiresAt: (reusedHoldId != null && reusedExpiresAt != null ? reusedExpiresAt : charterExpiresAt).toISOString(),
     });
     const responsePricing = {
       ...pricing,
@@ -1322,18 +1495,18 @@ export async function POST(request: NextRequest) {
         ...(releaseToken ? { releaseToken } : {}),
         ...(discountCodeApplied ? { discountCents: charterDiscountOut.cents, discountCode: discountCodeApplied } : {}),
       };
-      return NextResponse.json(response);
+      return jsonHoldCreated(response);
     }
 
-    const releaseToken = signReleaseToken(holdId, Math.floor(expiresAt.getTime() / 1000));
+    const releaseToken = signReleaseToken(holdId, Math.floor(charterExpiresAt.getTime() / 1000));
     const response: CreateHoldResponse = {
       holdId,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: charterExpiresAt.toISOString(),
       pricing: responsePricing,
       ...(releaseToken ? { releaseToken } : {}),
       ...(discountCodeApplied ? { discountCents: charterDiscountOut.cents, discountCode: discountCodeApplied } : {}),
     };
-    return NextResponse.json(response);
+    return jsonHoldCreated(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create hold failed";
     if (err instanceof BlockCheckUnavailableError) {
@@ -1346,6 +1519,15 @@ export async function POST(request: NextRequest) {
         incidentId,
         "block_check_unavailable",
         "Unable to verify availability. Please try again shortly."
+      );
+    }
+    if (err instanceof LegacyScanLimitReachedError) {
+      const incidentId = generateIncidentCode();
+      bookingWarn("create-hold", "legacy booking scan cap (503)", { incidentId });
+      return json503(
+        incidentId,
+        "legacy_scan_limit_reached",
+        "Availability verification is temporarily degraded. Please try again in a moment."
       );
     }
     if (message === "HOLD_REQUEST_ID_PAYLOAD_CONFLICT") {

@@ -1,6 +1,10 @@
 /**
  * Brevo (Sendinblue) — transactional email and contact upsert.
  * Server-side only. Uses BREVO_API_KEY.
+ *
+ * Booking confirmation: rendered HTML is the canonical customer receipt. Template param `receiptLink` is an optional
+ * bookmark to the success page when `RECEIPT_TOKEN_SECRET` is set (same optional shortcut as SMS), not a separate receipt email.
+ * `manageLink` is passed empty so signed manage URLs are not embedded in the message body.
  */
 
 import { bookingEnv } from "./env";
@@ -17,6 +21,7 @@ import {
   type ReminderType,
 } from "./reminder-emails";
 import type { Booking } from "./types";
+import { signReceiptToken } from "./receiptToken";
 
 const BREVO_API_BASE = "https://api.brevo.com/v3";
 
@@ -35,19 +40,33 @@ function fetchOpts(): RequestInit {
   return { signal: AbortSignal.timeout(BREVO_FETCH_TIMEOUT_MS) };
 }
 
+/** Brevo returns `{ messageId: string }` on successful transactional sends. */
+export async function parseBrevoProviderMessageId(res: Response): Promise<string | undefined> {
+  try {
+    const json = (await res.clone().json()) as { messageId?: string };
+    return typeof json.messageId === "string" ? json.messageId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function sendWithRetry(
   url: string,
   body: Record<string, unknown>,
-  opts?: { retries?: number }
+  opts?: { retries?: number; idempotencyKey?: string }
 ): Promise<Response> {
   const retries = opts?.retries ?? 2;
+  const headers: Record<string, string> = { ...getHeaders() };
+  if (opts?.idempotencyKey) {
+    headers["Idempotency-Key"] = opts.idempotencyKey;
+  }
   let lastRes: Response | null = null;
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: getHeaders(),
+        headers,
         body: JSON.stringify(body),
         ...fetchOpts(),
       });
@@ -84,9 +103,15 @@ export interface BookingEmailContext {
   remainingAlreadyCharged?: boolean;
   /** ISO date string for when the remaining balance will be auto-charged (when isDeposit and !remainingAlreadyCharged). */
   finalChargeAt?: string;
-  /** Signed manage-booking URL (deposit flow) or receipt URL. */
+  /**
+   * Intentionally omitted from customer confirmation: manage links embed a signed token; we pass an empty string in
+   * Brevo template params so templates do not surface a full-token URL in email. SMS may still use a separate optional receipt bookmark.
+   */
   manageLink?: string;
-  /** @deprecated Not shown in confirmation HTML (this email is the receipt). Kept for Brevo template param compatibility — always empty. */
+  /**
+   * @deprecated Optional Brevo param name only — not a second “receipt email”. Confirmation HTML is the receipt;
+   * when set, this is an optional bookmark URL for templates that still reference `receiptLink` (same as SMS shortcut when secret is set).
+   */
   receiptLink?: string;
   /** Waiver signing URL to include in confirmation (when template has includeInConfirmationEmail). */
   waiverSigningUrl?: string;
@@ -104,13 +129,24 @@ function getSender(): { name: string; email: string } {
   return { name, email };
 }
 
+export type BrevoSendResult = {
+  /** Email subject line (customer-facing). */
+  subject: string;
+  /** Brevo `messageId` when present in API response. */
+  providerMessageId?: string;
+};
+
 /**
  * Send booking confirmation email to the customer email from the booking details form.
  * Uses transactional send endpoint. If BREVO_BOOKING_TEMPLATE_ID is set, use template; else send HTML from email-templates.
  * Pass context for formatted date/time and boat/location/cancellation text.
- * Returns the subject line used so callers can log it (e.g. email audit).
+ * Returns subject and optional provider message id for durable idempotency.
  */
-export async function sendBookingConfirmationEmail(booking: Booking, context: BookingEmailContext): Promise<string> {
+export async function sendBookingConfirmationEmail(
+  booking: Booking,
+  context: BookingEmailContext,
+  opts?: { idempotencyKey?: string }
+): Promise<BrevoSendResult> {
   const toEmail = booking.customer?.email?.trim();
   if (!toEmail) {
     throw new Error("Booking customer email is required to send confirmation");
@@ -148,6 +184,13 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
   const amountPaidNowFormatted = isDepositForTemplate ? depositPaidFormatted : totalPaid;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
 
+  const bookingIdForLink = (booking as { id?: string }).id?.trim();
+  const longLivedReceiptToken = bookingIdForLink ? signReceiptToken(bookingIdForLink) : null;
+  const receiptLinkResolved =
+    longLivedReceiptToken != null
+      ? `${bookingEnv.appBaseUrl}/booking/success?receipt_token=${encodeURIComponent(longLivedReceiptToken)}`
+      : "";
+
   const subjectForDeposit = isDepositForTemplate ? " (deposit received)" : "";
   const subjectBase = waiverSigningUrl ? "Booking Confirmation & Waiver" : "Booking Confirmation";
   const subjectSuffix = " – Boat Bros ATX";
@@ -174,8 +217,9 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
           locationText,
           isDeposit: isDepositForTemplate,
           waiverSigningUrl: waiverSigningUrl ?? "",
-          manageLink: "", // Intentionally empty so Brevo template does not show "Manage booking"
-          receiptLink: "", // Confirmation email is the receipt; no separate receipt CTA
+          manageLink: "",
+          /** Optional bookmark when `RECEIPT_TOKEN_SECRET` is set; empty string otherwise. Confirmation HTML is the receipt — not a separate receipt link. */
+          receiptLink: receiptLinkResolved,
         },
       }
     : {
@@ -190,17 +234,129 @@ export async function sendBookingConfirmationEmail(booking: Booking, context: Bo
     ? { templateId, to: payload.to, params: payload.params }
     : { sender: payload.sender, to: payload.to, subject: payload.subject, htmlContent: payload.htmlContent };
 
-  const res = await sendWithRetry(url, body as Record<string, unknown>);
+  const bookingIdForIdem = (booking as { id?: string }).id?.trim();
+  const idempotencyKey = opts?.idempotencyKey ?? (bookingIdForIdem ? `${bookingIdForIdem}_booking_confirmation` : undefined);
+
+  const res = await sendWithRetry(url, body as Record<string, unknown>, { idempotencyKey });
   if (!res.ok) {
     const text = await res.text();
     const errMsg = `Brevo send failed: ${res.status} ${text}`;
     console.error("[brevo] sendBookingConfirmationEmail", errMsg);
     throw new Error(errMsg);
   }
-  return emailSubject;
+  const providerMessageId = await parseBrevoProviderMessageId(res);
+  return { subject: emailSubject, providerMessageId };
 }
 
 const BUSINESS_EMAIL = process.env.CONTACT_EMAIL?.trim() || "boatbrosllc@gmail.com";
+
+/** Ops / captain / staff (distinct from guest-facing noreply). */
+export function getStaffOperationsEmail(): string {
+  return process.env.STAFF_OPERATIONS_EMAIL?.trim() || BUSINESS_EMAIL;
+}
+
+/** Ops inbox when amount integrity blocks conversion (supplements Firestore operationalAlerts). */
+export async function sendAmountIntegrityMismatchOpsEmail(params: {
+  holdId: string;
+  paymentIntentId?: string;
+  source: string;
+}): Promise<void> {
+  const piLine = params.paymentIntentId
+    ? `<p><strong>PaymentIntent:</strong> ${params.paymentIntentId.replace(/</g, "&lt;")}</p>`
+    : "";
+  await sendStaffInternalEmail({
+    subject: `[Alert] Amount integrity mismatch — hold ${params.holdId}`,
+    htmlContent: `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:16px;">
+<p><strong>Amount integrity mismatch</strong> — booking not created; pending refund / review may apply.</p>
+<p><strong>Hold:</strong> ${params.holdId.replace(/</g, "&lt;")}</p>
+${piLine}
+<p><strong>Source:</strong> ${params.source.replace(/</g, "&lt;")}</p>
+<p>See Firestore <code>operationalAlerts</code> and <code>pendingRefunds</code>.</p>
+</body></html>`,
+    idempotencyKey: `amount_integrity_ops_${params.holdId}_${params.paymentIntentId ?? ""}`,
+  });
+}
+
+/** Guest-facing email when payment succeeded but amount integrity blocked conversion. */
+export async function sendAmountIntegrityMismatchCustomerEmail(params: {
+  to: string;
+  customerName: string;
+  holdId: string;
+}): Promise<void> {
+  const { to, customerName, holdId } = params;
+  const subject = "We received your payment — your booking is under review – Boat Bros ATX";
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p>Hi ${customerName.replace(/</g, "&lt;")},</p>
+  <p>We successfully received your payment. We need to complete a quick review of your reservation details before your booking is finalized.</p>
+  <p><strong>You do not need to pay again.</strong> Our team will contact you within <strong>2 hours</strong> with an update. If you do not hear from us by then, please reply to this email or call us.</p>
+  <p style="font-size: 12px; color: #666;">Reference: hold ${holdId.replace(/</g, "&lt;")}</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
+</body></html>`;
+  const res = await sendWithRetry(
+    `${BREVO_API_BASE}/smtp/email`,
+    {
+      sender: getSender(),
+      to: [{ email: to.trim(), name: customerName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>,
+    { idempotencyKey: `amount_integrity_notice_${holdId}` }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+}
+
+/**
+ * Email ops when a notification outbox row reaches dead_letter (in addition to Firestore operationalAlerts).
+ */
+export async function sendNotificationOutboxDeadLetterOpsEmail(params: {
+  outboxType: string;
+  bookingId: string;
+  lastError: string;
+}): Promise<void> {
+  const { outboxType, bookingId, lastError } = params;
+  const safeErr = lastError.replace(/</g, "&lt;").slice(0, 2000);
+  await sendStaffInternalEmail({
+    subject: `[Alert] Confirmation pipeline dead letter — ${outboxType} — ${bookingId}`,
+    htmlContent: `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:16px;">
+<p><strong>Notification outbox dead letter</strong></p>
+<p><strong>Type:</strong> ${outboxType.replace(/</g, "&lt;")}</p>
+<p><strong>Booking ID:</strong> ${bookingId.replace(/</g, "&lt;")}</p>
+<p><strong>Last error:</strong> ${safeErr}</p>
+<p>Investigate in Admin (outbox stats) and contact the guest if confirmation never arrived.</p>
+</body></html>`,
+    idempotencyKey: `dead_letter_ops_${bookingId}_${outboxType}`,
+  });
+}
+
+/**
+ * Internal staff email (Brevo). Throws on transport failure; callers treat logging as best-effort.
+ */
+export async function sendStaffInternalEmail(params: {
+  subject: string;
+  htmlContent: string;
+  idempotencyKey?: string;
+}): Promise<{ providerMessageId?: string }> {
+  const res = await sendWithRetry(
+    `${BREVO_API_BASE}/smtp/email`,
+    {
+      sender: getSender(),
+      to: [{ email: getStaffOperationsEmail() }],
+      subject: params.subject,
+      htmlContent: params.htmlContent,
+    } as Record<string, unknown>,
+    { idempotencyKey: params.idempotencyKey }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo staff send failed: ${res.status} ${text}`);
+  }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
+}
 
 /**
  * Send customer email when discount code hit its usage limit at conversion; customer was charged and a partial refund will be issued.
@@ -210,8 +366,10 @@ export async function sendDiscountLimitExceededCustomerEmail(params: {
   customerName: string;
   experienceName: string;
   tripDate?: string;
+  /** For Brevo idempotency when booking id is known */
+  bookingId?: string;
 }): Promise<void> {
-  const { to, customerName, experienceName, tripDate } = params;
+  const { to, customerName, experienceName, tripDate, bookingId } = params;
   const subject = "Your discount could not be applied – partial refund – Boat Bros ATX";
   const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
   const html = `
@@ -225,22 +383,19 @@ export async function sendDiscountLimitExceededCustomerEmail(params: {
   <p>If you have any questions, please reply to this email or contact us.</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
-  try {
-    const res = await sendWithRetry(
-      `${BREVO_API_BASE}/smtp/email`,
-      {
-        sender: getSender(),
-        to: [{ email: to.trim(), name: customerName.trim() || undefined }],
-        subject,
-        htmlContent: html,
-      } as Record<string, unknown>
-    );
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("[brevo] sendDiscountLimitExceededCustomerEmail", res.status, text);
-    }
-  } catch (err) {
-    console.error("[brevo] sendDiscountLimitExceededCustomerEmail", err);
+  const res = await sendWithRetry(
+    `${BREVO_API_BASE}/smtp/email`,
+    {
+      sender: getSender(),
+      to: [{ email: to.trim(), name: customerName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>,
+    { idempotencyKey: bookingId ? `discount_limit_customer_${bookingId}` : `discount_limit_customer_${to.trim().slice(0, 48)}` }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
   }
 }
 
@@ -268,6 +423,45 @@ export async function sendDiscountLimitExceededBusinessAlert(params: {
   <p>Process the refund in Stripe and mark the pendingRefunds record as resolved.</p>
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros booking system</p>
 </body></html>`;
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: getStaffOperationsEmail() }],
+    subject,
+    htmlContent: html,
+  } as Record<string, unknown>, { idempotencyKey: `discount_limit_biz_${bookingId}` });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+}
+
+/**
+ * Alert operators when automated pending-refund processing permanently fails so refunds can be completed manually.
+ */
+export async function sendPendingRefundPermanentFailureAlert(params: {
+  pendingRefundId: string;
+  paymentIntentId?: string;
+  reason?: string;
+  error: string;
+}): Promise<void> {
+  const { pendingRefundId, paymentIntentId, reason, error } = params;
+  const subject = `[Action] Pending refund permanently failed – ${pendingRefundId}`;
+  const piLine = paymentIntentId
+    ? `<p><strong>PaymentIntent:</strong> ${paymentIntentId.replace(/</g, "&lt;")}</p>`
+    : "";
+  const reasonLine = reason
+    ? `<p><strong>Reason:</strong> ${String(reason).replace(/</g, "&lt;")}</p>`
+    : "";
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p><strong>Automated refund processing gave up after max retries.</strong> Process the refund in Stripe and update the pendingRefunds record.</p>
+  <p><strong>Pending refund ID:</strong> ${pendingRefundId.replace(/</g, "&lt;")}</p>
+  ${piLine}
+  ${reasonLine}
+  <p><strong>Last error:</strong> ${error.replace(/</g, "&lt;").slice(0, 2000)}</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros booking system</p>
+</body></html>`;
   try {
     const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
       sender: getSender(),
@@ -277,45 +471,44 @@ export async function sendDiscountLimitExceededBusinessAlert(params: {
     } as Record<string, unknown>);
     if (!res.ok) {
       const text = await res.text();
-      console.error("[brevo] sendDiscountLimitExceededBusinessAlert", res.status, text);
+      console.error("[brevo] sendPendingRefundPermanentFailureAlert", res.status, text);
     }
   } catch (err) {
-    console.error("[brevo] sendDiscountLimitExceededBusinessAlert", err);
+    console.error("[brevo] sendPendingRefundPermanentFailureAlert", err);
   }
 }
 
 /**
  * Send a copy of the booking confirmation to the business (boatbrosllc@gmail.com) so they know they have a new booking.
- * Same HTML as customer; subject indicates new booking. Does not throw so customer flow is not blocked.
+ * Same HTML as customer; subject indicates new booking. Throws on transport failure (outbox caller records operational alert).
  */
 export async function sendBookingConfirmationCopyToBusiness(booking: Booking, context: BookingEmailContext): Promise<void> {
   const html = renderBookingConfirmationHtml(booking, context);
   const customerName = booking.customer?.name?.trim() ?? "Guest";
   const { boatName, startAt } = context;
   const subject = `New booking: ${boatName} – ${startAt} – ${customerName}`;
-  try {
-    const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
-      sender: getSender(),
-      to: [{ email: BUSINESS_EMAIL }],
-      subject,
-      htmlContent: html,
-    } as Record<string, unknown>);
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("[brevo] sendBookingConfirmationCopyToBusiness", res.status, text);
-    }
-  } catch (err) {
-    console.error("[brevo] sendBookingConfirmationCopyToBusiness", err);
+  const bookingIdForIdem = (booking as { id?: string }).id?.trim();
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: BUSINESS_EMAIL }],
+    subject,
+    htmlContent: html,
+  } as Record<string, unknown>, { idempotencyKey: bookingIdForIdem ? `${bookingIdForIdem}_booking_confirmation_business_copy` : undefined });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo business copy send failed: ${res.status} ${text}`);
   }
 }
 
 /**
  * Send booking reminder (1-week, 24h, or day-of). Uses reminder-emails HTML.
+ * Returns optional Brevo message id after confirmed delivery.
  */
 export async function sendBookingReminderEmail(
   type: ReminderType,
-  params: BookingReminderParams
-): Promise<void> {
+  params: BookingReminderParams,
+  opts?: { idempotencyKey?: string }
+): Promise<{ providerMessageId?: string }> {
   const html = buildReminderHtml(type, params);
   const subject = getReminderSubject(type, params.experienceName);
   const body = {
@@ -324,19 +517,23 @@ export async function sendBookingReminderEmail(
     subject,
     htmlContent: html,
   };
-  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body);
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body, { idempotencyKey: opts?.idempotencyKey });
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendBookingReminderEmail final failure", type, res.status, text);
     throw new Error(`Brevo reminder send failed: ${res.status} ${text}`);
   }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
 }
 
 /**
  * Send "final payment request" email (48h before trip) to customers with final_due status.
  * Includes a secure link to pay remaining balance; after payment, webhook marks booking final_paid.
  */
-export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestParams): Promise<void> {
+export async function sendFinalPaymentRequestEmail(
+  params: FinalPaymentRequestParams,
+  opts?: { idempotencyKey?: string }
+): Promise<{ providerMessageId?: string }> {
   const html = buildFinalPaymentRequestHtml(params);
   const subject = getFinalPaymentRequestSubject();
   const body = {
@@ -345,12 +542,13 @@ export async function sendFinalPaymentRequestEmail(params: FinalPaymentRequestPa
     subject,
     htmlContent: html,
   };
-  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body);
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, body, { idempotencyKey: opts?.idempotencyKey });
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendFinalPaymentRequestEmail final failure", res.status, text);
     throw new Error(`Brevo send failed: ${res.status} ${text}`);
   }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
 }
 
 /**
@@ -369,7 +567,10 @@ export interface FinalChargeSuccessEmailParams {
 /**
  * Receipt email after the final balance PaymentIntent succeeds (deposit flow).
  */
-export async function sendFinalChargeSuccessEmail(params: FinalChargeSuccessEmailParams): Promise<void> {
+export async function sendFinalChargeSuccessEmail(
+  params: FinalChargeSuccessEmailParams,
+  opts?: { idempotencyKey?: string }
+): Promise<{ providerMessageId?: string }> {
   const subject = `Payment received — ${params.experienceName} – Boat Bros ATX`;
   const html = `
 <!DOCTYPE html>
@@ -387,12 +588,13 @@ export async function sendFinalChargeSuccessEmail(params: FinalChargeSuccessEmai
     subject,
     htmlContent: html,
   };
-  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, reqBody);
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, reqBody, { idempotencyKey: opts?.idempotencyKey });
   if (!res.ok) {
     const text = await res.text();
     console.error("[brevo] sendFinalChargeSuccessEmail final failure", res.status, text);
     throw new Error(`Brevo send failed: ${res.status} ${text}`);
   }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
 }
 
 export async function sendFinalChargeFailedEmail(

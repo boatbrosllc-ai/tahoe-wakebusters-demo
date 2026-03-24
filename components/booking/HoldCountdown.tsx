@@ -9,6 +9,11 @@ interface HoldCountdownProps {
   label?: string;
   /** Compact format: "9:45" instead of "9 min 45 sec" */
   compact?: boolean;
+  /**
+   * During card entry: no visible ticking clock; show "Your spot is held" until the last 2 minutes,
+   * then show urgency copy + countdown.
+   */
+  presentation?: "default" | "softStripe";
   /** When time expires, show this instead of hiding (e.g. "Expired") */
   expiredLabel?: string;
   /** Called once when the countdown reaches zero */
@@ -24,10 +29,13 @@ function getRemaining(expiresAt: string): { minutes: number; seconds: number } |
   return { minutes: Math.floor(diff / 60), seconds: diff % 60 };
 }
 
+const SOFT_WARN_SEC = 120;
+
 export function HoldCountdown({
   expiresAt,
   label = "Complete payment in",
   compact = false,
+  presentation = "default",
   expiredLabel,
   onExpired,
   className = "",
@@ -69,9 +77,38 @@ export function HoldCountdown({
   }
 
   const { minutes, seconds } = remaining;
+  const totalSec = minutes * 60 + seconds;
   const timeStr = compact
     ? `${minutes}:${seconds.toString().padStart(2, "0")}`
     : `${minutes} min ${seconds} sec`;
+
+  if (presentation === "softStripe" && totalSec > SOFT_WARN_SEC) {
+    return (
+      <span className={className}>
+        <span className="font-medium text-brand-dark">Your spot is held.</span>
+        <span className="sr-only" aria-live="polite">
+          Complete payment before your reservation expires.
+        </span>
+      </span>
+    );
+  }
+
+  if (presentation === "softStripe" && totalSec > 0 && totalSec <= SOFT_WARN_SEC) {
+    return (
+      <span className={className}>
+        <span
+          className="block rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-sm font-medium text-amber-900"
+          role="status"
+          aria-live="polite"
+        >
+          Finish payment soon — {label.toLowerCase()} {timeStr}
+        </span>
+        <span className="sr-only" aria-live="assertive" aria-atomic="true">
+          {minutes} minutes {seconds} seconds remaining on your hold
+        </span>
+      </span>
+    );
+  }
 
   // Announce notable milestones to screen readers (2 min, 1 min, 30 sec).
   const milestone =

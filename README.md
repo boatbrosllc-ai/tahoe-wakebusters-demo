@@ -113,12 +113,7 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 
 Use the printed webhook signing secret as `STRIPE_WEBHOOK_SECRET` in `.env.local`. Then trigger a test payment; `checkout.session.completed` will finalize the booking and send the Brevo confirmation email.
 
-**Seed experiences (4 listings + 60 days of slots):**
-
-```bash
-curl -X POST http://localhost:3000/api/booking/seed-experiences
-# Or with auth: curl -X POST -H "Authorization: Bearer YOUR_SEED_SECRET" http://localhost:3000/api/booking/seed-experiences
-```
+**Seed experiences (4 listings + 60 days of slots):** use the admin dashboard **Seed** action (signed in at `/admin`), or `POST /api/admin/seed/experiences` with an admin session cookie. Public Bearer-only seed URLs were removed.
 
 Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/sunset`, `/experiences/holiday`.
 

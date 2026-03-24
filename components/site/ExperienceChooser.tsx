@@ -8,27 +8,54 @@ import { experiences, formatExperiencePriceLabel } from "@/content/experiences";
 import type { Experience } from "@/content/experiences";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 
 export function ExperienceChooser() {
-  const [listingBySlug, setListingBySlug] = useState<Record<string, { title?: string; subtitle?: string; heroMedia?: { url?: string } }>>({});
+  const [listingBySlug, setListingBySlug] = useState<
+    Record<string, { title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }>
+  >({});
+  const [apiError, setApiError] = useState(false);
   useEffect(() => {
-    fetch("/api/experiences")
-      .then((res) => res.json())
+    bookingCache
+      .fetchExperiences()
       .then((data) => {
+        setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
-        const map: Record<string, { title?: string; subtitle?: string; heroMedia?: { url?: string } }> = {};
-        list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string } }) => {
-          if (item.slug) map[item.slug] = { title: item.title, subtitle: item.subtitle, heroMedia: item.heroMedia };
-        });
+        const map: Record<
+          string,
+          { title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }
+        > = {};
+        list.forEach(
+          (item: {
+            slug?: string;
+            title?: string;
+            subtitle?: string;
+            heroMedia?: { url?: string };
+            fromPriceCents?: number | null;
+            pricingType?: "charter" | "ticketed";
+          }) => {
+            if (item.slug)
+              map[item.slug] = {
+                title: item.title,
+                subtitle: item.subtitle,
+                heroMedia: item.heroMedia,
+                fromPriceCents: item.fromPriceCents,
+                pricingType: item.pricingType,
+              };
+          }
+        );
         setListingBySlug(map);
       })
-      .catch(() => setListingBySlug({}));
+      .catch(() => {
+        setApiError(true);
+        setListingBySlug({});
+      });
   }, []);
 
   /** All boats are up to 14 people. */
   const CAPACITY_ALL = "Up to 14";
 
-  const experienceWithListingData = (exp: Experience): Experience => {
+  const experienceWithListingData = (exp: Experience): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
     const listing = listingBySlug[exp.slug];
     return {
       ...exp,
@@ -36,6 +63,8 @@ export function ExperienceChooser() {
       shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
       heroImage: listing?.heroMedia?.url || exp.heroImage,
       capacity: CAPACITY_ALL,
+      fromPriceCents: listing?.fromPriceCents !== undefined ? listing.fromPriceCents : exp.fromPriceCents,
+      ...(listing?.pricingType && { pricingType: listing.pricingType }),
     };
   };
 
@@ -63,6 +92,11 @@ export function ExperienceChooser() {
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.4, delay: 0.06 }}
         >
+          {apiError && (
+            <span className="block text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-center" role="status">
+              Prices may not be up to date — refresh to see the latest.
+            </span>
+          )}
           Pick one and book now.
         </motion.p>
 
@@ -119,9 +153,13 @@ export function ExperienceChooser() {
                     {pontoonData.shortDescription}
                   </p>
                   <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
-                    {pontoonData.fromPriceCents != null && (
-                      <span className="text-base sm:text-xl font-bold text-brand-primary">{formatExperiencePriceLabel(pontoonData.slug, pontoonData.fromPriceCents)}</span>
-                    )}
+                    <span className="text-base sm:text-xl font-bold text-brand-primary">
+                      {formatExperiencePriceLabel(
+                        pontoonData.slug,
+                        pontoonData.fromPriceCents ?? null,
+                        (pontoonData as { pricingType?: "charter" | "ticketed" }).pricingType
+                      )}
+                    </span>
                     <span className="inline-flex items-center gap-1.5 text-white font-medium text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                       View trip <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
                     </span>
@@ -174,9 +212,9 @@ export function ExperienceChooser() {
                       {data.shortDescription}
                     </p>
                     <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-3">
-                      {data.fromPriceCents != null && (
-                        <span className="text-sm sm:text-base font-bold text-brand-primary">{formatExperiencePriceLabel(data.slug, data.fromPriceCents)}</span>
-                      )}
+                      <span className="text-sm sm:text-base font-bold text-brand-primary">
+                        {formatExperiencePriceLabel(data.slug, data.fromPriceCents ?? null, (data as { pricingType?: "charter" | "ticketed" }).pricingType)}
+                      </span>
                       <span className="inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm group-hover:gap-2.5 transition-[gap] duration-200">
                         View trip <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
                       </span>

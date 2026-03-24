@@ -10,10 +10,18 @@ import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
 import { logNotificationSent } from "@/lib/booking/email-log";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { reconcileMissingWaivers } from "@/lib/waiver/reconcile-missing-waivers";
 
 const PAGE_SIZE = 100;
 
-export async function runWaiverReminderCron(logPrefix: string): Promise<{ matched: number; sent: number }> {
+export async function runWaiverReminderCron(
+  logPrefix: string
+): Promise<{ matched: number; sent: number; reconcileScanned: number; reconcileCreated: number }> {
+  const { scanned: reconcileScanned, created: reconcileCreated } = await reconcileMissingWaivers(logPrefix);
+  if (reconcileCreated > 0) {
+    console.log(`[${logPrefix}] reconcile missing waivers: created`, reconcileCreated, "scanned", reconcileScanned);
+  }
+
   const expired = await expireStalePendingRequests();
   if (expired > 0) {
     console.log(`[${logPrefix}] expired stale pending requests:`, expired);
@@ -163,5 +171,5 @@ export async function runWaiverReminderCron(logPrefix: string): Promise<{ matche
     cursor = snap.docs[snap.docs.length - 1];
   }
 
-  return { matched, sent };
+  return { matched, sent, reconcileScanned, reconcileCreated };
 }

@@ -2,20 +2,33 @@ import type { Firestore } from "firebase-admin/firestore";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
+import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
 import type { Hold, Experience } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, redactEmail, generateIncidentCode } from "@/lib/booking/debug";
-import { hasReleaseTokenSecret, verifyReleaseToken } from "@/lib/booking/releaseToken";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import {
+  hasReleaseTokenSecret,
+  signReleaseToken,
+  verifyReleaseToken,
+  verifyReleaseTokenIgnoreExpiry,
+} from "@/lib/booking/releaseToken";
 import { resolveHoldBookingPricing } from "@/lib/booking/hold-charge-resolver";
 import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { DEPOSIT_FRACTION, HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { buildPaymentIntentIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
+import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED_MS } from "@/lib/booking/hold-expiry";
+import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
+import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
+import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
+import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 
-/** Extend hold by this many minutes when creating payment intent so card-entry/SCA time does not invalidate conversion. */
-const HOLD_EXPIRY_EXTENSION_MINUTES = 30;
-/** Must match create-hold `HOLD_EXPIRY_MINUTES` — caps absolute hold wall time when combining initial hold + one PI extension. */
-const HOLD_INITIAL_EXPIRY_MINUTES = 10;
-const MAX_HOLD_LIFETIME_FROM_CREATED_MS =
-  (HOLD_INITIAL_EXPIRY_MINUTES + HOLD_EXPIRY_EXTENSION_MINUTES) * 60 * 1000;
+/** Re-sign after optional hold extension so the client can cancel/back after the original create-hold window. */
+function releaseTokenFieldForResponse(holdId: string, effectiveExpiresAt: Date): { releaseToken: string } | Record<string, never> {
+  if (!hasReleaseTokenSecret()) return {};
+  const t = signReleaseToken(holdId, Math.floor(effectiveExpiresAt.getTime() / 1000));
+  return t ? { releaseToken: t } : {};
+}
 
 function parseBody(body: unknown): { holdId: string; payFullAmount: boolean; release_token?: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -34,9 +47,12 @@ function parseBody(body: unknown): { holdId: string; payFullAmount: boolean; rel
  * PENDING_LOCK_LEASE_SEC bounds how long another request may hold the index lock; polling must run at least that long
  * so we do not return 503 while the lock is still legitimately held. */
 const PENDING_LOCK_LEASE_SEC = 10;
-const POLL_MAX_ITERATIONS = 30;
+/** Short poll: if index lock is not released quickly, fall through and create a Stripe customer (duplicate-by-email is acceptable). */
+const POLL_MAX_ITERATIONS = 5;
 const POLL_BASE_DELAY_MS = 200;
-const POLL_MAX_ELAPSED_MS = PENDING_LOCK_LEASE_SEC * 1000;
+const POLL_MAX_ELAPSED_MS = 5000;
+/** Firestore TTL on `expireAt` (730 days); refreshed when customer id is persisted. */
+const STRIPE_CUSTOMER_INDEX_TTL_MS = 730 * 24 * 60 * 60 * 1000;
 
 type TakeoverResult = { action: "done"; customerId: string } | { action: "tookOver" } | { action: "retry" };
 
@@ -53,13 +69,14 @@ async function getOrCreateStripeCustomer(
   const now = new Date();
   const leaseEnd = new Date(now.getTime() + PENDING_LOCK_LEASE_SEC * 1000);
 
-  const releaseLockOnError = async (err: unknown) => {
+  const releaseLockOnError = async (err: unknown, opts?: { stripeCustomerId?: string }) => {
     const message = err instanceof Error ? err.message : String(err);
     await indexRef.update({
       pending: false,
       recoverableError: {
         message: message.slice(0, 500),
         at: Timestamp.now(),
+        ...(opts?.stripeCustomerId ? { customerId: opts.stripeCustomerId } : {}),
       },
       updatedAt: FieldValue.serverTimestamp(),
     }).catch((updateErr) => {
@@ -73,6 +90,7 @@ async function getOrCreateStripeCustomer(
       pending: true,
       pendingLockExpiresAt: Timestamp.fromDate(leaseEnd),
       createdAt: Timestamp.now(),
+      expireAt: Timestamp.fromMillis(Date.now() + STRIPE_CUSTOMER_INDEX_TTL_MS),
     });
   } catch (createErr: unknown) {
     const err = createErr as { code?: number | string };
@@ -109,7 +127,17 @@ async function getOrCreateStripeCustomer(
         });
         return { action: "tookOver" };
       });
-      if (result.action === "done") return result.customerId;
+      if (result.action === "done") {
+        const verified = await verifyIndexedStripeCustomerOrClear(
+          stripe,
+          indexRef,
+          emailLower,
+          result.customerId,
+          "create-payment-intent"
+        );
+        if (verified) return verified;
+        break;
+      }
       if (result.action === "tookOver") {
         console.warn("[booking:create-payment-intent] stripe customer index lock takeover", {
           emailRedacted: emailLower.slice(0, 2) + "***",
@@ -124,55 +152,164 @@ async function getOrCreateStripeCustomer(
       );
       await new Promise((r) => setTimeout(r, delay));
       if (Date.now() - pollStart > POLL_MAX_ELAPSED_MS) {
-        const retriable = new Error("Stripe customer index poll timeout") as Error & { retriable?: boolean };
-        retriable.retriable = true;
-        throw retriable;
+        break;
       }
     }
 
     if (!tookOver) {
       const snap = await indexRef.get();
       const data = snap.exists ? (snap.data() as { customerId?: string | null }) : null;
-      if (data?.customerId) return data.customerId;
-      const retriable = new Error("Stripe customer index race: customerId not set in time") as Error & {
-        retriable?: boolean;
-      };
-      retriable.retriable = true;
-      throw retriable;
+      if (data?.customerId) {
+        const verified = await verifyIndexedStripeCustomerOrClear(
+          stripe,
+          indexRef,
+          emailLower,
+          data.customerId,
+          "create-payment-intent"
+        );
+        if (verified) return verified;
+      }
+      // Fall through: create a new Stripe customer without waiting on the index lock.
     }
   }
 
   // After lock takeover, re-read in case the previous holder already created the customer.
   const reSnap = await indexRef.get();
   const reData = reSnap.exists ? (reSnap.data() as { customerId?: string | null }) : null;
-  if (reData?.customerId) return reData.customerId;
+  if (reData?.customerId) {
+    const verified = await verifyIndexedStripeCustomerOrClear(
+      stripe,
+      indexRef,
+      emailLower,
+      reData.customerId,
+      "create-payment-intent"
+    );
+    if (verified) return verified;
+  }
 
   try {
+    const existingList = await stripe.customers.list({ email: emailLower, limit: 1 });
+    const existingId = existingList.data[0]?.id;
+    if (existingId) {
+      await indexRef
+        .set(
+          {
+            customerId: existingId,
+            pending: false,
+            pendingLockExpiresAt: FieldValue.delete(),
+            recoverableError: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+            expireAt: Timestamp.fromMillis(Date.now() + STRIPE_CUSTOMER_INDEX_TTL_MS),
+          },
+          { merge: true }
+        )
+        .catch((idxErr) => {
+          bookingWarn("create-payment-intent", "stripe customer index update failed after customers.list match", {
+            emailRedacted: redactEmail(emailLower),
+            idxErr,
+          });
+        });
+      return existingId;
+    }
+  } catch (listErr) {
+    bookingWarn("create-payment-intent", "stripe.customers.list before create failed; will create new customer", {
+      emailRedacted: redactEmail(emailLower),
+      listErr,
+    });
+  }
+
+  let customer: import("stripe").Stripe.Customer;
+  try {
     const displayEmail = email.trim();
-    const customer = await stripe.customers.create({
+    customer = await stripe.customers.create({
       email: email.trim().toLowerCase(),
       name: name.trim() || undefined,
       phone: phone.trim() || undefined,
       metadata: { emailLower, displayEmail },
     });
-    await indexRef.update({
-      customerId: customer.id,
-      pending: false,
-      pendingLockExpiresAt: FieldValue.delete(),
-      recoverableError: FieldValue.delete(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    return customer.id;
   } catch (stripeErr) {
     await releaseLockOnError(stripeErr);
     throw stripeErr;
   }
+
+  const FIRESTORE_CUSTOMER_INDEX_TX_MAX_ATTEMPTS = 5;
+  let lastTxErr: unknown;
+  for (let attempt = 0; attempt < FIRESTORE_CUSTOMER_INDEX_TX_MAX_ATTEMPTS; attempt++) {
+    try {
+      if (attempt > 0) {
+        const delayMs = Math.min(200 * Math.pow(2, attempt - 1), 2000);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+      const outcome = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(indexRef);
+        const data = snap.exists
+          ? (snap.data() as { customerId?: string | null })
+          : null;
+        const existing = typeof data?.customerId === "string" ? data.customerId.trim() : "";
+        if (existing) {
+          return { kind: "existing" as const, customerId: existing };
+        }
+        tx.set(
+          indexRef,
+          {
+            customerId: customer.id,
+            pending: false,
+            pendingLockExpiresAt: FieldValue.delete(),
+            recoverableError: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+            expireAt: Timestamp.fromMillis(Date.now() + STRIPE_CUSTOMER_INDEX_TTL_MS),
+          },
+          { merge: true }
+        );
+        return { kind: "new" as const, customerId: customer.id };
+      });
+      if (outcome.kind === "existing" && outcome.customerId !== customer.id) {
+        const okExisting = await verifyIndexedStripeCustomerOrClear(
+          stripe,
+          indexRef,
+          emailLower,
+          outcome.customerId,
+          "create-payment-intent"
+        );
+        if (okExisting) {
+          try {
+            await stripe.customers.del(customer.id);
+          } catch (delErr) {
+            bookingWarn("create-payment-intent", "failed to delete duplicate Stripe customer after index conflict", {
+              emailRedacted: redactEmail(emailLower),
+              duplicateStripeCustomerId: customer.id,
+              delErr,
+            });
+          }
+          return okExisting;
+        }
+        continue;
+      }
+      return customer.id;
+    } catch (txErr) {
+      lastTxErr = txErr;
+      bookingWarn("create-payment-intent", "stripe customer index transaction failed after customers.create (will retry)", {
+        emailRedacted: redactEmail(emailLower),
+        attempt: attempt + 1,
+        maxAttempts: FIRESTORE_CUSTOMER_INDEX_TX_MAX_ATTEMPTS,
+        err: txErr,
+      });
+    }
+  }
+  bookingError(
+    "create-payment-intent",
+    "stripe customer created but Firestore index conditional write failed after retries — operator may link customer manually",
+    lastTxErr,
+    { emailRedacted: redactEmail(emailLower), stripeCustomerId: customer.id }
+  );
+  await releaseLockOnError(lastTxErr ?? new Error("Firestore transaction failed"), { stripeCustomerId: customer.id });
+  throw lastTxErr instanceof Error ? lastTxErr : new Error(String(lastTxErr));
 }
 
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-payment-intent", "request started");
-    const rl = await checkRateLimit(getClientKey(request));
+    const rl = await checkRateLimitSensitiveMutation(getClientKey(request));
     if (!rl.allowed) {
       if (rl.serverError) {
         const incidentCode = generateIncidentCode();
@@ -191,6 +328,26 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
+    const notReady = bookingNotReadyResponse();
+    if (notReady) return notReady;
+    const legacyUnsafe = legacyFallbackUnsafeResponse();
+    if (legacyUnsafe) return legacyUnsafe;
+    try {
+      assertReceiptTokenSecretConfigured();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      bookingError("create-payment-intent", "RECEIPT_TOKEN_SECRET missing in non-development — refusing payment intent", null, {
+        nodeEnv: process.env.NODE_ENV ?? "",
+        message: msg,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Booking payments are temporarily unavailable (server configuration: RECEIPT_TOKEN_SECRET). Set the secret and redeploy.",
+        },
+        { status: 503 }
+      );
+    }
     const body = await request.json();
     const input = parseBody(body);
     if (!input) {
@@ -198,6 +355,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
     bookingLog("create-payment-intent", "parsed input", { holdId: input.holdId, payFullAmount: input.payFullAmount });
+    if (!hasReleaseTokenSecret()) {
+      bookingError("create-payment-intent", "RELEASE_TOKEN_SECRET is not set; refusing payment intent creation in production", null, {
+        holdId: input.holdId,
+        nodeEnv: process.env.NODE_ENV ?? "",
+      });
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          {
+            error:
+              "Booking payments are temporarily unavailable (server configuration: RELEASE_TOKEN_SECRET). Set the secret and redeploy.",
+          },
+          { status: 503 }
+        );
+      }
+    }
     let db: ReturnType<typeof getDb>;
     try {
       db = getDb();
@@ -231,7 +403,14 @@ export async function POST(request: NextRequest) {
       }
       const rel = verifyReleaseToken(input.release_token);
       if (!rel || rel.holdId !== input.holdId) {
-        return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+        const lax = verifyReleaseTokenIgnoreExpiry(input.release_token);
+        if (!lax || lax.holdId !== input.holdId) {
+          return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+        }
+        const holdExp = (hold.expiresAt as { toDate(): Date }).toDate();
+        if (holdExp < new Date()) {
+          return NextResponse.json({ error: "Invalid or expired release link" }, { status: 401 });
+        }
       }
     }
     if (hold.status !== "active") {
@@ -255,7 +434,7 @@ export async function POST(request: NextRequest) {
     }
     const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
     const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
-    const totalCents = Math.max(0, pricing.totalCents + tipCents - discountCents);
+    const totalCents = computeFinalChargeTotalCentsFromHoldPricing(pricing, tipCents, discountCents);
     const depositCents = Math.round(totalCents * DEPOSIT_FRACTION);
     const finalCents = totalCents - depositCents;
     // Shared ticketed experiences always charge full — no deposit option.
@@ -266,23 +445,62 @@ export async function POST(request: NextRequest) {
       try {
         const expSnap = await db.collection("experiences").doc(hold.experienceId).get();
         const experience = expSnap.exists ? (expSnap.data() as Experience) : null;
+        if (!experience) {
+          const incidentCode = generateIncidentCode();
+          bookingError(
+            "create-payment-intent",
+            "experience document missing for hold — cannot determine deposit vs full charge",
+            null,
+            { holdId: input.holdId, experienceId: hold.experienceId, incidentCode }
+          );
+          await writeOperationalAlert({
+            type: "create_payment_intent_experience_not_found",
+            holdId: input.holdId,
+            experienceId: hold.experienceId,
+            source: "create-payment-intent",
+            incidentCode,
+          });
+          return NextResponse.json(
+            { error: "Booking configuration error. Please try again shortly.", incidentCode },
+            { status: 503 }
+          );
+        }
         // Charter requires explicit allowDeposit === true in Firestore (match experience-detail API)
-        if (experience && experience.allowDeposit === true) {
+        if (experience.allowDeposit === true) {
           payFullAmount = false;
         } else {
           payFullAmount = true;
-          if (!experience) {
-            bookingWarn("create-payment-intent", "deposit coerced to full: experience not found", { holdId: input.holdId, experienceId: hold.experienceId });
-          } else {
-            bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", { holdId: input.holdId, experienceId: hold.experienceId });
-          }
+          bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", {
+            holdId: input.holdId,
+            experienceId: hold.experienceId,
+          });
         }
       } catch (fetchErr) {
-        payFullAmount = true;
-        bookingWarn("create-payment-intent", "deposit coerced to full: experience fetch failed", { holdId: input.holdId, experienceId: hold.experienceId, err: fetchErr });
+        const incidentCode = generateIncidentCode();
+        bookingError(
+          "create-payment-intent",
+          "experience fetch failed — cannot determine deposit vs full charge",
+          fetchErr,
+          { holdId: input.holdId, experienceId: hold.experienceId, incidentCode }
+        );
+        await writeOperationalAlert({
+          type: "create_payment_intent_experience_fetch_failed",
+          holdId: input.holdId,
+          experienceId: hold.experienceId,
+          source: "create-payment-intent",
+          incidentCode,
+        });
+        return NextResponse.json(
+          { error: "Booking configuration error. Please try again shortly.", incidentCode },
+          { status: 503 }
+        );
       }
     } else {
-      payFullAmount = input.payFullAmount;
+      // Legacy boat holds have no experience allowDeposit — deposits are not allowed.
+      payFullAmount = true;
+      if (input.payFullAmount === false) {
+        bookingWarn("create-payment-intent", "deposit coerced to full: legacy hold without experience allowDeposit", { holdId: input.holdId });
+      }
     }
     const chargeCents = payFullAmount ? totalCents : depositCents;
     const isOneTimeTicketed = (hold as { bookingMode?: string }).bookingMode === "shared" && payFullAmount === true;
@@ -293,92 +511,102 @@ export async function POST(request: NextRequest) {
 
     const { Timestamp, FieldValue } = getFirestoreExports();
     type MergeTxResult =
-      | { ok: false; code: "not_found" | "inactive" | "expired" }
+      | { ok: false; code: "not_found" | "inactive" | "expired" | "pi_field_conflict"; existingPiId?: string }
       | {
           ok: true;
           effectiveExpiresAt: Date;
           holdExtendedForPayment: boolean;
           otherIdToCancel?: string;
+          /** PI id for this payment stage read inside the transaction (authoritative vs non-transactional get). */
+          existingPiIdForStage?: string;
+          holdPaymentAttemptVersion: number;
         };
 
-    const mergeOutcome: MergeTxResult = await db.runTransaction(async (tx): Promise<MergeTxResult> => {
-      const snap = await tx.get(holdRef);
-      if (!snap.exists) return { ok: false, code: "not_found" };
-      const h = snap.data() as Hold & {
-        paymentIntentExpiryExtendedAt?: { toDate(): Date };
-        depositPaymentIntentId?: string;
-        fullPaymentIntentId?: string;
-      };
-      if (h.status !== "active") return { ok: false, code: "inactive" };
-      const exp = (h.expiresAt as { toDate(): Date }).toDate();
-      const now = new Date();
-      if (exp < now) return { ok: false, code: "expired" };
+    /** Extends hold expiry when first entering payment; optionally persists paymentIntent id in the same write (atomic with expiry). */
+    const runHoldExtensionTransaction = async (
+      paymentIntentIdToPersist: string | null,
+      options?: { noExtend?: boolean }
+    ): Promise<MergeTxResult> => {
+      const noExtend = options?.noExtend === true;
+      return await db.runTransaction(async (tx): Promise<MergeTxResult> => {
+        const snap = await tx.get(holdRef);
+        if (!snap.exists) return { ok: false, code: "not_found" };
+        const h = snap.data() as Hold & {
+          paymentIntentExpiryExtendedAt?: { toDate(): Date };
+          depositPaymentIntentId?: string;
+          fullPaymentIntentId?: string;
+          paymentAttemptVersion?: number;
+        };
+        if (h.status !== "active") return { ok: false, code: "inactive" };
+        const exp = (h.expiresAt as { toDate(): Date }).toDate();
+        const now = new Date();
+        if (exp < now) return { ok: false, code: "expired" };
 
-      const otherField = payFullAmount ? "depositPaymentIntentId" : "fullPaymentIntentId";
-      const otherIdRaw = (payFullAmount ? h.depositPaymentIntentId : h.fullPaymentIntentId)?.trim();
+        const otherField = payFullAmount ? "depositPaymentIntentId" : "fullPaymentIntentId";
+        const piField = payFullAmount ? "fullPaymentIntentId" : "depositPaymentIntentId";
+        const otherIdRaw = (payFullAmount ? h.depositPaymentIntentId : h.fullPaymentIntentId)?.trim();
+        const existingPiIdForStage = (h[piField as "fullPaymentIntentId"] as string | undefined)?.trim() || undefined;
+        const holdPaymentAttemptVersion = typeof h.paymentAttemptVersion === "number" ? h.paymentAttemptVersion : 1;
 
-      const alreadyExtended = h.paymentIntentExpiryExtendedAt != null;
-      let effectiveExpiresAt = exp;
-      let holdExtendedForPayment = false;
-      const updates: Record<string, unknown> = {};
+        if (noExtend && !paymentIntentIdToPersist) {
+          return {
+            ok: true,
+            effectiveExpiresAt: exp,
+            holdExtendedForPayment: false,
+            otherIdToCancel: undefined,
+            existingPiIdForStage,
+            holdPaymentAttemptVersion,
+          };
+        }
 
-      if (!alreadyExtended) {
-        const createdRaw = h.createdAt as { toDate(): Date } | undefined;
-        const createdMs = createdRaw && typeof createdRaw.toDate === "function" ? createdRaw.toDate().getTime() : now.getTime();
-        const maxEnd = new Date(createdMs + MAX_HOLD_LIFETIME_FROM_CREATED_MS);
-        let next = new Date(now.getTime() + HOLD_EXPIRY_EXTENSION_MINUTES * 60 * 1000);
-        if (next > maxEnd) next = maxEnd;
-        if (next <= now) return { ok: false, code: "expired" };
-        effectiveExpiresAt = next;
-        holdExtendedForPayment = true;
-        updates.expiresAt = Timestamp.fromDate(next);
-        updates.paymentIntentExpiryExtendedAt = Timestamp.now();
-      }
-      if (otherIdRaw) {
-        updates[otherField] = FieldValue.delete();
-      }
-      if (Object.keys(updates).length > 0) {
-        tx.update(holdRef, updates);
-      }
-      return { ok: true, effectiveExpiresAt, holdExtendedForPayment, otherIdToCancel: otherIdRaw };
-    });
+        const alreadyExtended = h.paymentIntentExpiryExtendedAt != null;
+        let effectiveExpiresAt = exp;
+        let holdExtendedForPayment = false;
+        const updates: Record<string, unknown> = {};
 
-    if (!mergeOutcome.ok) {
-      if (mergeOutcome.code === "not_found") {
-        return NextResponse.json({ error: "Hold not found" }, { status: 404 });
-      }
-      bookingLog("create-payment-intent", "hold no longer valid in extension transaction", {
-        holdId: input.holdId,
-        code: mergeOutcome.code,
+        if (!alreadyExtended) {
+          const createdRaw = h.createdAt as { toDate(): Date } | undefined;
+          const createdMs = createdRaw && typeof createdRaw.toDate === "function" ? createdRaw.toDate().getTime() : now.getTime();
+          const maxEnd = new Date(createdMs + MAX_HOLD_LIFETIME_FROM_CREATED_MS);
+          let next = new Date(now.getTime() + HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES * 60 * 1000);
+          if (next > maxEnd) next = maxEnd;
+          if (next <= now) return { ok: false, code: "expired" };
+          effectiveExpiresAt = next;
+          holdExtendedForPayment = true;
+          updates.expiresAt = Timestamp.fromDate(next);
+          updates.paymentIntentExpiryExtendedAt = Timestamp.now();
+        }
+        if (otherIdRaw) {
+          updates[otherField] = FieldValue.delete();
+        }
+        if (paymentIntentIdToPersist) {
+          const currentPi = (h[piField as "fullPaymentIntentId"] as string | undefined)?.trim();
+          if (currentPi && currentPi !== paymentIntentIdToPersist) {
+            return { ok: false, code: "pi_field_conflict", existingPiId: currentPi };
+          }
+          updates[piField] = paymentIntentIdToPersist;
+        }
+        if (Object.keys(updates).length > 0) {
+          tx.update(holdRef, updates);
+        }
+        return {
+          ok: true,
+          effectiveExpiresAt,
+          holdExtendedForPayment,
+          otherIdToCancel: otherIdRaw,
+          existingPiIdForStage,
+          holdPaymentAttemptVersion,
+        };
       });
-      return NextResponse.json(
-        { error: mergeOutcome.code === "expired" ? "Hold expired" : "Hold expired or already used" },
-        { status: 400 }
-      );
-    }
+    };
 
-    const newExpiresAt = mergeOutcome.effectiveExpiresAt;
-    const holdExtendedForPayment = mergeOutcome.holdExtendedForPayment;
-    if (holdExtendedForPayment) {
-      bookingLog("create-payment-intent", "hold expiry extended (first PI extension)", {
-        holdId: input.holdId,
-        newExpiresAt: newExpiresAt.toISOString(),
-      });
-    } else {
-      bookingLog("create-payment-intent", "hold expiry not extended (PI retry; already extended once)", {
-        holdId: input.holdId,
-        effectiveExpiresAt: newExpiresAt.toISOString(),
-      });
-    }
-
-    const receiptClaimToken = signReceiptClaimToken(input.holdId) ?? undefined;
-
-    const stripe = getStripe();
-    if (mergeOutcome.otherIdToCancel) {
+    const cancelOppositeStripeIntent = async (otherId: string | undefined) => {
+      if (!otherId) return;
+      const stripe = getStripe();
       try {
-        const otherPi = await stripe.paymentIntents.retrieve(mergeOutcome.otherIdToCancel);
+        const otherPi = await stripe.paymentIntents.retrieve(otherId);
         if (otherPi.status !== "succeeded" && otherPi.status !== "canceled") {
-          await stripe.paymentIntents.cancel(mergeOutcome.otherIdToCancel).catch(() => {});
+          await stripe.paymentIntents.cancel(otherId).catch(() => {});
         }
         bookingLog("create-payment-intent", "canceled opposite preconversion PI (field cleared in hold transaction)", {
           holdId: input.holdId,
@@ -390,8 +618,26 @@ export async function POST(request: NextRequest) {
           err: oppErr,
         });
       }
+    };
+
+    const receiptClaimToken = signReceiptClaimToken(input.holdId);
+
+    const probeBeforeCustomer = await runHoldExtensionTransaction(null, { noExtend: true });
+    if (!probeBeforeCustomer.ok) {
+      if (probeBeforeCustomer.code === "not_found") {
+        return NextResponse.json({ error: "Hold not found" }, { status: 404 });
+      }
+      bookingLog("create-payment-intent", "hold no longer valid (probe before Stripe customer)", {
+        holdId: input.holdId,
+        code: probeBeforeCustomer.code,
+      });
+      return NextResponse.json(
+        { error: probeBeforeCustomer.code === "expired" ? "Hold expired" : "Hold expired or already used" },
+        { status: 400 }
+      );
     }
 
+    const stripe = getStripe();
     const customerId = await getOrCreateStripeCustomer(
       db,
       stripe,
@@ -400,173 +646,296 @@ export async function POST(request: NextRequest) {
       hold.customerDraft.phone
     );
 
-    const holdSnapAfterOpposite = await holdRef.get();
-    const holdForPi = holdSnapAfterOpposite.exists ? (holdSnapAfterOpposite.data() as Hold) : hold;
-    const holdPaymentAttemptVersion =
-      typeof holdForPi.paymentAttemptVersion === "number" ? holdForPi.paymentAttemptVersion : 1;
-
-    // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
-    // Validate amount matches current chargeCents; if not, cancel/replace and persist new id so we never charge a stale amount.
-    const existingPiId = payFullAmount ? holdForPi.fullPaymentIntentId : holdForPi.depositPaymentIntentId;
-    if (existingPiId) {
-      try {
-        bookingLog("create-payment-intent", "checking existing PI", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8), payFullAmount });
-        const existing = await stripe.paymentIntents.retrieve(existingPiId);
-        if (existing.status !== "canceled" && existing.status !== "succeeded") {
-          const expectedStage = payFullAmount ? "full" : "deposit";
-          const metaStage = existing.metadata?.payment_stage;
-          if (metaStage && metaStage !== expectedStage) {
-            bookingLog("create-payment-intent", "existing PI payment_stage mismatch, canceling", {
-              holdId: input.holdId,
-              metaStage,
-              expectedStage,
-            });
-            if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
-              await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
-            }
-            const { FieldValue } = getFirestoreExports();
-            await holdRef.update(
-              payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
-            );
-          } else {
-          const metaVer = existing.metadata?.[HOLD_PAYMENT_ATTEMPT_VERSION_META];
-          if (metaVer !== String(holdPaymentAttemptVersion)) {
-            bookingLog("create-payment-intent", "existing PI payment attempt version mismatch, canceling", {
-              holdId: input.holdId,
-              metaVer: metaVer ?? null,
-              holdPaymentAttemptVersion,
-            });
-            if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
-              await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
-            }
-            const { FieldValue } = getFirestoreExports();
-            await holdRef.update(
-              payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
-            );
-          } else {
-          const existingAmount = existing.amount;
-          if (existingAmount === chargeCents && existing.client_secret) {
-            bookingLog("create-payment-intent", "reusing existing PI", { holdId: input.holdId, paymentIntentIdPrefix: existing.id.slice(0, 8) });
-            return NextResponse.json({
-              clientSecret: existing.client_secret,
-              paymentIntentId: existing.id,
-              depositCents: payFullAmount ? totalCents : depositCents,
-              finalCents: payFullAmount ? 0 : finalCents,
-              totalCents,
-              payFullAmount,
-              expiresAt: newExpiresAt.toISOString(),
-              holdExtendedForPayment,
-              ...(!holdExtendedForPayment
-                ? {
-                    holdExpiryNote:
-                      "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
-                  }
-                : {}),
-              ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
-              ...(receiptClaimToken ? { receiptClaimToken } : {}),
-            });
-          }
-          // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
-          bookingLog("create-payment-intent", "existing PI stale (amount mismatch or no secret), creating new", {
-            holdId: input.holdId,
-            status: existing.status,
-          });
-          if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
-            await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
-          }
-          const { FieldValue } = getFirestoreExports();
-          await holdRef.update(
-            payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
-          );
-          }
-          }
+    for (let spin = 0; spin < 5; spin++) {
+      const probe = await runHoldExtensionTransaction(null, { noExtend: true });
+      if (!probe.ok) {
+        if (probe.code === "not_found") {
+          return NextResponse.json({ error: "Hold not found" }, { status: 404 });
         }
-      } catch (piErr) {
-        bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", { holdId: input.holdId, existingPiIdPrefix: existingPiId.slice(0, 8) });
+        bookingLog("create-payment-intent", "hold no longer valid (probe)", {
+          holdId: input.holdId,
+          code: probe.code,
+        });
+        return NextResponse.json(
+          { error: probe.code === "expired" ? "Hold expired" : "Hold expired or already used" },
+          { status: 400 }
+        );
       }
-    }
+      const existingPiId = probe.existingPiIdForStage;
+      let holdPaymentAttemptVersion = probe.holdPaymentAttemptVersion;
 
-    const metadata: Record<string, string> = {
-      holdId: input.holdId,
-      slotId: hold.slotId,
-      rateId: hold.rateId,
-      payment_stage: payFullAmount ? "full" : "deposit",
-      totalCents: String(totalCents),
-      depositCents: String(depositCents),
-      finalCents: String(finalCents),
-      [HOLD_PAYMENT_ATTEMPT_VERSION_META]: String(holdPaymentAttemptVersion),
-    };
-    if (hold.experienceId) metadata.experienceId = hold.experienceId;
-    if (hold.boatId) metadata.boatId = hold.boatId;
-
-    // Idempotency key includes chargeCents so replacement intents after amount mismatch use a different key
-    // and cannot replay a stale Stripe response; fast-path above only reuses when amount and secret are valid.
-    const idempotencyKey = `pi-${input.holdId}-${payFullAmount ? "full" : "deposit"}-${chargeCents}`;
-    bookingLog("create-payment-intent", "creating new PaymentIntent", {
-      holdId: input.holdId,
-      payFullAmount,
-    });
-    const paymentIntentParams: Parameters<typeof stripe.paymentIntents.create>[0] = {
-      amount: chargeCents,
-      currency: "usd",
-      customer: customerId,
-      metadata,
-    };
-    if (isOneTimeTicketed) {
-      // Explicit types avoid dashboard extras (e.g. Affirm) while keeping card wallets (Apple/Google Pay).
-      paymentIntentParams.payment_method_types = ["card", "link"];
-    } else if (payFullAmount === false) {
-      // Deposit: save card for off-session use.
-      paymentIntentParams.payment_method_types = ["card"];
-      paymentIntentParams.setup_future_usage = "off_session";
-    } else {
-      // Full-payment charter: wallets via `card`; Link optional.
-      paymentIntentParams.payment_method_types = ["card", "link"];
-    }
-    const paymentIntent = await stripe.paymentIntents.create(
-      paymentIntentParams,
-      { idempotencyKey }
-    );
-    if (!paymentIntent.client_secret) {
-      bookingError("create-payment-intent", "PaymentIntent missing client secret", null, { paymentIntentIdPrefix: paymentIntent.id.slice(0, 8) });
-      return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
-    }
-    // Persist the PI id on the hold so retries can reuse it instead of creating a new charge.
-    await holdRef.update(
-      payFullAmount ? { fullPaymentIntentId: paymentIntent.id } : { depositPaymentIntentId: paymentIntent.id }
-    );
-    bookingLog("create-payment-intent", "PaymentIntent created and persisted", {
-      holdId: input.holdId,
-      paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
-      payFullAmount,
-    });
-    return NextResponse.json({
-      clientSecret: paymentIntent.client_secret,
-      paymentIntentId: paymentIntent.id,
-      depositCents: payFullAmount ? totalCents : depositCents,
-      finalCents: payFullAmount ? 0 : finalCents,
-      totalCents,
-      payFullAmount,
-      expiresAt: newExpiresAt.toISOString(),
-      holdExtendedForPayment,
-      ...(!holdExtendedForPayment
-        ? {
-            holdExpiryNote:
-              "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
+      // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
+      // PI id is read inside `probe` (transactional) — not a separate get() before Stripe calls.
+      if (existingPiId) {
+        try {
+          bookingLog("create-payment-intent", "checking existing PI", {
+            holdId: input.holdId,
+            existingPiIdPrefix: existingPiId.slice(0, 8),
+            payFullAmount,
+          });
+          const existing = await stripe.paymentIntents.retrieve(existingPiId);
+          if (existing.status !== "canceled" && existing.status !== "succeeded") {
+            const expectedStage = payFullAmount ? "full" : "deposit";
+            const metaStage = existing.metadata?.payment_stage;
+              if (metaStage && metaStage !== expectedStage) {
+              bookingLog("create-payment-intent", "existing PI payment_stage mismatch, canceling", {
+                holdId: input.holdId,
+                metaStage,
+                expectedStage,
+              });
+              if (
+                existing.status === "requires_payment_method" ||
+                existing.status === "requires_confirmation" ||
+                existing.status === "requires_action"
+              ) {
+                await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+              }
+              const { FieldValue } = getFirestoreExports();
+              await holdRef.update(
+                payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+              );
+            } else {
+              const metaVer = existing.metadata?.[HOLD_PAYMENT_ATTEMPT_VERSION_META];
+                if (metaVer !== String(holdPaymentAttemptVersion)) {
+                bookingLog("create-payment-intent", "existing PI payment attempt version mismatch, canceling", {
+                  holdId: input.holdId,
+                  metaVer: metaVer ?? null,
+                  holdPaymentAttemptVersion,
+                });
+                if (
+                  existing.status === "requires_payment_method" ||
+                  existing.status === "requires_confirmation" ||
+                  existing.status === "requires_action"
+                ) {
+                  await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+                }
+                const { FieldValue } = getFirestoreExports();
+                await holdRef.update(
+                  payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+                );
+              } else {
+                if (existing.status === "requires_action") {
+                  bookingLog("create-payment-intent", "existing PI requires_action after stage/version match — cancel and clear", {
+                    holdId: input.holdId,
+                  });
+                  await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+                  const { FieldValue } = getFirestoreExports();
+                  await holdRef.update(
+                    payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+                  );
+                  continue;
+                }
+                const existingAmount = existing.amount;
+                if (existingAmount === chargeCents && existing.client_secret) {
+                  bookingLog("create-payment-intent", "reusing existing PI", {
+                    holdId: input.holdId,
+                    paymentIntentIdPrefix: existing.id.slice(0, 8),
+                  });
+                  const mergeReuse = await runHoldExtensionTransaction(null);
+                  if (!mergeReuse.ok) {
+                    if (mergeReuse.code === "not_found") {
+                      return NextResponse.json({ error: "Hold not found" }, { status: 404 });
+                    }
+                    bookingLog("create-payment-intent", "hold no longer valid in extension transaction", {
+                      holdId: input.holdId,
+                      code: mergeReuse.code,
+                    });
+                    return NextResponse.json(
+                      { error: mergeReuse.code === "expired" ? "Hold expired" : "Hold expired or already used" },
+                      { status: 400 }
+                    );
+                  }
+                  await cancelOppositeStripeIntent(mergeReuse.otherIdToCancel);
+                  if (mergeReuse.holdExtendedForPayment) {
+                    bookingLog("create-payment-intent", "hold expiry extended (first PI extension)", {
+                      holdId: input.holdId,
+                      newExpiresAt: mergeReuse.effectiveExpiresAt.toISOString(),
+                    });
+                  } else {
+                    bookingLog("create-payment-intent", "hold expiry not extended (PI retry; already extended once)", {
+                      holdId: input.holdId,
+                      effectiveExpiresAt: mergeReuse.effectiveExpiresAt.toISOString(),
+                    });
+                  }
+                  const rtFieldReuse = releaseTokenFieldForResponse(input.holdId, mergeReuse.effectiveExpiresAt);
+                  const resReuse = NextResponse.json({
+                    clientSecret: existing.client_secret,
+                    paymentIntentId: existing.id,
+                    depositCents: payFullAmount ? totalCents : depositCents,
+                    finalCents: payFullAmount ? 0 : finalCents,
+                    totalCents,
+                    payFullAmount,
+                    expiresAt: mergeReuse.effectiveExpiresAt.toISOString(),
+                    holdExtendedForPayment: mergeReuse.holdExtendedForPayment,
+                    ...(!mergeReuse.holdExtendedForPayment
+                      ? {
+                          holdExpiryNote:
+                            "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
+                        }
+                      : {}),
+                    ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
+                    ...(receiptClaimToken ? { receiptClaimToken } : {}),
+                    ...rtFieldReuse,
+                  });
+                  if ("releaseToken" in rtFieldReuse && rtFieldReuse.releaseToken) {
+                    attachHoldReleaseCookie(resReuse, rtFieldReuse.releaseToken, mergeReuse.effectiveExpiresAt.toISOString());
+                  }
+                  return resReuse;
+                }
+                // Amount mismatch or missing secret: cancel stale intent so we create a fresh one with correct amount.
+                bookingLog("create-payment-intent", "existing PI stale (amount mismatch or no secret), creating new", {
+                  holdId: input.holdId,
+                  status: existing.status,
+                });
+                if (existing.status === "requires_payment_method" || existing.status === "requires_confirmation") {
+                  await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+                }
+                const { FieldValue } = getFirestoreExports();
+                await holdRef.update(
+                  payFullAmount ? { fullPaymentIntentId: FieldValue.delete() } : { depositPaymentIntentId: FieldValue.delete() }
+                );
+              }
+            }
           }
-        : {}),
-      ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
-      ...(receiptClaimToken ? { receiptClaimToken } : {}),
-    });
+        } catch (piErr) {
+          bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", {
+            holdId: input.holdId,
+            existingPiIdPrefix: existingPiId.slice(0, 8),
+            err: piErr,
+          });
+        }
+      }
+
+      const metadata: Record<string, string> = {
+        holdId: input.holdId,
+        slotId: hold.slotId,
+        rateId: hold.rateId,
+        payment_stage: payFullAmount ? "full" : "deposit",
+        totalCents: String(totalCents),
+        depositCents: String(depositCents),
+        finalCents: String(finalCents),
+        [HOLD_PAYMENT_ATTEMPT_VERSION_META]: String(holdPaymentAttemptVersion),
+      };
+      if (hold.experienceId) metadata.experienceId = hold.experienceId;
+      if (hold.boatId) metadata.boatId = hold.boatId;
+
+      const idempotencyKey = buildPaymentIntentIdempotencyKey({
+        holdId: input.holdId,
+        payFullAmount,
+        chargeCents,
+        holdPaymentAttemptVersion,
+      });
+      bookingLog("create-payment-intent", "creating new PaymentIntent", {
+        holdId: input.holdId,
+        payFullAmount,
+      });
+      const paymentIntentParams: Parameters<typeof stripe.paymentIntents.create>[0] = {
+        amount: chargeCents,
+        currency: "usd",
+        customer: customerId,
+        metadata,
+      };
+      if (isOneTimeTicketed) {
+        paymentIntentParams.payment_method_types = ["card", "link"];
+      } else if (payFullAmount === false) {
+        paymentIntentParams.payment_method_types = ["card"];
+        paymentIntentParams.setup_future_usage = "off_session";
+      } else {
+        paymentIntentParams.payment_method_types = ["card", "link"];
+      }
+      const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams, { idempotencyKey });
+      if (!paymentIntent.client_secret) {
+        bookingError("create-payment-intent", "PaymentIntent missing client secret", null, {
+          paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
+        });
+        return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
+      }
+      const mergeNew = await runHoldExtensionTransaction(paymentIntent.id);
+      if (!mergeNew.ok) {
+        await stripe.paymentIntents.cancel(paymentIntent.id).catch(() => {});
+        if (mergeNew.code === "pi_field_conflict") {
+          bookingLog("create-payment-intent", "PI field race: another request persisted first; retrying", {
+            holdId: input.holdId,
+          });
+          continue;
+        }
+        if (mergeNew.code === "not_found") {
+          return NextResponse.json({ error: "Hold not found" }, { status: 404 });
+        }
+        bookingLog("create-payment-intent", "hold no longer valid after PaymentIntent create", {
+          holdId: input.holdId,
+          code: mergeNew.code,
+        });
+        return NextResponse.json(
+          { error: mergeNew.code === "expired" ? "Hold expired" : "Hold expired or already used" },
+          { status: 400 }
+        );
+      }
+      await cancelOppositeStripeIntent(mergeNew.otherIdToCancel);
+      if (mergeNew.holdExtendedForPayment) {
+        bookingLog("create-payment-intent", "hold expiry extended (first PI extension)", {
+          holdId: input.holdId,
+          newExpiresAt: mergeNew.effectiveExpiresAt.toISOString(),
+        });
+      } else {
+        bookingLog("create-payment-intent", "hold expiry not extended (PI retry; already extended once)", {
+          holdId: input.holdId,
+          effectiveExpiresAt: mergeNew.effectiveExpiresAt.toISOString(),
+        });
+      }
+      bookingLog("create-payment-intent", "PaymentIntent created and persisted", {
+        holdId: input.holdId,
+        paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
+        payFullAmount,
+      });
+      const rtFieldNew = releaseTokenFieldForResponse(input.holdId, mergeNew.effectiveExpiresAt);
+      const resNew = NextResponse.json({
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id,
+        depositCents: payFullAmount ? totalCents : depositCents,
+        finalCents: payFullAmount ? 0 : finalCents,
+        totalCents,
+        payFullAmount,
+        expiresAt: mergeNew.effectiveExpiresAt.toISOString(),
+        holdExtendedForPayment: mergeNew.holdExtendedForPayment,
+        ...(!mergeNew.holdExtendedForPayment
+          ? {
+              holdExpiryNote:
+                "Your hold time was not extended again. Complete payment before it expires, or start over to pick a new time.",
+            }
+          : {}),
+        ...(typeof hold.effectiveRateCents === "number" ? { effectiveRateCents: hold.effectiveRateCents } : {}),
+        ...(receiptClaimToken ? { receiptClaimToken } : {}),
+        ...rtFieldNew,
+      });
+      if ("releaseToken" in rtFieldNew && rtFieldNew.releaseToken) {
+        attachHoldReleaseCookie(resNew, rtFieldNew.releaseToken, mergeNew.effectiveExpiresAt.toISOString());
+      }
+      return resNew;
+    }
+    return NextResponse.json(
+      { error: "Payment is temporarily unavailable. Please try again in a moment.", incidentCode: generateIncidentCode() },
+      { status: 503 }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Create payment intent failed";
     const isConfig = /Firebase config missing|FIREBASE_PRIVATE_KEY|Missing required env|STRIPE_SECRET_KEY/i.test(message);
     const isRetriable = err instanceof Error && (err as { retriable?: boolean }).retriable === true;
     const incidentCode = generateIncidentCode();
+    const stripeMeta =
+      err != null && typeof err === "object" && "type" in err && typeof (err as { type?: unknown }).type === "string"
+        ? {
+            stripeType: (err as { type: string }).type,
+            ...(typeof (err as { code?: unknown }).code === "string"
+              ? { stripeCode: (err as { code: string }).code }
+              : {}),
+          }
+        : {};
     bookingError("create-payment-intent", "create payment intent failed", err, {
       message,
       incidentCode,
       hint: isConfig ? "Set Firebase and Stripe env vars in deployment (see docs/BOOKING_SETUP.md)." : undefined,
+      ...stripeMeta,
     });
     if (isRetriable) {
       return NextResponse.json(
@@ -574,10 +943,16 @@ export async function POST(request: NextRequest) {
         { status: 503 }
       );
     }
+    const isDev = process.env.NODE_ENV === "development";
     return NextResponse.json(
       {
-        error: isConfig ? "Service temporarily unavailable. Please try again shortly." : "Payment is temporarily unavailable. Please try again.",
+        error: isConfig
+          ? "Service temporarily unavailable. Please try again shortly."
+          : isDev
+            ? message
+            : "Payment is temporarily unavailable. Please try again.",
         incidentCode,
+        ...(isDev && !isConfig ? { ...stripeMeta } : {}),
       },
       { status: isConfig ? 503 : 500 }
     );

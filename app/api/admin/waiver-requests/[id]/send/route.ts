@@ -7,6 +7,7 @@ import {
   updateRequest,
   getTokenById,
   isTokenValid,
+  getAppBaseUrl,
 } from "@/lib/waiver/firestore";
 import { generateSigningToken, createTokenExpiresAt, getDefaultTokenExpiryDays } from "@/lib/waiver/tokens";
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
@@ -42,7 +43,7 @@ export async function POST(
     if (!existingToken || !isTokenValid(existingToken)) {
       tokenId = generateSigningToken();
       const expiresAt = createTokenExpiresAt(getDefaultTokenExpiryDays());
-      const baseUrl = (process.env.APP_BASE_URL ?? "").replace(/\/$/, "");
+      const baseUrl = getAppBaseUrl();
       signingUrl = `${baseUrl}/waiver/sign?token=${encodeURIComponent(tokenId)}`;
       await db.collection("waiverSigningTokens").doc(tokenId).set({
         waiverRequestId: req.id,

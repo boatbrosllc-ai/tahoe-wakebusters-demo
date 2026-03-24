@@ -22,7 +22,11 @@ export async function getExperienceBySlug(slug: string): Promise<ExperienceWithD
   if (!snap || snap.empty) return null;
   const doc = snap.docs[0];
   const experience = doc.data() as Experience;
-  const ratesSnap = await db.collection("experiences").doc(doc.id).collection("rates").where("active", "==", true).get();
+  const expRef = db.collection("experiences").doc(doc.id);
+  const [ratesSnap, addonsSnap] = await Promise.all([
+    expRef.collection("rates").where("active", "==", true).get(),
+    expRef.collection("addons").where("active", "==", true).get(),
+  ]);
   const rates = ratesSnap.docs.map((r) => {
     const d = r.data() as ExperienceRate;
     return {
@@ -35,7 +39,6 @@ export async function getExperienceBySlug(slug: string): Promise<ExperienceWithD
       active: d.active,
     };
   });
-  const addonsSnap = await db.collection("experiences").doc(doc.id).collection("addons").where("active", "==", true).get();
   const addons = addonsSnap.docs.map((a) => {
     const d = a.data() as ExperienceAddon;
     return { id: a.id, name: d.name, description: d.description, priceCents: d.priceCents, type: d.type, active: d.active, maxQty: d.maxQty };

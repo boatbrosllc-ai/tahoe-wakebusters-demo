@@ -19,8 +19,8 @@ type RequestDetail = {
     signedAt?: unknown;
     ip?: string;
     userAgent?: string;
-    pdfUrl?: string;
     pdfStoragePath?: string;
+    htmlStoragePath?: string;
     contentHash?: string;
   };
   bookingSummary?: { experienceName?: string; tripDate?: string; startTime?: string; endTime?: string };

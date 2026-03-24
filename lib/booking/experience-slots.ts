@@ -167,9 +167,11 @@ function getCentralOffsetHoursForDate(dateStr: string): number {
 }
 
 /**
- * Returns start and end Date for a slot. Hours/minutes are interpreted in America/Chicago.
- * Uses Date.UTC so hour overflow (e.g. 18 CST = UTC+24 → rolls to midnight next day) is handled
- * correctly instead of building an invalid ISO string like "T24:00:00.000Z".
+ * Returns start and end `Date` values (JavaScript UTC instants) for a slot whose wall-clock fields
+ * (dateStr + hour/minute) are interpreted in America/Chicago. The returned `Date` objects are
+ * absolute UTC times; display with `timeZone: "America/Chicago"` (or `Intl`) to show local trip time.
+ * Uses `Date.UTC` composition from calendar parts + DST offset so hour overflow (e.g. late departures)
+ * rolls to the correct UTC day instead of invalid strings like `T24:00:00.000Z`.
  */
 export function getSlotStartEnd(dateStr: string, startHour: number, durationHours: number, startMinute: number = 0): { start: Date; end: Date } {
   const offsetHours = getCentralOffsetHoursForDate(dateStr);

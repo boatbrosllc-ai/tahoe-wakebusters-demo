@@ -7,8 +7,24 @@ import { BOOKING_PREVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { cn } from "@/lib/utils";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import type { BookingModalInitialSelection } from "@/lib/booking/booking-modal-types";
+import { isSeasonalAllowed } from "@/lib/booking/experience-slots";
+import type { SeasonalConfig } from "@/lib/booking/experience-slots";
 
 const durationOptions = BOOKING_PREVIEW.durations;
+
+function firstInSeasonDateStr(seasonal: SeasonalConfig | undefined, todayStr: string): string {
+  if (!seasonal?.enabled) return todayStr;
+  for (let i = 0; i < 370; i++) {
+    const d = new Date(todayStr + "T12:00:00");
+    d.setDate(d.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const iso = `${y}-${m}-${day}`;
+    if (isSeasonalAllowed(seasonal, d, iso)) return iso;
+  }
+  return todayStr;
+}
 
 export function BookingPreviewCard({
   onCheckAvailability,
@@ -18,6 +34,7 @@ export function BookingPreviewCard({
   pricingType = "charter",
   /** Denormalized on the experience document in Firestore; pass from the server page. */
   fromPriceCents,
+  seasonal,
 }: {
   onCheckAvailability?: (selection: BookingModalInitialSelection) => void;
   sectionId?: string;
@@ -26,10 +43,17 @@ export function BookingPreviewCard({
   experienceSlug: string;
   pricingType?: "charter" | "ticketed";
   fromPriceCents?: number | null;
+  seasonal?: SeasonalConfig;
 }) {
   const reduceMotion = useReducedMotion();
   const todayStr = useMemo(() => getChicagoToday(), []);
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const defaultDateStr = useMemo(() => firstInSeasonDateStr(seasonal, todayStr), [seasonal, todayStr]);
+  const maxDateStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 90);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const [selectedDate, setSelectedDate] = useState(defaultDateStr);
   const [duration, setDuration] = useState<number>(BOOKING_PREVIEW.durations[1]);
   const [guests, setGuests] = useState(6);
 
@@ -66,6 +90,7 @@ export function BookingPreviewCard({
         id="booking-preview-date"
         type="date"
         min={todayStr}
+        max={maxDateStr}
         value={selectedDate}
         onChange={(e) => setSelectedDate(e.target.value)}
         className="h-11 w-full rounded-xl bg-white/10 border border-white/20 mb-4 px-4 text-white text-sm placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark [color-scheme:dark]"
@@ -125,7 +150,7 @@ export function BookingPreviewCard({
         onClick={scrollToBooking}
         className="w-full rounded-xl h-12 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 font-semibold focus-visible:ring-brand-primary"
       >
-        Check Availability
+        See if this date is available
       </Button>
       <p className="text-white/60 text-xs text-center mt-3">{BOOKING_PREVIEW.trustLine}</p>
     </motion.div>

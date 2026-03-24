@@ -21,6 +21,13 @@ import {
 import { checkRateLimit, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
 import type { Booking } from "@/lib/booking/types";
 import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
+import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import {
+  persistFinalBalanceNormalizationIfNeeded,
+  resolveFinalBalanceFromBooking,
+} from "@/lib/booking/final-balance-resolver";
+import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 
 const ALLOWED_STATUSES = ["final_due", "final_failed", "final_requires_action", "final_processing"] as const;
 
@@ -28,7 +35,8 @@ type FinalPiGateResult =
   | { kind: "busy_cron" }
   | { kind: "busy_customer" }
   | { kind: "reuse"; existingPiId: string }
-  | { kind: "acquired_create" };
+  | { kind: "acquired_create"; freshSavedPmId: string | undefined; freshFinalCents: number; normalizedInGate: boolean }
+  | { kind: "waiver_blocked" };
 
 function getTokenFromRequest(request: NextRequest): string | null {
   const auth = request.headers.get("authorization");
@@ -39,12 +47,23 @@ function getTokenFromRequest(request: NextRequest): string | null {
   return null;
 }
 
-function parseBody(body: unknown): { token: string | null; skipSavedPaymentMethod: boolean } | null {
+/** Stripe PI amount is authoritative for what will be charged; fallback is resolver output for this request. */
+function effectiveFinalChargeCents(pi: { amount?: number | null }, fallbackCents: number): number {
+  return typeof pi.amount === "number" ? pi.amount : fallbackCents;
+}
+
+function parseBody(body: unknown): {
+  token: string | null;
+  skipSavedPaymentMethod: boolean;
+  customerEmail: string | null;
+} | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const token = typeof o.token === "string" ? o.token.trim() : null;
   const skipSavedPaymentMethod = o.skipSavedPaymentMethod === true;
-  return { token: token || null, skipSavedPaymentMethod };
+  const customerEmail =
+    typeof o.customerEmail === "string" ? o.customerEmail.trim().toLowerCase() : null;
+  return { token: token || null, skipSavedPaymentMethod, customerEmail };
 }
 
 export async function POST(request: NextRequest) {
@@ -67,6 +86,11 @@ export async function POST(request: NextRequest) {
     const parsed = parseBody(body);
     if (!token) token = parsed?.token ?? null;
     const skipSavedPaymentMethod = parsed?.skipSavedPaymentMethod === true;
+    let customerEmail =
+      parsed?.customerEmail ??
+      (body != null && typeof body === "object" && typeof (body as Record<string, unknown>).customerEmail === "string"
+        ? String((body as Record<string, unknown>).customerEmail).trim().toLowerCase()
+        : null);
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 });
     }
@@ -74,9 +98,11 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
-    if (!payload.email) {
-      return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
+    const resolvedEmail = resolveManageCustomerEmail(request, payload.bookingId, customerEmail);
+    if (!resolvedEmail) {
+      return NextResponse.json({ error: "customerEmail is required in the request body" }, { status: 400 });
     }
+    customerEmail = resolvedEmail;
     const rlManage = await checkRateLimit(getManageRateLimitKey(payload.bookingId));
     if (!rlManage.allowed) {
       if (rlManage.serverError) {
@@ -101,14 +127,17 @@ export async function POST(request: NextRequest) {
     const clearCustomerFinalPiInFlight = () =>
       bookingRef.update({
         "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
+        "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-    const runCustomerFinalPiGate = async (now: Date): Promise<FinalPiGateResult> =>
+    const runCustomerFinalPiGate = async (now: Date, pendingFinalPaymentIntentKey: string): Promise<FinalPiGateResult> =>
       db.runTransaction(async (tx): Promise<FinalPiGateResult> => {
         const snap = await tx.get(bookingRef);
         if (!snap.exists) throw new Error("Booking not found");
         const b = snap.data() as Booking;
+        const freshSavedPmId =
+          typeof b.stripe?.paymentMethodId === "string" ? b.stripe.paymentMethodId.trim() : undefined;
         const currentStatus = b.status;
         const currentPiId = b.stripe?.finalPaymentIntentId;
         const lockAt = b.stripe?.finalChargeLockAt;
@@ -131,15 +160,27 @@ export async function POST(request: NextRequest) {
         ) {
           return { kind: "reuse", existingPiId: currentPiId };
         }
+        const waiver = (b as Booking & { waiver?: { requestId?: string; status?: string } }).waiver;
+        if (waiver?.requestId && waiver.status !== "signed") {
+          return { kind: "waiver_blocked" };
+        }
         if (!ALLOWED_STATUSES.includes(currentStatus as (typeof ALLOWED_STATUSES)[number])) {
           throw new Error("Booking is not in a state that allows paying remaining balance");
         }
-        tx.update(bookingRef, {
+        const res = resolveFinalBalanceFromBooking(b);
+        const freshFinalCents = res.authoritativeFinalCents;
+        const gatePatch: Record<string, unknown> = {
           "stripe.customerFinalPiInFlightAt": Timestamp.fromDate(now),
+          "stripe.pendingFinalPaymentIntentKey": pendingFinalPaymentIntentKey,
           "stripe.customerPayLockAt": FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
-        });
-        return { kind: "acquired_create" };
+        };
+        if (res.mismatchVsStored) {
+          gatePatch["stripe.finalAmountCents"] = res.authoritativeFinalCents;
+          gatePatch["stripe.finalBalanceNormalizedAt"] = Timestamp.fromDate(now);
+        }
+        tx.update(bookingRef, gatePatch as UpdateData<DocumentData>);
+        return { kind: "acquired_create", freshSavedPmId, freshFinalCents, normalizedInGate: res.mismatchVsStored };
       });
 
     const bookingSnap = await bookingRef.get();
@@ -148,15 +189,19 @@ export async function POST(request: NextRequest) {
     }
     const booking = bookingSnap.data() as Booking;
     const bookingEmail = booking.customer?.email?.trim().toLowerCase();
-    if (!bookingEmail || bookingEmail !== payload.email) {
+    if (!bookingEmail || bookingEmail !== customerEmail) {
       return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
     }
     const customerId = booking.stripe?.customerId;
-    const finalCents = booking.stripe?.finalAmountCents ?? 0;
+    const persistAfterLoad = await persistFinalBalanceNormalizationIfNeeded(bookingRef, booking, {
+      bookingId: payload.bookingId,
+      source: "manage/pay-remaining",
+    });
+    const authoritativeFinalCents = persistAfterLoad.authoritativeFinalCents;
     if (!customerId) {
       return NextResponse.json({ error: "No customer on booking" }, { status: 400 });
     }
-    if (finalCents <= 0) {
+    if (authoritativeFinalCents <= 0) {
       return NextResponse.json({ error: "No remaining balance to pay" }, { status: 400 });
     }
     const status = booking.status;
@@ -167,6 +212,25 @@ export async function POST(request: NextRequest) {
     const stripe = getStripe();
     const now = new Date();
 
+    /** Persists in-flight final PI id only when booking status still allows it; avoids overwriting a different stored PI. */
+    const persistFinalPaymentIntentIdIfEligible = async (piId: string) => {
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(bookingRef);
+        if (!snap.exists) return;
+        const b = snap.data() as Booking;
+        const stored = b.stripe?.finalPaymentIntentId;
+        if (stored && stored !== piId) return;
+        if (!ALLOWED_STATUSES.includes(b.status as (typeof ALLOWED_STATUSES)[number])) return;
+        tx.update(bookingRef, {
+          "stripe.finalPaymentIntentId": piId,
+          "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
+          "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
+          "stripe.customerPayLockAt": FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        } as UpdateData<DocumentData>);
+      });
+    };
+
     /** Webhook/cron may lag; PI can be succeeded while booking is still final_due / final_processing. Idempotent. */
     const reconcileBookingToFinalPaidFromSucceededIntent = async (piId: string) => {
       await db.runTransaction(async (tx) => {
@@ -176,26 +240,31 @@ export async function POST(request: NextRequest) {
         const storedPi = b.stripe?.finalPaymentIntentId;
         if (storedPi && storedPi !== piId) return;
         if (b.status === "final_paid" && storedPi === piId && b.stripe?.finalChargedAt) return;
+        const transitioningToFinalPaid = b.status !== "final_paid";
         const sb = b.stripe;
         const isDepositFlow = typeof sb?.depositAmountCents === "number";
-        const finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
+        const finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
         if (isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true) {
-          applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev);
+          applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingRef.id);
         }
         const patch: Record<string, unknown> = {
           "stripe.finalPaymentIntentId": piId,
           "stripe.finalChargedAt": Timestamp.now(),
           "stripe.finalError": FieldValue.delete(),
           "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
+          "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
           ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
             ? { "stripe.finalRevenueSummaryApplied": true }
             : {}),
         };
-        if (b.status !== "final_paid") {
+        if (transitioningToFinalPaid) {
           patch.status = "final_paid";
         }
         tx.update(bookingRef, patch as UpdateData<DocumentData>);
+        if (transitioningToFinalPaid) {
+          await addFinalChargeSuccessOutboxInTransaction(tx, db, payload.bookingId);
+        }
       });
     };
 
@@ -205,12 +274,72 @@ export async function POST(request: NextRequest) {
       !skipSavedPaymentMethod;
 
     for (;;) {
-      const gate = await runCustomerFinalPiGate(now);
+      const integritySnapForKeys = await bookingRef.get();
+      if (!integritySnapForKeys.exists) {
+        return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+      }
+      const ibForKeys = integritySnapForKeys.data() as Booking;
+      const persistKeys = await persistFinalBalanceNormalizationIfNeeded(bookingRef, ibForKeys, {
+        bookingId: payload.bookingId,
+        source: "manage/pay-remaining",
+      });
+      const amountCentsForKeys = persistKeys.authoritativeFinalCents;
+      const offSessionKey = getFinalChargeIdempotencyKey(
+        payload.bookingId,
+        "customer",
+        "off-session",
+        amountCentsForKeys
+      );
+      const elementKey = getFinalChargeIdempotencyKey(
+        payload.bookingId,
+        "customer",
+        "element",
+        amountCentsForKeys
+      );
+      const pendingKeyForGate =
+        typeof booking.stripe?.paymentMethodId === "string" &&
+        booking.stripe.paymentMethodId.trim().length > 0 &&
+        !skipSavedPaymentMethod &&
+        attemptOffSessionFinal
+          ? offSessionKey
+          : elementKey;
+      const gate = await runCustomerFinalPiGate(now, pendingKeyForGate);
       if (gate.kind === "busy_cron" || gate.kind === "busy_customer") {
         return NextResponse.json(
           { error: "A final charge is in progress. Please wait a moment and try again." },
           { status: 409 }
         );
+      }
+      if (gate.kind === "waiver_blocked") {
+        try {
+          await writeOperationalAlert({
+            type: "pay_remaining_waiver_unsigned_blocked",
+            bookingId: payload.bookingId,
+            source: "manage/pay-remaining",
+          });
+        } catch {
+          /* non-fatal */
+        }
+        return NextResponse.json(
+          {
+            error:
+              "Please sign your waiver before paying the remaining balance. Use the link in your confirmation or waiver email.",
+          },
+          { status: 403 }
+        );
+      }
+
+      if (gate.kind === "acquired_create" && gate.normalizedInGate) {
+        try {
+          await writeOperationalAlert({
+            type: "final_balance_normalized",
+            bookingId: payload.bookingId,
+            source: "manage/pay-remaining",
+            phase: "final_pi_gate",
+          });
+        } catch {
+          /* non-fatal */
+        }
       }
 
       if (gate.kind === "reuse") {
@@ -230,7 +359,7 @@ export async function POST(request: NextRequest) {
             status: "processing",
             message: "Your payment is still processing. Please wait a moment and refresh the page to check status.",
             paymentIntentId: pi.id,
-            finalCents,
+            finalCents: effectiveFinalChargeCents(pi, amountCentsForKeys),
           });
         }
         if (pi.status === "requires_payment_method" || pi.status === "requires_confirmation" || pi.status === "requires_action") {
@@ -241,13 +370,14 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({
             clientSecret: pi.client_secret,
             paymentIntentId: pi.id,
-            finalCents,
+            finalCents: effectiveFinalChargeCents(pi, amountCentsForKeys),
           });
         }
         if (pi.status === "canceled") {
           await bookingRef.update({
             status: "final_due",
             "stripe.finalPaymentIntentId": FieldValue.delete(),
+            "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
             updatedAt: FieldValue.serverTimestamp(),
           });
           continue;
@@ -257,15 +387,17 @@ export async function POST(request: NextRequest) {
       }
 
       if (gate.kind === "acquired_create") {
-        const idempotencyKey = getFinalChargeIdempotencyKey(payload.bookingId, "customer");
-        const savedPmId =
-          typeof booking.stripe?.paymentMethodId === "string" ? booking.stripe.paymentMethodId.trim() : "";
+        const savedPmId = gate.freshSavedPmId?.trim() ?? "";
+        /** Gate reads paymentMethodId inside the transaction — do not use stale pre-transaction `booking.stripe`. */
+        const shouldAttemptOffSession =
+          savedPmId.length > 0 && !skipSavedPaymentMethod;
+        const amountCentsForFinalPi = gate.freshFinalCents;
 
-        if (savedPmId && attemptOffSessionFinal) {
+        if (shouldAttemptOffSession) {
           try {
             const offPi = await stripe.paymentIntents.create(
               {
-                amount: finalCents,
+                amount: amountCentsForFinalPi,
                 currency: "usd",
                 customer: customerId,
                 payment_method: savedPmId,
@@ -273,34 +405,36 @@ export async function POST(request: NextRequest) {
                 confirm: true,
                 metadata: { bookingId: payload.bookingId, payment_stage: "final" },
               },
-              { idempotencyKey }
+              { idempotencyKey: offSessionKey }
             );
             if (offPi.status === "succeeded") {
-              await bookingRef.update({
-                "stripe.finalPaymentIntentId": offPi.id,
-                "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-              });
-              await reconcileBookingToFinalPaidFromSucceededIntent(offPi.id);
+              const succeededOffSessionPiId = offPi.id;
+              try {
+                await reconcileBookingToFinalPaidFromSucceededIntent(succeededOffSessionPiId);
+              } catch {
+                await persistFinalPaymentIntentIdIfEligible(succeededOffSessionPiId);
+                return NextResponse.json({
+                  status: "processing",
+                  message:
+                    "Your payment was received but confirmation is still pending. Please wait a moment and refresh the page to check status.",
+                  paymentIntentId: succeededOffSessionPiId,
+                  finalCents: amountCentsForFinalPi,
+                });
+              }
               return NextResponse.json({
                 status: "succeeded",
                 message: "Your booking is fully paid. Refresh the page if the balance still shows.",
-                paymentIntentId: offPi.id,
+                paymentIntentId: succeededOffSessionPiId,
                 finalCents: 0,
               });
             }
             if (offPi.status === "processing") {
-              await bookingRef.update({
-                "stripe.finalPaymentIntentId": offPi.id,
-                "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-              });
-              await touchCustomerPayLock();
+              await persistFinalPaymentIntentIdIfEligible(offPi.id);
               return NextResponse.json({
                 status: "processing",
                 message: "Your payment is still processing. Please wait a moment and refresh the page to check status.",
                 paymentIntentId: offPi.id,
-                finalCents,
+                finalCents: effectiveFinalChargeCents(offPi, amountCentsForFinalPi),
               });
             }
             if (
@@ -312,16 +446,11 @@ export async function POST(request: NextRequest) {
                 await clearCustomerFinalPiInFlight().catch(() => {});
                 return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
               }
-              await bookingRef.update({
-                "stripe.finalPaymentIntentId": offPi.id,
-                "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-              });
-              await touchCustomerPayLock();
+              await persistFinalPaymentIntentIdIfEligible(offPi.id);
               return NextResponse.json({
                 clientSecret: offPi.client_secret,
                 paymentIntentId: offPi.id,
-                finalCents,
+                finalCents: effectiveFinalChargeCents(offPi, amountCentsForFinalPi),
               });
             }
             if (offPi.status === "canceled") {
@@ -341,20 +470,17 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        const useElementSuffix =
-          skipSavedPaymentMethod || (Boolean(savedPmId) && !attemptOffSessionFinal);
-
         let paymentIntent: Awaited<ReturnType<typeof stripe.paymentIntents.create>>;
         try {
           paymentIntent = await stripe.paymentIntents.create(
             {
-              amount: finalCents,
+              amount: amountCentsForFinalPi,
               currency: "usd",
               customer: customerId,
               payment_method_types: ["card", "link"],
               metadata: { bookingId: payload.bookingId, payment_stage: "final" },
             },
-            { idempotencyKey: useElementSuffix ? `${idempotencyKey}:element` : idempotencyKey }
+            { idempotencyKey: elementKey }
           );
         } catch (createErr: unknown) {
           const stripeErr = createErr as { code?: string; type?: string; statusCode?: number };
@@ -385,7 +511,7 @@ export async function POST(request: NextRequest) {
                   status: "processing",
                   message: "Your payment is still processing. Please wait a moment and refresh the page to check status.",
                   paymentIntentId: pi.id,
-                  finalCents,
+                  finalCents: effectiveFinalChargeCents(pi, amountCentsForKeys),
                 });
               }
               if (pi.status === "requires_payment_method" || pi.status === "requires_confirmation" || pi.status === "requires_action") {
@@ -396,13 +522,14 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({
                   clientSecret: pi.client_secret,
                   paymentIntentId: pi.id,
-                  finalCents,
+                  finalCents: effectiveFinalChargeCents(pi, amountCentsForKeys),
                 });
               }
               if (pi.status === "canceled") {
                 await bookingRef.update({
                   status: "final_due",
                   "stripe.finalPaymentIntentId": FieldValue.delete(),
+                  "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
                   updatedAt: FieldValue.serverTimestamp(),
                 });
                 continue;
@@ -417,16 +544,11 @@ export async function POST(request: NextRequest) {
           await clearCustomerFinalPiInFlight().catch(() => {});
           return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
         }
-        await bookingRef.update({
-          "stripe.finalPaymentIntentId": paymentIntent.id,
-          "stripe.customerPayLockAt": FieldValue.serverTimestamp(),
-          "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+        await persistFinalPaymentIntentIdIfEligible(paymentIntent.id);
         return NextResponse.json({
           clientSecret: paymentIntent.client_secret,
           paymentIntentId: paymentIntent.id,
-          finalCents,
+          finalCents: effectiveFinalChargeCents(paymentIntent, amountCentsForFinalPi),
         });
       }
     }

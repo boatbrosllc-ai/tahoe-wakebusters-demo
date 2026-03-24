@@ -10,12 +10,14 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
+import * as bookingCache from "@/lib/booking/booking-data-cache";
 
 type ListingData = { title?: string; subtitle?: string; heroUrl?: string; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" };
 
 export function ExperiencesListClient() {
   const [order, setOrder] = useState<string[] | null>(null);
   const [listingBySlug, setListingBySlug] = useState<Record<string, ListingData>>({});
+  const [apiError, setApiError] = useState(false);
   const { setOpen: setBookingModalOpen } = useBookingModal();
 
   useEffect(() => {
@@ -26,9 +28,10 @@ export function ExperiencesListClient() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/experiences")
-      .then((res) => res.json())
+    bookingCache
+      .fetchExperiences()
       .then((data) => {
+        setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
         const map: Record<string, ListingData> = {};
         list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }) => {
@@ -44,7 +47,10 @@ export function ExperiencesListClient() {
         });
         setListingBySlug(map);
       })
-      .catch(() => setListingBySlug({}));
+      .catch(() => {
+        setApiError(true);
+        setListingBySlug({});
+      });
   }, []);
 
   const sortedExperiences = useMemo(() => {
@@ -152,6 +158,11 @@ export function ExperiencesListClient() {
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.4, delay: 0.08 }}
           >
+            {apiError && (
+              <span className="block text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-lg mx-auto" role="status">
+                Prices may not be up to date — refresh to see the latest.
+              </span>
+            )}
             <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
               <Link
                 href="/experiences/lake-austin-pontoon"

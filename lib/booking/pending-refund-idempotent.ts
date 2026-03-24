@@ -50,8 +50,10 @@ export async function upsertPendingRefundRecord(
         lastSeenAt: now,
         occurrences: 1,
         status: "pending",
+        nextRetryAt: now,
       });
     } else {
+      const prev = snap.data() as { nextRetryAt?: unknown };
       tx.set(
         ref,
         {
@@ -59,6 +61,7 @@ export async function upsertPendingRefundRecord(
           reason: stable.reason,
           lastSeenAt: now,
           occurrences: FieldValue.increment(1),
+          ...(!prev.nextRetryAt ? { nextRetryAt: now } : {}),
         },
         { merge: true }
       );

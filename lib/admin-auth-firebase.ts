@@ -7,13 +7,13 @@
 
 import "server-only";
 import { extractAdminSessionCookieValue } from "./admin-cookie-parse";
-import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE } from "@/lib/admin-auth-constants";
+import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE, ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin"; // same app used for Firestore
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 
 export { ADMIN_AUTH_VERIFICATION_UNAVAILABLE };
 
-const COOKIE_NAME = "admin_session";
+const COOKIE_NAME = ADMIN_SESSION_COOKIE_NAME;
 const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
 
 /** Shown when Firebase/Firestore server config is missing or invalid (503/500). */

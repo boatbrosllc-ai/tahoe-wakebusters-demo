@@ -9,8 +9,8 @@ import { getFirestoreExports } from "./firebase-admin";
 
 const LEASE_MS = 2 * 60 * 1000;
 
-function dedupeKey(paymentIntentId?: string): string {
-  return paymentIntentId ?? "cron";
+function dedupeKey(bookingId: string, paymentIntentId?: string): string {
+  return paymentIntentId ?? `cron_${bookingId}`;
 }
 
 /**
@@ -24,7 +24,7 @@ export async function tryBeginFinalFailureNotificationSend(
 ): Promise<boolean> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const ref = db.collection("bookings").doc(bookingId);
-  const key = dedupeKey(paymentIntentId);
+  const key = dedupeKey(bookingId, paymentIntentId);
   const nowMs = Date.now();
 
   return db.runTransaction(async (tx) => {
@@ -58,7 +58,7 @@ export async function finalizeFinalFailureNotification(
   paymentIntentId?: string
 ): Promise<void> {
   const { Timestamp, FieldValue } = getFirestoreExports();
-  const key = dedupeKey(paymentIntentId);
+  const key = dedupeKey(bookingId, paymentIntentId);
   await db.collection("bookings").doc(bookingId).update({
     "stripe.finalFailureNotifiedAt": Timestamp.now(),
     "stripe.finalFailureNotifiedPaymentIntentId": key,

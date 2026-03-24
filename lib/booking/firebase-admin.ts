@@ -25,17 +25,24 @@ function getAdminSync(): AdminModule {
 
 export function getFirebaseApp(): import("firebase-admin").app.App {
   if (_app) return _app;
-  const hasConfig = hasFirebaseConfig();
-  if (!hasConfig) {
-    throw new Error(
-      "Firebase config missing. Set FIREBASE_SERVICE_ACCOUNT_JSON_PATH (path to service account JSON) or FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY."
-    );
-  }
   const admin = getAdminSync();
   const existing = admin.apps[0];
   if (existing) {
     _app = existing as import("firebase-admin").app.App;
     return _app;
+  }
+  /** Firestore emulator: Admin SDK does not need a service account; never set this in production. */
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST?.trim();
+  if (emulatorHost) {
+    const projectId = bookingEnv.firebaseProjectId?.trim() || "demo-test";
+    _app = admin.initializeApp({ projectId });
+    return _app;
+  }
+  const hasConfig = hasFirebaseConfig();
+  if (!hasConfig) {
+    throw new Error(
+      "Firebase config missing. Set FIREBASE_SERVICE_ACCOUNT_JSON_PATH (path to service account JSON) or FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY."
+    );
   }
   try {
     const serviceAccountPath = bookingEnv.firebaseServiceAccountPath;

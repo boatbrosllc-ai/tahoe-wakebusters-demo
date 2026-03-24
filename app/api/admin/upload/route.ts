@@ -5,7 +5,9 @@ import { bookingEnv } from "@/lib/booking/env";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
-/** POST /api/admin/upload — upload one image file. Body: multipart/form-data with "file". Returns { url }. */
+/** POST /api/admin/upload — upload one image file. Body: multipart/form-data with "file". Returns { url }.
+ * Uses Admin SDK (bypasses Storage rules). With root `storage.rules` denying all client access, public URLs
+ * still depend on object/bucket ACL; audit exposure if you return permanent public URLs to the browser. */
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;

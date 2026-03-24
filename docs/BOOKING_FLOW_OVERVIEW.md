@@ -9,6 +9,25 @@ This doc explains how **listings** (experiences), **boats**, **calendars** (chec
 - **Slot** = one time window: date + start hour + duration. Slot id format: `YYYY-MM-DD-startHour-durationHours` (e.g. `2026-02-19-13-4` = Feb 19, 1pm, 4h).
 - **Booking** = one paid (or deposit-paid) reservation. Stored in `bookings` with `experienceId`, `boatId` (when listing has boats), `slotId`, `startDateStr` (trip date from slotId), and `status`.
 
+## Booking entry points (intended use)
+
+| Entry | Use case | Hold / expiry / idempotency notes |
+| --- | --- | --- |
+| **BookingModal** (`create-hold` → Elements or `create-checkout-session`) | Primary path from site header, listings, and `openWithSelection` | Full hold lifecycle: `holdRequestId` for create-hold, session recovery keys, release token, longest-tested path. |
+| **CalendarModal** → `openWithSelection` | Quick date/time from calendar widget | Same modal stack as primary; requires resolved `experienceId` before booking (no null-id fallback). |
+| **`ExperienceCalendarSectionView` direct checkout** | `POST /api/booking/create-checkout-session-direct` when modal is not used | Creates hold + Stripe Checkout in one step; **must** send `holdRequestId` (client-generated, stable per session + selection via `getOrCreateDirectCheckoutHoldRequestId`). Charter-only; ticketed listings are redirected to `/booking`. |
+| **Booking page / Stripe return** (`BookingStripeReturnHandler`, success page) | Post-redirect payment confirmation | Uses `complete-after-payment` with `paymentIntentId` and optional claim token; **no** `holdId` required when PaymentIntent metadata carries `holdId`. |
+
+Direct checkout and modal paths should stay aligned on hold expiry messaging and freshness checks where possible; consolidating duplicate UI into BookingModal is optional but reduces drift.
+
+## Deploy runbook: legacy fallback flags (`DISABLE_LEGACY_*`)
+
+**Do not** rely on a startup crash to enforce flags. Sequence:
+
+1. Run **`GET /api/admin/backfill-status`** (admin session) until `bookingsMissingStartDateStr` and `holdsMissingStartDateStr` are both **0** (or run `/api/admin/backfill-start-date-str` until dry-run shows zero remaining per collection).
+2. Set **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** and **`DISABLE_LEGACY_HOLDS_FALLBACK=true`** in the host environment.
+3. Redeploy. **Greenfield** databases with no legacy rows may set both flags to `true` from the first deployment.
+
 ## Data flow: from selection to booking
 
 ### 1. Checkout calendar (site)
@@ -35,7 +54,7 @@ This doc explains how **listings** (experiences), **boats**, **calendars** (chec
 
 ### 3. Payment and booking creation
 
-- **Full payment (Stripe Checkout):** `checkout.session.completed` webhook creates the **booking** inline: experienceId, boatId, slotId, **startDateStr** (from `parseSlotId(hold.slotId).dateStr`), customer, pricing, status `paid`, and updates the slot doc to `booked` with `bookingId`.
+- **Full payment (Stripe Checkout):** `checkout.session.completed` (paid, active hold) calls **`runCheckoutSessionActiveHoldConversion` → `convertHoldToBooking`**, which writes the booking, updates the slot, and applies shared/ticketed departure logic consistently with other conversion paths.
 - **50/50 (deposit):** `payment_intent.succeeded` webhook calls **convertHoldToBooking**, which:
   - Reads hold, experience, boat, rate, slot
   - Builds booking with experienceId, boatId, slotId, **startDateStr** (from parsed slotId), status `final_due` (or `paid` for full), and writes it; updates slot to `booked`.
@@ -65,6 +84,26 @@ This doc explains how **listings** (experiences), **boats**, **calendars** (chec
 - **Slot id format** (`lib/booking/experience-slots.ts`): `YYYY-MM-DD-startHour-durationHours`. Used by:
   - BookingModal (buildSlotId when building slot id for selection)
   - All APIs that parse or build slotId (create-hold, slots, convert-hold-to-booking, admin bookings, calendar-events)
+
+## Paid-but-unbooked edge cases (`hold_expired_after_payment`)
+
+This `pendingRefunds` reason and operational alert fire when **complete-after-payment** (or similar) throws `Hold has expired` after Stripe has already charged the customer — for example the hold clock expired before conversion, or a rare race with hold cleanup.
+
+**Typical causes**
+
+- The hold’s `expiresAt` passed before `convertHoldToBooking` ran, and the payment succeeded outside the normal grace window.
+- Cleanup cron would normally expire the hold and release the slot; if a **deposit** or **full** PaymentIntent id is already stored on the hold, cleanup **does not** release the slot automatically — it sets `rollbackPending: true` and raises an ops alert so staff can confirm whether payment succeeded and whether a booking should be created or refunded.
+
+**`convertHoldToBooking` grace window**
+
+- If the PaymentIntent is **succeeded** in Stripe and conversion runs within **60 seconds** after `expiresAt`, conversion is allowed even when the clock is slightly past expiry (reduces paid-but-unbooked from timing races).
+
+**Admin remediation**
+
+1. In Stripe, confirm the PaymentIntent status and amount.
+2. In Firestore, find the hold (`holds/{holdId}`) and any booking linked by `stripe.paymentIntentId` / `holdId` on `bookings`.
+3. If the slot is still held for this hold and there is no booking, either complete conversion manually (if appropriate) or refund via Stripe and expire/release the hold after reconciliation.
+4. Complete **`POST /api/admin/backfill-start-date-str`** until zero documents remain, then set **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** before launch so legacy booking scans cannot miss overlaps (see `docs/BOOKING_AVAILABILITY.md`).
 
 ## What to check when something is wrong
 

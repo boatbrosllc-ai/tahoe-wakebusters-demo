@@ -32,9 +32,19 @@ function GoogleGIcon({ className }: { className?: string }) {
   );
 }
 
-export function TrustRow({ className }: { className?: string }) {
+export function TrustRow({
+  className,
+  tone = "dark",
+}: {
+  className?: string;
+  /** `dark` = hero/video; `light` = light pages (e.g. /booking) */
+  tone?: "dark" | "light";
+}) {
+  const muted = tone === "dark" ? "text-white/80" : "text-brand-muted";
+  const strong = tone === "dark" ? "text-white" : "text-brand-dark";
+  const sep = tone === "dark" ? "text-white/50" : "text-brand-dark/25";
   return (
-    <div className={cn("flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm text-white/80", className)}>
+    <div className={cn("flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm", muted, className)}>
       <span className="inline-flex items-center gap-2">
         <GoogleGIcon className="h-5 w-5 sm:h-6 sm:w-6" />
         <span className="inline-flex items-center gap-1">
@@ -43,13 +53,13 @@ export function TrustRow({ className }: { className?: string }) {
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
           <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
-          <span className="ml-1 font-medium text-white">{location.rating}</span>
-          <span className="ml-1.5 font-semibold text-white">{location.reviewCount}+ reviews</span>
+          <span className={cn("ml-1 font-medium", strong)}>{location.rating}</span>
+          <span className={cn("ml-1.5 font-semibold", strong)}>{location.reviewCount}+ reviews</span>
         </span>
       </span>
-      <span className="text-white/50" aria-hidden>·</span>
+      <span className={sep} aria-hidden>·</span>
       <span>Local Austin crew</span>
-      <span className="text-white/50" aria-hidden>·</span>
+      <span className={sep} aria-hidden>·</span>
       <span>Captain included</span>
     </div>
   );

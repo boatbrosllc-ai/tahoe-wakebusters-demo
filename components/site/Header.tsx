@@ -23,10 +23,18 @@ const navLinks = [
   { href: "/contact", label: "Contact" },
 ];
 
-export function Header() {
+function documentHasAdminSessionCookie(): boolean {
+  if (typeof document === "undefined") return false;
+  // Match server cookie name (see `ADMIN_SESSION_COOKIE_NAME`) without false-positive `xadmin_session=`.
+  return /(?:^|;\s*)admin_session=/.test(document.cookie);
+}
+
+export function Header({ adminSessionCookiePresent = false }: { adminSessionCookiePresent?: boolean }) {
   const pathname = usePathname();
   const [accountOpen, setAccountOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(() =>
+    adminSessionCookiePresent ? null : false,
+  );
   const accountRef = useRef<HTMLDivElement>(null);
   const {
     open: bookingModalOpen,
@@ -50,14 +58,25 @@ export function Header() {
   };
 
   useEffect(() => {
+    const hasCookie =
+      adminSessionCookiePresent ||
+      (typeof document !== "undefined" && documentHasAdminSessionCookie());
+    if (!hasCookie) {
+      setIsAdmin(false);
+      return;
+    }
     void revalidateAdminSession().then(applySessionState);
-  }, []);
+  }, [adminSessionCookiePresent]);
 
   useEffect(() => {
+    const cookiePresent =
+      adminSessionCookiePresent ||
+      (typeof document !== "undefined" && documentHasAdminSessionCookie());
+    if (!cookiePresent && isAdmin !== true) return;
     return subscribeAdminAuthRevalidate(() => {
       void revalidateAdminSession().then(applySessionState);
     });
-  }, []);
+  }, [adminSessionCookiePresent, isAdmin]);
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -165,6 +184,7 @@ export function Header() {
               height={64}
               className="h-10 w-10 sm:h-11 sm:w-11 lg:h-14 lg:w-14 object-contain object-left"
               sizes="(max-width: 1023px) 40px, 56px"
+              priority
               fetchPriority="high"
             />
           </Link>

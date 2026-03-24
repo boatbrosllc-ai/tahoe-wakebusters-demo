@@ -8,6 +8,9 @@ import type Stripe from "stripe";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 import type { BookingCardDisplay } from "@/lib/booking/types";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
+import { bookingWarn } from "@/lib/booking/debug";
+import type { BookingPricing } from "@/lib/booking/types";
 
 export type HoldPricingFallback = {
   pricing?: { totalCents?: number };
@@ -56,13 +59,13 @@ export function customerOverrideFromPaymentIntent(
 
 /** Same deposit vs full classification as {@link buildConvertHoldInputFromSucceededPaymentIntent} (metadata + amount vs total). */
 export function resolveUsesDepositInputFromPaymentIntent(
-  pi: Pick<Stripe.PaymentIntent, "metadata" | "amount">,
+  pi: Pick<Stripe.PaymentIntent, "metadata" | "amount"> & { id?: string },
   holdPricingFallback: HoldPricingFallback
 ): boolean {
-  const paymentStage = (pi.metadata?.payment_stage ?? "") as string;
+  const paymentStageRaw = (pi.metadata?.payment_stage ?? "") as string;
+  const paymentStage = paymentStageRaw.trim();
   const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
   const amountCharged = pi.amount ?? 0;
-  const isDepositByStage = paymentStage === "deposit";
 
   let totalCents: number;
   if (totalCentsFromMeta > 0) {
@@ -71,13 +74,56 @@ export function resolveUsesDepositInputFromPaymentIntent(
     const tipCents = typeof holdPricingFallback.tipCents === "number" ? holdPricingFallback.tipCents : 0;
     const discountCents =
       typeof holdPricingFallback.discountCents === "number" ? holdPricingFallback.discountCents : 0;
-    totalCents = Math.max(0, holdPricingFallback.pricing.totalCents + tipCents - discountCents);
+    totalCents = computeFinalChargeTotalCentsFromHoldPricing(
+      holdPricingFallback.pricing as BookingPricing,
+      tipCents,
+      discountCents
+    );
   } else {
     totalCents = amountCharged;
   }
 
-  const isDepositByAmount = totalCents > 0 && amountCharged > 0 && amountCharged < totalCents;
-  return isDepositByStage || (paymentStage !== "full" && paymentStage !== "final" && isDepositByAmount);
+  if (
+    holdPricingFallback == null &&
+    paymentStage === "" &&
+    totalCentsFromMeta <= 0
+  ) {
+    bookingWarn("convert-hold", "deposit vs full: no totalCents metadata and no hold pricing — defaulting to full payment (avoid amount ratio heuristic)", {
+      paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+    });
+    return false;
+  }
+
+  if (paymentStage === "deposit") return true;
+  if (paymentStage === "full" || paymentStage === "final") return false;
+
+  if (paymentStage !== "") {
+    return false;
+  }
+
+  if (holdPricingFallback == null) {
+    bookingWarn("convert-hold", "deposit vs full: no hold pricing context (classifying as full payment)", {
+      paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+      totalCentsFromMeta,
+      amountCharged,
+    });
+    return false;
+  }
+
+  void import("@/lib/booking/operational-alerts")
+    .then(({ writeOperationalAlert }) =>
+      writeOperationalAlert({
+        type: "deposit_vs_full_missing_payment_stage_metadata",
+        paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+        totalCents,
+        amountCharged,
+        source: "resolveUsesDepositInputFromPaymentIntent",
+        message:
+          "payment_stage metadata absent on PaymentIntent; defaulting to full payment (avoids misclassifying full as deposit).",
+      })
+    )
+    .catch(() => {});
+  return false;
 }
 
 export type HoldStripeIntentIds = {
@@ -108,6 +154,10 @@ export function paymentIntentMatchesHoldForConversion(
   }
 
   const holdVer = typeof hold.paymentAttemptVersion === "number" ? hold.paymentAttemptVersion : 0;
+  if (holdVer >= 1 && !dep && !full) {
+    return { ok: false };
+  }
+
   const piStr = pi.metadata?.[HOLD_PAYMENT_ATTEMPT_VERSION_META] ?? "";
   const piVer = piStr === "" ? NaN : parseInt(piStr, 10);
 
@@ -116,8 +166,10 @@ export function paymentIntentMatchesHoldForConversion(
       return { ok: false };
     }
   } else {
-    // Legacy holds without paymentAttemptVersion: require at least one intent id on the hold
-    // (race where ids are not yet written is handled by holdVer >= 1 + metadata match on new PIs).
+    /**
+     * @deprecated Legacy holds without paymentAttemptVersion — remove this branch once all holds have
+     * paymentAttemptVersion >= 1 in production (see HOLD_PAYMENT_ATTEMPT_VERSION_META).
+     */
     if (!dep && !full) {
       return { ok: false };
     }
@@ -182,7 +234,11 @@ export function buildConvertHoldInputFromSucceededPaymentIntent(
     const tipCents = typeof holdPricingFallback.tipCents === "number" ? holdPricingFallback.tipCents : 0;
     const discountCents =
       typeof holdPricingFallback.discountCents === "number" ? holdPricingFallback.discountCents : 0;
-    totalCents = Math.max(0, holdPricingFallback.pricing.totalCents + tipCents - discountCents);
+    totalCents = computeFinalChargeTotalCentsFromHoldPricing(
+      holdPricingFallback.pricing as BookingPricing,
+      tipCents,
+      discountCents
+    );
   } else {
     totalCents = amountCharged;
   }
