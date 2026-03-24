@@ -49,7 +49,8 @@ export type BookingLogStep =
   | "run-final-charges"
   | "client"
   | "slot-availability"
-  | "receipt";
+  | "receipt"
+  | "stripe-customer-index";
 
 /** Log an info-level booking step. Suppressed in production unless BOOKING_LOG_LEVEL=verbose. */
 export function bookingLog(

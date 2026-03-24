@@ -924,12 +924,15 @@ export async function POST(request: NextRequest) {
     const incidentCode = generateIncidentCode();
     const stripeMeta =
       err != null && typeof err === "object" && "type" in err && typeof (err as { type?: unknown }).type === "string"
-        ? {
-            stripeType: (err as { type: string }).type,
-            ...(typeof (err as { code?: unknown }).code === "string"
-              ? { stripeCode: (err as { code: string }).code }
-              : {}),
-          }
+        ? (() => {
+            const stripeErr = err as { type: string; code?: unknown };
+            const stripeCode =
+              typeof stripeErr.code === "string" ? stripeErr.code : undefined;
+            return {
+              stripeType: stripeErr.type,
+              ...(stripeCode !== undefined ? { stripeCode } : {}),
+            };
+          })()
         : {};
     bookingError("create-payment-intent", "create payment intent failed", err, {
       message,

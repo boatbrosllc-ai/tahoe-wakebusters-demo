@@ -598,14 +598,18 @@ export function useHoldCreation(
       const fin = optionsRef.current;
       if (pendingModalCloseWhileProceedRef.current) {
         pendingModalCloseWhileProceedRef.current = false;
-        const id = fin.holdId;
-        if (id) {
-          const explicit = createdHoldForRelease;
-          const useExplicit = explicit != null && explicit.holdId === id;
+        const explicit = createdHoldForRelease;
+        const releaseTargetId = explicit?.holdId ?? fin.holdId;
+        if (releaseTargetId) {
           void releaseCreatedHold(
-            useExplicit ? explicit.holdId : undefined,
-            useExplicit ? explicit.releaseToken : undefined,
-          ).then(() => fin.onOpenChange(false));
+            explicit?.holdId ?? undefined,
+            explicit != null ? explicit.releaseToken : undefined,
+          ).then((ok) => {
+            if (ok && explicit?.holdId && fin.lastHoldRef.current?.holdId === explicit.holdId) {
+              fin.lastHoldRef.current = null;
+            }
+            fin.onOpenChange(false);
+          });
         } else {
           fin.onOpenChange(false);
         }

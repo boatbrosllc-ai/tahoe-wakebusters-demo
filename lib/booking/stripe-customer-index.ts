@@ -1,7 +1,7 @@
 import type { DocumentReference } from "firebase-admin/firestore";
 import type Stripe from "stripe";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { bookingWarn, redactEmail } from "@/lib/booking/debug";
+import { bookingWarn, redactEmail, type BookingLogStep } from "@/lib/booking/debug";
 
 const STRIPE_CUSTOMER_INDEX_TTL_MS = 730 * 24 * 60 * 60 * 1000;
 
@@ -22,7 +22,7 @@ export async function verifyIndexedStripeCustomerOrClear(
   indexRef: DocumentReference,
   emailLower: string,
   customerId: string,
-  logContext = "stripe-customer-index"
+  logContext: BookingLogStep = "stripe-customer-index"
 ): Promise<string | null> {
   const id = customerId.trim();
   if (!id) return null;

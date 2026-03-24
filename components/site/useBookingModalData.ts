@@ -33,6 +33,10 @@ export type UseBookingModalDataSelection = {
   selectedBoatId: string | null;
 };
 
+export type ConfirmSlotsFreshResult =
+  | { ok: true; slots: SlotDto[] }
+  | { ok: false; error: string };
+
 export function useBookingModalData(
   open: boolean,
   initialSelection: BookingModalInitialSelection | null | undefined,
@@ -622,11 +626,12 @@ export function useBookingModalData(
   }, []);
 
   /** Invalidate slot cache and fetch immediately (e.g. before payment step when data may be stale). */
-  const confirmSlotsFresh = useCallback(async (): Promise<{ slots: SlotDto[] }> => {
+  const confirmSlotsFresh = useCallback(async (): Promise<ConfirmSlotsFreshResult> => {
     const exp = selection?.selectedExperience;
-    if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return { slots: [] };
+    if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return { ok: true, slots: [] };
     bookingCache.invalidate(`slots|${exp.id}|`);
     setSlotsLoading(true);
+    setSlotsLoadError(null);
     try {
       const data = await bookingCache.fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, {
         ticketed: isTicketedExperienceForBooking(exp),
@@ -635,7 +640,36 @@ export function useBookingModalData(
       setMonthSlots(slots);
       setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
       setSlotsFetchedAt(Date.now());
-      return { slots };
+      setSlotsLoadError(null);
+      return { ok: true, slots };
+    } catch (err: unknown) {
+      if ((err as { name?: string })?.name === "AbortError") {
+        const aborted = "Could not refresh availability. Tap Continue again to retry.";
+        setSlotsLoadError(aborted);
+        return { ok: false, error: aborted };
+      }
+      const apiBody = (err as { apiBody?: { error?: string; hint?: string; firebaseDetail?: { summary?: string } } })?.apiBody;
+      const status = (err as { status?: number }).status;
+      bookingError("client", "confirmSlotsFresh fetch failed", err, {
+        experienceId: exp.id,
+        startDate: viewMonthStartStr,
+        endDate: viewMonthEndStr,
+        status,
+        error: apiBody?.error,
+        hint: apiBody?.hint,
+        firebaseSummary: apiBody?.firebaseDetail?.summary,
+      });
+      const head =
+        (err as { name?: string })?.name === "TimeoutError"
+          ? "Availability is taking a moment to load."
+          : apiBody?.error ?? (err instanceof Error ? err.message : "Could not refresh availability.");
+      const parts = [head, apiBody?.hint, apiBody?.firebaseDetail?.summary].filter(Boolean);
+      const detail = parts.join(" ").replace(/\s+/g, " ").trim();
+      const message = detail
+        ? `${detail} Tap Continue again to retry.`
+        : "Could not refresh availability. Tap Continue again to retry.";
+      setSlotsLoadError(message);
+      return { ok: false, error: message };
     } finally {
       setSlotsLoading(false);
     }

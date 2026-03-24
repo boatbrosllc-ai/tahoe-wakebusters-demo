@@ -60,6 +60,13 @@ const SESSION_SUCCESS_KEY = "bb_booking_success";
 /** Success snapshot is only for immediate post-booking UX; claim token remains valid longer server-side. */
 const SESSION_SUCCESS_MAX_AGE_MS = 7 * 60 * 1000;
 
+/** Default view month when reinitializing the calendar — matches America/Chicago used for slots and dates. */
+function viewMonthFromChicagoToday(): { year: number; month: number } {
+  const s = getChicagoToday();
+  const [y, m] = s.split("-").map(Number);
+  return { year: y, month: m };
+}
+
 /** Prefer claim token from API; fall back to legacy receiptToken field. */
 function receiptTokenFromCompleteAfterPaymentPayload(data: {
   receiptClaimToken?: unknown;
@@ -504,9 +511,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
       if (initialSelection.date) {
         setSelectedDate(initialSelection.date);
-        const d = new Date(initialSelection.date + "T12:00:00");
-        setViewMonthYear(d.getFullYear());
-        setViewMonthMonth(d.getMonth() + 1);
+        const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(initialSelection.date);
+        if (m) {
+          setViewMonthYear(Number(m[1]));
+          setViewMonthMonth(Number(m[2]));
+        } else {
+          const { year, month } = viewMonthFromChicagoToday();
+          setViewMonthYear(year);
+          setViewMonthMonth(month);
+        }
       }
     }
   }, [open, initialSelection, initialSelection?.date, experiences]);
@@ -529,9 +542,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   useEffect(() => {
     if (!open || !initialSelection?.slotId || !openSlotsForDate.length) return;
-    const slot = openSlotsForDate.find((s) => s.id === initialSelection.slotId);
+    if (!openSlotsForDate.some((s) => s.id === initialSelection.slotId)) return;
+    const slot = monthSlots.find((s) => s.id === initialSelection.slotId);
     if (slot) setSelectedSlot(slot);
-  }, [open, initialSelection, openSlotsForDate]);
+  }, [open, initialSelection, openSlotsForDate, monthSlots]);
 
   // Use shared date-range helper so month boundaries match API and other booking flows.
   const { start: viewMonthStartStr, end: viewMonthEndStr } = useMemo(
@@ -605,7 +619,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   useEffect(() => {
     if (bookingEffectsPhase === "checkout") return;
     if (!isTicketed || !selectedDate || openSlotsForDate.length === 0) return;
-    const first = openSlotsForDate[0];
+    const firstOpen = openSlotsForDate[0];
+    const first = monthSlots.find((s) => s.id === firstOpen.id);
+    if (!first) return;
     const depHour = selectedExperience?.departureHour;
     if (depHour != null && typeof depHour === "number") {
       const parsed = parseSlotId(first.id);
@@ -618,7 +634,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     }
     setSelectedSlot(first);
-  }, [bookingEffectsPhase, isTicketed, selectedDate, openSlotsForDate, selectedExperience?.departureHour, selectedExperience?.id]);
+  }, [
+    bookingEffectsPhase,
+    isTicketed,
+    selectedDate,
+    openSlotsForDate,
+    monthSlots,
+    selectedExperience?.departureHour,
+    selectedExperience?.id,
+  ]);
 
   const rateForCalendar = useMemo(
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
@@ -1209,14 +1233,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     pendingRecoveryBoatIdRef.current = null;
 
     const applyModalOpenSyncReset = () => {
-      if (typeof sessionStorage !== "undefined") {
-        try {
-          sessionStorage.removeItem(SESSION_SUCCESS_KEY);
-          sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
-        } catch {
-          /* ignore */
-        }
-      }
       if (initialSelection?.date) {
         const isTicketedPreselect = isTicketedExperienceForBooking({
           pricingType: initialSelection.pricingType,
@@ -1232,9 +1248,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       resetBookingDataForModalOpen();
       setSelectedBoat(null);
       setSelectedDate(null);
-      const now = new Date();
-      setViewMonthYear(now.getFullYear());
-      setViewMonthMonth(now.getMonth() + 1);
+      {
+        const { year, month } = viewMonthFromChicagoToday();
+        setViewMonthYear(year);
+        setViewMonthMonth(month);
+      }
       setSelectedRateIdForCalendar(null);
       setSelectedSlot(null);
       setPartySize(1);
@@ -1302,6 +1320,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       const skipSessionHydration = Boolean(initialSelection?.experienceId);
 
       if (skipSessionHydration && typeof sessionStorage !== "undefined") {
+        try {
+          sessionStorage.removeItem(SESSION_SUCCESS_KEY);
+        } catch (err) {
+          bookingError("client", "sessionStorage remove success key failed (skip hydration)", err, {});
+        }
         try {
           if (sessionStorage.getItem(SESSION_HOLD_ID_KEY)) {
             void releaseHoldFromModalSessionStorage().catch((err) => {
@@ -1925,9 +1948,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setSelectedSlot(null);
       setSelectedRateIdForCalendar(null);
       setSelectedBoat(null);
-      const now = new Date();
-      setViewMonthYear(now.getFullYear());
-      setViewMonthMonth(now.getMonth() + 1);
+      {
+        const { year, month } = viewMonthFromChicagoToday();
+        setViewMonthYear(year);
+        setViewMonthMonth(month);
+      }
       setStep(1);
       return;
     }
@@ -2000,9 +2025,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setSelectedSlot(null);
     setSelectedRateIdForCalendar(null);
     setSelectedBoat(null);
-    const now = new Date();
-    setViewMonthYear(now.getFullYear());
-    setViewMonthMonth(now.getMonth() + 1);
+    {
+      const { year, month } = viewMonthFromChicagoToday();
+      setViewMonthYear(year);
+      setViewMonthMonth(month);
+    }
     setSelectedExperience(exp);
     setStep(2);
     analytics.bookingStep1CategorySelected();
@@ -2033,7 +2060,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setConfirmingAvailability(true);
       setPaymentError(null);
       try {
-        const { slots } = await confirmSlotsFresh();
+        const fresh = await confirmSlotsFresh();
+        if (!fresh.ok) {
+          setPaymentError(fresh.error);
+          return;
+        }
+        const { slots } = fresh;
         if (selectedSlot && selectedDate) {
           const stillOpen = slots.some((s) => {
             if (s.id !== selectedSlot.id || s.status !== "open") return false;
@@ -2076,7 +2108,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setConfirmingAvailability(true);
       setPaymentError(null);
       try {
-        const { slots } = await confirmSlotsFresh();
+        const fresh = await confirmSlotsFresh();
+        if (!fresh.ok) {
+          setPaymentError(fresh.error);
+          return;
+        }
+        const { slots } = fresh;
         if (selectedSlot && selectedDate) {
           const stillOpen = slots.some((s) => {
             if (s.id !== selectedSlot.id || s.status !== "open") return false;
@@ -2743,7 +2780,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               <button
                                 key={slot.startAt}
                                 type="button"
-                                onClick={() => setSelectedSlot(slot)}
+                                onClick={() => {
+                                  const full = monthSlots.find((s) => s.id === slot.id);
+                                  if (full) setSelectedSlot(full);
+                                }}
                                 className={cn(
                                   "rounded-lg border sm:border-2 px-2.5 py-2 text-xs sm:text-sm font-medium transition-all min-h-[40px] sm:min-h-[44px] touch-manipulation sm:px-3 sm:py-2.5 md:px-4 md:py-2.5",
                                   isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
