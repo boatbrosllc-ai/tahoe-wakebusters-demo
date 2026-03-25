@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
 import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
+import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
 import "./globals.css";
 
 /** Must match `RELEASE_TRAIN` in `@stripe/stripe-js` so `loadStripe()` reuses this tag (CSP + strict-dynamic). */
@@ -16,6 +17,8 @@ const syne = Syne({
   variable: "--font-display",
   preload: true,
 });
+
+let didLogGaSkip = false;
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com"),
@@ -46,6 +49,17 @@ export default async function RootLayout({
   const gaMeasurementId = getGaMeasurementId();
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
+  if (!gaMeasurementId && !didLogGaSkip) {
+    didLogGaSkip = true;
+    const raw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+    const trimmed = raw == null ? "(unset)" : raw.trim();
+    console.warn(
+      `[ga] Skipping GA injection in app/layout.tsx. NEXT_PUBLIC_GA_MEASUREMENT_ID is empty/disabled/malformed (value: ${JSON.stringify(
+        trimmed
+      )}).`
+    );
+  }
+
   return (
     <html lang="en" className={syne.variable}>
       <body>
@@ -70,6 +84,7 @@ export default async function RootLayout({
             </Script>
           </>
         ) : null}
+        <GaPageViewTracker />
         {children}
       </body>
     </html>

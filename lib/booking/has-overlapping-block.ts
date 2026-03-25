@@ -17,12 +17,13 @@ export class BlockCheckUnavailableError extends Error {
  * Returns true if any block exists for the experience (or any id variant) that overlaps [slotStart, slotEnd],
  * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
  *
- * Queries `blocks` by `experienceId` and filters overlap in memory. If Firestore cannot run the query
+ * Queries `blocks` by `experienceId` with `startAt`/`endAt` bounds for [slotStart, slotEnd], then filters
+ * by boat in memory. If Firestore cannot run the query
  * (e.g. failed-precondition / index), throws `BlockCheckUnavailableError` so callers return 503.
  */
 export async function hasOverlappingBlock(opts: {
   db: Firestore;
-  /** Retained for callers; not used for the query (see module doc). */
+  /** Used for Firestore `startAt`/`endAt` bounds on the blocks query. */
   Timestamp: TimestampConstructor;
   experienceId: string;
   /** Same experience under slug vs doc id, etc. — blocks may be stored under any variant. */
@@ -32,7 +33,7 @@ export async function hasOverlappingBlock(opts: {
   slotEnd: Date;
   get?: (q: Query) => Promise<QuerySnapshot>;
 }): Promise<boolean> {
-  const { db, experienceId, slotStart, slotEnd, get } = opts;
+  const { db, experienceId, slotStart, slotEnd, get, Timestamp } = opts;
   const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
   const slotStartMs = slotStart.getTime();
   const slotEndMs = slotEnd.getTime();
@@ -53,14 +54,17 @@ export async function hasOverlappingBlock(opts: {
       const startAt = b.startAt?.toDate?.();
       const endAt = b.endAt?.toDate?.();
       if (!startAt || !endAt) continue;
-      if (startAt.getTime() >= slotEndMs || endAt.getTime() <= slotStartMs) continue;
       return true;
     }
     return false;
   };
 
   const runQuery = async (expIdForQuery: string): Promise<boolean> => {
-    const query = db.collection("blocks").where("experienceId", "==", expIdForQuery);
+    const query = db
+      .collection("blocks")
+      .where("experienceId", "==", expIdForQuery)
+      .where("startAt", "<=", Timestamp.fromDate(slotEnd))
+      .where("endAt", ">=", Timestamp.fromDate(slotStart));
 
     try {
       const snap = await getSnap(query);

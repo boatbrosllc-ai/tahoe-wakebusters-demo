@@ -7,6 +7,7 @@ import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/
 import type { Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import {
@@ -105,7 +106,13 @@ export async function GET(request: NextRequest) {
           ),
     ]);
 
-    const total = exp.maxCapacity ?? exp.maxGuests ?? 36;
+    const total = getMaxGuestsForExperience({
+      pricingType: exp.pricingType,
+      maxCapacity: exp.maxCapacity,
+      maxGuests: exp.maxGuests,
+      slug: exp.slug,
+      title: exp.title,
+    });
 
     // Merge primary and legacy hold docs; dedup by id; backfill missing startDateStr.
     const holdDocMap = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();

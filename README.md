@@ -9,7 +9,7 @@ Next.js 14 App Router marketing site for Boat Bros ATX: Lake Austin boat rentals
 - **Framer Motion** for subtle animations
 - **next/image** for all images
 - Content in `content/*.ts` (ready to swap to Sanity/Contentful later)
-- Analytics: `lib/analytics.ts` (event logger abstraction; plug in GA4/GTM/Plausible later)
+- Analytics: `lib/analytics.ts` (GA4 event logger; pushes to `dataLayer` and optionally calls Plausible)
 
 ## Install and run
 
@@ -119,12 +119,39 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
 
 ## Analytics events
 
+### GA4 bootstrap (page views + stream selection)
+
+- `app/layout.tsx` injects the GA4 `gtag/js` script and inline bootstrap when `getGaMeasurementId()` returns a valid ID.
+- `lib/ga-measurement-id.ts` reads `NEXT_PUBLIC_GA_MEASUREMENT_ID`:
+  - Unset: uses the default GA4 measurement ID (in both local dev and production).
+  - Set to a valid GA4 measurement ID (`G-XXXXXXXXXX`): overrides the stream.
+  - Set to `off` or `0` (or empty): disables GA injection (so analytics won’t fire).
+  - Malformed values: are logged and treated as disabled.
+- Production guard: `scripts/check-production-env.js` fails the check in production when `NEXT_PUBLIC_GA_MEASUREMENT_ID` is empty/disabled/malformed.
+
+Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it sends `page_view` updates only when `window.gtag` is available, and de-dupes the initial render).
+
+### Conversion events
+
 - `book_cta_click` – source, page, experience
 - `call_click` – source, page
 - `lead_submit` – source, page
 - `contact_submit` – source
 
-Implementation: `lib/analytics.ts`. No vendor hardcoding; add `window.gtag` / `window.plausible` etc. in that file when ready.
+Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA is loaded, and also pushes the same payload to `window.dataLayer` for inspection/debugging.
+
+### Verification checklist
+
+Production
+- Run `node scripts/check-production-env.js` and confirm it passes.
+- Confirm GA injection is not being skipped in server logs.
+- Navigate between routes and confirm GA4 `page_view` updates on client-side transitions.
+- Click-to-call and booking CTAs should emit `call_click` / `book_cta_click` events with the expected `source` and `page`.
+
+Local
+- For GA testing: leave `NEXT_PUBLIC_GA_MEASUREMENT_ID` unset (uses the default) or set it to another valid `G-XXXXXXXXXX` ID.
+- To avoid polluting GA: set `NEXT_PUBLIC_GA_MEASUREMENT_ID=off` (or `0`).
+- Confirm `page_view` fires when navigating between routes.
 
 ## Content and CMS
 

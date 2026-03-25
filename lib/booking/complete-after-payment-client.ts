@@ -1,9 +1,12 @@
+"use client";
+
 /**
  * Client-side complete-after-payment flow with processing (HTTP 202) polling.
  * Shared by BookingStripeReturnHandler and BookingModal for consistent UX.
  */
 
 import { siteConfig } from "@/config/site";
+import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 
 export const COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS = 3000;
 export const COMPLETE_AFTER_POLL_MAX_INTERVAL_MS = 15_000;
@@ -329,6 +332,11 @@ export async function completeAfterPaymentWithPolling(options: {
 
       if (pollRes.ok && pollJson?.success === true) {
         signal.removeEventListener("abort", onParentAbort);
+        const experienceIdOk =
+          typeof pollJson.experienceId === "string" && pollJson.experienceId.trim()
+            ? pollJson.experienceId.trim()
+            : undefined;
+        if (experienceIdOk) invalidateBookingCaches(experienceIdOk);
         return {
           kind: "success",
           data: {
@@ -336,7 +344,7 @@ export async function completeAfterPaymentWithPolling(options: {
             bookingId: pollJson.bookingId ?? null,
             receiptClaimToken: pollJson.receiptClaimToken ?? null,
             receiptToken: pollJson.receiptToken ?? null,
-            experienceId: typeof pollJson.experienceId === "string" ? pollJson.experienceId : undefined,
+            experienceId: experienceIdOk,
             paymentSummary: pollJson.paymentSummary,
             message: typeof pollJson.message === "string" ? pollJson.message : undefined,
             alreadyConverted: pollJson.alreadyConverted,
@@ -376,6 +384,9 @@ export async function completeAfterPaymentWithPolling(options: {
   }
 
   if (res.ok && json?.success === true) {
+    const experienceIdOk =
+      typeof json.experienceId === "string" && json.experienceId.trim() ? json.experienceId.trim() : undefined;
+    if (experienceIdOk) invalidateBookingCaches(experienceIdOk);
     return {
       kind: "success",
       data: {
@@ -383,7 +394,7 @@ export async function completeAfterPaymentWithPolling(options: {
         bookingId: json.bookingId ?? null,
         receiptClaimToken: json.receiptClaimToken ?? null,
         receiptToken: json.receiptToken ?? null,
-        experienceId: typeof json.experienceId === "string" ? json.experienceId : undefined,
+        experienceId: experienceIdOk,
         paymentSummary: json.paymentSummary,
         message: typeof json.message === "string" ? json.message : undefined,
         alreadyConverted: json.alreadyConverted,

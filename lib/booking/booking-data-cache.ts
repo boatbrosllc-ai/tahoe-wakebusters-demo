@@ -94,7 +94,7 @@ function getApiBaseUrl(): string {
 }
 
 /** Exported for UI copy: client calendar hints may lag this long behind server truth. */
-export const STALE_MS_SLOTS = 3_500;
+export const STALE_MS_SLOTS = 1_500;
 
 const STALE_MS = {
   experiences: 60_000,

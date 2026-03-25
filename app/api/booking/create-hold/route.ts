@@ -1198,6 +1198,15 @@ export async function POST(request: NextRequest) {
           }
         }
       }
+      let charterDayLockRef: import("firebase-admin").firestore.DocumentReference | null = null;
+      if (isListingBoatFlow && input.boatId && parsedSlotForHold) {
+        charterDayLockRef = db
+          .collection("boats")
+          .doc(input.boatId)
+          .collection("dayLocks")
+          .doc(parsedSlotForHold.dateStr);
+        await tx.get(charterDayLockRef);
+      }
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
@@ -1429,6 +1438,9 @@ export async function POST(request: NextRequest) {
           bookingId: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
         });
+        if (charterDayLockRef) {
+          tx.set(charterDayLockRef, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        }
       } else {
         if (!isExperienceOnly && !isListingBoatFlow) throw new Error("Slot not found");
         const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
@@ -1489,6 +1501,9 @@ export async function POST(request: NextRequest) {
           bookingId: null,
           updatedAt: FieldValue.serverTimestamp(),
         });
+        if (charterDayLockRef) {
+          tx.set(charterDayLockRef, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        }
       }
       tx.set(db.collection("holds").doc(holdId), {
         ...holdPayload,

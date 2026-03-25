@@ -508,6 +508,7 @@ export async function GET(request: NextRequest) {
             tAllExpIds.map(expId =>
               db.collection("holds")
                 .where("experienceId", "==", expId)
+                .where("status", "==", "active")
                 .where("startDateStr", ">=", ticketedStartDateStrLower)
                 .where("startDateStr", "<=", endDate)
                 .get()
@@ -1363,7 +1364,7 @@ export async function GET(request: NextRequest) {
       const slotsToReturn = seasonalCharter?.enabled
         ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt), s.dateStr))
         : slots;
-      if (charterBlocksQueryFailed) {
+      if (charterBlocksQueryFailed || legacyQueryHitLimitCharter || !windowedIndexReady) {
         for (const s of slotsToReturn) {
           s.status = conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true);
         }

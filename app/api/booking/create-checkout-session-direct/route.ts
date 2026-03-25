@@ -45,6 +45,7 @@ import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
 import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED_MS } from "@/lib/booking/hold-expiry";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat, Hold } from "@/lib/booking/types";
 import { HOLD_REQUEST_CLAIMS_COLLECTION, computeDirectCheckoutHoldRequestFingerprint } from "@/lib/booking/hold-request-idempotency";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
@@ -506,12 +507,47 @@ export async function POST(request: NextRequest) {
             }
           }
         }
+        let charterDayLockRefDirect: import("firebase-admin").firestore.DocumentReference | null = null;
+        if (useBoatSlots && input.boatId) {
+          charterDayLockRefDirect = db
+            .collection("boats")
+            .doc(input.boatId)
+            .collection("dayLocks")
+            .doc(parsed.dateStr);
+          await tx.get(charterDayLockRefDirect);
+        }
         const slotSnap = await tx.get(slotRef);
         if (slotSnap.exists) {
           const slot = slotSnap.data() as Slot;
-          if (slot.status !== "open") throw new SlotConflictError("Slot no longer available");
           const slotStartDate = (slot.startAt as { toDate(): Date }).toDate();
           const slotEndDate = (slot.endAt as { toDate(): Date }).toDate();
+          if (slot.status !== "open") {
+            if (slot.status === "held" && slot.holdId) {
+              const existingHoldSnap = await tx.get(db.collection("holds").doc(slot.holdId));
+              if (existingHoldSnap.exists) {
+                const existingHold = existingHoldSnap.data() as Hold & {
+                  expiresAt?: { toDate?: () => Date; seconds?: number };
+                };
+                const expH = existingHold.expiresAt;
+                const expiryDate =
+                  expH?.toDate?.() ?? (typeof expH?.seconds === "number" ? new Date(expH.seconds * 1000) : new Date(0));
+                const isStillActive = existingHold.status === "active" && expiryDate > nowTx;
+                if (isStillActive) {
+                  throw new SlotConflictError("Slot no longer available");
+                }
+              }
+            } else if (slot.status === "booked" && slot.bookingId) {
+              const bookingSnap = await tx.get(db.collection("bookings").doc(slot.bookingId));
+              if (bookingSnap.exists) {
+                const b = bookingSnap.data() as { status?: string };
+                if (b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
+                  throw new SlotConflictError("Slot no longer available");
+                }
+              }
+            } else if (slot.status !== "held" || !slot.holdId) {
+              throw new SlotConflictError("Slot no longer available");
+            }
+          }
           await assertNoOverlappingActiveSameDaySlots({
             db,
             Timestamp,
@@ -542,6 +578,9 @@ export async function POST(request: NextRequest) {
             holdId,
             updatedAt: FieldValue.serverTimestamp(),
           });
+          if (charterDayLockRefDirect) {
+            tx.set(charterDayLockRefDirect, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          }
         } else {
           const { start: slotStartDate, end: slotEndDate } = getSlotStartEnd(
             parsed.dateStr,
@@ -596,6 +635,9 @@ export async function POST(request: NextRequest) {
             bookingId: null,
             updatedAt: FieldValue.serverTimestamp(),
           });
+          if (charterDayLockRefDirect) {
+            tx.set(charterDayLockRefDirect, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          }
         }
         tx.set(db.collection("holds").doc(holdId), holdPayload);
         if (holdRequestId && holdRequestFingerprint) {

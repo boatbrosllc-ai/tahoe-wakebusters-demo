@@ -204,10 +204,22 @@ async function main() {
         "ENABLE_BLOCK_CHECK_FAIL_OPEN must be absent or false in production (obsolete flag; block queries now fail closed on index errors).",
       );
     }
-    if (!hasValue("NEXT_PUBLIC_GA_MEASUREMENT_ID")) {
+    const gaRaw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+    if (gaRaw === undefined) {
       console.warn(
         "[check-production-env] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset — using default GA4 ID from lib/ga-measurement-id.ts. Set this var only to override the stream.",
       );
+    } else {
+      const trimmed = String(gaRaw).trim();
+      const isOff = trimmed.toLowerCase() === "off" || trimmed === "0";
+      const isEmpty = trimmed === "";
+      const isMalformed = !/^G-[A-Za-z0-9]{10}$/.test(trimmed);
+      if (isEmpty || isOff || isMalformed) {
+        missing.push(
+          `GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to a valid GA4 measurement ID (format G-XXXXXXXXXX) in production. ` +
+            `Current value is ${isEmpty ? "empty" : isOff ? "disabled (off/0)" : "malformed"}.`
+        );
+      }
     }
   }
   if (missing.length > 0) {

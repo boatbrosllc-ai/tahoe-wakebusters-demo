@@ -7,6 +7,7 @@ import { Home, Compass, CalendarCheck, Menu, Mail } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBookingModal } from "@/components/site/BookingModalContext";
+import { analytics } from "@/lib/analytics";
 
 type NavLink = { href: string; label: string; icon: LucideIcon; center?: boolean };
 
@@ -21,6 +22,12 @@ const navItems: NavLink[] = [
 export function MobileStickyBar() {
   const pathname = usePathname();
   const { setOpen: setBookingModalOpen } = useBookingModal();
+
+  const page = pathname === "/" ? "home" : pathname.replace(/^\//, "");
+  const handleBookNowClick = () => {
+    analytics.bookCtaClick("mobile_sticky_bar", page);
+    setBookingModalOpen(true);
+  };
 
   return (
     <nav
@@ -46,7 +53,7 @@ export function MobileStickyBar() {
               <button
                 key="book-now"
                 type="button"
-                onClick={() => setBookingModalOpen(true)}
+                onClick={handleBookNowClick}
                 className="flex flex-1 min-w-0 mx-0.5 -mt-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary rounded-xl"
                 aria-label="Book now"
               >
