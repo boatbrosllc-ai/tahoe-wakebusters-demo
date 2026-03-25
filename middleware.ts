@@ -69,6 +69,8 @@ function buildCsp(nonce: string): string {
   const scriptSrc = [
     "'self'",
     `'nonce-${nonce}'`,
+    // Allow scripts loaded by nonce-trusted scripts (gtag.js injects further tags; host allowlists alone miss edge cases).
+    "'strict-dynamic'",
     "https://js.stripe.com",
     "https://*.stripe.com",
     "https://checkout.stripe.com",

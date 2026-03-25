@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
+import { Ga4Scripts } from "@/components/Ga4Scripts";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import "./globals.css";
@@ -52,17 +53,7 @@ export default async function RootLayout({
         {isStripeCheckoutReady ? (
           <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
         ) : null}
-        {gaMeasurementId ? (
-          <>
-            <Script
-              id="ga-gtag-lib"
-              src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
-              strategy="afterInteractive"
-              nonce={nonce}
-            />
-            <Script id="ga-gtag-init" src="/gtag-bootstrap" strategy="afterInteractive" nonce={nonce} />
-          </>
-        ) : null}
+        {gaMeasurementId ? <Ga4Scripts measurementId={gaMeasurementId} nonce={nonce} /> : null}
         {children}
       </body>
     </html>
