@@ -223,6 +223,47 @@ export function isAllowedSlotTime(
   return startMinute === 0;
 }
 
+/** True when listing boat `boatType` is the wake/wakesurf grid family (case-insensitive). */
+export function isWakeListingBoatType(boatType: string | undefined): boolean {
+  return typeof boatType === "string" && boatType.trim().toLowerCase() === "wake";
+}
+
+/**
+ * Start-time check for wake listing boats; must match {@link getSlotGridWakeBoard} (slots API).
+ * Saturday uses {@link WAKEBOARD_SATURDAY_START_TIMES} regardless of `weekdayAllowedStartTimes`.
+ * Weekdays: explicit list if non-empty, else hourly :00 starts within the operating window.
+ */
+export function isWakeBoardListingStartTimeAllowed(
+  dateStr: string,
+  startHour: number,
+  startMinute: number,
+  weekdayAllowedStartTimes?: { hour: number; minute: number }[]
+): boolean {
+  const startDecimal = startHour + startMinute / 60;
+  if (startDecimal < OPERATING_START_HOUR || startDecimal > OPERATING_END_HOUR) return false;
+  if (isSaturdayInSlotTimezone(dateStr)) {
+    return WAKEBOARD_SATURDAY_START_TIMES.some((t) => t.hour === startHour && t.minute === startMinute);
+  }
+  if (weekdayAllowedStartTimes && weekdayAllowedStartTimes.length > 0) {
+    return weekdayAllowedStartTimes.some((t) => t.hour === startHour && t.minute === startMinute);
+  }
+  return startMinute === 0;
+}
+
+/** Charter listing-boat path: wake boats use the same grid rules as GET /api/booking/slots; others use {@link isAllowedSlotTime}. */
+export function isListingBoatCharterStartTimeAllowed(
+  boat: { boatType?: string; allowedStartTimes?: { hour: number; minute: number }[] },
+  dateStr: string,
+  startHour: number,
+  startMinute: number,
+  durationHours: number
+): boolean {
+  if (isWakeListingBoatType(boat.boatType)) {
+    return isWakeBoardListingStartTimeAllowed(dateStr, startHour, startMinute, boat.allowedStartTimes);
+  }
+  return isAllowedSlotTime(startHour, startMinute, durationHours, boat.allowedStartTimes);
+}
+
 /**
  * Date string (YYYY-MM-DD) for a given moment in America/Chicago. Use for "today" and date ranges so
  * dashboard "next 7 days" and slot logic match the business timezone.

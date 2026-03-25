@@ -56,7 +56,8 @@ export async function GET(request: NextRequest) {
     const daysParam = request.nextUrl.searchParams.get("days");
     const days = Math.min(Math.max(parseInt(daysParam ?? "35", 10) || 35, 1), 90);
     const startDateParam = request.nextUrl.searchParams.get("startDate"); // YYYY-MM-DD, optional
-    const rateIdParam = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
+    const rateIdRaw = request.nextUrl.searchParams.get("rateId"); // optional; when set, use that rate so step 3 matches checkout
+    const rateIdParam = rateIdRaw != null && rateIdRaw.trim() !== "" ? rateIdRaw.trim() : null;
     const boatIdParam = request.nextUrl.searchParams.get("boatId")?.trim() || null;
 
     const db = getDb();
@@ -104,9 +105,28 @@ export async function GET(request: NextRequest) {
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ExperienceRate & { id: string }));
     // Default to first rate by duration (smallest) so calendar prices are deterministic when no rateId is passed.
     const sortedRates = [...rates].sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0));
-    const chosenRate = rateIdParam
-      ? rates.find((r) => r.id === rateIdParam) ?? sortedRates[0]
-      : sortedRates[0];
+    const noStoreHeadersEarly: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    };
+    let chosenRate: ExperienceRate & { id: string };
+    if (rateIdParam) {
+      const found = rates.find((r) => r.id === rateIdParam);
+      if (!found) {
+        return NextResponse.json(
+          {
+            error: "The selected rate is no longer available. Please refresh and choose a trip length again.",
+            rateIdMismatch: true as const,
+          },
+          { status: 400, headers: noStoreHeadersEarly }
+        );
+      }
+      chosenRate = found;
+    } else {
+      chosenRate = sortedRates[0];
+    }
     // Use full rate pricing (weekday + weekend + holiday + special dates) for both charter and ticketed.
     // Ticketed listing "From $X per ticket" can come from content override or min rate; calendar shows actual price per date.
     const rateForPricing = {

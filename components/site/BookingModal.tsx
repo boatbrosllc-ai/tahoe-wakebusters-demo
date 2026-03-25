@@ -14,7 +14,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
+import { parseSlotId, parseSlotIdRelaxed, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { slugMatches, isTicketedExperienceForBooking } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
@@ -268,6 +268,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     : null;
 
+  const onDatePricesRateIdMismatch = useCallback(() => {
+    setSelectedRateIdForCalendar(null);
+  }, []);
+
   /** User-driven category changes only — do not read `initialSelection` here (hydration applies `bookingMode` once). */
   const prevExperienceIdForBookingModeRef = useRef<string | null>(null);
   useEffect(() => {
@@ -311,6 +315,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     datePrices,
     datePricesLoading,
     datePricesPartialData,
+    datePricesRateMismatchMessage,
     holidayDateStrings,
     ticketsAvailableByDate,
     ratesSummary,
@@ -331,7 +336,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     retryTicketCounts,
     resetBookingDataForModalOpen,
     invalidateAfterConflict,
-  } = useBookingModalData(open, initialSelection ?? null, selectionKey ?? 0, selection, paymentPhase);
+  } = useBookingModalData(
+    open,
+    initialSelection ?? null,
+    selectionKey ?? 0,
+    selection,
+    paymentPhase,
+    onDatePricesRateIdMismatch
+  );
 
   useEffect(() => {
     if (!experienceDetailPatch) return;
@@ -624,7 +636,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (!first) return;
     const depHour = selectedExperience?.departureHour;
     if (depHour != null && typeof depHour === "number") {
-      const parsed = parseSlotId(first.id);
+      const parsed = parseSlotIdRelaxed(first.id) ?? parseSlotId(first.id);
       if (parsed && parsed.startHour !== depHour) {
         setSelectedSlot(null);
         if (selectedExperience?.id) {
@@ -670,7 +682,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       };
     }
     const selectedStartMs = new Date(selectedSlot.startAt).getTime();
-    const selectedDurationHours = parseSlotId(selectedSlot.id)?.durationHours ?? null;
+    const selectedDurationHours = (parseSlotIdRelaxed(selectedSlot.id) ?? parseSlotId(selectedSlot.id))?.durationHours ?? null;
     const available = new Set<string>();
     const unavailable = new Set<string>();
     const booked = new Set<string>();
@@ -680,7 +692,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       const boatKey = s.boatId && s.boatId.trim() ? s.boatId : ticketedForSlot ? "_ticketed" : null;
       if (boatKey === null) continue;
       if (new Date(s.startAt).getTime() !== selectedStartMs) continue;
-      const slotDuration = parseSlotId(s.id)?.durationHours ?? null;
+      const slotDuration = (parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))?.durationHours ?? null;
       if (slotDuration !== selectedDurationHours) continue;
       if (s.status === "open") available.add(boatKey);
       else {
@@ -745,7 +757,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       if (s.status !== "open") continue;
       if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0) continue;
       const day = isoToChicagoDateStr(s.startAt);
-      const dur = parseSlotId(s.id)?.durationHours;
+      const dur = (parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))?.durationHours;
       if (dur == null) continue;
       if (!map.has(day)) map.set(day, new Map());
       const byDur = map.get(day)!;
@@ -759,7 +771,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     const filtered =
       durationHours != null
         ? openSlotsForDate.filter((s) => {
-            const parsed = parseSlotId(s.id);
+            const parsed = parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id);
             return parsed?.durationHours === durationHours;
           })
         : openSlotsForDate;
@@ -778,11 +790,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     // Ticketed: rate is already auto-selected by selectedRateIdForCalendar — do not try to match by slot duration
     if (isTicketed) return selectedRateIdForCalendar;
     if (!selectedSlot || ratesForSelection.length === 0) return null;
-    const parsed = parseSlotId(selectedSlot.id);
+    const parsed = parseSlotIdRelaxed(selectedSlot.id) ?? parseSlotId(selectedSlot.id);
     const durationHours = parsed?.durationHours ?? 0;
     const rate = ratesForSelection.find((r) => r.durationHours === durationHours);
     return rate?.id ?? null;
   }, [isTicketed, selectedRateIdForCalendar, selectedSlot, ratesForSelection]);
+
+  const noRateForSelectedSlot = useMemo(
+    () => Boolean(selectedSlot) && selectedRateId == null,
+    [selectedSlot, selectedRateId]
+  );
 
   const selectedRate = useMemo(
     () => (selectedRateId ? ratesForSelection.find((r) => r.id === selectedRateId) ?? null : null),
@@ -2559,6 +2576,14 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </p>
                     </div>
                   )}
+                  {datePricesRateMismatchMessage && (
+                    <div
+                      className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
+                      role="alert"
+                    >
+                      {datePricesRateMismatchMessage}
+                    </div>
+                  )}
                   {multiBoatListing && !isTicketed && (
                     <p className="text-[10px] text-brand-muted text-center mb-2 px-1">
                       Calendar prices may vary by boat; your final price updates after you select a boat.
@@ -2805,6 +2830,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       );
                       })()}
                       </>
+                    )}
+                    {noRateForSelectedSlot && (
+                      <p className="text-xs text-amber-700 mt-2" role="alert">
+                        This time slot is not currently available for online booking — please choose another time or contact us.
+                      </p>
                     )}
                   </div>
                 )}

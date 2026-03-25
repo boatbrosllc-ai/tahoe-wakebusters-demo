@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId, isAllowedSlotTime, isSeasonalAllowed } from "@/lib/booking/experience-slots";
+import {
+  getSlotStartEnd,
+  parseSlotId,
+  isAllowedSlotTime,
+  isListingBoatCharterStartTimeAllowed,
+  isSeasonalAllowed,
+} from "@/lib/booking/experience-slots";
 import { getDepartureInventoryRef, getReservedSeats } from "@/lib/booking/shared-departure-inventory";
 import {
   acquireCheckoutSessionCreationLock,
@@ -258,7 +264,16 @@ export async function POST(request: NextRequest) {
     const selectedBoat = input.boatId
       ? (listingBoatDocs.find((d) => d.id === input.boatId)?.data() as ListingBoat | undefined)
       : undefined;
-    if (!isAllowedSlotTime(parsed.startHour, parsed.startMinute, parsed.durationHours, selectedBoat?.allowedStartTimes)) {
+    const slotTimeOk = selectedBoat
+      ? isListingBoatCharterStartTimeAllowed(
+          selectedBoat,
+          parsed.dateStr,
+          parsed.startHour,
+          parsed.startMinute,
+          parsed.durationHours
+        )
+      : isAllowedSlotTime(parsed.startHour, parsed.startMinute, parsed.durationHours, undefined);
+    if (!slotTimeOk) {
       return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
     }
 
@@ -530,6 +545,32 @@ export async function POST(request: NextRequest) {
             parsed.durationHours,
             parsed.startMinute ?? 0
           );
+          if (useBoatSlots && input.boatId && input.experienceId) {
+            await assertNoOverlappingActiveSameDaySlots({
+              db,
+              Timestamp,
+              get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+              experienceId: input.experienceId,
+              boatId: input.boatId,
+              useBoatSlots: true,
+              parsed,
+              slotStart: slotStartDate,
+              slotEnd: slotEndDate,
+              now: nowTx,
+            });
+          } else if (input.experienceId && !useBoatSlots) {
+            await assertNoOverlappingActiveSameDaySlots({
+              db,
+              Timestamp,
+              get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+              experienceId: input.experienceId,
+              useBoatSlots: false,
+              parsed,
+              slotStart: slotStartDate,
+              slotEnd: slotEndDate,
+              now: nowTx,
+            });
+          }
           await assertSlotAvailable({
             db,
             Timestamp,
@@ -541,7 +582,7 @@ export async function POST(request: NextRequest) {
             slotEnd: slotEndDate,
             boatId: input.boatId,
             useBoatSlots,
-            runSameDaySlotScan: true,
+            runSameDaySlotScan: false,
           });
           tx.set(slotRef, {
             startAt: Timestamp.fromDate(slotStartDate),
@@ -880,6 +921,7 @@ export async function POST(request: NextRequest) {
     const holdUpdateBaseDirect: Record<string, unknown> = {
       checkoutSessionMode: "redirect" as const,
       rollbackPending: FieldValue.delete(),
+      rollbackPendingExpiresAt: FieldValue.delete(),
     };
     if (stripeCouponId) holdUpdateBaseDirect.stripeCouponId = stripeCouponId;
     const discountAtomicPersistDirect =

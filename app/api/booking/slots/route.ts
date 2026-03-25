@@ -15,6 +15,7 @@ import {
   toDateStrOnly,
   isSeasonalAllowed,
   OPERATING_END_HOUR,
+  isWakeListingBoatType,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
@@ -23,7 +24,10 @@ import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
-import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
+import {
+  conservativeOpenSlotStatus,
+  getLegacyBookingScanLimit,
+} from "@/lib/booking/legacy-booking-scan-limit";
 import {
   addCalendarDaysToDateStr,
   bookingIntervalMsFromSlotFields,
@@ -456,8 +460,17 @@ export async function GET(request: NextRequest) {
         // Query active holds for this experience and fold non-charter holds into spotsByDate
         const tHoldsNow = Date.now();
         const processHoldForCapacity = (doc: { id: string; data: () => Record<string, unknown> }) => {
-          const h = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; bookingMode?: string; status?: string; expiresAt?: { toDate(): Date } };
+          const h = doc.data() as {
+            slotId?: string;
+            slot_id?: string;
+            partySize?: number;
+            bookingMode?: string;
+            status?: string;
+            expiresAt?: { toDate(): Date };
+            rollbackPending?: boolean;
+          };
           if (h.status !== "active") return;
+          if (h.rollbackPending === true) return;
           if (h.expiresAt && h.expiresAt.toDate().getTime() < tHoldsNow) return;
           const slotIdRaw = h.slotId ?? h.slot_id;
           if (!slotIdRaw) return;
@@ -648,6 +661,11 @@ export async function GET(request: NextRequest) {
           seasonalTicketed?.enabled
             ? tSlots.filter((s) => isSeasonalAllowed(seasonalTicketed, new Date(s.startAt), s.dateStr))
             : tSlots;
+        if (blocksQueryFailed) {
+          for (const s of tSlotsReturned) {
+            s.status = conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true);
+          }
+        }
         const ticketedPartial =
           legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed;
         if (legacyHoldsScanCapHit) {
@@ -731,7 +749,25 @@ export async function GET(request: NextRequest) {
         if (boatIds.length === 0) return NextResponse.json({ slots: [] });
         bookingsFromFallback = mergedDocs;
       }
-      type SlotRow = { id: string; dateStr: string; startAt: string; endAt: string; status: string; holdId: string | null; bookingId: string | null; updatedAt: string | null; boatId: string; experienceId: string; maxCapacity?: number | undefined; spotsBooked?: number | undefined; spotsRemaining?: number | undefined; isCharterLocked?: boolean | undefined; showSpotsRemaining?: boolean | undefined };
+      type SlotRow = {
+        id: string;
+        dateStr: string;
+        startAt: string;
+        endAt: string;
+        status: string;
+        holdId: string | null;
+        bookingId: string | null;
+        updatedAt: string | null;
+        boatId: string;
+        experienceId: string;
+        maxCapacity?: number | undefined;
+        spotsBooked?: number | undefined;
+        spotsRemaining?: number | undefined;
+        isCharterLocked?: boolean | undefined;
+        showSpotsRemaining?: boolean | undefined;
+        /** When this grid row is a shorter tier overlapped by a longer booked trip — true duration for UI. */
+        bookingDurationHours?: number;
+      };
       const existingByBoatAndKey = new Map<string, SlotRow>();
       /** Firestore slot docs may store holdId for server-side hold expiry resolution; never expose to clients (response uses holdId: null). */
       const charterSlotHoldIdByKey = new Map<string, string>();
@@ -1081,7 +1117,7 @@ export async function GET(request: NextRequest) {
           if (boatData) boatDocDataById.set(bid, boatData);
         }
         const allowedEveryDay = boatData?.allowedStartTimes;
-        const isWakeBoat = boatData?.boatType === "wake";
+        const isWakeBoat = isWakeListingBoatType(boatData?.boatType);
         let grid: import("@/lib/booking/experience-slots").SlotGridItem[];
         if (durationsUnique.length === 0) {
           grid = [];
@@ -1174,6 +1210,19 @@ export async function GET(request: NextRequest) {
             rowStatus = "open";
           }
 
+          let bookingDurationHours: number | undefined = undefined;
+          if (rowStatus === "booked" && rowBookingId) {
+            const canonicalRow = Array.from(existingByBoatAndKey.values()).find((r) => {
+              if (r.boatId !== bid || r.status !== "booked" || r.bookingId !== rowBookingId) return false;
+              const cp = parseSlotIdRelaxed(r.id);
+              return cp != null && cp.durationHours !== durationHours;
+            });
+            if (canonicalRow) {
+              const cp = parseSlotIdRelaxed(canonicalRow.id);
+              if (cp) bookingDurationHours = cp.durationHours;
+            }
+          }
+
           slots.push({
             id: slotId,
             dateStr,
@@ -1185,6 +1234,7 @@ export async function GET(request: NextRequest) {
             updatedAt: null,
             boatId: bid,
             experienceId,
+            ...(bookingDurationHours != null ? { bookingDurationHours } : {}),
           });
         }
       }
@@ -1235,6 +1285,11 @@ export async function GET(request: NextRequest) {
       const slotsToReturn = seasonalCharter?.enabled
         ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt), s.dateStr))
         : slots;
+      if (charterBlocksQueryFailed) {
+        for (const s of slotsToReturn) {
+          s.status = conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true);
+        }
+      }
 
       const debugByDate = request.nextUrl.searchParams.get("debug") === "1" || request.nextUrl.searchParams.get("byDate") === "1"
         ? (() => {
@@ -1280,6 +1335,34 @@ export async function GET(request: NextRequest) {
       const slotId = (d.data() as { slotId?: string }).slotId;
       if (slotId) legacyBookedSlotIdToBookingId.set(slotId, d.id);
     });
+
+    const { docs: legacyBlockDocs, incomplete: legacyBlocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
+      db,
+      start,
+      end,
+      [boatId!],
+    );
+    if (legacyBlocksIncomplete) {
+      void writeOperationalAlert({
+        type: "slots_blocks_query_incomplete",
+        source: "app/api/booking/slots",
+        boatId: boatId ?? undefined,
+        branch: "legacy_boat_only",
+        hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
+      }).catch(() => {});
+    }
+    const legacyBlockRanges: { start: number; end: number }[] = [];
+    const legacyBoatIdNorm = typeof boatId === "string" ? boatId.trim() : "";
+    legacyBlockDocs.forEach((doc) => {
+      const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
+      const blockBoatRaw = typeof b.boatId === "string" ? b.boatId.trim() : null;
+      if (blockBoatRaw && legacyBoatIdNorm && blockBoatRaw !== legacyBoatIdNorm) return;
+      const blockStart = b.startAt?.toDate?.()?.getTime();
+      const blockEnd = b.endAt?.toDate?.()?.getTime();
+      if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+      legacyBlockRanges.push({ start: blockStart, end: blockEnd });
+    });
+
     let legacySlotDocsQueryEnd = end;
     try {
       const legacyBoatSnap = await db.collection("boats").doc(boatId!).get();
@@ -1311,14 +1394,17 @@ export async function GET(request: NextRequest) {
       .where("startAt", "<=", Timestamp.fromDate(legacySlotDocsQueryEnd))
       .orderBy("startAt", "asc")
       .get();
-    const slots = snap.docs.map((doc) => {
+    const legacySlotHoldIdByDocId = new Map<string, string>();
+    let slots = snap.docs.map((doc) => {
       const data = doc.data() as Slot;
       const startAt = data.startAt as { toDate(): Date };
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
       const parsed = parseSlotId(doc.id);
       const fromBooking = legacyBookedSlotIdToBookingId.has(doc.id);
-      const status = fromBooking ? "booked" : data.status === "booked" ? "open" : data.status;
+      let status = fromBooking ? "booked" : data.status === "booked" ? "open" : data.status;
+      const hidRaw = typeof data.holdId === "string" && data.holdId.trim() ? data.holdId.trim() : null;
+      if (status === "held" && hidRaw) legacySlotHoldIdByDocId.set(doc.id, hidRaw);
       const resolvedBookingId = fromBooking ? legacyBookedSlotIdToBookingId.get(doc.id) : data.bookingId;
       return {
         id: doc.id,
@@ -1331,7 +1417,66 @@ export async function GET(request: NextRequest) {
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
       };
     });
-    return NextResponse.json({ slots }, { headers: NO_STORE_HEADERS });
+
+    const legacyHeldHoldIds = Array.from(new Set(legacySlotHoldIdByDocId.values()));
+    if (legacyHeldHoldIds.length > 0) {
+      try {
+        const legacyHoldResolutionSnaps = await getHoldSnapshotsOrdered(db, legacyHeldHoldIds);
+        const legacyHoldIdsToOpen = new Set<string>();
+        const nowLegacy = new Date();
+        legacyHoldResolutionSnaps.forEach((hs, i) => {
+          const hid = legacyHeldHoldIds[i];
+          if (!hs.exists) {
+            legacyHoldIdsToOpen.add(hid);
+            return;
+          }
+          const hd = hs.data() as { status?: string; expiresAt?: { toDate(): Date } };
+          if (hd?.status !== "active") {
+            legacyHoldIdsToOpen.add(hid);
+            return;
+          }
+          const expH = hd?.expiresAt?.toDate?.();
+          if (expH && expH <= nowLegacy) legacyHoldIdsToOpen.add(hid);
+        });
+        slots = slots.map((row) => {
+          if (row.status !== "held") return row;
+          const hid = legacySlotHoldIdByDocId.get(row.id);
+          if (hid && legacyHoldIdsToOpen.has(hid)) return { ...row, status: "open" as const };
+          return row;
+        });
+      } catch (legacyHoldErr) {
+        console.warn(
+          "[slots] legacy boat held-slot hold resolution failed:",
+          legacyHoldErr instanceof Error ? legacyHoldErr.message : legacyHoldErr,
+        );
+      }
+    }
+
+    if (legacyBlocksIncomplete) {
+      slots = slots.map((s) => ({
+        ...s,
+        status: conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true),
+      }));
+    } else {
+      slots = slots.map((s) => {
+        const slotStartMs = new Date(s.startAt).getTime();
+        const slotEndMs = new Date(s.endAt).getTime();
+        const overlapped = legacyBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
+        if (overlapped && (s.status === "open" || s.status === "held")) {
+          return { ...s, status: "blocked" as const };
+        }
+        return s;
+      });
+    }
+
+    const legacyResponseHeaders: Record<string, string> = {
+      ...NO_STORE_HEADERS,
+      ...(legacyBlocksIncomplete ? { "X-Slots-Partial-Data": "true" } : {}),
+    };
+    return NextResponse.json(
+      { slots, ...(legacyBlocksIncomplete ? { partialData: true } : {}) },
+      { headers: legacyResponseHeaders },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const startDate = request.nextUrl.searchParams.get("startDate");

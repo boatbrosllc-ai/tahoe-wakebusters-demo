@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import {
   signReceiptToken,
   verifyReceiptToken,
@@ -359,7 +359,29 @@ async function handleReceipt(
       .get();
     if (!pendingRefundSnap.empty) discountLimitExceeded = true;
 
-    const durationHours = rate?.durationHours;
+    const slotDurationParsed = parseSlotIdRelaxed(booking.slotId ?? "");
+    const durationHoursFromSlot =
+      slotDurationParsed != null &&
+      typeof slotDurationParsed.durationHours === "number" &&
+      !Number.isNaN(slotDurationParsed.durationHours) &&
+      slotDurationParsed.durationHours > 0
+        ? slotDurationParsed.durationHours
+        : null;
+    const durationHoursFromRate = rate?.durationHours;
+    const durationHours = durationHoursFromSlot ?? durationHoursFromRate;
+    if (
+      durationHoursFromSlot != null &&
+      durationHoursFromRate != null &&
+      durationHoursFromSlot !== durationHoursFromRate
+    ) {
+      console.warn("[receipt] durationHours mismatch: slotId vs rate document (using slot)", {
+        bookingId: doc.id,
+        durationHoursFromSlot,
+        durationHoursFromRate,
+        slotId: booking.slotId,
+        rateId: booking.rateId,
+      });
+    }
     const newReceiptToken = resolvedViaClaim ? signReceiptToken(doc.id) : undefined;
 
     const stripe = booking.stripe;

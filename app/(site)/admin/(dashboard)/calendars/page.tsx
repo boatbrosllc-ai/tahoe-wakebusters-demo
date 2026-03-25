@@ -46,6 +46,8 @@ interface SlotDto {
   maxCapacity?: number;
   spotsBooked?: number;
   spotsRemaining?: number;
+  /** Charter: true trip length when this grid row is a shorter tier overlapped by the booking (see slots API). */
+  bookingDurationHours?: number;
 }
 
 function toDateStr(d: Date): string {
@@ -64,6 +66,10 @@ function formatSlotTime(slot: SlotDto): string {
 
 /** Duration label for a slot, e.g. "2 hr" or "4 hr", from slot id or start/end times. */
 function getSlotDurationLabel(slot: SlotDto): string {
+  if (typeof slot.bookingDurationHours === "number" && slot.bookingDurationHours > 0) {
+    const h = slot.bookingDurationHours;
+    return h === 1 ? "1 hr" : `${h} hr`;
+  }
   const parsed = parseSlotId(slot.id);
   if (parsed?.durationHours != null) {
     return parsed.durationHours === 1 ? "1 hr" : `${parsed.durationHours} hr`;

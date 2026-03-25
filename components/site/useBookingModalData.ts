@@ -43,7 +43,9 @@ export function useBookingModalData(
   selectionKey: number,
   selection: UseBookingModalDataSelection | null,
   /** Skip experience-detail fetch and merge during active Stripe checkout so slot selection is not overwritten. */
-  paymentPhase: string
+  paymentPhase: string,
+  /** When date-prices returns `rateIdMismatch`, parent should clear `selectedRateIdForCalendar`. */
+  onDatePricesRateIdMismatch?: () => void
 ) {
   const paymentPhaseRef = useRef(paymentPhase);
   paymentPhaseRef.current = paymentPhase;
@@ -66,6 +68,8 @@ export function useBookingModalData(
   const [datePricesLoading, setDatePricesLoading] = useState(false);
   /** True when date-prices API indicates incomplete legacy hold scan (conservative ticket caps in UI). */
   const [datePricesPartialData, setDatePricesPartialData] = useState(false);
+  /** Set when API reports selected rateId no longer exists; parent resets calendar rate via callback. */
+  const [datePricesRateMismatchMessage, setDatePricesRateMismatchMessage] = useState<string | null>(null);
   const [holidayDateStrings, setHolidayDateStrings] = useState<Set<string>>(new Set());
   const [ticketsAvailableByDate, setTicketsAvailableByDate] = useState<Record<string, number>>({});
   const [ratesSummary, setRatesSummary] = useState<bookingCache.CachedRateOption[] | null>(null);
@@ -139,6 +143,7 @@ export function useBookingModalData(
     setTicketCountsLoading(false);
     setTicketCountsError(null);
     setExperienceDetailPatch(null);
+    setDatePricesRateMismatchMessage(null);
   }, [open]);
 
   // Experiences fetch (on open/selectionKey)
@@ -272,6 +277,7 @@ export function useBookingModalData(
     const key = `${exp.id}|${viewMonthStartStr}|${daysInViewMonth}|${rateIdForDatePrices}`;
     inFlightKeyRef.current = key;
     setDatePricesLoading(true);
+    setDatePricesRateMismatchMessage(null);
     const controller = new AbortController();
     bookingCache
       .fetchDatePrices(
@@ -285,6 +291,7 @@ export function useBookingModalData(
         const keyMatch = inFlightKeyRef.current === key;
         const prices = data.prices && typeof data.prices === "object" ? data.prices : {};
         if (!keyMatch) return;
+        setDatePricesRateMismatchMessage(null);
         const holidays = new Set<string>(Array.isArray(data?.holidayDateStrings) ? data.holidayDateStrings : []);
         const ticketsAvailable =
           data.ticketsAvailableByDate && typeof data.ticketsAvailableByDate === "object"
@@ -314,8 +321,25 @@ export function useBookingModalData(
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === "AbortError") return;
         const status = (err as { status?: number }).status;
-        const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
-        bookingError("client", "date-prices fetch failed", null, { startDate: viewMonthStartStr, status, error: apiBody?.error, hint: apiBody?.hint });
+        const apiBody = (err as {
+          apiBody?: { error?: string; hint?: string; rateIdMismatch?: boolean };
+        })?.apiBody;
+        const rateMismatch = apiBody?.rateIdMismatch === true;
+        if (rateMismatch && inFlightKeyRef.current === key) {
+          onDatePricesRateIdMismatch?.();
+          setDatePricesRateMismatchMessage(
+            apiBody?.error?.trim() ||
+              "That trip length is no longer available. Please choose a duration again."
+          );
+        }
+        if (!rateMismatch) {
+          bookingError("client", "date-prices fetch failed", null, {
+            startDate: viewMonthStartStr,
+            status,
+            error: apiBody?.error,
+            hint: apiBody?.hint,
+          });
+        }
         if (inFlightKeyRef.current === key) {
           setDatePrices({});
           setHolidayDateStrings(new Set());
@@ -338,6 +362,7 @@ export function useBookingModalData(
     daysInViewMonth,
     selection?.selectedRateIdForCalendar,
     ratesForSelection,
+    onDatePricesRateIdMismatch,
   ]);
 
   // Slots for visible month
@@ -696,6 +721,7 @@ export function useBookingModalData(
     setEffectiveRateCents(null);
     setDatePrices({});
     setDatePricesPartialData(false);
+    setDatePricesRateMismatchMessage(null);
     setMonthSlots([]);
     setRatesSummary(null);
     setRatesLoadError(null);
@@ -737,6 +763,7 @@ export function useBookingModalData(
     datePrices,
     datePricesLoading,
     datePricesPartialData,
+    datePricesRateMismatchMessage,
     holidayDateStrings,
     ticketsAvailableByDate,
     ratesSummary,

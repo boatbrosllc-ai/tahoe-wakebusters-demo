@@ -142,6 +142,7 @@ export async function rollbackCheckoutSession(
           status: "expired",
           sessionCreationInFlight: FieldValue.delete(),
           rollbackPending: FieldValue.delete(),
+          rollbackPendingExpiresAt: FieldValue.delete(),
         });
 
         if (discountRollback) {

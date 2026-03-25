@@ -262,7 +262,22 @@ export async function POST(
           const slotSnap = await tx.get(slotRef);
           if (slotSnap.exists) {
             const slot = slotSnap.data() as { status?: string; bookingId?: string };
-            if (slot.status === "booked" && slot.bookingId === bookingId) {
+            if (slot.status === "booked") {
+              const slotBookingId =
+                typeof slot.bookingId === "string" && slot.bookingId.trim() ? slot.bookingId.trim() : "";
+              if (slotBookingId && slotBookingId !== bookingId) {
+                console.warn(
+                  "[admin/cancel] data integrity: slot.bookingId does not match canceled booking — releasing slot using booking as source of truth",
+                  { bookingId, slotBookingId, slotPath: slotRef.path }
+                );
+                void writeOperationalAlert({
+                  type: "admin_cancel_slot_booking_id_mismatch",
+                  source: "admin-cancel",
+                  bookingId,
+                  slotBookingId,
+                  slotPath: slotRef.path,
+                }).catch(() => {});
+              }
               tx.update(slotRef, {
                 status: "open",
                 holdId: FieldValue.delete(),
@@ -272,6 +287,22 @@ export async function POST(
               slotReleased = true;
             }
           }
+        } else if (slotId) {
+          console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
+            bookingId,
+            experienceId,
+            boatId,
+            slotId,
+          });
+          void writeOperationalAlert({
+            type: "admin_cancel_no_slot_ref",
+            source: "admin-cancel",
+            bookingId,
+            experienceId: experienceId ?? null,
+            boatId: boatId ?? null,
+            slotId,
+            hint: "Could not resolve Firestore path for slot document; investigate and backfill boatId/experienceId on booking.",
+          }).catch(() => {});
         }
       });
     } else {

@@ -22,7 +22,23 @@ export default function WaiverSignPage() {
     setLoading(true);
     const query = group ? `group=${encodeURIComponent(group)}` : `token=${encodeURIComponent(token)}`;
     fetch(`/api/waiver/signing/validate?${query}`)
-      .then((res) => res.json())
+      .then(async (res) => {
+        const text = await res.text();
+        let json: { valid?: unknown; waiverRequestId?: unknown; isGroupSigning?: unknown; error?: string };
+        try {
+          json = text ? (JSON.parse(text) as typeof json) : {};
+        } catch {
+          throw new Error(
+            res.ok
+              ? "Could not read server response."
+              : `Server error (${res.status}). Please try again or contact the business.`
+          );
+        }
+        if (!res.ok && !json.error) {
+          throw new Error(json.error ?? `Server error (${res.status}). Please try again.`);
+        }
+        return json;
+      })
       .then((json) => {
         if (json.valid && (json.waiverRequestId !== undefined || json.isGroupSigning)) {
           setData(json as WaiverValidateResponse);
@@ -32,8 +48,8 @@ export default function WaiverSignPage() {
           setData(null);
         }
       })
-      .catch(() => {
-        setInvalid("Could not load waiver. Please try again.");
+      .catch((e) => {
+        setInvalid(e instanceof Error ? e.message : "Could not load waiver. Please try again.");
         setData(null);
       })
       .finally(() => setLoading(false));

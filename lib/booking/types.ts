@@ -364,6 +364,8 @@ export interface Hold {
    * compensate discount exactly once.
    */
   rollbackPending?: boolean;
+  /** After this time, cron may auto-release the slot if no succeeded PaymentIntent is observed (see cleanup-holds-logic). */
+  rollbackPendingExpiresAt?: FirestoreTimestamp;
 }
 
 // ---------------------------------------------------------------------------

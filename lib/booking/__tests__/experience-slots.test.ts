@@ -4,7 +4,16 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { parseSlotId, buildSlotId, getSlotStartEnd, toDateStrOnly, isSeasonalAllowed } from "../experience-slots";
+import {
+  parseSlotId,
+  buildSlotId,
+  getSlotStartEnd,
+  toDateStrOnly,
+  isSeasonalAllowed,
+  isSaturdayInSlotTimezone,
+  isListingBoatCharterStartTimeAllowed,
+  isWakeListingBoatType,
+} from "../experience-slots";
 
 describe("parseSlotId", () => {
   it("parses 5-part slot id (hour start, no minute)", () => {
@@ -121,5 +130,61 @@ describe("isSeasonalAllowed", () => {
     assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2026-01-10T12:00:00Z"), "2026-01-10"), true);
     assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2025-10-31T12:00:00Z"), "2025-10-31"), false);
     assert.strictEqual(isSeasonalAllowed(seasonal, new Date("2026-02-01T12:00:00Z"), "2026-02-01"), false);
+  });
+});
+
+describe("isWakeListingBoatType", () => {
+  it("treats wake boatType case-insensitively", () => {
+    assert.strictEqual(isWakeListingBoatType("wake"), true);
+    assert.strictEqual(isWakeListingBoatType("Wake"), true);
+    assert.strictEqual(isWakeListingBoatType(" WAKE "), true);
+    assert.strictEqual(isWakeListingBoatType("pontoon"), false);
+    assert.strictEqual(isWakeListingBoatType(undefined), false);
+  });
+});
+
+describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
+  const sat = "2025-06-14";
+  const mon = "2025-06-09";
+
+  it("fixture dates are Saturday / Monday in America/Chicago", () => {
+    assert.strictEqual(isSaturdayInSlotTimezone(sat), true);
+    assert.strictEqual(isSaturdayInSlotTimezone(mon), false);
+  });
+
+  it("wake boat: Saturday afternoon is allowed even when allowedStartTimes omits it (matches slots API)", () => {
+    const boat = {
+      boatType: "Wake",
+      allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }, { hour: 10, minute: 0 }, { hour: 10, minute: 30 }],
+    };
+    assert.strictEqual(
+      isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4),
+      true,
+      "3pm Saturday must match WAKEBOARD_SATURDAY_START_TIMES, not Firestore weekday list"
+    );
+  });
+
+  it("wake boat: weekday restricts to allowedStartTimes when set", () => {
+    const boat = {
+      boatType: "wake" as const,
+      allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }],
+    };
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, mon, 9, 0, 4), true);
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, mon, 15, 0, 4), false);
+  });
+
+  it("wake boat: weekday hourly when allowedStartTimes empty", () => {
+    const boat = { boatType: "wake" as const, allowedStartTimes: [] as { hour: number; minute: number }[] };
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, mon, 15, 0, 3), true);
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, mon, 15, 30, 3), false);
+  });
+
+  it("non-wake listing boat still uses allowedStartTimes only", () => {
+    const boat = {
+      boatType: "pontoon",
+      allowedStartTimes: [{ hour: 9, minute: 0 }],
+    };
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 9, 0, 4), true);
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4), false);
   });
 });

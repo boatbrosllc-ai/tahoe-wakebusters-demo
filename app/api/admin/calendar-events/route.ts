@@ -79,11 +79,25 @@ function buildBookingCalendarEvent(
     end = e;
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       start = new Date(dateStr + "T12:00:00.000Z");
+      if (!parsed.durationHours) {
+        console.warn("[admin/calendar-events] booking event fallback duration: missing or falsy durationHours on parsed slotId", {
+          bookingId: doc.id,
+          slotId: b.slotId,
+        });
+      }
       end = new Date(start.getTime() + (parsed.durationHours || 3) * 60 * 60 * 1000);
     }
   } else {
+    const durationParsed = parseSlotIdRelaxed(b.slotId ?? "");
+    const hours =
+      durationParsed != null &&
+      typeof durationParsed.durationHours === "number" &&
+      !Number.isNaN(durationParsed.durationHours) &&
+      durationParsed.durationHours > 0
+        ? durationParsed.durationHours
+        : 3;
     start = new Date(dateStr + "T12:00:00.000Z");
-    end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
+    end = new Date(start.getTime() + hours * 60 * 60 * 1000);
   }
   const title = b.customer?.name?.trim() || b.customer?.email || "Booking";
   const expName = b.experienceId ? experienceNames.get(b.experienceId) ?? "—" : "—";

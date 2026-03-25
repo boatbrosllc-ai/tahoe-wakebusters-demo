@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
-import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { getTokenById, getRequestById, getTemplateById, getGroupTokenById, isTokenValid } from "@/lib/waiver/firestore";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
-import { sanitizeTermsHtml } from "@/lib/waiver/sanitize-terms-html";
+import { toValidateTemplatePayload } from "@/lib/waiver/to-validate-template-payload";
 
 async function buildBookingSummary(bookingId: string): Promise<{ experienceName: string; tripDate: string; startTime?: string; endTime?: string; partySize?: number }> {
   const db = getDb();
@@ -23,8 +23,8 @@ async function buildBookingSummary(bookingId: string): Promise<{ experienceName:
     if (parsed) {
       tripDate = parsed.dateStr;
       const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
-      startTime = formatBookingTime(start);
-      endTime = formatBookingTime(end);
+      startTime = formatBookingTimeSafe(start);
+      endTime = formatBookingTimeSafe(end);
     }
     if (booking.experienceId) {
       const expSnap = await db.collection("experiences").doc(booking.experienceId).get();
@@ -58,14 +58,7 @@ export async function GET(request: NextRequest) {
         isGroupSigning: true,
         groupToken: group,
         bookingSummary: { ...bookingSummary, partySize: bookingSummary.partySize ?? groupDoc.partySize },
-        template: {
-          title: template.title,
-          termsHtml: sanitizeTermsHtml(template.termsHtml),
-          requiredFields: template.requiredFields,
-          clauses: template.clauses,
-          signature: template.signature,
-          version: template.version,
-        },
+        template: toValidateTemplatePayload(template),
       };
       return NextResponse.json(response);
     } catch (e) {
@@ -106,14 +99,7 @@ export async function GET(request: NextRequest) {
         ...bookingSummary,
         partySize: bookingSummary.partySize,
       },
-      template: {
-        title: template.title,
-        termsHtml: sanitizeTermsHtml(template.termsHtml),
-        requiredFields: template.requiredFields,
-        clauses: template.clauses,
-        signature: template.signature,
-        version: template.version,
-      },
+      template: toValidateTemplatePayload(template),
     };
     return NextResponse.json(response);
   } catch (e) {

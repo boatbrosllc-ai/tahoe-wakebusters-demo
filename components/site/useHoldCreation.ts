@@ -395,8 +395,14 @@ export function useHoldCreation(
     let createdHoldForRelease: { holdId: string; releaseToken: string | null } | null = null;
 
     try {
-    if (!selectedExperience || !selectedSlot || !selectedRateId) {
+    if (!selectedExperience || !selectedSlot) {
       opts.setPaymentError("Missing booking details. Please try again.");
+      return;
+    }
+    if (!selectedRateId) {
+      opts.setPaymentError(
+        "This time slot does not match an available trip length for online booking. Please choose another time or contact us."
+      );
       return;
     }
     if (!customerName.trim()) {

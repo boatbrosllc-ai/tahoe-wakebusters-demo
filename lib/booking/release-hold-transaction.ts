@@ -79,7 +79,11 @@ export async function executeReleaseHoldTransaction(
         const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
         await releaseCapacity(tx, inventoryRef, hold.partySize);
       }
-      tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete() });
+      tx.update(holdRef, {
+        status: "expired",
+        rollbackPending: FieldValue.delete(),
+        rollbackPendingExpiresAt: FieldValue.delete(),
+      });
       await applyDiscountDecrementTx();
       outcome = { released: true };
       return;
@@ -90,7 +94,11 @@ export async function executeReleaseHoldTransaction(
         const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
         await releaseCapacity(tx, inventoryRef, hold.partySize);
       }
-      tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete() });
+      tx.update(holdRef, {
+        status: "expired",
+        rollbackPending: FieldValue.delete(),
+        rollbackPendingExpiresAt: FieldValue.delete(),
+      });
       await applyDiscountDecrementTx();
       outcome = { released: true };
       return;
@@ -104,7 +112,11 @@ export async function executeReleaseHoldTransaction(
       const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
       await releaseCapacity(tx, inventoryRef, hold.partySize);
     }
-    tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete() });
+    tx.update(holdRef, {
+      status: "expired",
+      rollbackPending: FieldValue.delete(),
+      rollbackPendingExpiresAt: FieldValue.delete(),
+    });
     await applyDiscountDecrementTx();
     outcome = { released: true };
   });

@@ -5,6 +5,7 @@ import {
   parseSlotId,
   parseSlotIdRelaxed,
   isAllowedSlotTime,
+  isListingBoatCharterStartTimeAllowed,
   toDateStrOnly,
   isSeasonalAllowed,
 } from "@/lib/booking/experience-slots";
@@ -319,9 +320,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
       {
-        const parsedForValidation = (isSharedTicketed || isCharterTicketed)
-          ? (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))
-          : parseSlotId(input.slotId);
+        const parsedForValidation = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
         if (!parsedForValidation) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
@@ -335,7 +334,15 @@ export async function POST(request: NextRequest) {
             expId
           );
           if (errResp) return errResp;
-        } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours, boat.allowedStartTimes)) {
+        } else if (
+          !isListingBoatCharterStartTimeAllowed(
+            boat,
+            parsedForValidation.dateStr,
+            parsedForValidation.startHour,
+            parsedForValidation.startMinute,
+            parsedForValidation.durationHours
+          )
+        ) {
           return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
         }
       }
@@ -377,7 +384,7 @@ export async function POST(request: NextRequest) {
           slotStartForBlock = slotStart;
           slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
         } else {
-          const parsed = parseSlotId(input.slotId);
+          const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
           if (!parsed) {
             return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
           }
@@ -390,7 +397,7 @@ export async function POST(request: NextRequest) {
           slotEndForBlock = end;
         }
       }
-      const slotDateStrForSeasonal = parseSlotId(input.slotId)?.dateStr;
+      const slotDateStrForSeasonal = (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))?.dateStr;
       if (!isSeasonalAllowed(experience.seasonal, slotStart, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
@@ -430,9 +437,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
       {
-        const parsedForValidation = (isSharedTicketed || isCharterTicketed)
-          ? (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))
-          : parseSlotId(input.slotId);
+        const parsedForValidation = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
         if (!parsedForValidation) {
           return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
         }
@@ -477,7 +482,7 @@ export async function POST(request: NextRequest) {
           slotStartForBlock = slotStartExp;
           slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
         } else {
-          const parsed = parseSlotId(input.slotId);
+          const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
           if (!parsed) {
             return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
           }
@@ -492,7 +497,7 @@ export async function POST(request: NextRequest) {
           slotEndForBlock = end;
         }
       }
-      const slotDateStrForSeasonal = parseSlotId(input.slotId)?.dateStr;
+      const slotDateStrForSeasonal = (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))?.dateStr;
       if (!isSeasonalAllowed(experience.seasonal, slotStartExp, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
@@ -529,7 +534,7 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
-      const parsedSlotLegacy = parseSlotId(input.slotId);
+      const parsedSlotLegacy = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
       if (!parsedSlotLegacy) {
         return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
       }
@@ -885,6 +890,18 @@ export async function POST(request: NextRequest) {
               if (delta !== 0) {
                 currentReserved = await getReservedSeats(tx, inventoryRef);
               }
+
+              const blockedResume = await hasOverlappingBlock({
+                db,
+                Timestamp,
+                experienceId: expIdForCapacity,
+                experienceIdVariants: slugVariantsList,
+                boatId: isListingBoatFlow ? input.boatId : undefined,
+                slotStart: slotStartForBlock,
+                slotEnd: slotEndForBlock,
+                get: (q) => tx.get(q),
+              });
+              if (blockedResume) throw new SlotConflictError("This slot is blocked");
 
               // Explicitly clear discount fields when no discount applies (mirror charter reuse path)
               // so resuming a previously discounted hold without a discount does not retain stale discount amounts.
@@ -1413,7 +1430,7 @@ export async function POST(request: NextRequest) {
         });
       } else {
         if (!isExperienceOnly && !isListingBoatFlow) throw new Error("Slot not found");
-        const parsed = parseSlotId(input.slotId);
+        const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
         if (!parsed) throw new Error("Invalid slot");
         const { start: slotStartDate, end: slotEndDate } = getSlotStartEnd(
           parsed.dateStr,

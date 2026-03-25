@@ -50,6 +50,11 @@ export interface SlotDto {
   spotsRemaining?: number;
   /** Ticketed: holds query failed for this date — capacity may be understated; show uncertain styling. */
   holdDataMissing?: boolean;
+  /**
+   * Charter admin grid: when a shorter-duration row is marked booked because a longer trip overlaps it,
+   * this is the booking's true duration (from the booking's slot id). Prefer over parsing `id` for labels.
+   */
+  bookingDurationHours?: number;
 }
 
 export interface RateOption {
