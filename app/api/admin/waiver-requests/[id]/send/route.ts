@@ -8,6 +8,8 @@ import {
   getTokenById,
   isTokenValid,
   getAppBaseUrl,
+  buildWaiverSigningUrlFromTokenId,
+  getActiveGroupSigningUrlForBooking,
 } from "@/lib/waiver/firestore";
 import { generateSigningToken, createTokenExpiresAt, getDefaultTokenExpiryDays } from "@/lib/waiver/tokens";
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
@@ -52,8 +54,9 @@ export async function POST(
         usedAt: null,
       });
       await updateRequest(requestId, { signingTokenId: tokenId, signingUrl });
-    } else {
-      signingUrl = req.signingUrl;
+    }
+    if (tokenId) {
+      signingUrl = buildWaiverSigningUrlFromTokenId(tokenId);
     }
 
     const bookingSnap = await db.collection("bookings").doc(req.bookingId).get();
@@ -96,10 +99,14 @@ export async function POST(
       return NextResponse.json({ error: "No guest email (set on request or from booking)" }, { status: 400 });
     }
 
+    const party = partySize ?? 1;
+    const groupSigningUrl =
+      party > 1 ? req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(req.bookingId)) ?? undefined : undefined;
     await waiverEmailBrevo.sendWaiverInvite({
       to: toEmail,
       name: toName,
       signingUrl,
+      groupSigningUrl,
       bookingSummary: { experienceName, tripDate, startTime, endTime, partySize },
     });
     await logNotificationSent({

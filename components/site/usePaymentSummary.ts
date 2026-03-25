@@ -45,17 +45,36 @@ export function usePaymentSummary({
   return useMemo(() => {
     const paymentPriceBlocked =
       effectiveRateCents == null && (datePricesLoading || effectivePriceLoading);
-    const rawDepositCents =
-      depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
+    const authoritativeTotal = Math.max(0, totalCentsFromServer ?? priceSummary.totalCents);
+    const halfRounded = Math.round(authoritativeTotal * DEPOSIT_FRACTION);
+    /** Reject stale/wrong PI metadata (e.g. full charge reported as "deposit") or absurd values — never show > ~50% + slack as deposit. */
+    const maxReasonableDeposit = Math.min(authoritativeTotal, halfRounded + 2);
+
+    let rawDepositCents: number;
+    let trustServerDeposit = false;
+    if (
+      typeof depositCentsFromServer === "number" &&
+      Number.isFinite(depositCentsFromServer) &&
+      depositCentsFromServer >= 0
+    ) {
+      if (depositCentsFromServer <= maxReasonableDeposit) {
+        rawDepositCents = depositCentsFromServer;
+        trustServerDeposit = true;
+      } else {
+        rawDepositCents = halfRounded;
+      }
+    } else {
+      rawDepositCents = halfRounded;
+    }
+
     const displayDepositCents = Math.max(0, Number.isFinite(rawDepositCents) ? rawDepositCents : 0);
     const rawFinalCents =
-      finalCentsFromServer ??
-      (totalCentsFromServer != null
-        ? totalCentsFromServer - rawDepositCents
-        : Math.max(0, priceSummary.totalCents - rawDepositCents));
+      finalCentsFromServer != null && trustServerDeposit
+        ? finalCentsFromServer
+        : Math.max(0, authoritativeTotal - displayDepositCents);
     const displayFinalCents = Math.max(0, Number.isFinite(rawFinalCents) ? rawFinalCents : 0);
-    const depositAmountIsEstimate = depositCentsFromServer == null;
-    const finalAmountIsEstimate = finalCentsFromServer == null;
+    const depositAmountIsEstimate = depositCentsFromServer == null || !trustServerDeposit;
+    const finalAmountIsEstimate = finalCentsFromServer == null || !trustServerDeposit;
     const payFullTotalPending = paymentPriceBlocked || priceSummary.priceIsEstimate;
     const tipBlockedForEstimate = tipChoice === "now" && priceSummary.priceIsEstimate;
     return {

@@ -4,6 +4,7 @@
  */
 
 import "server-only";
+import { bookingEnv } from "@/lib/booking/env";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import {
   generateSigningToken,
@@ -38,14 +39,38 @@ const COLL = {
 } as const;
 
 /**
- * Public base URL for waiver links and emails. Must be an absolute URL in production so email clients can open links.
+ * Public base URL for waiver links (matches booking emails / Stripe — uses {@link bookingEnv.appBaseUrl}).
  */
 export function getAppBaseUrl(): string {
-  const url = process.env.APP_BASE_URL?.trim() ?? "";
-  if (!url.startsWith("https://") && !url.startsWith("http://")) {
-    console.error("[waiver] APP_BASE_URL is not set or is not absolute — signing URLs in emails will be broken");
+  return bookingEnv.appBaseUrl.replace(/\/$/, "");
+}
+
+/** Prefer this for outbound email/SMS so links stay valid if `signingUrl` on the request was built with a stale host. */
+export function buildWaiverSigningUrlFromTokenId(tokenId: string): string {
+  const id = typeof tokenId === "string" ? tokenId.trim() : "";
+  if (!id) return "";
+  const baseUrl = getAppBaseUrl();
+  return `${baseUrl}/waiver/sign?token=${encodeURIComponent(id)}`;
+}
+
+/** When `groupSigningUrl` was not denormalized on the request (older bookings), resolve from `waiverGroupTokens`. */
+export async function getActiveGroupSigningUrlForBooking(bookingId: string): Promise<string | null> {
+  const id = typeof bookingId === "string" ? bookingId.trim() : "";
+  if (!id) return null;
+  const db = getDb();
+  const snap = await db.collection(COLL.groupTokens).where("bookingId", "==", id).limit(10).get();
+  if (snap.empty) return null;
+  const nowMs = Date.now();
+  const baseUrl = getAppBaseUrl();
+  for (const d of snap.docs) {
+    const data = d.data() as WaiverGroupTokenDoc;
+    const expAt = data.expiresAt as { toDate?: () => Date; seconds?: number };
+    const expDate = typeof expAt?.toDate === "function" ? expAt.toDate() : new Date((expAt?.seconds ?? 0) * 1000);
+    if (expDate.getTime() > nowMs) {
+      return `${baseUrl}/waiver/sign?group=${encodeURIComponent(d.id)}`;
+    }
   }
-  return url.replace(/\/$/, "");
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +278,8 @@ export function createGroupTokenInTransaction(
   bookingId: string,
   templateId: string,
   templateVersion: number,
-  partySize: number
+  partySize: number,
+  primaryWaiverRequestId: string
 ): { groupSigningUrl: string } {
   const { Timestamp } = getFirestoreExports();
   const groupToken = generateGroupToken();
@@ -272,6 +298,7 @@ export function createGroupTokenInTransaction(
     expiresAt: Timestamp.fromDate(expiresAt),
   };
   tx.set(db.collection(COLL.groupTokens).doc(groupToken), doc);
+  tx.update(db.collection(COLL.requests).doc(primaryWaiverRequestId), { groupSigningUrl });
   return { groupSigningUrl };
 }
 
@@ -471,6 +498,7 @@ export async function updateRequest(
     signerDob?: string;
     signingTokenId?: string;
     signingUrl?: string;
+    groupSigningUrl?: string;
   }
 ): Promise<void> {
   const db = getDb();

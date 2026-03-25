@@ -6,6 +6,7 @@
 import { brand } from "@/content/brand";
 import { bookingEnv } from "@/lib/booking/env";
 import type { WaiverEmailAdapter, WaiverInviteParams, WaiverReminderParams } from "./email-adapter";
+import { getDefaultTokenExpiryDays } from "./tokens";
 
 const BREVO_API_BASE = "https://api.brevo.com/v3";
 const PRIMARY = "#50bdba";
@@ -58,8 +59,18 @@ function formatBookingSummary(summary: WaiverInviteParams["bookingSummary"]): st
   return parts.length ? parts.join("\n") : "Your booking";
 }
 
+function groupSigningBlock(groupSigningUrl: string, partySize: number | undefined): string {
+  if (!groupSigningUrl.trim() || (partySize ?? 1) <= 1) return "";
+  return `
+    <p style="margin:20px 0 8px;font-size:14px;font-weight:600;color:${DARK};">For your other guests</p>
+    <p style="margin:0 0 8px;font-size:14px;color:#196a87;line-height:1.5;">Each person needs to sign. Share this link with everyone in your party:</p>
+    <p style="word-break:break-all;font-size:13px;margin:0 0 16px;"><a href="${groupSigningUrl}" style="color:#196a87;">${groupSigningUrl}</a></p>`;
+}
+
 function buildInviteHtml(params: WaiverInviteParams): string {
   const summary = formatBookingSummary(params.bookingSummary);
+  const groupBlock = params.groupSigningUrl ? groupSigningBlock(params.groupSigningUrl, params.bookingSummary.partySize) : "";
+  const expiryDays = getDefaultTokenExpiryDays();
   return `
 <!DOCTYPE html>
 <html>
@@ -75,7 +86,8 @@ function buildInviteHtml(params: WaiverInviteParams): string {
     <p><a href="${params.signingUrl}" style="display:inline-block;background:${DARK};color:#fff;padding:12px 24px;text-decoration:none;border-radius:8px;font-weight:600;">Sign waiver</a></p>
     <p style="color:#196a87;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
     <p style="word-break:break-all;font-size:13px;">${params.signingUrl}</p>
-    <p style="color:#196a87;font-size:14px;">This link is unique to you and will expire after 30 days.</p>
+    ${groupBlock}
+    <p style="color:#196a87;font-size:14px;">These links stay valid for about <strong>${expiryDays} days</strong> (or until everyone has signed).</p>
   </div>
 </body>
 </html>`;
@@ -83,6 +95,7 @@ function buildInviteHtml(params: WaiverInviteParams): string {
 
 function buildReminderHtml(params: WaiverReminderParams): string {
   const summary = formatBookingSummary(params.bookingSummary);
+  const groupBlock = params.groupSigningUrl ? groupSigningBlock(params.groupSigningUrl, params.bookingSummary.partySize) : "";
   return `
 <!DOCTYPE html>
 <html>
@@ -97,6 +110,7 @@ function buildReminderHtml(params: WaiverReminderParams): string {
     </div>
     <p><a href="${params.signingUrl}" style="display:inline-block;background:${DARK};color:#fff;padding:12px 24px;text-decoration:none;border-radius:8px;font-weight:600;">Sign waiver</a></p>
     <p style="color:#196a87;font-size:14px;">If the button doesn't work, copy this link: ${params.signingUrl}</p>
+    ${groupBlock}
   </div>
 </body>
 </html>`;

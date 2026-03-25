@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
 import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
-import { parseSlotId } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
 import type { Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
@@ -64,6 +65,10 @@ export async function GET(request: NextRequest) {
     const exp = expDoc.data() as Experience & { slug?: string };
     const expSlug = exp?.slug ?? "";
     const allExpIds = getExperienceIdVariants(experienceId, expSlug);
+    const ticketRangeStart = addCalendarDaysToDateStr(
+      date,
+      -bookingLookbackDaysFromMaxDuration(24 * 14),
+    );
 
     // Set DISABLE_LEGACY_HOLDS_FALLBACK=true once all holds have startDateStr to skip the extra query.
     const legacyFallbackEnabled = process.env.DISABLE_LEGACY_HOLDS_FALLBACK !== "true";
@@ -72,7 +77,12 @@ export async function GET(request: NextRequest) {
     const [bookingsSnaps, holdsSnaps, legacyHoldsResult] = await Promise.all([
       Promise.all(
         allExpIds.map((id) =>
-          db.collection("bookings").where("experienceId", "==", id).where("startDateStr", "==", date).get()
+          db
+            .collection("bookings")
+            .where("experienceId", "==", id)
+            .where("startDateStr", ">=", ticketRangeStart)
+            .where("startDateStr", "<=", date)
+            .get()
         )
       ),
       Promise.all(
@@ -81,7 +91,8 @@ export async function GET(request: NextRequest) {
             .collection("holds")
             .where("experienceId", "==", id)
             .where("status", "==", "active")
-            .where("startDateStr", "==", date)
+            .where("startDateStr", ">=", ticketRangeStart)
+            .where("startDateStr", "<=", date)
             .get()
         )
       ),
@@ -113,10 +124,11 @@ export async function GET(request: NextRequest) {
       for (const doc of snap.docs) {
         if (seenBookingIds.has(doc.id)) continue;
         seenBookingIds.add(doc.id);
-        const b = doc.data() as { slotId?: string; partySize?: number; status?: string };
-        if (!b.slotId || typeof b.partySize !== "number") continue;
+        const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; status?: string };
+        const slotRawB = b.slotId ?? b.slot_id;
+        if (!slotRawB || typeof b.partySize !== "number") continue;
         if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-        const parsed = parseSlotId(b.slotId);
+        const parsed = parseSlotIdRelaxed(slotRawB);
         if (!parsed || parsed.dateStr !== date) continue;
         sold += b.partySize;
       }
@@ -124,11 +136,19 @@ export async function GET(request: NextRequest) {
 
     let onHold = 0;
     for (const doc of Array.from(holdDocMap.values())) {
-      const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
-      if (!h.slotId || typeof h.partySize !== "number") continue;
+      const h = doc.data() as {
+        slotId?: string;
+        slot_id?: string;
+        startDateStr?: string;
+        partySize?: number;
+        status?: string;
+        expiresAt?: { toDate(): Date };
+      };
+      const slotRawH = h.slotId ?? h.slot_id;
+      if (!slotRawH || typeof h.partySize !== "number") continue;
       if (h.status !== "active") continue;
       if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
-      const holdDate = h.startDateStr ?? parseSlotId(h.slotId)?.dateStr;
+      const holdDate = h.startDateStr ?? parseSlotIdRelaxed(slotRawH)?.dateStr;
       if (holdDate !== date) continue;
       onHold += h.partySize;
     }

@@ -25,7 +25,11 @@ import {
   type ReminderTemplateKey,
 } from "@/lib/booking/reminder-retry";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
-import { getRequestById } from "@/lib/waiver/firestore";
+import {
+  getRequestById,
+  buildWaiverSigningUrlFromTokenId,
+  getActiveGroupSigningUrlForBooking,
+} from "@/lib/waiver/firestore";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
@@ -128,11 +132,30 @@ export async function POST(request: NextRequest) {
     const customerName = booking.customer?.name?.trim() ?? "Guest";
     if (!toEmail) continue;
     let waiverSigningUrl: string | null = null;
+    let waiverGroupSigningUrl: string | null = null;
     if (booking.waiver?.requestId) {
       const req = await getRequestById(booking.waiver.requestId);
-      if (req?.status === "pending" && req.signingUrl) waiverSigningUrl = req.signingUrl;
+      if (req?.status === "pending") {
+        if (req.signingTokenId) waiverSigningUrl = buildWaiverSigningUrlFromTokenId(req.signingTokenId);
+        else if (req.signingUrl) waiverSigningUrl = req.signingUrl;
+        if ((booking.partySize ?? 1) > 1) {
+          waiverGroupSigningUrl =
+            req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(bookingId)) ?? null;
+        }
+      }
     }
-    const params = { to: toEmail, customerName, experienceName, tripDate: tripDateStr, startTime: startTimeStr, locationText, locationAddress: locationAddress || undefined, waiverSigningUrl, whatToBring };
+    const params = {
+      to: toEmail,
+      customerName,
+      experienceName,
+      tripDate: tripDateStr,
+      startTime: startTimeStr,
+      locationText,
+      locationAddress: locationAddress || undefined,
+      waiverSigningUrl,
+      waiverGroupSigningUrl,
+      whatToBring,
+    };
     const claimed = await tryClaimSend(db, bookingId, templateKey);
     if (!claimed) continue;
     try {
@@ -269,10 +292,16 @@ export async function POST(request: NextRequest) {
         }
 
         let waiverSigningUrl: string | null = null;
+        let waiverGroupSigningUrl: string | null = null;
         if (booking.waiver?.requestId) {
           const req = await getRequestById(booking.waiver.requestId);
-          if (req?.status === "pending" && req.signingUrl) {
-            waiverSigningUrl = req.signingUrl;
+          if (req?.status === "pending") {
+            if (req.signingTokenId) waiverSigningUrl = buildWaiverSigningUrlFromTokenId(req.signingTokenId);
+            else if (req.signingUrl) waiverSigningUrl = req.signingUrl;
+            if ((booking.partySize ?? 1) > 1) {
+              waiverGroupSigningUrl =
+                req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(doc.id)) ?? null;
+            }
           }
         }
 
@@ -285,6 +314,7 @@ export async function POST(request: NextRequest) {
           locationText,
           locationAddress: locationAddress || undefined,
           waiverSigningUrl,
+          waiverGroupSigningUrl,
           whatToBring,
         };
 

@@ -19,6 +19,8 @@ export interface BookingReminderParams {
   locationAddress?: string;
   /** If waiver not yet signed, pass signing URL to include in email. */
   waiverSigningUrl?: string | null;
+  /** Share link for additional party members (when party size &gt; 1). */
+  waiverGroupSigningUrl?: string | null;
   /** Short "what to bring" (e.g. from experience). */
   whatToBring?: string[];
 }
@@ -77,7 +79,13 @@ function sharedInstructionsHtml(params: BookingReminderParams): string {
 }
 
 /** Waiver block (only when waiverSigningUrl is set). */
-function waiverBlockHtml(waiverSigningUrl: string): string {
+function waiverBlockHtml(waiverSigningUrl: string, waiverGroupSigningUrl?: string | null): string {
+  const group =
+    waiverGroupSigningUrl && waiverGroupSigningUrl.trim()
+      ? `
+        <p style="margin: 16px 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;"><strong style="color:${DARK};">Other guests in your party:</strong> each person needs to sign. Share this link:</p>
+        <p style="margin: 0; word-break: break-all; font-size: 13px;"><a href="${escapeHtml(waiverGroupSigningUrl)}" target="_blank" rel="noopener" style="color: ${PRIMARY};">${escapeHtml(waiverGroupSigningUrl)}</a></p>`
+      : "";
   return `
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 20px 0;">
     <tr>
@@ -85,6 +93,7 @@ function waiverBlockHtml(waiverSigningUrl: string): string {
         <p style="margin: 0 0 12px; font-size: 14px; font-weight: 600; color: ${DARK};">✍️ Sign your waiver</p>
         <p style="margin: 0 0 12px; font-size: 14px; color: ${MUTED}; line-height: 1.5;">You still need to sign the waiver before your trip. It only takes a minute.</p>
         <a href="${escapeHtml(waiverSigningUrl)}" target="_blank" rel="noopener" style="display: inline-block; background: ${DARK}; color: #fff; padding: 12px 24px; font-size: 14px; font-weight: 600; text-decoration: none; border-radius: 8px;">Sign waiver now</a>
+        ${group}
       </td>
     </tr>
   </table>`;
@@ -102,7 +111,9 @@ const BASE_STYLES = `margin:0;padding:0;font-family:-apple-system,BlinkMacSystem
 const CONTAINER = `max-width:560px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,28,48,0.08);overflow:hidden;`;
 
 export function buildReminder1WeekHtml(params: BookingReminderParams): string {
-  const waiverBlock = params.waiverSigningUrl ? waiverBlockHtml(params.waiverSigningUrl) : "";
+  const waiverBlock = params.waiverSigningUrl
+    ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
+    : "";
   const instructions = sharedInstructionsHtml(params);
   const bring = whatToBringHtml(params.whatToBring);
   return `
@@ -134,7 +145,9 @@ export function buildReminder1WeekHtml(params: BookingReminderParams): string {
 }
 
 export function buildReminder24hHtml(params: BookingReminderParams): string {
-  const waiverBlock = params.waiverSigningUrl ? waiverBlockHtml(params.waiverSigningUrl) : "";
+  const waiverBlock = params.waiverSigningUrl
+    ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
+    : "";
   const instructions = sharedInstructionsHtml(params);
   const bring = whatToBringHtml(params.whatToBring);
   return `
@@ -166,7 +179,9 @@ export function buildReminder24hHtml(params: BookingReminderParams): string {
 }
 
 export function buildReminderDayOfHtml(params: BookingReminderParams): string {
-  const waiverBlock = params.waiverSigningUrl ? waiverBlockHtml(params.waiverSigningUrl) : "";
+  const waiverBlock = params.waiverSigningUrl
+    ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
+    : "";
   const instructions = sharedInstructionsHtml(params);
   const bring = whatToBringHtml(params.whatToBring);
   return `

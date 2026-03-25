@@ -70,12 +70,25 @@ export async function POST(request: NextRequest) {
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     if (action === "unblock") {
-      const blocksSnap = await db
-        .collection("blocks")
-        .where("experienceId", "==", experienceId)
-        .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-        .get();
-      const toDelete = blocksSnap.docs.filter((doc) => {
+      const blockSnapsByVariant = await Promise.all(
+        experienceIdVariants.map((variantId) =>
+          db
+            .collection("blocks")
+            .where("experienceId", "==", variantId)
+            .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+            .get()
+        )
+      );
+      const mergedBlockDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+      const seenBlockDocIds = new Set<string>();
+      for (const snap of blockSnapsByVariant) {
+        for (const doc of snap.docs) {
+          if (seenBlockDocIds.has(doc.id)) continue;
+          seenBlockDocIds.add(doc.id);
+          mergedBlockDocs.push(doc);
+        }
+      }
+      const toDelete = mergedBlockDocs.filter((doc) => {
         const b = doc.data() as { boatId?: string | null; endAt: { toDate(): Date } };
         const endAt = b.endAt?.toDate?.();
         if (!endAt || endAt.getTime() < dayStart.getTime()) return false;

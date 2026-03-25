@@ -633,7 +633,7 @@ export async function POST(request: NextRequest) {
     const holdId = db.collection("holds").doc().id;
     const holdRequestFingerprint = input.holdRequestId ? computeHoldRequestFingerprint(input) : null;
 
-    const parsedSlotForHold = parseSlotId(input.slotId);
+    const parsedSlotForHold = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
     const addonSelectionsSnapshot = input.addonSelections.map((s) => {
       const addon = addonsById.get(s.addonId);
       const priceCents =
@@ -1147,10 +1147,26 @@ export async function POST(request: NextRequest) {
           }
         };
         if (input.boatId) {
-          const oppSnap = await tx.get(
-            db.collection("holds").where("boatId", "==", input.boatId).where("startDateStr", "==", parsedSlotForHold.dateStr)
-          );
-          await scanOppositeSharedHolds(oppSnap.docs);
+          const oppSnaps = await Promise.all([
+            tx.get(
+              db.collection("holds").where("boatId", "==", input.boatId).where("startDateStr", "==", parsedSlotForHold.dateStr)
+            ),
+            ...experienceIdVariantsForAssert.map((v) =>
+              tx.get(
+                db.collection("holds").where("experienceId", "==", v).where("startDateStr", "==", parsedSlotForHold.dateStr)
+              )
+            ),
+          ]);
+          const mergedOppDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
+          const seenOppHoldIds = new Set<string>();
+          for (const s of oppSnaps) {
+            for (const d of s.docs) {
+              if (seenOppHoldIds.has(d.id)) continue;
+              seenOppHoldIds.add(d.id);
+              mergedOppDocs.push(d);
+            }
+          }
+          await scanOppositeSharedHolds(mergedOppDocs);
         } else if (input.experienceId) {
           const oppSnaps = await Promise.all(
             experienceIdVariantsForAssert.map((v) =>

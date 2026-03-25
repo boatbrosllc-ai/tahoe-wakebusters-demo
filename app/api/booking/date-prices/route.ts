@@ -20,7 +20,8 @@ import { getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents, isDateInAny
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
-import { getDateStrInSlotTimezone, parseSlotId } from "@/lib/booking/experience-slots";
+import { getDateStrInSlotTimezone, isSeasonalAllowed, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
 import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -166,10 +167,15 @@ export async function GET(request: NextRequest) {
         calendarRatesForDayLoop = await fetchMergedPricingCalendarRatesForBoatTypes(db, [bt]);
       }
     }
+    const seasonalForPricing = exp.seasonal;
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
       const dateStr = toDateStrCentral(d);
       dateStrs.push(dateStr);
+      if (isTicketed && seasonalForPricing?.enabled && !isSeasonalAllowed(seasonalForPricing, d, dateStr)) {
+        prices[dateStr] = 0;
+        continue;
+      }
       prices[dateStr] = useListingBoatCalendar
         ? getEffectiveBoatRatePriceCents(
             {
@@ -202,6 +208,10 @@ export async function GET(request: NextRequest) {
 
       const startStr = dateStrs[0];
       const endStr = dateStrs[dateStrs.length - 1];
+      const ticketedBookingRangeStart = addCalendarDaysToDateStr(
+        startStr,
+        -bookingLookbackDaysFromMaxDuration(chosenRate.durationHours ?? 12),
+      );
 
       const allExpIds = getExperienceIdVariants(experienceId, effectiveSlug);
       // Bookings: one query per experience ID variant, then merge (so sunset/holiday match regardless of stored experienceId)
@@ -209,7 +219,7 @@ export async function GET(request: NextRequest) {
         allExpIds.map((expId) =>
           db.collection("bookings")
             .where("experienceId", "==", expId)
-            .where("startDateStr", ">=", startStr)
+            .where("startDateStr", ">=", ticketedBookingRangeStart)
             .where("startDateStr", "<=", endStr)
             .get()
         )
@@ -218,7 +228,7 @@ export async function GET(request: NextRequest) {
         allExpIds.map((expId) =>
           db.collection("holds")
             .where("experienceId", "==", expId)
-            .where("startDateStr", ">=", startStr)
+            .where("startDateStr", ">=", ticketedBookingRangeStart)
             .where("startDateStr", "<=", endStr)
             .get()
         )
@@ -258,26 +268,39 @@ export async function GET(request: NextRequest) {
       const heldByDate: Record<string, number> = {};
       for (const snap of bookingsSnaps) {
         for (const doc of snap.docs) {
-          const b = doc.data() as { slotId?: string; partySize?: number; status?: string };
-          if (!b.slotId || typeof b.partySize !== "number") continue;
+          const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; status?: string };
+          const slotRaw = b.slotId ?? b.slot_id;
+          if (!slotRaw || typeof b.partySize !== "number") continue;
           if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-          const parsed = parseSlotId(b.slotId);
+          const parsed = parseSlotIdRelaxed(slotRaw);
           if (!parsed || !dateSet.has(parsed.dateStr)) continue;
           soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
         }
       }
       for (const doc of Array.from(holdDocMap.values())) {
-        const h = doc.data() as { slotId?: string; startDateStr?: string; partySize?: number; status?: string; expiresAt?: { toDate(): Date } };
-        if (!h.slotId || typeof h.partySize !== "number") continue;
+        const h = doc.data() as {
+          slotId?: string;
+          slot_id?: string;
+          startDateStr?: string;
+          partySize?: number;
+          status?: string;
+          expiresAt?: { toDate(): Date };
+        };
+        const slotRawH = h.slotId ?? h.slot_id;
+        if (!slotRawH || typeof h.partySize !== "number") continue;
         if (h.status !== "active") continue;
         if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
-        const holdDate = h.startDateStr ?? parseSlotId(h.slotId)?.dateStr;
+        const holdDate = h.startDateStr ?? parseSlotIdRelaxed(slotRawH)?.dateStr;
         if (!holdDate || !dateSet.has(holdDate)) continue;
         heldByDate[holdDate] = (heldByDate[holdDate] ?? 0) + h.partySize;
       }
 
       ticketsAvailableByDate = {};
       for (const dateStr of dateStrs) {
+        if (seasonalForPricing?.enabled && !isSeasonalAllowed(seasonalForPricing, new Date(dateStr + "T12:00:00.000Z"), dateStr)) {
+          ticketsAvailableByDate[dateStr] = 0;
+          continue;
+        }
         const sold = soldByDate[dateStr] ?? 0;
         const held = heldByDate[dateStr] ?? 0;
         ticketsAvailableByDate[dateStr] = Math.max(0, total - sold - held);

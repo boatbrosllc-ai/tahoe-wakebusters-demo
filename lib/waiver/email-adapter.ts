@@ -7,6 +7,8 @@ export interface WaiverInviteParams {
   to: string;
   name: string;
   signingUrl: string;
+  /** Share link for additional guests when party size &gt; 1. */
+  groupSigningUrl?: string;
   bookingSummary: {
     experienceName?: string;
     tripDate?: string;
@@ -20,6 +22,7 @@ export interface WaiverReminderParams {
   to: string;
   name: string;
   signingUrl: string;
+  groupSigningUrl?: string;
   bookingSummary: {
     experienceName?: string;
     tripDate?: string;

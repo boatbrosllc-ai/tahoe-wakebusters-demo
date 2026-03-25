@@ -25,7 +25,7 @@ import { bookingError } from "@/lib/booking/debug";
 import { getMonthRange, toMonthKey, getChicagoToday, getDaysInMonth, getMsUntilNextChicagoMidnight } from "@/lib/booking/booking-date-range";
 import { validatePhone, formatPhoneHint } from "@/lib/booking/validate-phone";
 import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
-import { timeOfDayMinutes } from "@/lib/booking/booking-calendar-utils";
+import { slotTimeSortKey } from "@/lib/booking/booking-calendar-utils";
 import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
 import {
   openSlotsForDateFromMonthSlots,
@@ -764,7 +764,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           })
         : openSlotsForDate;
     const sorted = [...filtered].sort(
-      (a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt)
+      (a, b) => slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id)
     );
     const withLabel = sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
     const seen = new Set<string>();
@@ -788,6 +788,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => (selectedRateId ? ratesForSelection.find((r) => r.id === selectedRateId) ?? null : null),
     [selectedRateId, ratesForSelection]
   );
+
+  // Charter: date-prices + effectiveRateCents follow `selectedRateIdForCalendar`; checkout uses slot-derived `selectedRateId`.
+  // Keep them aligned so totals/deposit are never computed from a different duration tier than the selected slot.
+  useEffect(() => {
+    if (isTicketed) return;
+    if (!selectedRateId) return;
+    if (selectedRateIdForCalendar === selectedRateId) return;
+    setSelectedRateIdForCalendar(selectedRateId);
+  }, [isTicketed, selectedRateId, selectedRateIdForCalendar]);
 
   // Price ready for step 4: either effective rate from API or selected rate from cache (avoids $0.00 before fetch)
   const priceReady = effectiveRateCents != null || selectedRate != null;
@@ -1964,8 +1973,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     } else if (step === 4) {
       const navigateFromStep4 = () => {
-        setSelectedSlot(null);
-        setSelectedRateIdForCalendar(null);
+        // Keep date, duration, and time slot when leaving checkout so "Back" does not blank step 2 / break step 3.
         if (isTicketed) {
           if (isCalendarFirstFlow) {
             onOpenChange(false);
@@ -2769,7 +2777,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       ) : (() => {
                         const slotsForDay = openSlotsByTime
                           .filter((s) => isoToChicagoDateStr(s.startAt) === selectedDate)
-                          .sort((a, b) => timeOfDayMinutes(a.startAt) - timeOfDayMinutes(b.startAt));
+                          .sort((a, b) => slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id));
                         return slotsForDay.length === 0 ? (
                           <p className="text-xs text-brand-muted">No open slots this day.</p>
                         ) : (
@@ -3194,7 +3202,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 <span className="text-sm font-semibold text-brand-dark">Deposit due now</span>
                                 {priceReady ? (
                                   <span className="text-xl font-bold text-brand-primary">
-                                    {depositCentsFromServer == null ? "~" : ""}
                                     {formatMoneyNonNegative(displayDepositCents)}
                                   </span>
                                 ) : (
@@ -3613,7 +3620,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                   `$${(priceSummary.totalCents / 100).toFixed(2)}`
                                 )
                               : priceReady
-                                ? `${depositCentsFromServer == null ? "~" : ""}${formatMoneyNonNegative(displayDepositCents)}`
+                                ? formatMoneyNonNegative(displayDepositCents)
                                 : null}
                             {!isTicketed && !payFullAmount && !priceReady && (
                               <span className="inline-block h-6 w-20 animate-pulse rounded bg-brand-primary/20 align-middle" aria-hidden />
@@ -3833,10 +3840,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               Exact deposit shown in Stripe
                             </span>
                           ) : (
-                            <>
-                              {depositAmountIsEstimate ? "~" : ""}
-                              {formatMoneyNonNegative(displayDepositCents)}
-                            </>
+                            formatMoneyNonNegative(displayDepositCents)
                           )}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-8 w-24 align-middle animate-pulse rounded bg-brand-primary/20" aria-hidden />
@@ -3886,10 +3890,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           ) : depositAmountIsEstimate && depositCentsFromServer == null && totalCentsFromServer == null ? (
                             "—"
                           ) : (
-                            <>
-                              {depositAmountIsEstimate ? "~" : ""}
-                              {formatMoneyNonNegative(displayDepositCents)}
-                            </>
+                            formatMoneyNonNegative(displayDepositCents)
                           )}
                           {!isTicketed && !payFullAmount && !priceReady && (
                             <span className="inline-block h-5 w-20 align-middle animate-pulse rounded bg-brand-dark/10" aria-hidden />

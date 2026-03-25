@@ -154,7 +154,17 @@ export async function sendBookingConfirmationEmail(
   const html = renderBookingConfirmationHtml(booking, context);
 
   const templateId = bookingEnv.brevoBookingTemplateId;
-  const { boatName, startAt, endAt, durationHours, locationText, cancellationPolicyText, waiverSigningUrl, addonsSummary: addonsSummaryFromContext } = context;
+  const {
+    boatName,
+    startAt,
+    endAt,
+    durationHours,
+    locationText,
+    cancellationPolicyText,
+    waiverSigningUrl,
+    waiverGroupSigningUrl,
+    addonsSummary: addonsSummaryFromContext,
+  } = context;
   // Only use deposit-specific copy when we have valid stripe.depositAmountCents (defensive guard; matches email-templates).
   const stripe = booking.stripe as { totalAmountCents?: number; depositAmountCents?: number; finalAmountCents?: number } | undefined;
   const hasValidDepositAmount = typeof stripe?.depositAmountCents === "number" && stripe.depositAmountCents > 0;
@@ -217,6 +227,7 @@ export async function sendBookingConfirmationEmail(
           locationText,
           isDeposit: isDepositForTemplate,
           waiverSigningUrl: waiverSigningUrl ?? "",
+          waiverGroupSigningUrl: waiverGroupSigningUrl ?? "",
           manageLink: "",
           /** Optional bookmark when `RECEIPT_TOKEN_SECRET` is set; empty string otherwise. Confirmation HTML is the receipt — not a separate receipt link. */
           receiptLink: receiptLinkResolved,

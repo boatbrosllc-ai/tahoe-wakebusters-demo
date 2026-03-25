@@ -4,7 +4,15 @@
 
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getTemplateById, updateRequest, getTokenById, isTokenValid, expireStalePendingRequests } from "@/lib/waiver/firestore";
+import {
+  getTemplateById,
+  updateRequest,
+  getTokenById,
+  isTokenValid,
+  expireStalePendingRequests,
+  buildWaiverSigningUrlFromTokenId,
+  getActiveGroupSigningUrlForBooking,
+} from "@/lib/waiver/firestore";
 import type { WaiverRequest } from "@/lib/waiver/types";
 import { waiverEmailBrevo } from "@/lib/waiver/email-brevo";
 import { logNotificationSent } from "@/lib/booking/email-log";
@@ -138,10 +146,18 @@ export async function runWaiverReminderCron(
       if (template?.sendWaiverReminder === false) continue;
 
       try {
+        const signingUrlForEmail = full.signingTokenId
+          ? buildWaiverSigningUrlFromTokenId(full.signingTokenId)
+          : full.signingUrl;
+        const groupUrlForEmail =
+          (partySize ?? 1) > 1
+            ? full.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(full.bookingId)) ?? undefined
+            : undefined;
         await waiverEmailBrevo.sendWaiverReminder({
           to: toEmail,
           name: toName,
-          signingUrl: full.signingUrl,
+          signingUrl: signingUrlForEmail,
+          groupSigningUrl: groupUrlForEmail,
           bookingSummary: { experienceName, tripDate, startTime, endTime, partySize },
         });
         await logNotificationSent({

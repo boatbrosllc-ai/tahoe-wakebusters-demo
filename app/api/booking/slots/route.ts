@@ -14,6 +14,7 @@ import {
   parseSlotIdRelaxed,
   toDateStrOnly,
   isSeasonalAllowed,
+  OPERATING_END_HOUR,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
@@ -23,6 +24,12 @@ import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
+import {
+  addCalendarDaysToDateStr,
+  bookingIntervalMsFromSlotFields,
+  bookingLookbackDaysFromMaxDuration,
+  intervalOverlapsRequestWindow,
+} from "@/lib/booking/booking-interval";
 import {
   DEFAULT_LEGACY_HOLDS_PAGE_SIZE,
   scanLegacyActiveHoldsForExperience,
@@ -131,17 +138,16 @@ function mergeTicketedLegacyHoldDocsIntoSpots(
   tSeenHoldIds: Set<string>,
   startDate: string,
   endDate: string,
+  requestWindowStart: Date,
+  requestWindowEnd: Date,
   processHoldForCapacity: (doc: { id: string; data: () => Record<string, unknown> }) => void,
 ): void {
   for (const doc of docs) {
     if (tSeenHoldIds.has(doc.id)) continue;
     const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
     if (d.startDateStr) continue;
-    const slotIdRaw = d.slotId ?? d.slot_id;
-    const parsedH = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
-    const dateStrH =
-      parsedH?.dateStr ?? (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
-    if (!dateStrH || dateStrH < startDate || dateStrH > endDate) continue;
+    const ivH = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
+    if (!ivH || !intervalOverlapsRequestWindow(ivH.startMs, ivH.endMs, requestWindowStart, requestWindowEnd)) continue;
     tSeenHoldIds.add(doc.id);
     processHoldForCapacity(doc);
   }
@@ -300,6 +306,10 @@ export async function GET(request: NextRequest) {
         );
 
         const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
+        const ticketedStartDateStrLower = addCalendarDaysToDateStr(
+          startDate,
+          -bookingLookbackDaysFromMaxDuration(tDurationHours),
+        );
 
         const spotsByDate = new Map<string, number>();
         const charterLockedDates = new Set<string>();
@@ -324,6 +334,7 @@ export async function GET(request: NextRequest) {
           const parsed = parseSlotIdRelaxed(slotIdRaw);
           if (!parsed) return;
           const { dateStr } = parsed;
+          if (dateStr < startDate || dateStr > endDate) return;
           if (b.bookingMode === "charter") {
             charterLockedDates.add(dateStr);
           } else {
@@ -348,7 +359,7 @@ export async function GET(request: NextRequest) {
             tAllExpIds.map(expId =>
               db.collection("bookings")
                 .where("experienceId", "==", expId)
-                .where("startDateStr", ">=", startDate)
+                .where("startDateStr", ">=", ticketedStartDateStrLower)
                 .where("startDateStr", "<=", endDate)
                 .get()
             )
@@ -377,7 +388,7 @@ export async function GET(request: NextRequest) {
                 db.collection("bookings")
                   .where("experienceId", "==", expId)
                   .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-                  .where("startDateStr", ">=", startDate)
+                  .where("startDateStr", ">=", ticketedStartDateStrLower)
                   .where("startDateStr", "<=", endDate)
                   .limit(LEGACY_BOOKING_SCAN_LIMIT)
                   .get()
@@ -426,12 +437,8 @@ export async function GET(request: NextRequest) {
                 if (tSeenBookingIds.has(doc.id)) continue;
                 const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
                 if (d.startDateStr) continue;
-                const slotIdRaw = d.slotId ?? d.slot_id;
-                const parsedL = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
-                const ds =
-                  parsedL?.dateStr ??
-                  (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
-                if (!ds || ds < startDate || ds > endDate) continue;
+                const ivLegacyT = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
+                if (!ivLegacyT || !intervalOverlapsRequestWindow(ivLegacyT.startMs, ivLegacyT.endMs, start, end)) continue;
                 tSeenBookingIds.add(doc.id);
                 processBookingForCapacity(doc);
               }
@@ -457,6 +464,7 @@ export async function GET(request: NextRequest) {
           const parsed = parseSlotIdRelaxed(slotIdRaw);
           if (!parsed) return;
           const { dateStr } = parsed;
+          if (dateStr < startDate || dateStr > endDate) return;
           // Charter holds do not reduce shared ticket capacity
           if (h.bookingMode === "charter") return;
           spotsByDate.set(dateStr, (spotsByDate.get(dateStr) ?? 0) + (h.partySize ?? 0));
@@ -468,7 +476,7 @@ export async function GET(request: NextRequest) {
             tAllExpIds.map(expId =>
               db.collection("holds")
                 .where("experienceId", "==", expId)
-                .where("startDateStr", ">=", startDate)
+                .where("startDateStr", ">=", ticketedStartDateStrLower)
                 .where("startDateStr", "<=", endDate)
                 .get()
             )
@@ -507,7 +515,15 @@ export async function GET(request: NextRequest) {
                   count: result.docs.length,
                 });
               }
-              mergeTicketedLegacyHoldDocsIntoSpots(result.docs, tSeenHoldIds, startDate, endDate, processHoldForCapacity);
+              mergeTicketedLegacyHoldDocsIntoSpots(
+                result.docs,
+                tSeenHoldIds,
+                startDate,
+                endDate,
+                start,
+                end,
+                processHoldForCapacity,
+              );
             });
           } catch (legacyExpiresErr) {
             const lem = legacyExpiresErr instanceof Error ? legacyExpiresErr.message : String(legacyExpiresErr);
@@ -529,7 +545,15 @@ export async function GET(request: NextRequest) {
                       timedOut,
                     });
                   }
-                  mergeTicketedLegacyHoldDocsIntoSpots(docs, tSeenHoldIds, startDate, endDate, processHoldForCapacity);
+                  mergeTicketedLegacyHoldDocsIntoSpots(
+                    docs,
+                    tSeenHoldIds,
+                    startDate,
+                    endDate,
+                    start,
+                    end,
+                    processHoldForCapacity,
+                  );
                 })
               );
             } catch (paginationErr) {
@@ -584,7 +608,6 @@ export async function GET(request: NextRequest) {
         for (const { dateStr, startHour, startMinute, durationHours: dur } of ticketedGrid) {
           const slotId = buildSlotId(dateStr, startHour, dur, startMinute);
           const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, dur, startMinute);
-          // Ticketed: do not filter by seasonal here so calendar always shows dates. Seasonal is enforced at booking (create-hold, create-checkout).
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
           const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
@@ -620,6 +643,11 @@ export async function GET(request: NextRequest) {
           });
         }
         tSlots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
+        const seasonalTicketed = expDataFull?.seasonal;
+        const tSlotsReturned =
+          seasonalTicketed?.enabled
+            ? tSlots.filter((s) => isSeasonalAllowed(seasonalTicketed, new Date(s.startAt), s.dateStr))
+            : tSlots;
         const ticketedPartial =
           legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed;
         if (legacyHoldsScanCapHit) {
@@ -635,7 +663,7 @@ export async function GET(request: NextRequest) {
           ...(ticketedPartial ? { "X-Slots-Partial-Data": "true" } : {}),
         };
         return NextResponse.json(
-          { slots: tSlots, ...(ticketedPartial ? { partialData: true } : {}) },
+          { slots: tSlotsReturned, ...(ticketedPartial ? { partialData: true } : {}) },
           { headers: ticketedHeaders },
         );
       }
@@ -643,6 +671,12 @@ export async function GET(request: NextRequest) {
 
       const durations = ratesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
       const durationsUnique = Array.from(new Set(durations));
+      const maxDurationCharterSlots = Math.max(...durationsUnique, 1);
+      const charterBookingStartDateStrLower = addCalendarDaysToDateStr(
+        startDate,
+        -bookingLookbackDaysFromMaxDuration(maxDurationCharterSlots),
+      );
+      const slotDocsQueryEnd = getSlotStartEnd(endDate, OPERATING_END_HOUR, maxDurationCharterSlots, 0).end;
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
       const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
       mergedBoatDocs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
@@ -661,6 +695,7 @@ export async function GET(request: NextRequest) {
         }
         boatIds = [boatIdParam];
       }
+      let legacyQueryHitLimitCharter = false;
       // If no boats linked to this experience (e.g. boats use slug and experience has different id), still show booked slots by using boatIds from bookings.
       let bookingsFromFallback: { id: string; data: () => Record<string, unknown> }[] = [];
       if (boatIds.length === 0) {
@@ -674,6 +709,9 @@ export async function GET(request: NextRequest) {
               .get()
           )
         );
+        if (fallbackSnaps.some((snap) => snap.size === 500)) {
+          legacyQueryHitLimitCharter = true;
+        }
         const seenFallbackIds = new Set<string>();
         const mergedDocs: { id: string; data: () => Record<string, unknown> }[] = [];
         fallbackSnaps.forEach(snap =>
@@ -723,7 +761,6 @@ export async function GET(request: NextRequest) {
         if (!slotIdRaw) return;
         const parsed = parseSlotIdRelaxed(slotIdRaw);
         if (!parsed) return;
-        if (parsed.dateStr < startDate || parsed.dateStr > endDate) return;
         let slotStart: Date;
         let slotEnd: Date;
         try {
@@ -738,6 +775,7 @@ export async function GET(request: NextRequest) {
           slotStart = new Date(parsed.dateStr + "T12:00:00.000Z");
           slotEnd = new Date(slotStart.getTime() + parsed.durationHours * 60 * 60 * 1000);
         }
+        if (!intervalOverlapsRequestWindow(slotStart.getTime(), slotEnd.getTime(), start, end)) return;
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
         const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : undefined;
@@ -783,7 +821,6 @@ export async function GET(request: NextRequest) {
 
       const allBookingDocs: { id: string; data: () => Record<string, unknown> }[] = [];
       const seenBookingIds = new Set<string>();
-      let legacyQueryHitLimitCharter = false;
       let charterHoldsResolutionFailed = false;
       const LEGACY_BOOKING_SCAN_LIMIT_CH = getLegacyBookingScanLimit();
 
@@ -801,7 +838,7 @@ export async function GET(request: NextRequest) {
           allExpIds.map(expId =>
             db.collection("bookings")
               .where("experienceId", "==", expId)
-              .where("startDateStr", ">=", startDate)
+              .where("startDateStr", ">=", charterBookingStartDateStrLower)
               .where("startDateStr", "<=", endDate)
               .get()
           )
@@ -842,12 +879,10 @@ export async function GET(request: NextRequest) {
             snap.docs.forEach(doc => {
               if (seenBookingIds.has(doc.id)) return;
               const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
-              // Only include docs without startDateStr (legacy); then filter by date range via slotId.
+              // Only include docs without startDateStr (legacy); then filter by interval overlap with request window.
               if (d.startDateStr) return;
-              const slotIdRaw = d.slotId ?? d.slot_id;
-              const parsed = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
-              const dateStr = parsed?.dateStr ?? (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
-              if (!dateStr || dateStr < startDate || dateStr > endDate) return;
+              const iv = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
+              if (!iv || !intervalOverlapsRequestWindow(iv.startMs, iv.endMs, start, end)) return;
               addBookingDoc(doc);
             });
           });
@@ -880,11 +915,8 @@ export async function GET(request: NextRequest) {
               if (seenBookingIds.has(doc.id)) continue;
               const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
               if (d.startDateStr) continue;
-              const slotIdRaw = d.slotId ?? d.slot_id;
-              const parsedNc = slotIdRaw ? parseSlotIdRelaxed(slotIdRaw) : null;
-              const dateStrNc =
-                parsedNc?.dateStr ?? (typeof slotIdRaw === "string" && slotIdRaw.length >= 10 ? slotIdRaw.slice(0, 10) : null);
-              if (!dateStrNc || dateStrNc < startDate || dateStrNc > endDate) continue;
+              const ivNc = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
+              if (!ivNc || !intervalOverlapsRequestWindow(ivNc.startMs, ivNc.endMs, start, end)) continue;
               addBookingDoc(doc);
             }
           }
@@ -955,7 +987,7 @@ export async function GET(request: NextRequest) {
             .doc(bid)
             .collection("slots")
             .where("startAt", ">=", Timestamp.fromDate(start))
-            .where("startAt", "<=", Timestamp.fromDate(end))
+            .where("startAt", "<=", Timestamp.fromDate(slotDocsQueryEnd))
             .get();
           snap.docs.forEach((doc) => {
             const parsedSlot = parseSlotIdRelaxed(doc.id);
@@ -989,6 +1021,53 @@ export async function GET(request: NextRequest) {
           });
         })
       );
+
+      // Resolve expired/missing holds before building nonOpenIntervals from existingByBoatAndKey (otherwise overlapping grid cells stay "blocked" after a hold expires).
+      const charterHeldHoldIdsResolved = Array.from(
+        new Set(
+          Array.from(existingByBoatAndKey.values())
+            .filter((s) => s.status === "held")
+            .map((s) => charterSlotHoldIdByKey.get(`${s.boatId}:${s.id}`))
+            .filter((id): id is string => typeof id === "string" && id.length > 0)
+        )
+      );
+      let charterHoldResolutionSnap: import("firebase-admin").firestore.DocumentSnapshot[] = [];
+      const holdIdsToReleaseAfterResolve = new Set<string>();
+      if (charterHeldHoldIdsResolved.length > 0) {
+        try {
+          charterHoldResolutionSnap = await getHoldSnapshotsOrdered(db, charterHeldHoldIdsResolved);
+        } catch (holdResolveErr) {
+          charterHoldsResolutionFailed = true;
+          console.warn(
+            "[slots] charter held-slot hold docs fetch failed:",
+            holdResolveErr instanceof Error ? holdResolveErr.message : holdResolveErr,
+          );
+        }
+        const nowResolve = new Date();
+        charterHoldResolutionSnap.forEach((doc, i) => {
+          const hid = charterHeldHoldIdsResolved[i];
+          if (!doc.exists) {
+            holdIdsToReleaseAfterResolve.add(hid);
+            return;
+          }
+          const data = doc.data() as { status?: string; expiresAt?: { toDate(): Date } };
+          if (data?.status !== "active") {
+            holdIdsToReleaseAfterResolve.add(hid);
+            return;
+          }
+          const expAt = data?.expiresAt?.toDate?.();
+          if (expAt && expAt <= nowResolve) holdIdsToReleaseAfterResolve.add(hid);
+        });
+        if (!charterHoldsResolutionFailed) {
+          for (const row of Array.from(existingByBoatAndKey.values())) {
+            if (row.status !== "held") continue;
+            const hid = charterSlotHoldIdByKey.get(`${row.boatId}:${row.id}`);
+            if (!hid || !holdIdsToReleaseAfterResolve.has(hid)) continue;
+            row.status = "open";
+            charterSlotHoldIdByKey.delete(`${row.boatId}:${row.id}`);
+          }
+        }
+      }
 
       // Per-boat grid: wake boats use Saturday-only expanded times (9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm) on Saturday and allowedStartTimes (or hourly) on weekdays. Other boats with allowedStartTimes use those every day.
       const gridByBoatId = new Map<string, import("@/lib/booking/experience-slots").SlotGridItem[]>();
@@ -1044,14 +1123,20 @@ export async function GET(request: NextRequest) {
         }
       });
       const slots: SlotRow[] = [];
+      const intervalOverlaps = (msStart: number, msEnd: number, r: { start: number; end: number }) =>
+        msStart < r.end && msEnd > r.start;
+
       for (const bid of boatIds) {
         const grid = gridByBoatId.get(bid) ?? [];
-        const takenRanges = [
-          ...Array.from(existingByBoatAndKey.values())
-            .filter((s) => s.boatId === bid && s.status !== "open")
-            .map((s) => ({ start: new Date(s.startAt).getTime(), end: new Date(s.endAt).getTime() })),
-          ...(blockRangesByBoat.get(bid) ?? []),
-        ];
+        const nonOpenIntervals = Array.from(existingByBoatAndKey.values())
+          .filter((s) => s.boatId === bid && s.status !== "open")
+          .map((s) => ({
+            start: new Date(s.startAt).getTime(),
+            end: new Date(s.endAt).getTime(),
+            status: s.status,
+            bookingId: s.bookingId as string | null,
+          }));
+        const boatBlockRanges = blockRangesByBoat.get(bid) ?? [];
         for (const { dateStr, startHour, startMinute, durationHours } of grid) {
           const slotId = buildSlotId(dateStr, startHour, durationHours, startMinute);
           const key = `${bid}:${slotId}`;
@@ -1063,15 +1148,40 @@ export async function GET(request: NextRequest) {
           const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
-          const overlapsTaken = takenRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
+
+          // Admin/operator blocks win over “same booking” labeling.
+          const blockedByCalendar = boatBlockRanges.some((r) => intervalOverlaps(slotStartMs, slotEndMs, r));
+          const overlappingBooked = nonOpenIntervals.find(
+            (e) => e.status === "booked" && intervalOverlaps(slotStartMs, slotEndMs, e)
+          );
+          const overlappingOtherTaken = nonOpenIntervals.some(
+            (e) => e.status !== "booked" && intervalOverlaps(slotStartMs, slotEndMs, e)
+          );
+
+          let rowStatus: string;
+          let rowBookingId: string | null = null;
+          if (blockedByCalendar || overlappingOtherTaken) {
+            rowStatus = "blocked";
+          } else if (overlappingBooked) {
+            // Same paid charter overlapping this start time (e.g. 7am–10am trip blocks a 9am start on the same boat).
+            // Use "booked" so the UI matches the exact slot row, not generic "Unavailable".
+            rowStatus = "booked";
+            rowBookingId =
+              overlappingBooked.bookingId != null && String(overlappingBooked.bookingId).trim() !== ""
+                ? String(overlappingBooked.bookingId).trim()
+                : null;
+          } else {
+            rowStatus = "open";
+          }
+
           slots.push({
             id: slotId,
             dateStr,
             startAt: slotStart.toISOString(),
             endAt: slotEnd.toISOString(),
-            status: overlapsTaken ? "blocked" : "open",
+            status: rowStatus,
             holdId: null,
-            bookingId: null,
+            bookingId: rowBookingId,
             updatedAt: null,
             boatId: bid,
             experienceId,
@@ -1082,57 +1192,22 @@ export async function GET(request: NextRequest) {
       const slotsKeySet = new Set(slots.map((s) => `${s.boatId}:${s.id}`));
       for (const row of Array.from(existingByBoatAndKey.values())) {
         if (row.status !== "booked" && row.status !== "held") continue;
-        if (row.dateStr < startDate || row.dateStr > endDate) continue;
+        const rowStartMs = new Date(row.startAt).getTime();
+        const rowEndMs = new Date(row.endAt).getTime();
+        if (
+          Number.isNaN(rowStartMs) ||
+          Number.isNaN(rowEndMs) ||
+          !intervalOverlapsRequestWindow(rowStartMs, rowEndMs, start, end)
+        ) {
+          continue;
+        }
         const key = `${row.boatId}:${row.id}`;
         if (slotsKeySet.has(key)) continue;
         slots.push(row);
         slotsKeySet.add(key);
       }
       slots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
-      const heldHoldIds = Array.from(
-        new Set(
-          slots
-            .filter((s) => s.status === "held")
-            .map((s) => charterSlotHoldIdByKey.get(`${s.boatId}:${s.id}`))
-            .filter((id): id is string => typeof id === "string" && id.length > 0)
-        )
-      );
-      const holdIdsToRelease = new Set<string>(); // held slots whose hold is missing, inactive, or expired → show as open
-      if (heldHoldIds.length > 0) {
-        let holdSnap: import("firebase-admin").firestore.DocumentSnapshot[] = [];
-        try {
-          holdSnap = await getHoldSnapshotsOrdered(db, heldHoldIds);
-        } catch (holdResolveErr) {
-          charterHoldsResolutionFailed = true;
-          console.warn("[slots] charter held-slot hold docs fetch failed:", holdResolveErr instanceof Error ? holdResolveErr.message : holdResolveErr);
-        }
-        const now = new Date();
-        holdSnap.forEach((doc, i) => {
-          const hid = heldHoldIds[i];
-          if (!doc.exists) {
-            holdIdsToRelease.add(hid);
-            return;
-          }
-          const data = doc.data() as { status?: string; expiresAt?: { toDate(): Date } };
-          if (data?.status !== "active") {
-            holdIdsToRelease.add(hid);
-            return;
-          }
-          const exp = data?.expiresAt?.toDate?.();
-          if (exp && exp <= now) holdIdsToRelease.add(hid);
-        });
-        slots.forEach((s) => {
-          if (s.status !== "held") return;
-          const hid = charterSlotHoldIdByKey.get(`${s.boatId}:${s.id}`);
-          if (!hid) return;
-          if (holdIdsToRelease.has(hid)) {
-            s.status = "open";
-            (s as Record<string, unknown>).holdId = null;
-          } else {
-            const exp = holdSnap[heldHoldIds.indexOf(hid)]?.data()?.expiresAt as { toDate(): Date } | undefined;
-            if (exp) (s as Record<string, unknown>).expiresAt = exp.toDate().toISOString();
-          }
-        });
+      if (charterHeldHoldIdsResolved.length > 0) {
         if (charterHoldsResolutionFailed) {
           void writeOperationalAlert({
             type: "slots_charter_holds_batch_get_failed",
@@ -1144,6 +1219,14 @@ export async function GET(request: NextRequest) {
             if (s.status === "held") {
               (s as Record<string, unknown>).holdDataMissing = true;
             }
+          });
+        } else {
+          slots.forEach((s) => {
+            if (s.status !== "held") return;
+            const hid = charterSlotHoldIdByKey.get(`${s.boatId}:${s.id}`);
+            if (!hid) return;
+            const exp = charterHoldResolutionSnap[charterHeldHoldIdsResolved.indexOf(hid)]?.data()?.expiresAt as { toDate(): Date } | undefined;
+            if (exp) (s as Record<string, unknown>).expiresAt = exp.toDate().toISOString();
           });
         }
       }
@@ -1197,10 +1280,35 @@ export async function GET(request: NextRequest) {
       const slotId = (d.data() as { slotId?: string }).slotId;
       if (slotId) legacyBookedSlotIdToBookingId.set(slotId, d.id);
     });
+    let legacySlotDocsQueryEnd = end;
+    try {
+      const legacyBoatSnap = await db.collection("boats").doc(boatId!).get();
+      const legacyExpIds =
+        (legacyBoatSnap.data() as { experienceIds?: string[] } | undefined)?.experienceIds?.filter(
+          (id): id is string => typeof id === "string" && id.trim() !== "",
+        ) ?? [];
+      const primaryLegacyExpId = legacyExpIds[0];
+      if (primaryLegacyExpId) {
+        const legacyRatesSnap = await db
+          .collection("experiences")
+          .doc(primaryLegacyExpId)
+          .collection("rates")
+          .where("active", "==", true)
+          .get();
+        const legacyDurations = legacyRatesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
+        const legacyDurationsUnique = Array.from(new Set(legacyDurations));
+        const legacyMaxDuration = Math.max(...legacyDurationsUnique, 1);
+        legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, legacyMaxDuration, 0).end;
+      } else {
+        legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, 1, 0).end;
+      }
+    } catch {
+      legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, 1, 0).end;
+    }
     const slotsRef = db.collection("boats").doc(boatId!).collection("slots");
     const snap = await slotsRef
       .where("startAt", ">=", Timestamp.fromDate(start))
-      .where("startAt", "<=", Timestamp.fromDate(end))
+      .where("startAt", "<=", Timestamp.fromDate(legacySlotDocsQueryEnd))
       .orderBy("startAt", "asc")
       .get();
     const slots = snap.docs.map((doc) => {

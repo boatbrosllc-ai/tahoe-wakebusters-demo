@@ -109,6 +109,8 @@ export interface WaiverRequest {
   signerDob?: string;
   signingTokenId: string;
   signingUrl: string;
+  /** Share link for additional party members; same token doc as {@link WaiverGroupTokenDoc}. */
+  groupSigningUrl?: string;
   sent: WaiverSent;
   signed?: WaiverSigned;
   createdAt: FirestoreTimestamp;

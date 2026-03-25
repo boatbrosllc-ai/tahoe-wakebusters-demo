@@ -5,7 +5,13 @@
  * or LegacyScanLimitReachedError when the legacy scan cap is hit (callers map to 503).
  */
 import type { Firestore } from "firebase-admin/firestore";
-import { getSlotStartEnd, parseSlotId, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
+import {
+  addCalendarDaysToDateStr,
+  bookingIntervalMsFromSlotFields,
+  bookingLookbackDaysFromMaxDuration,
+  intervalsOverlapMs,
+} from "@/lib/booking/booking-interval";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import type { Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -117,13 +123,17 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
   });
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
+  const lookbackDays = bookingLookbackDaysFromMaxDuration(parsed.durationHours);
+  const startDateLower = addCalendarDaysToDateStr(parsed.dateStr, -lookbackDays);
+  const startDateUpper = addCalendarDaysToDateStr(parsed.dateStr, lookbackDays);
   const paidSnaps = await Promise.all(
     experienceIdVariants.map((v) =>
       get(
         db
           .collection("bookings")
           .where("experienceId", "==", v)
-          .where("startDateStr", "==", parsed.dateStr)
+          .where("startDateStr", ">=", startDateLower)
+          .where("startDateStr", "<=", startDateUpper)
       )
     )
   );
@@ -135,15 +145,9 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
       const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
       if (useBoatSlots && boatId && b.boatId !== boatId) continue;
       if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-      const p = b.slotId ? parseSlotId(b.slotId) : null;
-      if (!p) continue;
-      const { start: exStart, end: exEnd } = getSlotStartEnd(
-        p.dateStr,
-        p.startHour,
-        p.durationHours,
-        p.startMinute ?? 0
-      );
-      if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+      const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+      if (!iv) continue;
+      if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
         throw new SlotConflictError("Slot no longer available");
       }
     }
@@ -183,15 +187,9 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
         const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
         if (b.startDateStr) continue;
         if (useBoatSlots && boatId && b.boatId !== boatId) continue;
-        const p = b.slotId ? parseSlotId(b.slotId) : null;
-        if (!p || p.dateStr !== parsed.dateStr) continue;
-        const { start: exStart, end: exEnd } = getSlotStartEnd(
-          p.dateStr,
-          p.startHour,
-          p.durationHours,
-          p.startMinute ?? 0
-        );
-        if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+        const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+        if (!iv) continue;
+        if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
           throw new SlotConflictError("Slot no longer available");
         }
       }
@@ -247,8 +245,15 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   });
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
+  const lookbackLegacy = bookingLookbackDaysFromMaxDuration(parsed.durationHours);
+  const lowerLegacy = addCalendarDaysToDateStr(parsed.dateStr, -lookbackLegacy);
+  const upperLegacy = addCalendarDaysToDateStr(parsed.dateStr, lookbackLegacy);
   const paidSnap = await get(
-    db.collection("bookings").where("boatId", "==", bid).where("startDateStr", "==", parsed.dateStr)
+    db
+      .collection("bookings")
+      .where("boatId", "==", bid)
+      .where("startDateStr", ">=", lowerLegacy)
+      .where("startDateStr", "<=", upperLegacy)
   );
   const seenIds = new Set<string>();
   for (const doc of paidSnap.docs) {
@@ -256,15 +261,9 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     seenIds.add(doc.id);
     const b = doc.data() as { slotId?: string; status?: string };
     if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-    const p = b.slotId ? parseSlotId(b.slotId) : null;
-    if (!p) continue;
-    const { start: exStart, end: exEnd } = getSlotStartEnd(
-      p.dateStr,
-      p.startHour,
-      p.durationHours,
-      p.startMinute ?? 0
-    );
-    if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+    const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+    if (!iv) continue;
+    if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
       throw new SlotConflictError("Slot no longer available");
     }
   }
@@ -290,15 +289,9 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     const b = doc.data() as { slotId?: string; startDateStr?: string; status?: string };
     if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
     if (b.startDateStr) continue;
-    const p = b.slotId ? parseSlotId(b.slotId) : null;
-    if (!p || p.dateStr !== parsed.dateStr) continue;
-    const { start: exStart, end: exEnd } = getSlotStartEnd(
-      p.dateStr,
-      p.startHour,
-      p.durationHours,
-      p.startMinute ?? 0
-    );
-    if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+    const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+    if (!iv) continue;
+    if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
       throw new SlotConflictError("Slot no longer available");
     }
   }

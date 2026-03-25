@@ -127,6 +127,7 @@ export async function createWaiverForBooking(
     if (partyCount > 1) {
       const group = await createGroupToken(input.bookingId, active.id, active.version, partyCount);
       groupSigningUrl = group.groupSigningUrl;
+      await updateRequest(requestId, { groupSigningUrl });
     }
 
     return {
@@ -162,6 +163,7 @@ export async function sendWaiverInviteAndMarkSent(
     to: result.to,
     name: result.name,
     signingUrl: result.signingUrl,
+    groupSigningUrl: result.groupSigningUrl,
     bookingSummary: result.bookingSummary,
   });
   const { Timestamp } = getFirestoreExports();

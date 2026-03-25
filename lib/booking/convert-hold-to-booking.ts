@@ -743,7 +743,8 @@ export async function convertHoldToBooking(
           bookingId,
           activeWaiverTemplate.id,
           activeWaiverTemplate.version,
-          hold.partySize
+          hold.partySize,
+          requestId
         );
       }
       bookingDoc = {

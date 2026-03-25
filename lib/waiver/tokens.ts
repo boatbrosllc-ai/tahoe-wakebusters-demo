@@ -6,7 +6,16 @@
 import { randomBytes } from "crypto";
 
 const TOKEN_BYTES = 32;
-const DEFAULT_EXPIRY_DAYS = 30;
+
+function defaultExpiryDays(): number {
+  const raw = typeof process !== "undefined" ? process.env.WAIVER_TOKEN_EXPIRY_DAYS?.trim() : undefined;
+  if (raw) {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 7 && n <= 365) return n;
+  }
+  /** Long enough for far-out trips + slow signers; override with WAIVER_TOKEN_EXPIRY_DAYS. */
+  return 120;
+}
 
 /**
  * Generate a cryptographically secure token (hex string).
@@ -43,14 +52,15 @@ export function isTokenExpired(expiresAt: Date | { seconds: number } | string): 
  * Default expiry for new signing tokens (days from now).
  */
 export function getDefaultTokenExpiryDays(): number {
-  return DEFAULT_EXPIRY_DAYS;
+  return defaultExpiryDays();
 }
 
 /**
  * Create expiresAt Date for new token.
  */
-export function createTokenExpiresAt(daysFromNow: number = DEFAULT_EXPIRY_DAYS): Date {
+export function createTokenExpiresAt(daysFromNow?: number): Date {
+  const days = daysFromNow ?? defaultExpiryDays();
   const d = new Date();
-  d.setDate(d.getDate() + daysFromNow);
+  d.setDate(d.getDate() + days);
   return d;
 }

@@ -11,7 +11,11 @@ import { logEmailSent } from "@/lib/booking/email-log";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingDateTime } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
-import { getRequestById } from "@/lib/waiver/firestore";
+import {
+  getRequestById,
+  buildWaiverSigningUrlFromTokenId,
+  getActiveGroupSigningUrlForBooking,
+} from "@/lib/waiver/firestore";
 import { isDepositMode } from "@/lib/booking/deposit-mode";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
@@ -105,9 +109,17 @@ export async function POST(
     let waiverGroupSigningUrl: string | undefined;
     if (booking.waiver?.requestId && booking.waiver?.status === "pending") {
       const req = await getRequestById(booking.waiver.requestId);
-      if (req?.status === "pending" && req.signingUrl) {
-        waiverSigningUrl = req.signingUrl;
-        waiverGroupSigningUrl = (req as { groupSigningUrl?: string }).groupSigningUrl;
+      if (req?.status === "pending") {
+        if (req.signingTokenId) {
+          waiverSigningUrl = buildWaiverSigningUrlFromTokenId(req.signingTokenId);
+        } else if (req.signingUrl) {
+          waiverSigningUrl = req.signingUrl;
+        }
+        const party = booking.partySize ?? 1;
+        if (party > 1) {
+          waiverGroupSigningUrl =
+            req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(bookingId)) ?? undefined;
+        }
       }
     }
 

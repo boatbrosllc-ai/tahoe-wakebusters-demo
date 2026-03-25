@@ -316,7 +316,6 @@ async function deliverClaimedConfirmationEntry(
     const { DEFAULT_CANCELLATION_POLICY } = await import("./cancellation-policy");
     const { signReceiptToken } = await import("./receiptToken");
     const { bookingEnv } = await import("./env");
-    const { getRequestById } = await import("@/lib/waiver/firestore");
     type Booking = import("./types").Booking;
     type Experience = import("./types").Experience;
 
@@ -416,10 +415,20 @@ async function deliverClaimedConfirmationEntry(
     let waiverSigningUrl: string | undefined;
     let waiverGroupSigningUrl: string | undefined;
     if (booking.waiver?.requestId) {
-      const req = await getRequestById(booking.waiver.requestId);
-      if (req?.status === "pending" && req.signingUrl) {
-        waiverSigningUrl = req.signingUrl;
-        waiverGroupSigningUrl = (req as { groupSigningUrl?: string }).groupSigningUrl;
+      const { getRequestById: getReq, buildWaiverSigningUrlFromTokenId, getActiveGroupSigningUrlForBooking } =
+        await import("@/lib/waiver/firestore");
+      const req = await getReq(booking.waiver.requestId);
+      if (req?.status === "pending") {
+        if (req.signingTokenId) {
+          waiverSigningUrl = buildWaiverSigningUrlFromTokenId(req.signingTokenId);
+        } else if (req.signingUrl) {
+          waiverSigningUrl = req.signingUrl;
+        }
+        const party = booking.partySize ?? 1;
+        if (party > 1) {
+          waiverGroupSigningUrl =
+            req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(bookingId)) ?? undefined;
+        }
       }
     }
 
@@ -834,7 +843,11 @@ async function deliverClaimedWaiverInviteEntry(
   const now = Timestamp.now();
   type Booking = import("./types").Booking;
   try {
-    const { getRequestById } = await import("@/lib/waiver/firestore");
+    const {
+      getRequestById,
+      buildWaiverSigningUrlFromTokenId,
+      getActiveGroupSigningUrlForBooking,
+    } = await import("@/lib/waiver/firestore");
     const { sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");
     const { parseSlotId, getSlotStartEnd } = await import("./experience-slots");
     const { formatBookingTime } = await import("./format-booking-datetime");
@@ -915,10 +928,18 @@ async function deliverClaimedWaiverInviteEntry(
       });
       return "failed";
     }
+    const signingUrlForEmail = req.signingTokenId
+      ? buildWaiverSigningUrlFromTokenId(req.signingTokenId)
+      : req.signingUrl;
+    const partyN = booking.partySize ?? 1;
+    const groupUrlForEmail =
+      partyN > 1
+        ? req.groupSigningUrl ?? (await getActiveGroupSigningUrlForBooking(bookingId)) ?? undefined
+        : undefined;
     await sendWaiverInviteAndMarkSent({
       requestId: req.id,
-      signingUrl: req.signingUrl,
-      groupSigningUrl: (req as { groupSigningUrl?: string }).groupSigningUrl,
+      signingUrl: signingUrlForEmail,
+      groupSigningUrl: groupUrlForEmail,
       includeInConfirmationEmail: false,
       sendSeparateWaiverInvite: true,
       bookingSummary: {
