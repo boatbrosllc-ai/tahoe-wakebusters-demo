@@ -201,8 +201,8 @@ export async function processStaleClaims(db: Firestore): Promise<number> {
   ] as const) {
     const snap = await db
       .collection(COLLECTION)
-      .where("type", "==", outboxType)
       .where("status", "==", "claimed")
+      .where("type", "==", outboxType)
       .where("claimExpiresAt", "<", now)
       .get();
 
@@ -268,7 +268,13 @@ export async function getNotificationOutboxStats(db: Firestore): Promise<Notific
     const [pendingSnap, deadSnap, stuckSnap] = await Promise.all([
       base().where("status", "==", "pending").count().get(),
       base().where("status", "==", "dead_letter").count().get(),
-      base().where("status", "==", "claimed").where("claimExpiresAt", "<", now).count().get(),
+      db
+        .collection(COLLECTION)
+        .where("status", "==", "claimed")
+        .where("type", "==", outboxType)
+        .where("claimExpiresAt", "<", now)
+        .count()
+        .get(),
     ]);
     return {
       pending: pendingSnap.data().count,

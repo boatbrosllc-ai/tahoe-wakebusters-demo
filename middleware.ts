@@ -119,8 +119,11 @@ function buildCsp(nonce: string): string {
     "https://*.stripe.com",
     "https://checkout.stripe.com",
     "https://*.js.stripe.com",
+    "https://*.googletagmanager.com",
     "https://www.googletagmanager.com",
     "https://*.google-analytics.com",
+    "https://www.google.com",
+    "https://apis.google.com",
     "https://www.gstatic.com",
     "https://*.gstatic.com",
     "https://*.firebaseapp.com",
@@ -133,16 +136,24 @@ function buildCsp(nonce: string): string {
     "https://identitytoolkit.googleapis.com",
     "https://securetoken.googleapis.com",
     "https://*.googleapis.com",
+    "https://apis.google.com",
     "https://api.stripe.com",
     "https://*.stripe.com",
     "https://*.stripe.network",
     "https://checkout.stripe.com",
     // Google Pay / Payment Handler manifest fetch (browser → www.google.com/pay, pay.google.com)
     "https://www.google.com",
+    "https://*.google.com",
     "https://pay.google.com",
-    // GA4 may use regional collect hosts (e.g. region1.google-analytics.com), not only www.
+    // GA4 / Tag Manager (regional collect, analytics.google.com, etc.)
     "https://*.google-analytics.com",
+    "https://*.analytics.google.com",
+    "https://*.googletagmanager.com",
     "https://www.googletagmanager.com",
+    // GA / Ads measurement may hit doubleclick when signals are enabled
+    "https://*.doubleclick.net",
+    "https://stats.g.doubleclick.net",
+    "https://www.recaptcha.net",
   ].join(" ");
   return [
     "default-src 'self'",
@@ -151,7 +162,7 @@ function buildCsp(nonce: string): string {
     // script-src when worker-src is omitted; script-src must not include blob:, so set explicitly.
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
-    "frame-src 'self' https://js.stripe.com https://*.stripe.com https://checkout.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://www.google.com https://*.google.com",
+    "frame-src 'self' https://js.stripe.com https://*.stripe.com https://checkout.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://www.google.com https://*.google.com https://www.recaptcha.net",
     `connect-src ${connectSrc}`,
     "img-src 'self' data: blob: https:",
     "object-src 'none'",

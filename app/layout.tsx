@@ -1,8 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Syne } from "next/font/google";
+import { headers } from "next/headers";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
+import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import "./globals.css";
+
+/** Must match `RELEASE_TRAIN` in `@stripe/stripe-js` so `loadStripe()` reuses this tag (CSP + strict-dynamic). */
+const STRIPE_JS_SRC = "https://js.stripe.com/clover/stripe.js";
 
 const syne = Syne({
   subsets: ["latin"],
@@ -32,26 +37,30 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const gaMeasurementId = getGaMeasurementId();
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   return (
     <html lang="en" className={syne.variable}>
-      <head>
-        <link rel="preload" as="image" href="/videos/hero-poster.jpg" />
-      </head>
       <body>
+        {/* Nonce on entry scripts so gtag can propagate it to dynamically inserted script tags (Google Tag / GA4). */}
+        {isStripeCheckoutReady ? (
+          <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
+        ) : null}
         {gaMeasurementId ? (
           <>
             <Script
+              id="ga-gtag"
               src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
               strategy="afterInteractive"
+              nonce={nonce}
             />
-            <Script src="/gtag-bootstrap" strategy="afterInteractive" />
+            <Script id="ga-bootstrap" src="/gtag-bootstrap" strategy="afterInteractive" nonce={nonce} />
           </>
         ) : null}
         {children}
