@@ -12,6 +12,8 @@ export interface BoatOption {
   name: string;
   slug?: string;
   description?: string;
+  /** Firestore listing boat type (wake / pontoon / …). Used client-side for wake-aware calendar rows. */
+  boatType?: string;
   photos: string[];
   fromPriceCents: number | null;
   rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
@@ -79,6 +81,7 @@ export async function GET(request: NextRequest) {
         name: boat.name,
         slug: boat.slug,
         description: boat.description,
+        boatType: boat.boatType,
         photos: boat.photos ?? [],
         fromPriceCents,
         rates: ratesForBoats,

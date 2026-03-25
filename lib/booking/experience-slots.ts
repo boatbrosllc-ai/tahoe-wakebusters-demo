@@ -291,6 +291,18 @@ export function isAllowedSlotTime(
   return startMinute === 0;
 }
 
+/**
+ * Intentional legacy escape hatch: when set, watersports charter may treat blank/unknown boatType like a wake grid boat.
+ * Keeps GET /api/booking/slots, {@link allowBoatTypeForSlug}, and this helper aligned.
+ */
+function watersportsUntypedBoatAllowedForCharter(): boolean {
+  if (typeof process === "undefined") return false;
+  return (
+    process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" ||
+    process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true"
+  );
+}
+
 /** True when listing boat `boatType` is the wake/wakesurf grid family (case-insensitive). */
 export function isWakeListingBoatType(boatType: string | undefined): boolean {
   if (typeof boatType !== "string") return false;
@@ -307,14 +319,18 @@ export function isPontoonOrTritoonBoatType(boatType: string | undefined): boolea
 }
 
 /**
- * Charter calendar should use {@link getSlotGridWakeBoard} rules when the boat is explicitly typed wake,
- * or when the listing is watersports and the boat is not pontoon/tritoon (e.g. missing/legacy boatType).
- * Must stay in sync with GET /api/booking/slots and {@link isListingBoatCharterStartTimeAllowed}.
+ * Charter calendar should use {@link getSlotGridWakeBoard} when the boat is explicitly wake-typed,
+ * or when watersports + legacy untyped is intentionally enabled (see env in {@link watersportsUntypedBoatAllowedForCharter}).
+ * Blank/unknown boat type does not implicitly get the wake grid unless that env is set.
+ * Must stay in sync with GET /api/booking/slots, {@link allowBoatTypeForSlug}, and {@link isListingBoatCharterStartTimeAllowed}.
  */
 export function shouldUseWakeBoardCharterGrid(boatType: string | undefined, watersportsExperience: boolean): boolean {
   if (isWakeListingBoatType(boatType)) return true;
   if (!watersportsExperience) return false;
-  return !isPontoonOrTritoonBoatType(boatType);
+  if (isPontoonOrTritoonBoatType(boatType)) return false;
+  const b = (boatType ?? "").trim();
+  if (b === "") return watersportsUntypedBoatAllowedForCharter();
+  return false;
 }
 
 /**

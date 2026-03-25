@@ -148,7 +148,7 @@ export function boatAvailabilitySetsForSelectedCharterSlot(
   const held = new Set<string>();
   const blocked = new Set<string>();
 
-  for (const [boatKey, rows] of byBoat) {
+  byBoat.forEach((rows, boatKey) => {
     const nonOpen = rows.filter((r) => r.status !== "open");
     const openExact = rows.some((r) => r.id === selectedSlot.id && r.status === "open");
     if (nonOpen.length > 0) {
@@ -159,7 +159,7 @@ export function boatAvailabilitySetsForSelectedCharterSlot(
     } else if (openExact) {
       available.add(boatKey);
     }
-  }
+  });
 
   return {
     availableBoatIdsForSelectedSlot: available,

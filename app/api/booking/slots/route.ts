@@ -985,6 +985,55 @@ export async function GET(request: NextRequest) {
           }
         }
       }
+      /**
+       * Supplement experience-scoped window queries: include taken bookings for each listing boat when the
+       * trip interval overlaps the request window, even if `startDateStr` is missing or wrong (e.g. legacy
+       * backfill drift). Ensures longer tiers (8h) still see `existingByBoatAndKey` / `nonOpenIntervals` overlap.
+       */
+      const expIdsSetForBoatBookingMerge = new Set(allExpIds);
+      const BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT = 500;
+      const BOAT_CHARTER_BOOKING_QUERY_CHUNK = 10;
+      if (boatIds.length > 0) {
+        try {
+          for (let off = 0; off < boatIds.length; off += BOAT_CHARTER_BOOKING_QUERY_CHUNK) {
+            const chunk = boatIds.slice(off, off + BOAT_CHARTER_BOOKING_QUERY_CHUNK);
+            const supplementSnaps = await Promise.all(
+              chunk.map((bid) =>
+                db
+                  .collection("bookings")
+                  .where("boatId", "==", bid)
+                  .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                  .limit(BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT)
+                  .get()
+              )
+            );
+            for (const snap of supplementSnaps) {
+              if (snap.size >= BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT) {
+                legacyQueryHitLimitCharter = true;
+                console.warn("[slots] charter boat-scoped booking supplement hit limit; overlapping trips may be incomplete", {
+                  experienceId,
+                });
+              }
+              for (const doc of snap.docs) {
+                if (seenBookingIds.has(doc.id)) continue;
+                const b = doc.data() as { experienceId?: string; slotId?: string; slot_id?: string };
+                if (b.experienceId != null && String(b.experienceId).trim() !== "") {
+                  if (!expIdsSetForBoatBookingMerge.has(String(b.experienceId))) continue;
+                }
+                const ivSup = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
+                if (!ivSup || !intervalOverlapsRequestWindow(ivSup.startMs, ivSup.endMs, winStart, winEnd)) continue;
+                addBookingDoc(doc);
+              }
+            }
+          }
+        } catch (suppErr) {
+          legacyQueryHitLimitCharter = true;
+          console.warn(
+            "[slots] charter boat-scoped booking supplement failed:",
+            suppErr instanceof Error ? suppErr.message : suppErr,
+          );
+        }
+      }
       allBookingDocs.forEach((doc) => mergeBookingSlot(doc));
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
       bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));

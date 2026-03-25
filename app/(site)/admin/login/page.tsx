@@ -104,9 +104,22 @@ export default function AdminLoginPage() {
       }
       setSuccess(true);
       notifyAdminAuthChanged();
-      // Full page navigation so the session cookie is sent; replace() avoids back-button returning to login
-      const redirectTo = (data as { redirect?: string }).redirect ?? "/admin";
-      window.location.replace(redirectTo);
+
+      const raw = (data as { redirect?: string }).redirect;
+      const path = typeof raw === "string" && raw.startsWith("/") ? raw : "/admin";
+      const target = new URL(path, window.location.origin).href;
+
+      // Defer full-page navigation: synchronous replace() right after setState can be dropped in some
+      // browsers / WebViews; absolute URL avoids relative-URL edge cases on non-standard hosts.
+      const navigate = () => {
+        window.location.replace(target);
+      };
+      window.setTimeout(navigate, 0);
+      window.setTimeout(() => {
+        if (window.location.pathname === "/admin/login" || window.location.pathname.startsWith("/admin/login/")) {
+          window.location.href = target;
+        }
+      }, 400);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("auth/invalid-credential") || msg.includes("auth/wrong-password") || msg.includes("auth/user-not-found")) {

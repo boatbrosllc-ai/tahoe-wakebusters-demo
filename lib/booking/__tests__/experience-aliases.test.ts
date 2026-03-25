@@ -123,15 +123,31 @@ describe("isWatersportsSlug / isPontoonSlug", () => {
 });
 
 describe("allowBoatTypeForSlug", () => {
-  it("watersports: wake family and empty type allowed; never pontoon/tritoon", () => {
-    const allow = allowBoatTypeForSlug("wake-surf");
-    assert.strictEqual(allow("wake"), true);
-    assert.strictEqual(allow("wakeboard"), true);
-    assert.strictEqual(allow("wakesurf"), true);
-    assert.strictEqual(allow(""), true);
-    assert.strictEqual(allow(undefined), true);
-    assert.strictEqual(allow("pontoon"), false);
-    assert.strictEqual(allow("tritoon"), false);
+  it("watersports: explicit wake types only; blank rejected unless env fallback", () => {
+    const prevU = process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+    const prevPub = process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+    try {
+      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      const allowStrict = allowBoatTypeForSlug("wake-surf");
+      assert.strictEqual(allowStrict("wake"), true);
+      assert.strictEqual(allowStrict("wakeboard"), true);
+      assert.strictEqual(allowStrict("wakesurf"), true);
+      assert.strictEqual(allowStrict(""), false);
+      assert.strictEqual(allowStrict(undefined), false);
+      assert.strictEqual(allowStrict("pontoon"), false);
+      assert.strictEqual(allowStrict("tritoon"), false);
+
+      process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
+      const allowLegacy = allowBoatTypeForSlug("wake-surf");
+      assert.strictEqual(allowLegacy(""), true);
+      assert.strictEqual(allowLegacy(undefined), true);
+    } finally {
+      if (prevU === undefined) delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      else process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevU;
+      if (prevPub === undefined) delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      else process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevPub;
+    }
   });
   it("pontoon: pontoon/tritoon or missing allowed", () => {
     const allow = allowBoatTypeForSlug("lake-austin-pontoon");

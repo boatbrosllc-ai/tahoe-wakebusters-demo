@@ -11,6 +11,14 @@
 
 import { isWakeListingBoatType } from "./experience-slots";
 
+function watersportsAllowUntypedBoatInInventory(): boolean {
+  if (typeof process === "undefined") return false;
+  return (
+    process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" ||
+    process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true"
+  );
+}
+
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
   ["pontoon", "lake-austin-pontoon", "pontoon-party"],
   ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board"],
@@ -219,7 +227,9 @@ export function allowBoatTypeForSlug(slug: string): (boatType: string | undefine
     return (bt) => {
       const b = (bt ?? "").toLowerCase().trim();
       if (b === "pontoon" || b === "tritoon") return false;
-      return isWakeListingBoatType(bt) || b === "";
+      if (isWakeListingBoatType(bt)) return true;
+      if (b === "") return watersportsAllowUntypedBoatInInventory();
+      return false;
     };
   }
   if (isPontoonSlug(s)) return (bt) => !isWakeListingBoatType(bt);

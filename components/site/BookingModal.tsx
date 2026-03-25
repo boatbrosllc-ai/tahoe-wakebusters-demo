@@ -14,9 +14,15 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId, parseSlotIdRelaxed, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
+import {
+  parseSlotId,
+  parseSlotIdRelaxed,
+  isSeasonalAllowed,
+  isMonthInSeasonalRange,
+  shouldUseWakeBoardCharterGrid,
+} from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
-import { slugMatches, isTicketedExperienceForBooking } from "@/lib/booking/experience-aliases";
+import { slugMatches, isTicketedExperienceForBooking, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
@@ -745,16 +751,45 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
     return map;
   }, [monthSlots, isTicketed]);
+  /**
+   * Wake charter Step 2: boats that share the wake board grid rules (matches GET /api/booking/slots).
+   * `null` while boats are still loading (`boats.length === 0`) — skip scoping until then.
+   */
+  const wakeCharterBoatIdsForStep2 = useMemo(() => {
+    if (boats.length === 0) return null;
+    const ids = new Set<string>();
+    for (const b of boats) {
+      if (shouldUseWakeBoardCharterGrid(b.boatType, true)) ids.add(b.id);
+    }
+    return ids;
+  }, [boats]);
   // One row per start time (multiple boats can have same slot); use first slot per time for selection. Sorted chronologically by time of day.
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
-    const filtered =
+    let filtered =
       durationHours != null
         ? openSlotsForDate.filter((s) => {
             const parsed = parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id);
             return parsed?.durationHours === durationHours;
           })
-        : openSlotsForDate;
+        : [...openSlotsForDate];
+
+    const expSlug = (selectedExperience?.slug ?? "").toLowerCase().trim();
+    const watersportsCharter = !isTicketed && selectedExperience != null && isWatersportsSlug(expSlug);
+    if (watersportsCharter && wakeCharterBoatIdsForStep2 != null) {
+      if (wakeCharterBoatIdsForStep2.size === 0) {
+        filtered = [];
+      } else {
+        const scope =
+          selectedBoat != null ? new Set<string>([selectedBoat.id]) : wakeCharterBoatIdsForStep2;
+        filtered = filtered.filter((s) => {
+          const bid = typeof s.boatId === "string" ? s.boatId.trim() : "";
+          if (!bid) return false;
+          return scope.has(bid);
+        });
+      }
+    }
+
     const sorted = [...filtered].sort(
       (a, b) => slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id)
     );
@@ -765,7 +800,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       seen.add(s.startAt);
       return true;
     });
-  }, [openSlotsForDate, rateForCalendar?.durationHours]);
+  }, [
+    openSlotsForDate,
+    rateForCalendar?.durationHours,
+    isTicketed,
+    selectedExperience?.id,
+    selectedExperience?.slug,
+    selectedBoat?.id,
+    wakeCharterBoatIdsForStep2,
+  ]);
   const selectedRateId = useMemo(() => {
     // Ticketed: rate is already auto-selected by selectedRateIdForCalendar — do not try to match by slot duration
     if (isTicketed) return selectedRateIdForCalendar;
@@ -2801,7 +2844,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             const isSelected = selectedSlot?.id === slot.id;
                             return (
                               <button
-                                key={slot.startAt}
+                                key={slot.id}
                                 type="button"
                                 onClick={() => {
                                   const full = monthSlots.find((s) => s.id === slot.id);

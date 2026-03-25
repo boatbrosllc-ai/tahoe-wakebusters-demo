@@ -45,8 +45,11 @@ jobs:
           FIREBASE_PRIVATE_KEY: placeholder
         run: npx --yes firebase-tools@13 emulators:exec --only firestore --project demo-test "npm run test"
 
+      # Middleware inlines ADMIN_EDGE_SECRET at build time; CI must set a long placeholder so builds match production behavior.
       - name: Build
         run: npm run build
+        env:
+          ADMIN_EDGE_SECRET: ci-build-placeholder-secret-32b-min!
 
       # Fails the job if required production secrets (including RELEASE_TOKEN_SECRET for user hold release) are missing from CI env.
       - name: Check env (required variable names)

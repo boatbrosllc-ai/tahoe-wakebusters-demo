@@ -31,4 +31,10 @@ describe("admin session unauthenticated access", () => {
     assert.strictEqual(isAdminPublicPath("/api/admin/session/extra"), false);
     assert.strictEqual(isAdminPublicPath("/api/admin/bookings"), false);
   });
+
+  it("trailing slash on public paths is still treated as public (middleware pathname variants)", () => {
+    assert.ok(isAdminPublicPath("/api/admin/session/"));
+    assert.ok(isAdminPublicPath("/admin/login/"));
+    assert.ok(isAdminPublicPath("/api/admin/logout/"));
+  });
 });

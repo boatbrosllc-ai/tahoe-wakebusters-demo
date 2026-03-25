@@ -33,6 +33,8 @@ export interface BoatOption {
   id: string;
   name: string;
   slug?: string;
+  /** From listings API; used for wakeboard charter Step 2 slot scoping. */
+  boatType?: string;
   photos: string[];
   fromPriceCents: number | null;
   rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
