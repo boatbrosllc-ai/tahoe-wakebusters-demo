@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 
-function buildPagePath(pathname: string, searchParams: URLSearchParams | ReadonlyURLSearchParams) {
+function buildPagePath(pathname: string, searchParams: URLSearchParams | ReturnType<typeof useSearchParams>) {
   const search = searchParams.toString();
   return `${pathname}${search ? `?${search}` : ""}`;
 }
