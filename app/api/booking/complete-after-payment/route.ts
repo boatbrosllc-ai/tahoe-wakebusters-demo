@@ -551,7 +551,11 @@ export async function POST(request: NextRequest) {
         const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
         const discountCents =
           typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
-        totalCents = Math.max(0, holdForPricing.pricing.totalCents + tipCents - discountCents);
+        totalCents = computeFinalChargeTotalCentsFromHoldPricing(
+          holdForPricing.pricing as BookingPricing,
+          tipCents,
+          discountCents
+        );
       } else totalCents = amountCharged;
     }
     const finalCentsComputed = useDepositInput ? Math.max(0, totalCents - amountCharged) : 0;

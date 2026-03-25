@@ -25,6 +25,8 @@ export interface TicketAvailabilityResponse {
   sold: number;
   onHold: number;
   available: number;
+  /** True when a charter booking locks the whole departure date (no shared ticket capacity). */
+  charterLocked?: boolean;
   /** True when legacy holds scan was truncated; UI should show `availabilityNote` instead of treating `available` as exact. */
   conservativeEstimate?: boolean;
   /** When `conservativeEstimate` is true, show this message instead of the numeric `available` count. */
@@ -120,16 +122,27 @@ export async function GET(request: NextRequest) {
     const now = Date.now();
     const seenBookingIds = new Set<string>();
     let sold = 0;
+    let charterLockedForDate = false;
     for (const snap of bookingsSnaps) {
       for (const doc of snap.docs) {
         if (seenBookingIds.has(doc.id)) continue;
         seenBookingIds.add(doc.id);
-        const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; status?: string };
+        const b = doc.data() as {
+          slotId?: string;
+          slot_id?: string;
+          partySize?: number;
+          status?: string;
+          bookingMode?: string;
+        };
         const slotRawB = b.slotId ?? b.slot_id;
         if (!slotRawB || typeof b.partySize !== "number") continue;
         if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
         const parsed = parseSlotIdRelaxed(slotRawB);
         if (!parsed || parsed.dateStr !== date) continue;
+        if (b.bookingMode === "charter") {
+          charterLockedForDate = true;
+          continue;
+        }
         sold += b.partySize;
       }
     }
@@ -142,6 +155,7 @@ export async function GET(request: NextRequest) {
         startDateStr?: string;
         partySize?: number;
         status?: string;
+        bookingMode?: string;
         expiresAt?: { toDate(): Date };
       };
       const slotRawH = h.slotId ?? h.slot_id;
@@ -150,14 +164,15 @@ export async function GET(request: NextRequest) {
       if (h.expiresAt && h.expiresAt.toDate().getTime() < now) continue;
       const holdDate = h.startDateStr ?? parseSlotIdRelaxed(slotRawH)?.dateStr;
       if (holdDate !== date) continue;
+      if (h.bookingMode === "charter") continue;
       onHold += h.partySize;
     }
 
-    let available = Math.max(0, total - sold - onHold);
+    let available = charterLockedForDate ? 0 : Math.max(0, total - sold - onHold);
     let conservativeEstimate = false;
     if (legacyHoldsPartial) {
       conservativeEstimate = true;
-      available = Math.max(0, total - sold - onHold);
+      available = charterLockedForDate ? 0 : Math.max(0, total - sold - onHold);
       void writeOperationalAlert({
         type: "ticket_availability_legacy_holds_truncated",
         experienceId,
@@ -172,6 +187,7 @@ export async function GET(request: NextRequest) {
       sold,
       onHold,
       available,
+      ...(charterLockedForDate ? { charterLocked: true as const } : {}),
       ...(conservativeEstimate
         ? { conservativeEstimate: true as const, availabilityNote: CONSERVATIVE_AVAILABILITY_NOTE }
         : {}),

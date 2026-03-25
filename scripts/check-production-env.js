@@ -204,12 +204,9 @@ async function main() {
         "ENABLE_BLOCK_CHECK_FAIL_OPEN must be absent or false in production (obsolete flag; block queries now fail closed on index errors).",
       );
     }
-    if (!hasValue("ADMIN_EDGE_SECRET")) {
-      missing.push("ADMIN_EDGE_SECRET (required in production for admin Edge session cookie)");
-    }
     if (!hasValue("NEXT_PUBLIC_GA_MEASUREMENT_ID")) {
       console.warn(
-        "[check-production-env] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset — production still uses the default boatbrosatx.com GA4 stream from lib/ga-measurement-id.ts. Set this var to override (e.g. new stream or staging).",
+        "[check-production-env] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset — using default GA4 ID from lib/ga-measurement-id.ts. Set this var only to override the stream.",
       );
     }
   }

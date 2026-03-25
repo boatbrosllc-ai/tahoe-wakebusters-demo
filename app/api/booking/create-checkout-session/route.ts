@@ -262,6 +262,8 @@ export async function POST(request: NextRequest) {
       typeof (hold as { paymentAttemptVersion?: number }).paymentAttemptVersion === "number"
         ? (hold as { paymentAttemptVersion?: number }).paymentAttemptVersion!
         : 1;
+    /** Bumped in Firestore when an open Checkout Session is expired due to amount mismatch so Stripe idempotency keys differ on recreate. */
+    let stripePaymentAttemptVersion = holdPaymentAttemptVersion;
     const holdStripeCouponId = (hold as { stripeCouponId?: string }).stripeCouponId;
     let stripeCouponId: string | undefined = holdStripeCouponId;
     const baseUrl = bookingEnv.appBaseUrl;
@@ -396,6 +398,15 @@ export async function POST(request: NextRequest) {
               Math.abs(amountTotalEarly - expectedPerHoldTotalCentsEarly) > 1;
             if (sessionAmountMismatch) {
               await stripe.checkout.sessions.expire(existingSessionIdFresh);
+              await holdRef.update({
+                paymentAttemptVersion: FieldValue.increment(1),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              stripePaymentAttemptVersion = stripePaymentAttemptVersion + 1;
+              const versionStr = String(stripePaymentAttemptVersion);
+              if (sessionParams.metadata) sessionParams.metadata[HOLD_PAYMENT_ATTEMPT_VERSION_META] = versionStr;
+              const pid = sessionParams.payment_intent_data as { metadata?: Record<string, string> } | undefined;
+              if (pid?.metadata) pid.metadata[HOLD_PAYMENT_ATTEMPT_VERSION_META] = versionStr;
               bookingWarn("create-checkout-session", "Checkout session amount mismatch vs hold; expired and will create new session", {
                 existingSessionId: existingSessionIdFresh,
                 amountTotal: amountTotalEarly,
@@ -436,7 +447,7 @@ export async function POST(request: NextRequest) {
             name: `Discount${holdDiscountCode ? ` (${holdDiscountCode})` : ""}`,
             duration: "once",
           },
-          { idempotencyKey: `coupon-cs-${input.holdId}-v${holdPaymentAttemptVersion}` }
+          { idempotencyKey: `coupon-cs-${input.holdId}-v${stripePaymentAttemptVersion}` }
         );
         stripeCouponId = coupon.id;
       }
@@ -456,7 +467,7 @@ export async function POST(request: NextRequest) {
       buildCheckoutSessionIdempotencyKey({
         holdId: input.holdId,
         embedded: input.embedded === true,
-        holdPaymentAttemptVersion,
+        holdPaymentAttemptVersion: stripePaymentAttemptVersion,
       }),
       holdUpdateBase,
       { FieldValue, Timestamp }

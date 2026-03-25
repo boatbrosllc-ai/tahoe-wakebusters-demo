@@ -3,6 +3,7 @@ import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Booking } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -165,9 +166,12 @@ export async function GET(request: NextRequest) {
         bookingDocs.push(d);
       }
 
+      const legacyScanLimit = getLegacyBookingScanLimit();
+      let legacyTruncated = false;
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
       if (legacyFallbackEnabled) {
-        const legacySnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(300).get();
+        const legacySnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(legacyScanLimit).get();
+        if (legacySnap.size >= legacyScanLimit) legacyTruncated = true;
         for (const doc of legacySnap.docs) {
           if (seenBookingIds.has(doc.id)) continue;
           const d = doc.data() as { startDateStr?: string; slotId?: string };
@@ -209,7 +213,12 @@ export async function GET(request: NextRequest) {
         if (ev) events.push(ev);
       }
       events.sort((a, b) => a.startAt.localeCompare(b.startAt));
-      return NextResponse.json({ events });
+      const headers: Record<string, string> = {};
+      if (legacyTruncated) headers["X-Calendar-Partial-Data"] = "true";
+      return NextResponse.json(
+        { events, ...(legacyTruncated ? { legacyTruncated: true as const } : {}) },
+        { headers },
+      );
     }
 
     const expSnap = await db.collection("experiences").doc(experienceId).get();
@@ -238,6 +247,8 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const legacyScanLimitExp = getLegacyBookingScanLimit();
+    let legacyTruncatedExp = false;
     const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
     if (legacyFallbackEnabled && variantIds.length > 0) {
       const legacySnaps = await Promise.all(
@@ -245,11 +256,12 @@ export async function GET(request: NextRequest) {
           db
             .collection("bookings")
             .where("experienceId", "==", variantId)
-            .limit(100)
+            .limit(legacyScanLimitExp)
             .get()
         )
       );
       for (const snap of legacySnaps) {
+        if (snap.size >= legacyScanLimitExp) legacyTruncatedExp = true;
         for (const doc of snap.docs) {
           if (seenBookingIds.has(doc.id)) continue;
           const d = doc.data() as { startDateStr?: string };
@@ -343,7 +355,12 @@ export async function GET(request: NextRequest) {
     });
 
     events.sort((a, b) => a.startAt.localeCompare(b.startAt));
-    return NextResponse.json({ events });
+    const headersExp: Record<string, string> = {};
+    if (legacyTruncatedExp) headersExp["X-Calendar-Partial-Data"] = "true";
+    return NextResponse.json(
+      { events, ...(legacyTruncatedExp ? { legacyTruncated: true as const } : {}) },
+      { headers: headersExp },
+    );
   } catch (err) {
     console.error("[admin/calendar-events]", err);
     return NextResponse.json({ error: "Failed to load calendar events" }, { status: 500 });

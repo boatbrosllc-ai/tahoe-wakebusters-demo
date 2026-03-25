@@ -48,19 +48,19 @@ export default async function RootLayout({
   return (
     <html lang="en" className={syne.variable}>
       <body>
-        {/* Nonce on entry scripts so gtag can propagate it to dynamically inserted script tags (Google Tag / GA4). */}
+        {/* GA4 + CSP: allowlisted googletag* / google-analytics in middleware; nonce on Script tags. */}
         {isStripeCheckoutReady ? (
           <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
         ) : null}
         {gaMeasurementId ? (
           <>
             <Script
-              id="ga-gtag"
+              id="ga-gtag-lib"
               src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
               strategy="afterInteractive"
               nonce={nonce}
             />
-            <Script id="ga-bootstrap" src="/gtag-bootstrap" strategy="afterInteractive" nonce={nonce} />
+            <Script id="ga-gtag-init" src="/gtag-bootstrap" strategy="afterInteractive" nonce={nonce} />
           </>
         ) : null}
         {children}

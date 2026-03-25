@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Ban, Plus, Trash2, RefreshCw, CalendarDays } from "lucide-react";
-import { getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, SLOT_TIMEZONE } from "@/lib/booking/experience-slots";
 
 interface BlockItem {
   id: string;
@@ -50,10 +50,24 @@ function fmtDateTime(iso: string) {
   return `${date} ${time}`;
 }
 
+/** Hour and minute in business timezone (America/Chicago), matching slot grid / admin calendar. */
+function hourMinuteInSlotTz(iso: string): { hour: number; minute: number } {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: SLOT_TIMEZONE,
+    hour: "numeric",
+    hour12: false,
+    minute: "2-digit",
+  }).formatToParts(d);
+  const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const minute = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return { hour, minute };
+}
+
 function isFullDay(startAt: string, endAt: string): boolean {
-  const s = new Date(startAt);
-  const e = new Date(endAt);
-  return s.getHours() === 0 && s.getMinutes() === 0 && e.getHours() === 23 && e.getMinutes() >= 59;
+  const s = hourMinuteInSlotTz(startAt);
+  const e = hourMinuteInSlotTz(endAt);
+  return s.hour === 0 && s.minute === 0 && e.hour === 23 && e.minute >= 59;
 }
 
 export function BlockManagementPanel({ experienceId, experienceName }: BlockManagementPanelProps) {

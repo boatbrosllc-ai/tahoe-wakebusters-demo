@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { isAdminPublicPath } from "@/lib/admin-public-paths";
-import { verifyEdgeSessionCookie } from "@/lib/admin-edge-session-verify";
-import { ADMIN_EDGE_SECRET_CONFIG_CODE, isAdminEdgeSecretValid } from "@/lib/admin-edge-secret";
 
 function isAdminProtectedPath(pathname: string): boolean {
   return (pathname.startsWith("/admin") || pathname.startsWith("/api/admin")) && !isAdminPublicPath(pathname);
@@ -43,64 +41,20 @@ export async function middleware(request: NextRequest) {
     return res;
   }
 
-  const edgeSecretRaw = process.env.ADMIN_EDGE_SECRET;
-  const isProduction = process.env.NODE_ENV === "production";
   if (isAdminProtectedPath(pathname)) {
-    if (isAdminCronPath(pathname) && (await isCronAuthorized(request))) {
-      const res = NextResponse.next({ request: { headers: requestHeaders } });
-      res.headers.set("Content-Security-Policy", csp);
-      return res;
+    if (isAdminCronPath(pathname)) {
+      if (await isCronAuthorized(request)) {
+        const res = NextResponse.next({ request: { headers: requestHeaders } });
+        res.headers.set("Content-Security-Policy", csp);
+        return res;
+      }
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (isProduction && !isAdminEdgeSecretValid(edgeSecretRaw)) {
-      console.error(
-        "[middleware] ADMIN_EDGE_SECRET missing or too short in production — set a secret of at least 32 UTF-8 bytes (same value as server env).",
-        { code: ADMIN_EDGE_SECRET_CONFIG_CODE }
-      );
-      const body = {
-        error: "Service misconfigured. Admin access is not available.",
-        code: ADMIN_EDGE_SECRET_CONFIG_CODE,
-        hint: "Set ADMIN_EDGE_SECRET in your host (e.g. Netlify) to a random string of at least 32 UTF-8 bytes. It must match across build and runtime.",
-      };
-      if (pathname.startsWith("/api/")) {
-        return NextResponse.json(body, { status: 503 });
-      }
-      return NextResponse.json(body, { status: 503 });
-    }
-    const edgeSecret = edgeSecretRaw?.trim();
-    if (edgeSecret) {
-      const cookieHeader = request.headers.get("cookie");
-      const valid = await verifyEdgeSessionCookie(cookieHeader, edgeSecret);
-      if (!valid) {
-        if (pathname.startsWith("/api/")) {
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        }
-        return NextResponse.redirect(new URL("/admin/login", request.url), 302);
-      }
-    } else if (!isProduction && isAdminProtectedPath(pathname) && !isAdminCronPath(pathname)) {
-      const isDev = process.env.NODE_ENV === "development";
-      const isHosted = !!(process.env.NETLIFY || process.env.VERCEL);
-      if (isHosted && !isAdminEdgeSecretValid(edgeSecretRaw)) {
-        console.error(
-          "[middleware] ADMIN_EDGE_SECRET missing or too short on hosted preview/staging — admin APIs are blocked.",
-          { code: ADMIN_EDGE_SECRET_CONFIG_CODE }
-        );
-        const body = {
-          error: "Service misconfigured. Admin access is not available.",
-          code: ADMIN_EDGE_SECRET_CONFIG_CODE,
-          hint: "Set ADMIN_EDGE_SECRET in your host to a random string of at least 32 UTF-8 bytes (same as production).",
-        };
-        if (pathname.startsWith("/api/")) {
-          return NextResponse.json(body, { status: 503 });
-        }
-        return NextResponse.json(body, { status: 503 });
-      }
-      if (!isDev && !isAdminEdgeSecretValid(edgeSecretRaw)) {
-        if (pathname.startsWith("/api/")) {
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        }
-        return NextResponse.redirect(new URL("/admin/login", request.url), 302);
-      }
-    }
+    /**
+     * Admin pages and /api/admin/* rely on the Firebase session cookie (layout + requireAdminSession).
+     * We do not gate here with ADMIN_EDGE_SECRET / admin_edge: Edge build vs server env mismatches on
+     * hosts like Netlify broke login even when Firebase was configured correctly.
+     */
   }
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
@@ -121,6 +75,7 @@ function buildCsp(nonce: string): string {
     "https://*.js.stripe.com",
     "https://*.googletagmanager.com",
     "https://www.googletagmanager.com",
+    "https://*.googletag.com",
     "https://*.google-analytics.com",
     "https://www.google.com",
     "https://apis.google.com",
@@ -150,6 +105,7 @@ function buildCsp(nonce: string): string {
     "https://*.analytics.google.com",
     "https://*.googletagmanager.com",
     "https://www.googletagmanager.com",
+    "https://*.googletag.com",
     // GA / Ads measurement may hit doubleclick when signals are enabled
     "https://*.doubleclick.net",
     "https://stats.g.doubleclick.net",
@@ -162,9 +118,9 @@ function buildCsp(nonce: string): string {
     // script-src when worker-src is omitted; script-src must not include blob:, so set explicitly.
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
-    "frame-src 'self' https://js.stripe.com https://*.stripe.com https://checkout.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://www.google.com https://*.google.com https://www.recaptcha.net",
+    "frame-src 'self' https://js.stripe.com https://*.stripe.com https://checkout.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://www.google.com https://*.google.com https://www.recaptcha.net https://www.googletagmanager.com",
     `connect-src ${connectSrc}`,
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob: https: https://*.google-analytics.com https://*.googletagmanager.com",
     "object-src 'none'",
     "base-uri 'self'",
   ].join("; ");

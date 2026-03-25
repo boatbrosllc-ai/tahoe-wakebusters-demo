@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
+import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 
 /**
- * Same-origin GA4 bootstrap so we avoid CSP `script-src` nonces on inline snippets.
- * `layout.tsx` loads this after `gtag/js`; measurement ID stays server-derived.
+ * Legacy same-origin GA4 bootstrap (prefer inline in `app/layout.tsx`).
+ * Must not overwrite `window.gtag` if `gtag/js` already ran — see `getGtagInlineBootstrapJs`.
  */
 export async function GET() {
   const id = getGaMeasurementId();
@@ -17,12 +18,7 @@ export async function GET() {
     });
   }
 
-  const body = [
-    "window.dataLayer = window.dataLayer || [];",
-    "function gtag(){dataLayer.push(arguments);}",
-    "gtag('js', new Date());",
-    `gtag('config', ${JSON.stringify(id)});`,
-  ].join("\n");
+  const body = `${getGtagInlineBootstrapJs(id)}\n`;
 
   return new NextResponse(body, {
     status: 200,

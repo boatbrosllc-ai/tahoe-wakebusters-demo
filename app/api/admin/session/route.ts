@@ -7,9 +7,6 @@ import {
   getAdminSessionVerifyOutcome,
   verifyAdminSessionCookie,
 } from "@/lib/admin-auth-firebase";
-import { createEdgeSessionCookie } from "@/lib/admin-edge-session-create";
-import { ADMIN_EDGE_COOKIE_NAME } from "@/lib/admin-edge-session-verify";
-import { ADMIN_EDGE_SECRET_CONFIG_CODE, isAdminEdgeSecretValid } from "@/lib/admin-edge-secret";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 import { getResolvedFirebaseProjectId } from "@/lib/booking/env";
 
@@ -196,18 +193,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if (isProduction && !isAdminEdgeSecretValid(process.env.ADMIN_EDGE_SECRET)) {
-      return NextResponse.json(
-        {
-          error: "Server configuration error: ADMIN_EDGE_SECRET is missing or too short for production.",
-          code: ADMIN_EDGE_SECRET_CONFIG_CODE,
-          hint: "Set ADMIN_EDGE_SECRET to a random string of at least 32 UTF-8 bytes in your host (e.g. Netlify). It must match runtime env so middleware and session agree.",
-        },
-        { status: 503 }
-      );
-    }
-
     const sessionCookie = await createAdminSessionCookie(idToken);
     const name = getAdminSessionCookieName();
     const res = NextResponse.json({ ok: true, redirect: "/admin" }, { status: 200 });
@@ -218,42 +203,6 @@ export async function POST(request: NextRequest) {
       maxAge: COOKIE_MAX_AGE,
       path: "/",
     });
-
-    if (isProduction) {
-      const edgeSecret = process.env.ADMIN_EDGE_SECRET!.trim();
-      const edgeValue = createEdgeSessionCookie(email, edgeSecret, COOKIE_MAX_AGE);
-      res.cookies.set(ADMIN_EDGE_COOKIE_NAME, edgeValue, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        maxAge: COOKIE_MAX_AGE,
-        path: "/",
-      });
-    } else {
-      const edgeSecret = process.env.ADMIN_EDGE_SECRET?.trim();
-      if (edgeSecret && isAdminEdgeSecretValid(edgeSecret)) {
-        try {
-          const edgeValue = createEdgeSessionCookie(email, edgeSecret, COOKIE_MAX_AGE);
-          res.cookies.set(ADMIN_EDGE_COOKIE_NAME, edgeValue, {
-            httpOnly: true,
-            secure: false,
-            sameSite: "lax",
-            maxAge: COOKIE_MAX_AGE,
-            path: "/",
-          });
-        } catch (e) {
-          console.error("[admin/session] ADMIN_EDGE_SECRET invalid:", e);
-          return NextResponse.json(
-            {
-              error: "Server configuration error: ADMIN_EDGE_SECRET must be at least 32 UTF-8 bytes.",
-              code: ADMIN_EDGE_SECRET_CONFIG_CODE,
-              hint: "Use a secret of at least 32 UTF-8 bytes, or omit ADMIN_EDGE_SECRET in local dev.",
-            },
-            { status: 503 }
-          );
-        }
-      }
-    }
     return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

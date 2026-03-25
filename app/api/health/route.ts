@@ -19,6 +19,7 @@ import {
   isReceiptAndManageSecretsDistinctInProduction,
 } from "@/lib/booking/receipt-token-secret";
 import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
+import { getGaMeasurementId } from "@/lib/ga-measurement-id";
 
 async function isPrivilegedHealthRequest(request: NextRequest): Promise<boolean> {
   const internalSecret = process.env.HEALTH_INTERNAL_SECRET?.trim();
@@ -103,6 +104,12 @@ export async function GET(request: NextRequest) {
       : "n/a";
   }
 
+  const gaMeasurementId = getGaMeasurementId();
+  checks.ga4 = {
+    enabled: !!gaMeasurementId,
+    measurementId: gaMeasurementId,
+  };
+
   const rateLimitReady = isRateLimitReadyForProduction();
   checks.rateLimitReady = rateLimitReady;
   checks.rateLimit = rateLimitReady ? "ok" : "degraded";
@@ -146,6 +153,7 @@ export async function GET(request: NextRequest) {
         legacyFallbackSafe: checks.legacyFallbackSafe,
         firebase: checks.firebase,
         stripe: checks.stripe,
+        ga4: checks.ga4,
       };
   const statusCode = ok ? 200 : 503;
   return NextResponse.json(body, { status: statusCode });

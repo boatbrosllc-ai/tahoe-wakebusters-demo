@@ -522,6 +522,7 @@ export async function GET(request: NextRequest) {
           );
         } catch (tHoldsWindowedErr) {
           holdsQueryFailed = true;
+          legacyHoldsScanCapHit = true;
           console.warn(
             "[slots] ticketed windowed holds query failed:",
             tHoldsWindowedErr instanceof Error ? tHoldsWindowedErr.message : tHoldsWindowedErr,
@@ -680,14 +681,21 @@ export async function GET(request: NextRequest) {
           seasonalTicketed?.enabled
             ? tSlots.filter((s) => isSeasonalAllowed(seasonalTicketed, new Date(s.startAt), s.dateStr))
             : tSlots;
-        if (blocksQueryFailed) {
+        if (blocksQueryFailed || holdsQueryFailed) {
           for (const s of tSlotsReturned) {
             s.status = conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true);
           }
         }
         const ticketedPartial =
-          legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed;
-        if (legacyHoldsScanCapHit) {
+          legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed || legacyHoldsScanCapHit;
+        if (holdsQueryFailed) {
+          void writeOperationalAlert({
+            type: "slots_ticketed_holds_query_failed",
+            source: "app/api/booking/slots",
+            experienceId,
+            hint: "Ticketed holds query or pagination failed; open slots marked blocked conservatively. Check Firestore indexes and holds collection health.",
+          }).catch(() => {});
+        } else if (legacyHoldsScanCapHit) {
           void writeOperationalAlert({
             type: "legacy_holds_scan_cap_hit",
             source: "app/api/booking/slots",
