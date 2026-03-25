@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { ListingBoat, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 
@@ -168,16 +168,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const slugEffective = inferSlugFromAssignedBoats(slugForBoatType, allBoatDocs);
     // Filter by boatType so Watersports shows only wake boats and Pontoon shows only pontoon/tritoon
     const allowBoatType = allowBoatTypeForSlug(slugEffective);
-    let boatDocsFiltered = allBoatDocs.filter((doc) => {
+    const boatDocsFiltered = allBoatDocs.filter((doc) => {
       const boat = doc.data() as ListingBoat;
       return allowBoatType(boat.boatType);
     });
-    // Hard guarantee: watersports must never show pontoon/tritoon — only wake boats.
-    if (isWatersportsSlug(slugEffective)) {
-      boatDocsFiltered = boatDocsFiltered.filter(
-        (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
-      );
-    }
     const boats: ExperienceDetailBoat[] = [...boatDocsFiltered]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((doc) => {

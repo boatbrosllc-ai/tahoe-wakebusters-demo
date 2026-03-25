@@ -14,7 +14,7 @@ import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/prici
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import { getTicketedDepartureAndDuration, validateTicketedSlotParsed, type RateDocLike } from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
@@ -340,7 +340,8 @@ export async function POST(request: NextRequest) {
             parsedForValidation.dateStr,
             parsedForValidation.startHour,
             parsedForValidation.startMinute,
-            parsedForValidation.durationHours
+            parsedForValidation.durationHours,
+            isWatersportsSlug(effectiveSlug)
           )
         ) {
           return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });

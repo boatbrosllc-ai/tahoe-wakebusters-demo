@@ -15,7 +15,7 @@ import {
   createStripeCheckoutSessionForHold,
   rollbackCheckoutSession,
 } from "@/lib/booking/checkout-session-helpers";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 import {
   assertSlotAvailable,
@@ -212,6 +212,9 @@ export async function POST(request: NextRequest) {
     }
     const experience = expDoc.data() as Experience;
     const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
+    const listingSlugForGrid =
+      expSlug ||
+      inferSlugFromTitle(experience.title ?? (experience as { name?: string }).name);
     const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, input.experienceId, expSlug);
     const experienceIdVariants = getExperienceIdVariants(input.experienceId, experience?.slug ?? "");
     if (!experience.active) {
@@ -270,7 +273,8 @@ export async function POST(request: NextRequest) {
           parsed.dateStr,
           parsed.startHour,
           parsed.startMinute,
-          parsed.durationHours
+          parsed.durationHours,
+          isWatersportsSlug(listingSlugForGrid)
         )
       : isAllowedSlotTime(parsed.startHour, parsed.startMinute, parsed.durationHours, undefined);
     if (!slotTimeOk) {

@@ -22,21 +22,53 @@ export const EXPERIENCE_START_HOURS = Array.from(
 
 export type ParsedSlotId = { dateStr: string; startHour: number; startMinute: number; durationHours: number };
 
+/** Each hyphen-separated segment must be a plain unsigned integer (no trailing junk from parseInt). */
+function isSlotIdUnsignedIntToken(s: string): boolean {
+  return /^[0-9]+$/.test(s);
+}
+
+const SLOT_ID_MIN_DURATION_HOURS = 1;
+/** Generous cap; multi-day trips use startDateStr scans — IDs beyond this are rejected as malformed. */
+const SLOT_ID_MAX_DURATION_HOURS = 24 * 21;
+
 export function parseSlotId(slotId: string): ParsedSlotId | null {
   const parts = slotId.split("-");
-  if (parts.length < 5) return null;
+  if (parts.length !== 5 && parts.length !== 6) return null;
   const y = parts[0];
-  const m = parts[1].padStart(2, "0");
-  const d = parts[2].padStart(2, "0");
+  const mo = parts[1];
+  const da = parts[2];
+  if (!isSlotIdUnsignedIntToken(y) || y.length !== 4) return null;
+  if (!isSlotIdUnsignedIntToken(mo) || !isSlotIdUnsignedIntToken(da)) return null;
+  const monthNum = Number(mo);
+  const dayNum = Number(da);
+  if (monthNum < 1 || monthNum > 12 || dayNum < 1 || dayNum > 31) return null;
+  const m = mo.padStart(2, "0");
+  const d = da.padStart(2, "0");
   const dateStr = `${y}-${m}-${d}`;
-  const startHour = parseInt(parts[3], 10);
-  // 5 parts: YYYY-MM-DD-H-duration → minute 0. 6 parts: YYYY-MM-DD-H-M-duration → minute M.
-  const durationHours = parts.length === 5 ? parseInt(parts[4], 10) : parseInt(parts[5], 10);
-  const startMinute = parts.length === 6 ? parseInt(parts[4], 10) : 0;
-  if (Number.isNaN(startHour) || Number.isNaN(durationHours)) return null;
-  if (parts.length === 6 && (Number.isNaN(startMinute) || (startMinute !== 0 && startMinute !== 30))) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
-  return { dateStr, startHour, startMinute: parts.length === 6 ? startMinute : 0, durationHours };
+  if (!isSlotIdUnsignedIntToken(parts[3])) return null;
+  const startHour = Number(parts[3]);
+  if (startHour < 0 || startHour > 23) return null;
+  let startMinute: number;
+  let durationHours: number;
+  if (parts.length === 5) {
+    if (!isSlotIdUnsignedIntToken(parts[4])) return null;
+    startMinute = 0;
+    durationHours = Number(parts[4]);
+  } else {
+    if (!isSlotIdUnsignedIntToken(parts[4]) || !isSlotIdUnsignedIntToken(parts[5])) return null;
+    startMinute = Number(parts[4]);
+    durationHours = Number(parts[5]);
+    if (startMinute !== 0 && startMinute !== 30) return null;
+  }
+  if (
+    !Number.isFinite(durationHours) ||
+    durationHours < SLOT_ID_MIN_DURATION_HOURS ||
+    durationHours > SLOT_ID_MAX_DURATION_HOURS
+  ) {
+    return null;
+  }
+  return { dateStr, startHour, startMinute, durationHours };
 }
 
 /**
@@ -49,15 +81,51 @@ export function parseSlotIdRelaxed(slotId: string): ParsedSlotId | null {
   const cleaned = slotId.replace(/\s/g, "");
   if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
     const parts = cleaned.split("-");
+    if (!isSlotIdUnsignedIntToken(parts[0]) || parts[0].length !== 4) return null;
+    if (
+      !isSlotIdUnsignedIntToken(parts[1]) ||
+      !isSlotIdUnsignedIntToken(parts[2]) ||
+      !isSlotIdUnsignedIntToken(parts[3]) ||
+      !isSlotIdUnsignedIntToken(parts[4])
+    ) {
+      return null;
+    }
     const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}`;
     return parseSlotId(normalized);
   }
   if (/^\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}-\d{1,2}$/.test(cleaned)) {
     const parts = cleaned.split("-");
+    if (!isSlotIdUnsignedIntToken(parts[0]) || parts[0].length !== 4) return null;
+    if (
+      !isSlotIdUnsignedIntToken(parts[1]) ||
+      !isSlotIdUnsignedIntToken(parts[2]) ||
+      !isSlotIdUnsignedIntToken(parts[3]) ||
+      !isSlotIdUnsignedIntToken(parts[4]) ||
+      !isSlotIdUnsignedIntToken(parts[5])
+    ) {
+      return null;
+    }
     const normalized = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}-${parts[3]}-${parts[4]}-${parts[5]}`;
     return parseSlotId(normalized);
   }
   return null;
+}
+
+/**
+ * Slots API request window in America/Chicago: from midnight on `startDateStr` through the end instant
+ * of a trip that departs at the last schedulable hour ({@link OPERATING_END_HOUR}) on `endDateStr`
+ * with `maxDurationHours`. Use this for booking/hold/block overlap and slot `startAt` query upper bounds
+ * so evening departures on the range end date are not cut off by a UTC end-of-day timestamp.
+ */
+export function getSlotsApiRequestWindow(
+  startDateStr: string,
+  endDateStr: string,
+  maxDurationHours: number,
+): { windowStart: Date; windowEnd: Date } {
+  const { dayStart: windowStart } = getCentralCalendarDayBounds(startDateStr);
+  const dur = Math.max(1, maxDurationHours);
+  const { end: windowEnd } = getSlotStartEnd(endDateStr, OPERATING_END_HOUR, dur, 0);
+  return { windowStart, windowEnd };
 }
 
 export function buildSlotId(dateStr: string, startHour: number, durationHours: number, startMinute?: number): string {
@@ -225,7 +293,28 @@ export function isAllowedSlotTime(
 
 /** True when listing boat `boatType` is the wake/wakesurf grid family (case-insensitive). */
 export function isWakeListingBoatType(boatType: string | undefined): boolean {
-  return typeof boatType === "string" && boatType.trim().toLowerCase() === "wake";
+  if (typeof boatType !== "string") return false;
+  const t = boatType.trim().toLowerCase();
+  if (t === "wake") return true;
+  if (t === "wakesurf" || t === "wake-surf" || t === "wakeboard" || t === "wake-board" || t === "wake board") return true;
+  return false;
+}
+
+/** Pontoon / tritoon — excluded from wake-style grids on watersports listings. */
+export function isPontoonOrTritoonBoatType(boatType: string | undefined): boolean {
+  const b = (boatType ?? "").toLowerCase().trim();
+  return b === "pontoon" || b === "tritoon";
+}
+
+/**
+ * Charter calendar should use {@link getSlotGridWakeBoard} rules when the boat is explicitly typed wake,
+ * or when the listing is watersports and the boat is not pontoon/tritoon (e.g. missing/legacy boatType).
+ * Must stay in sync with GET /api/booking/slots and {@link isListingBoatCharterStartTimeAllowed}.
+ */
+export function shouldUseWakeBoardCharterGrid(boatType: string | undefined, watersportsExperience: boolean): boolean {
+  if (isWakeListingBoatType(boatType)) return true;
+  if (!watersportsExperience) return false;
+  return !isPontoonOrTritoonBoatType(boatType);
 }
 
 /**
@@ -256,9 +345,10 @@ export function isListingBoatCharterStartTimeAllowed(
   dateStr: string,
   startHour: number,
   startMinute: number,
-  durationHours: number
+  durationHours: number,
+  watersportsExperience?: boolean
 ): boolean {
-  if (isWakeListingBoatType(boat.boatType)) {
+  if (shouldUseWakeBoardCharterGrid(boat.boatType, watersportsExperience === true)) {
     return isWakeBoardListingStartTimeAllowed(dateStr, startHour, startMinute, boat.allowedStartTimes);
   }
   return isAllowedSlotTime(startHour, startMinute, durationHours, boat.allowedStartTimes);

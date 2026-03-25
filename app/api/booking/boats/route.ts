@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, inferSlugFromAssignedBoats } from "@/lib/booking/experience-aliases";
 import type { ListingBoat, ExperienceRate } from "@/lib/booking/types";
 
 export interface BoatOption {
@@ -68,14 +68,9 @@ export async function GET(request: NextRequest) {
     const slugEffective = inferSlugFromAssignedBoats(slugForBoatType, allBoatDocsList);
 
     const allowBoatType = allowBoatTypeForSlug(slugEffective);
-    let boatDocs = allBoatDocsList.filter((doc) =>
+    const boatDocs = allBoatDocsList.filter((doc) =>
       allowBoatType((doc.data() as ListingBoat).boatType)
     );
-    if (isWatersportsSlug(slugEffective)) {
-      boatDocs = boatDocs.filter(
-        (doc) => ((doc.data() as ListingBoat).boatType ?? "").toLowerCase().trim() === "wake"
-      );
-    }
     boatDocs.sort((a, b) => a.id.localeCompare(b.id));
     const boats: BoatOption[] = boatDocs.map((doc) => {
       const boat = doc.data() as ListingBoat;

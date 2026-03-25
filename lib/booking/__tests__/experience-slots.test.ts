@@ -6,14 +6,18 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   parseSlotId,
+  parseSlotIdRelaxed,
   buildSlotId,
   getSlotStartEnd,
+  getSlotsApiRequestWindow,
   toDateStrOnly,
   isSeasonalAllowed,
   isSaturdayInSlotTimezone,
   isListingBoatCharterStartTimeAllowed,
   isWakeListingBoatType,
+  shouldUseWakeBoardCharterGrid,
 } from "../experience-slots";
+import { bookingIntervalMsFromSlotFields, intervalOverlapsRequestWindow } from "../booking-interval";
 
 describe("parseSlotId", () => {
   it("parses 5-part slot id (hour start, no minute)", () => {
@@ -46,6 +50,39 @@ describe("parseSlotId", () => {
   it("returns null for invalid minute (only 0 or 30 allowed)", () => {
     assert.strictEqual(parseSlotId("2025-02-10-9-15-4"), null);
   });
+
+  it("returns null when hour or duration tokens are not strictly numeric (no parseInt truncation)", () => {
+    assert.strictEqual(parseSlotId("2025-02-10-13a-3"), null);
+    assert.strictEqual(parseSlotId("2025-02-10-13-3x"), null);
+    assert.strictEqual(parseSlotId("2025-02-10-13-3.5"), null);
+  });
+
+  it("returns null for hour or duration out of range", () => {
+    assert.strictEqual(parseSlotId("2025-02-10-24-3"), null);
+    assert.strictEqual(parseSlotId("2025-02-10-10-0"), null);
+  });
+
+  it("returns null for impossible calendar month/day tokens", () => {
+    assert.strictEqual(parseSlotId("2025-13-01-10-2"), null);
+    assert.strictEqual(parseSlotId("2025-02-32-10-2"), null);
+  });
+});
+
+describe("parseSlotIdRelaxed", () => {
+  it("still normalizes legacy date padding only; rejects junk numeric tokens", () => {
+    const r = parseSlotIdRelaxed("2026-2-20-17-3");
+    assert.ok(r);
+    assert.strictEqual(r!.dateStr, "2026-02-20");
+    assert.strictEqual(parseSlotIdRelaxed("2026-2-20-17a-3"), null);
+    assert.strictEqual(parseSlotIdRelaxed("2026-2-20-17-3x"), null);
+  });
+});
+
+describe("bookingIntervalMsFromSlotFields (parse integration)", () => {
+  it("returns null for malformed slot ids so overlap logic does not use truncated end times", () => {
+    assert.strictEqual(bookingIntervalMsFromSlotFields("2025-02-10-13-3x", undefined), null);
+    assert.strictEqual(bookingIntervalMsFromSlotFields(undefined, "2025-02-10-9-30-4x"), null);
+  });
 });
 
 describe("buildSlotId", () => {
@@ -56,6 +93,29 @@ describe("buildSlotId", () => {
 
   it("builds 6-part id when startMinute is 30", () => {
     assert.strictEqual(buildSlotId("2025-02-10", 9, 4, 30), "2025-02-10-9-30-4");
+  });
+});
+
+describe("getSlotsApiRequestWindow", () => {
+  it("includes a 7:00 PM Central departure on endDate in the overlap window (regression)", () => {
+    const endDate = "2025-06-15";
+    const maxDur = 3;
+    const { windowStart, windowEnd } = getSlotsApiRequestWindow("2025-06-01", endDate, maxDur);
+    const booked = getSlotStartEnd(endDate, 19, maxDur, 0);
+    assert.ok(
+      intervalOverlapsRequestWindow(booked.start.getTime(), booked.end.getTime(), windowStart, windowEnd),
+      "evening trip on range end date should overlap API request window",
+    );
+    const legacyUtcCutoffEnd = new Date(endDate + "T23:59:59.999Z");
+    assert.ok(
+      !intervalOverlapsRequestWindow(
+        booked.start.getTime(),
+        booked.end.getTime(),
+        new Date("2025-06-01T12:00:00.000Z"),
+        legacyUtcCutoffEnd,
+      ),
+      "naive UTC end-of-day previously excluded 7pm Central on endDate",
+    );
   });
 });
 
@@ -134,12 +194,23 @@ describe("isSeasonalAllowed", () => {
 });
 
 describe("isWakeListingBoatType", () => {
-  it("treats wake boatType case-insensitively", () => {
+  it("treats wake boatType case-insensitively and accepts common aliases", () => {
     assert.strictEqual(isWakeListingBoatType("wake"), true);
     assert.strictEqual(isWakeListingBoatType("Wake"), true);
     assert.strictEqual(isWakeListingBoatType(" WAKE "), true);
+    assert.strictEqual(isWakeListingBoatType("wakeboard"), true);
+    assert.strictEqual(isWakeListingBoatType("wakesurf"), true);
     assert.strictEqual(isWakeListingBoatType("pontoon"), false);
     assert.strictEqual(isWakeListingBoatType(undefined), false);
+  });
+});
+
+describe("shouldUseWakeBoardCharterGrid", () => {
+  it("watersports listing uses wake grid for non-pontoon even when boatType is empty", () => {
+    assert.strictEqual(shouldUseWakeBoardCharterGrid(undefined, true), true);
+    assert.strictEqual(shouldUseWakeBoardCharterGrid("", true), true);
+    assert.strictEqual(shouldUseWakeBoardCharterGrid("pontoon", true), false);
+    assert.strictEqual(shouldUseWakeBoardCharterGrid("", false), false);
   });
 });
 
@@ -162,6 +233,14 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
       true,
       "3pm Saturday must match WAKEBOARD_SATURDAY_START_TIMES, not Firestore weekday list"
     );
+  });
+
+  it("watersports listing + missing boatType: Saturday afternoon uses wake grid (matches slots API)", () => {
+    const boat = {
+      allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }],
+    };
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), true);
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, false), false);
   });
 
   it("wake boat: weekday restricts to allowedStartTimes when set", () => {

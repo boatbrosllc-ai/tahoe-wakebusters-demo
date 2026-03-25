@@ -142,10 +142,10 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     for (const doc of paidSnap.docs) {
       if (seenIds.has(doc.id)) continue;
       seenIds.add(doc.id);
-      const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
+      const b = doc.data() as { slotId?: string; slot_id?: string; boatId?: string; status?: string };
       if (useBoatSlots && boatId && b.boatId !== boatId) continue;
       if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-      const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+      const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
       if (!iv) continue;
       if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
         throw new SlotConflictError("Slot no longer available");
@@ -184,10 +184,10 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
       for (const doc of snap.docs) {
         if (legacySeen.has(doc.id)) continue;
         legacySeen.add(doc.id);
-        const b = doc.data() as { slotId?: string; boatId?: string; startDateStr?: string };
+        const b = doc.data() as { slotId?: string; slot_id?: string; boatId?: string; startDateStr?: string };
         if (b.startDateStr) continue;
         if (useBoatSlots && boatId && b.boatId !== boatId) continue;
-        const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+        const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
         if (!iv) continue;
         if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
           throw new SlotConflictError("Slot no longer available");
@@ -259,9 +259,9 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   for (const doc of paidSnap.docs) {
     if (seenIds.has(doc.id)) continue;
     seenIds.add(doc.id);
-    const b = doc.data() as { slotId?: string; status?: string };
+    const b = doc.data() as { slotId?: string; slot_id?: string; status?: string };
     if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-    const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+    const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
     if (!iv) continue;
     if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
       throw new SlotConflictError("Slot no longer available");
@@ -286,10 +286,10 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     throw new LegacyScanLimitReachedError();
   }
   for (const doc of legacySnap.docs) {
-    const b = doc.data() as { slotId?: string; startDateStr?: string; status?: string };
+    const b = doc.data() as { slotId?: string; slot_id?: string; startDateStr?: string; status?: string };
     if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
     if (b.startDateStr) continue;
-    const iv = bookingIntervalMsFromSlotFields(b.slotId, undefined);
+    const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
     if (!iv) continue;
     if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
       throw new SlotConflictError("Slot no longer available");

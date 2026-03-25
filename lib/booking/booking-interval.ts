@@ -5,6 +5,8 @@
 
 import { getDateStrInSlotTimezone, getSlotStartEnd, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 
+export { getSlotsApiRequestWindow } from "@/lib/booking/experience-slots";
+
 /** Upper bound on how far we widen startDateStr queries vs max trip duration (caps scan size). */
 export const BOOKING_SLOT_START_DATE_LOOKBACK_CAP_DAYS = 14;
 

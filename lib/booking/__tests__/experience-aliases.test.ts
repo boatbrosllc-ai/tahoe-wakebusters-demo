@@ -123,11 +123,15 @@ describe("isWatersportsSlug / isPontoonSlug", () => {
 });
 
 describe("allowBoatTypeForSlug", () => {
-  it("watersports: only wake allowed", () => {
+  it("watersports: wake family and empty type allowed; never pontoon/tritoon", () => {
     const allow = allowBoatTypeForSlug("wake-surf");
     assert.strictEqual(allow("wake"), true);
+    assert.strictEqual(allow("wakeboard"), true);
+    assert.strictEqual(allow("wakesurf"), true);
+    assert.strictEqual(allow(""), true);
+    assert.strictEqual(allow(undefined), true);
     assert.strictEqual(allow("pontoon"), false);
-    assert.strictEqual(allow(undefined), false);
+    assert.strictEqual(allow("tritoon"), false);
   });
   it("pontoon: pontoon/tritoon or missing allowed", () => {
     const allow = allowBoatTypeForSlug("lake-austin-pontoon");
@@ -135,6 +139,7 @@ describe("allowBoatTypeForSlug", () => {
     assert.strictEqual(allow("tritoon"), true);
     assert.strictEqual(allow(undefined), true);
     assert.strictEqual(allow("wake"), false);
+    assert.strictEqual(allow("wakeboard"), false);
   });
   it("sunset/holiday: any boat type allowed", () => {
     assert.strictEqual(allowBoatTypeForSlug("sunset")("wake"), true);

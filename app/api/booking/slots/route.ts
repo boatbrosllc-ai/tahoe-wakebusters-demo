@@ -10,12 +10,12 @@ import {
   getSlotGridWithSaturdayOnlyRestriction,
   getSlotStartEnd,
   getTicketedSlotGrid,
-  parseSlotId,
+  getSlotsApiRequestWindow,
   parseSlotIdRelaxed,
   toDateStrOnly,
   isSeasonalAllowed,
   OPERATING_END_HOUR,
-  isWakeListingBoatType,
+  shouldUseWakeBoardCharterGrid,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
@@ -205,17 +205,15 @@ export async function GET(request: NextRequest) {
     if ((!boatId && !experienceId) || !startDate || !endDate) {
       return NextResponse.json({ error: "boatId or experienceId, startDate, endDate required (YYYY-MM-DD)" }, { status: 400 });
     }
-    // Parse as UTC so range validation is identical in all server timezones (avoids production-only rejections).
-    // UTC noon is used intentionally so that when converted to America/Chicago (UTC-5 to UTC-6), the timestamp
-    // still falls on the same calendar day (noon UTC = 6–7 AM Chicago). Do not change to T00:00:00Z — UTC midnight
-    // maps to 6–7 PM Chicago the previous calendar day.
-    const start = new Date(startDate + "T12:00:00.000Z");
-    const end = new Date(endDate + "T23:59:59.999Z");
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    // Range validation uses UTC noon anchors (stable calendar day vs America/Chicago). Request-window bounds for
+    // bookings/holds/blocks overlap and slot queries are computed per-branch via getSlotsApiRequestWindow.
+    const rangeStartAnchor = new Date(startDate + "T12:00:00.000Z");
+    const rangeEndAnchor = new Date(endDate + "T12:00:00.000Z");
+    if (Number.isNaN(rangeStartAnchor.getTime()) || Number.isNaN(rangeEndAnchor.getTime())) {
       return NextResponse.json({ error: "Invalid date format" }, { status: 400 });
     }
     const maxDays = 92;
-    const daysMs = end.getTime() - start.getTime();
+    const daysMs = rangeEndAnchor.getTime() - rangeStartAnchor.getTime();
     if (daysMs > maxDays * 24 * 60 * 60 * 1000 || daysMs < 0) {
       return NextResponse.json({ error: `Date range must be between 1 and ${maxDays} days` }, { status: 400 });
     }
@@ -289,27 +287,48 @@ export async function GET(request: NextRequest) {
       const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
       const useTicketedBranch = expDataFull?.pricingType === "ticketed" || isTicketedBySlug;
 
+      if (useTicketedBranch && ratesSnap.empty) {
+        console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
+        return NextResponse.json({ slots: [] });
+      }
+
+      const expForTicketed = {
+        ...expDataFull,
+        id: experienceId,
+        slug: expDataFull?.slug,
+        title: expData?.title ?? expData?.name,
+        name: expData?.name,
+      };
+      let maxDurationHoursForWindow = 1;
+      let tDepartureHour = 0;
+      let tDepartureMinute = 0;
+      let tDurationHours = 1;
+      if (useTicketedBranch) {
+        const td = getTicketedDepartureAndDuration(expForTicketed, ratesSnap.docs);
+        tDepartureHour = td.deptHour;
+        tDepartureMinute = td.deptMinute;
+        tDurationHours = td.tripDuration;
+        maxDurationHoursForWindow = Math.max(1, td.tripDuration);
+      } else {
+        const durs = ratesSnap.docs
+          .map((d) => (d.data() as ExperienceRate).durationHours)
+          .filter((h): h is number => Number.isFinite(h) && h > 0);
+        const uniq = Array.from(new Set(durs));
+        maxDurationHoursForWindow = uniq.length ? Math.max(...uniq) : 1;
+      }
+      const { windowStart: winStart, windowEnd: winEnd } = getSlotsApiRequestWindow(
+        startDate,
+        endDate,
+        maxDurationHoursForWindow,
+      );
+      const gridStart = new Date(startDate + "T12:00:00.000Z");
+      const gridEnd = new Date(endDate + "T12:00:00.000Z");
+
       if (useTicketedBranch) {
         // --- Ticketed experience: one slot per date with capacity enrichment ---
         const tRatesSnap = ratesSnap;
-        if (tRatesSnap.empty) {
-          console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
-          return NextResponse.json({ slots: [] });
-        }
-        // Use shared ticketed-slot-utils so slot generation matches create-hold validation (same dept + duration).
-        const expForTicketed = {
-          ...expDataFull,
-          id: experienceId,
-          slug: expDataFull?.slug,
-          title: expData?.title ?? expData?.name,
-          name: expData?.name,
-        };
-        const { deptHour: tDepartureHour, deptMinute: tDepartureMinute, tripDuration: tDurationHours } = getTicketedDepartureAndDuration(
-          expForTicketed,
-          tRatesSnap.docs
-        );
 
-        const ticketedGrid = getTicketedSlotGrid(start, end, tDurationHours, tDepartureHour, tDepartureMinute);
+        const ticketedGrid = getTicketedSlotGrid(gridStart, gridEnd, tDurationHours, tDepartureHour, tDepartureMinute);
         const ticketedStartDateStrLower = addCalendarDaysToDateStr(
           startDate,
           -bookingLookbackDaysFromMaxDuration(tDurationHours),
@@ -325,7 +344,7 @@ export async function GET(request: NextRequest) {
         if (isWatersportsSlug(slugEffective)) {
           tBoatIds = tBoatIds.filter((id) => {
             const doc = mergedBoatDocs.find((d) => d.id === id);
-            return ((doc?.data() as { boatType?: string })?.boatType ?? "").toLowerCase().trim() === "wake";
+            return shouldUseWakeBoardCharterGrid((doc?.data() as { boatType?: string })?.boatType, true);
           });
         }
 
@@ -442,7 +461,7 @@ export async function GET(request: NextRequest) {
                 const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
                 if (d.startDateStr) continue;
                 const ivLegacyT = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
-                if (!ivLegacyT || !intervalOverlapsRequestWindow(ivLegacyT.startMs, ivLegacyT.endMs, start, end)) continue;
+                if (!ivLegacyT || !intervalOverlapsRequestWindow(ivLegacyT.startMs, ivLegacyT.endMs, winStart, winEnd)) continue;
                 tSeenBookingIds.add(doc.id);
                 processBookingForCapacity(doc);
               }
@@ -515,7 +534,7 @@ export async function GET(request: NextRequest) {
           try {
             const tHoldsLegacyResults = await Promise.all(
               tAllExpIds.map((expId) =>
-                scanLegacyHoldsExpiresAtLowerBound(db, expId, Timestamp.fromDate(start), LEGACY_BOOKING_SCAN_LIMIT)
+                scanLegacyHoldsExpiresAtLowerBound(db, expId, Timestamp.fromDate(winStart), LEGACY_BOOKING_SCAN_LIMIT)
               )
             );
             tHoldsLegacyResults.forEach((result, idx) => {
@@ -533,8 +552,8 @@ export async function GET(request: NextRequest) {
                 tSeenHoldIds,
                 startDate,
                 endDate,
-                start,
-                end,
+                winStart,
+                winEnd,
                 processHoldForCapacity,
               );
             });
@@ -563,8 +582,8 @@ export async function GET(request: NextRequest) {
                     tSeenHoldIds,
                     startDate,
                     endDate,
-                    start,
-                    end,
+                    winStart,
+                    winEnd,
                     processHoldForCapacity,
                   );
                 })
@@ -582,8 +601,8 @@ export async function GET(request: NextRequest) {
         // Query blocks for all experience ID variants (slug-based or legacy)
         const { docs: ticketedBlockDocs, incomplete: blocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
           db,
-          start,
-          end,
+          winStart,
+          winEnd,
           tAllExpIds,
         );
         const blocksQueryFailed = blocksIncomplete;
@@ -601,7 +620,7 @@ export async function GET(request: NextRequest) {
           const b = doc.data() as { startAt: { toDate(): Date }; endAt: { toDate(): Date } };
           const blockStart = b.startAt?.toDate?.()?.getTime();
           const blockEnd = b.endAt?.toDate?.()?.getTime();
-          if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+          if (blockStart == null || blockEnd == null || blockEnd < winStart.getTime()) return;
           const key = `${blockStart}:${blockEnd}`;
           if (tBlockRangesSeen.has(key)) return;
           tBlockRangesSeen.add(key);
@@ -694,7 +713,7 @@ export async function GET(request: NextRequest) {
         startDate,
         -bookingLookbackDaysFromMaxDuration(maxDurationCharterSlots),
       );
-      const slotDocsQueryEnd = getSlotStartEnd(endDate, OPERATING_END_HOUR, maxDurationCharterSlots, 0).end;
+      const slotDocsQueryEnd = winEnd;
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
       const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
       mergedBoatDocs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
@@ -702,9 +721,7 @@ export async function GET(request: NextRequest) {
         .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
       if (isWatersportsSlug(slugEffective)) {
-        boatIds = boatIds.filter(
-          (id) => (boatDocDataById.get(id)?.boatType ?? "").toLowerCase().trim() === "wake"
-        );
+        boatIds = boatIds.filter((id) => shouldUseWakeBoardCharterGrid(boatDocDataById.get(id)?.boatType, true));
       }
       const allExpIds = experienceIdVariants;
       if (boatIdParam) {
@@ -811,7 +828,7 @@ export async function GET(request: NextRequest) {
           slotStart = new Date(parsed.dateStr + "T12:00:00.000Z");
           slotEnd = new Date(slotStart.getTime() + parsed.durationHours * 60 * 60 * 1000);
         }
-        if (!intervalOverlapsRequestWindow(slotStart.getTime(), slotEnd.getTime(), start, end)) return;
+        if (!intervalOverlapsRequestWindow(slotStart.getTime(), slotEnd.getTime(), winStart, winEnd)) return;
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
         const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : undefined;
@@ -918,7 +935,7 @@ export async function GET(request: NextRequest) {
               // Only include docs without startDateStr (legacy); then filter by interval overlap with request window.
               if (d.startDateStr) return;
               const iv = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
-              if (!iv || !intervalOverlapsRequestWindow(iv.startMs, iv.endMs, start, end)) return;
+              if (!iv || !intervalOverlapsRequestWindow(iv.startMs, iv.endMs, winStart, winEnd)) return;
               addBookingDoc(doc);
             });
           });
@@ -952,7 +969,7 @@ export async function GET(request: NextRequest) {
               const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
               if (d.startDateStr) continue;
               const ivNc = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
-              if (!ivNc || !intervalOverlapsRequestWindow(ivNc.startMs, ivNc.endMs, start, end)) continue;
+              if (!ivNc || !intervalOverlapsRequestWindow(ivNc.startMs, ivNc.endMs, winStart, winEnd)) continue;
               addBookingDoc(doc);
             }
           }
@@ -1013,7 +1030,7 @@ export async function GET(request: NextRequest) {
       };
 
       // Query blocks for all experience ID variants (slug-based or legacy); merge and dedupe.
-      const blocksResultPromise = fetchBlocksDocsOverlappingWindow(db, start, end, allExpIds);
+      const blocksResultPromise = fetchBlocksDocsOverlappingWindow(db, winStart, winEnd, allExpIds);
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -1022,7 +1039,7 @@ export async function GET(request: NextRequest) {
             .collection("boats")
             .doc(bid)
             .collection("slots")
-            .where("startAt", ">=", Timestamp.fromDate(start))
+            .where("startAt", ">=", Timestamp.fromDate(winStart))
             .where("startAt", "<=", Timestamp.fromDate(slotDocsQueryEnd))
             .get();
           snap.docs.forEach((doc) => {
@@ -1117,16 +1134,16 @@ export async function GET(request: NextRequest) {
           if (boatData) boatDocDataById.set(bid, boatData);
         }
         const allowedEveryDay = boatData?.allowedStartTimes;
-        const isWakeBoat = isWakeListingBoatType(boatData?.boatType);
+        const isWakeBoat = shouldUseWakeBoardCharterGrid(boatData?.boatType, isWatersportsSlug(slugEffective));
         let grid: import("@/lib/booking/experience-slots").SlotGridItem[];
         if (durationsUnique.length === 0) {
           grid = [];
         } else if (isWakeBoat) {
-          grid = getSlotGridWakeBoard(start, end, durationsUnique, allowedEveryDay ?? undefined);
+          grid = getSlotGridWakeBoard(gridStart, gridEnd, durationsUnique, allowedEveryDay ?? undefined);
         } else if (allowedEveryDay?.length) {
-          grid = getSlotGridForStartTimes(start, end, durationsUnique, allowedEveryDay);
+          grid = getSlotGridForStartTimes(gridStart, gridEnd, durationsUnique, allowedEveryDay);
         } else {
-          grid = getSlotGrid(start, end, durationsUnique);
+          grid = getSlotGrid(gridStart, gridEnd, durationsUnique);
         }
         gridByBoatId.set(bid, grid);
       }
@@ -1145,7 +1162,7 @@ export async function GET(request: NextRequest) {
         const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
         const blockStart = b.startAt?.toDate?.()?.getTime();
         const blockEnd = b.endAt?.toDate?.()?.getTime();
-        if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+        if (blockStart == null || blockEnd == null || blockEnd < winStart.getTime()) return;
         const range = { start: blockStart, end: blockEnd };
         const boatId = typeof b.boatId === "string" ? b.boatId : null;
         if (boatId) {
@@ -1247,7 +1264,7 @@ export async function GET(request: NextRequest) {
         if (
           Number.isNaN(rowStartMs) ||
           Number.isNaN(rowEndMs) ||
-          !intervalOverlapsRequestWindow(rowStartMs, rowEndMs, start, end)
+          !intervalOverlapsRequestWindow(rowStartMs, rowEndMs, winStart, winEnd)
         ) {
           continue;
         }
@@ -1324,22 +1341,83 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Boats: legacy – use bookings as source of truth for "booked", slot docs for grid/held/blocked
+    // Boats: legacy – bookings/holds by interval overlap (match charter policy), slot docs for grid/held/blocked
+    let legacyMaxDuration = 1;
+    try {
+      const legacyBoatSnap = await db.collection("boats").doc(boatId!).get();
+      const legacyExpIds =
+        (legacyBoatSnap.data() as { experienceIds?: string[] } | undefined)?.experienceIds?.filter(
+          (id): id is string => typeof id === "string" && id.trim() !== "",
+        ) ?? [];
+      const primaryLegacyExpId = legacyExpIds[0];
+      if (primaryLegacyExpId) {
+        const legacyRatesSnap = await db
+          .collection("experiences")
+          .doc(primaryLegacyExpId)
+          .collection("rates")
+          .where("active", "==", true)
+          .get();
+        const legacyDurations = legacyRatesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
+        const legacyDurationsUnique = Array.from(new Set(legacyDurations));
+        legacyMaxDuration = Math.max(...legacyDurationsUnique, 1);
+      }
+    } catch {
+      legacyMaxDuration = 1;
+    }
+    const { windowStart: legacyWinStart, windowEnd: legacyWinEnd } = getSlotsApiRequestWindow(
+      startDate!,
+      endDate!,
+      legacyMaxDuration,
+    );
+    const legacySlotDocsQueryEnd = legacyWinEnd;
+
     const legacyBookingsSnap = await db
       .collection("bookings")
       .where("boatId", "==", boatId)
       .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
       .get();
-    const legacyBookedSlotIdToBookingId = new Map<string, string>();
+    const legacyBookedIntervals: { startMs: number; endMs: number; bookingId: string }[] = [];
     legacyBookingsSnap.docs.forEach((d) => {
-      const slotId = (d.data() as { slotId?: string }).slotId;
-      if (slotId) legacyBookedSlotIdToBookingId.set(slotId, d.id);
+      const b = d.data() as { slotId?: string; slot_id?: string; status?: string };
+      if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) return;
+      const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
+      if (!iv || !intervalOverlapsRequestWindow(iv.startMs, iv.endMs, legacyWinStart, legacyWinEnd)) return;
+      legacyBookedIntervals.push({ startMs: iv.startMs, endMs: iv.endMs, bookingId: d.id });
     });
+
+    const legacyHeldIntervals: { startMs: number; endMs: number }[] = [];
+    const legacyHoldsNow = Date.now();
+    try {
+      const legacyHoldsSnap = await db.collection("holds").where("boatId", "==", boatId).get();
+      legacyHoldsSnap.docs.forEach((doc) => {
+        const h = doc.data() as {
+          status?: string;
+          expiresAt?: { toDate(): Date };
+          rollbackPending?: boolean;
+          slotId?: string;
+          slot_id?: string;
+        };
+        if (h.status !== "active") return;
+        if (h.rollbackPending === true) return;
+        if (h.expiresAt && h.expiresAt.toDate().getTime() < legacyHoldsNow) return;
+        const ivH = bookingIntervalMsFromSlotFields(h.slotId, h.slot_id);
+        if (!ivH || !intervalOverlapsRequestWindow(ivH.startMs, ivH.endMs, legacyWinStart, legacyWinEnd)) return;
+        legacyHeldIntervals.push({ startMs: ivH.startMs, endMs: ivH.endMs });
+      });
+    } catch (legacyHoldScanErr) {
+      console.warn(
+        "[slots] legacy boat holds scan failed:",
+        legacyHoldScanErr instanceof Error ? legacyHoldScanErr.message : legacyHoldScanErr,
+      );
+    }
+
+    const legacyIvOverlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
+      aStart < bEnd && aEnd > bStart;
 
     const { docs: legacyBlockDocs, incomplete: legacyBlocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
       db,
-      start,
-      end,
+      legacyWinStart,
+      legacyWinEnd,
       [boatId!],
     );
     if (legacyBlocksIncomplete) {
@@ -1359,38 +1437,13 @@ export async function GET(request: NextRequest) {
       if (blockBoatRaw && legacyBoatIdNorm && blockBoatRaw !== legacyBoatIdNorm) return;
       const blockStart = b.startAt?.toDate?.()?.getTime();
       const blockEnd = b.endAt?.toDate?.()?.getTime();
-      if (blockStart == null || blockEnd == null || blockEnd < start.getTime()) return;
+      if (blockStart == null || blockEnd == null || blockEnd < legacyWinStart.getTime()) return;
       legacyBlockRanges.push({ start: blockStart, end: blockEnd });
     });
 
-    let legacySlotDocsQueryEnd = end;
-    try {
-      const legacyBoatSnap = await db.collection("boats").doc(boatId!).get();
-      const legacyExpIds =
-        (legacyBoatSnap.data() as { experienceIds?: string[] } | undefined)?.experienceIds?.filter(
-          (id): id is string => typeof id === "string" && id.trim() !== "",
-        ) ?? [];
-      const primaryLegacyExpId = legacyExpIds[0];
-      if (primaryLegacyExpId) {
-        const legacyRatesSnap = await db
-          .collection("experiences")
-          .doc(primaryLegacyExpId)
-          .collection("rates")
-          .where("active", "==", true)
-          .get();
-        const legacyDurations = legacyRatesSnap.docs.map((d) => (d.data() as ExperienceRate).durationHours);
-        const legacyDurationsUnique = Array.from(new Set(legacyDurations));
-        const legacyMaxDuration = Math.max(...legacyDurationsUnique, 1);
-        legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, legacyMaxDuration, 0).end;
-      } else {
-        legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, 1, 0).end;
-      }
-    } catch {
-      legacySlotDocsQueryEnd = getSlotStartEnd(endDate!, OPERATING_END_HOUR, 1, 0).end;
-    }
     const slotsRef = db.collection("boats").doc(boatId!).collection("slots");
     const snap = await slotsRef
-      .where("startAt", ">=", Timestamp.fromDate(start))
+      .where("startAt", ">=", Timestamp.fromDate(legacyWinStart))
       .where("startAt", "<=", Timestamp.fromDate(legacySlotDocsQueryEnd))
       .orderBy("startAt", "asc")
       .get();
@@ -1400,12 +1453,10 @@ export async function GET(request: NextRequest) {
       const startAt = data.startAt as { toDate(): Date };
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
-      const parsed = parseSlotId(doc.id);
-      const fromBooking = legacyBookedSlotIdToBookingId.has(doc.id);
-      let status = fromBooking ? "booked" : data.status === "booked" ? "open" : data.status;
+      const parsed = parseSlotIdRelaxed(doc.id);
+      let status: string = data.status === "booked" ? "open" : data.status;
       const hidRaw = typeof data.holdId === "string" && data.holdId.trim() ? data.holdId.trim() : null;
       if (status === "held" && hidRaw) legacySlotHoldIdByDocId.set(doc.id, hidRaw);
-      const resolvedBookingId = fromBooking ? legacyBookedSlotIdToBookingId.get(doc.id) : data.bookingId;
       return {
         id: doc.id,
         dateStr: parsed?.dateStr ?? doc.id.slice(0, 10),
@@ -1413,7 +1464,7 @@ export async function GET(request: NextRequest) {
         endAt: endAt.toDate().toISOString(),
         status,
         holdId: null,
-        bookingId: resolvedBookingId ?? data.bookingId,
+        bookingId: data.bookingId ?? null,
         updatedAt: updatedAt?.toDate?.()?.toISOString?.() ?? null,
       };
     });
@@ -1468,6 +1519,20 @@ export async function GET(request: NextRequest) {
         return s;
       });
     }
+
+    slots = slots.map((s) => {
+      const sMs = new Date(s.startAt).getTime();
+      const eMs = new Date(s.endAt).getTime();
+      const hitBook = legacyBookedIntervals.find((b) => legacyIvOverlaps(sMs, eMs, b.startMs, b.endMs));
+      if (hitBook) {
+        return { ...s, status: "booked", bookingId: hitBook.bookingId };
+      }
+      const hitHold = legacyHeldIntervals.some((h) => legacyIvOverlaps(sMs, eMs, h.startMs, h.endMs));
+      if (hitHold && s.status === "open") {
+        return { ...s, status: "blocked" };
+      }
+      return s;
+    });
 
     const legacyResponseHeaders: Record<string, string> = {
       ...NO_STORE_HEADERS,

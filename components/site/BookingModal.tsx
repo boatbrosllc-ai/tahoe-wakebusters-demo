@@ -440,6 +440,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setSelectedRateIdForCalendar(defaultRate.id);
   }, [ratesForSelection, selectedRateIdForCalendar, initialSelection?.durationHours]);
 
+  /** Clearing the slot matters: charter sync effect below otherwise snaps calendar duration back to the old slot's tier. */
+  const selectCharterCalendarRate = useCallback((rateId: string) => {
+    setSelectedRateIdForCalendar(rateId);
+    setSelectedSlot(null);
+    setSelectedBoat(null);
+  }, []);
+
   const dateOptions = useMemo(
     () => getDaysInMonth(viewMonthYear, viewMonthMonth - 1),
     [viewMonthYear, viewMonthMonth]
@@ -2484,7 +2491,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           <button
                             key={r.id}
                             type="button"
-                            onClick={() => setSelectedRateIdForCalendar(r.id)}
+                            onClick={() => selectCharterCalendarRate(r.id)}
                             className={cn(
                               "rounded-lg sm:rounded-xl border sm:border-2 px-1.5 py-1.5 sm:px-4 sm:py-3 text-[10px] leading-tight sm:text-sm font-semibold min-h-[36px] sm:min-h-[44px] md:min-h-[48px] transition-all text-center",
                               isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"

@@ -7,7 +7,11 @@ import Link from "next/link";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
-import { parseSlotId, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
+import { parseSlotId, parseSlotIdRelaxed, isSeasonalAllowed, isMonthInSeasonalRange } from "@/lib/booking/experience-slots";
+
+function durationHoursFromSlotId(slotId: string): number | undefined {
+  return (parseSlotIdRelaxed(slotId) ?? parseSlotId(slotId))?.durationHours;
+}
 import type { SeasonalConfig } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
@@ -628,7 +632,7 @@ export function ExperienceCalendarSection({
       map.get(t)!.push(s);
     }
     map.forEach((arr) =>
-      arr.sort((a, b) => (parseSlotId(a.id)?.durationHours ?? 0) - (parseSlotId(b.id)?.durationHours ?? 0))
+      arr.sort((a, b) => (durationHoursFromSlotId(a.id) ?? 0) - (durationHoursFromSlotId(b.id) ?? 0))
     );
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [selectedDateOpenSlots]);
@@ -636,7 +640,7 @@ export function ExperienceCalendarSection({
   /** For time modal (step-3 style): slots for selected date filtered by selected duration. */
   const slotsForModalDuration = useMemo(() => {
     if (selectedDurationForModal == null) return [];
-    return selectedDateOpenSlots.filter((s) => parseSlotId(s.id)?.durationHours === selectedDurationForModal);
+    return selectedDateOpenSlots.filter((s) => durationHoursFromSlotId(s.id) === selectedDurationForModal);
   }, [selectedDateOpenSlots, selectedDurationForModal]);
 
   /** Unique start times for selected duration (step-3 style time list). Only show a time if slots still has at least one open slot for that start/end and duration — avoids showing 7am/1pm when all boats are actually booked (stale open slot removed by merge). */
@@ -651,7 +655,7 @@ export function ExperienceCalendarSection({
       const openCount = slots.filter(
         (x) =>
           x.status === "open" &&
-          (selectedDurationForModal == null || parseSlotId(x.id)?.durationHours === selectedDurationForModal) &&
+          (selectedDurationForModal == null || durationHoursFromSlotId(x.id) === selectedDurationForModal) &&
           new Date(x.startAt).getTime() === startMs &&
           (endMs === null || new Date(x.endAt).getTime() === endMs)
       ).length;
@@ -697,7 +701,7 @@ export function ExperienceCalendarSection({
     const map = new Map<string, number>();
     for (const s of slots) {
       if (s.status !== "open") continue;
-      const dur = parseSlotId(s.id)?.durationHours;
+      const dur = durationHoursFromSlotId(s.id);
       if (dur !== selectedDurationForModal) continue;
       const day = isoToChicagoDateStr(s.startAt);
       map.set(day, (map.get(day) ?? 0) + 1);
@@ -908,7 +912,7 @@ export function ExperienceCalendarSection({
   const inlineDetailsRate = useMemo(() => {
     if (!selectedDate || !selectedSlotInline || !effectiveExperienceForDetails) return null;
     const rateList = effectiveRatesForDetails ?? rates;
-    const dur = parseSlotId(selectedSlotInline.id)?.durationHours ?? selectedDurationForModal;
+    const dur = durationHoursFromSlotId(selectedSlotInline.id) ?? selectedDurationForModal;
     const rate = (dur != null ? rateList.find((r) => r.durationHours === dur) : null) ?? rateList[0];
     return rate ?? null;
   }, [selectedDate, selectedSlotInline, effectiveExperienceForDetails, effectiveRatesForDetails, rates, selectedDurationForModal]);

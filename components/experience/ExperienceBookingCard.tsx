@@ -1232,7 +1232,10 @@ export function ExperienceBookingCard({
               <button
                 key={r.id}
                 type="button"
-                onClick={() => setSelectedRateId(r.id)}
+                onClick={() => {
+                  setSelectedRateId(r.id);
+                  setSelectedSlot(null);
+                }}
                 className={cn(
                   "rounded-xl border px-3 py-2 text-sm font-medium",
                   selectedRateId === r.id

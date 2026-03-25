@@ -8,6 +8,9 @@
  * Canonical alias map: each array is a family of slugs treated as the same experience.
  * Includes Firestore slugs and known URL/static variants so boat-resolution is identical across endpoints.
  */
+
+import { isWakeListingBoatType } from "./experience-slots";
+
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
   ["pontoon", "lake-austin-pontoon", "pontoon-party"],
   ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board"],
@@ -196,10 +199,12 @@ export function inferSlugFromAssignedBoats(
     boatDocs.map((d) => (d.data().boatType ?? "").toLowerCase().trim()).filter(Boolean)
   );
   if (types.size === 0) return slugForBoatType;
-  if (types.has("wake") && !types.has("pontoon") && !types.has("tritoon")) return "watersports";
-  if (!types.has("wake") && (types.has("pontoon") || types.has("tritoon"))) return "pontoon";
+  const hasWakeLike = boatDocs.some((d) => isWakeListingBoatType(d.data().boatType));
+  const hasPontoonLike = types.has("pontoon") || types.has("tritoon");
+  if (hasWakeLike && !hasPontoonLike) return "watersports";
+  if (!hasWakeLike && hasPontoonLike) return "pontoon";
   // Mixed or wake + pontoon: treat as watersports so we only show wake (never show pontoon on wake listing)
-  if (types.has("wake")) return "watersports";
+  if (hasWakeLike) return "watersports";
   return "pontoon";
 }
 
@@ -214,10 +219,10 @@ export function allowBoatTypeForSlug(slug: string): (boatType: string | undefine
     return (bt) => {
       const b = (bt ?? "").toLowerCase().trim();
       if (b === "pontoon" || b === "tritoon") return false;
-      return b === "wake";
+      return isWakeListingBoatType(bt) || b === "";
     };
   }
-  if (isPontoonSlug(s)) return (bt) => (bt ?? "").toLowerCase().trim() !== "wake";
+  if (isPontoonSlug(s)) return (bt) => !isWakeListingBoatType(bt);
   return () => true;
 }
 
