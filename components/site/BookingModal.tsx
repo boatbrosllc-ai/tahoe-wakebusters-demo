@@ -31,6 +31,7 @@ import {
   openSlotsForDateFromMonthSlots,
   availableDateSetFromMonthSlots,
   step2SelectedSlotVerifiedOpen,
+  boatAvailabilitySetsForSelectedCharterSlot,
 } from "@/lib/booking/partial-slots-calendar-derivation";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import {
@@ -667,9 +668,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => (selectedRateIdForCalendar ? ratesForSelection.find((r) => r.id === selectedRateIdForCalendar) ?? null : null),
     [selectedRateIdForCalendar, ratesForSelection]
   );
-  /** Single-pass derivation of all three boat-availability sets for the selected time slot.
-   * Only considers slots with the SAME duration as selectedSlot so we don't show boats that have
-   * a different duration open (e.g. 2hr open but 3hr held). Matches the duration-filtered time list. */
+  /** Step 3 boat tiles: overlap on trip interval (matches slots API) so shorter bookings block longer tiers. */
   const ticketedForSlot = isTicketed;
   const {
     availableBoatIdsForSelectedSlot,
@@ -677,46 +676,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     bookedBoatIdsForSelectedSlot,
     heldBoatIdsForSelectedSlot,
     blockedBoatIdsForSelectedSlot,
-  } = useMemo(() => {
-    const empty = new Set<string>();
-    if (!selectedSlot?.startAt) {
-      return {
-        availableBoatIdsForSelectedSlot: empty,
-        unavailableBoatIdsForSelectedSlot: empty,
-        bookedBoatIdsForSelectedSlot: empty,
-        heldBoatIdsForSelectedSlot: empty,
-        blockedBoatIdsForSelectedSlot: empty,
-      };
-    }
-    const selectedStartMs = new Date(selectedSlot.startAt).getTime();
-    const selectedDurationHours = (parseSlotIdRelaxed(selectedSlot.id) ?? parseSlotId(selectedSlot.id))?.durationHours ?? null;
-    const available = new Set<string>();
-    const unavailable = new Set<string>();
-    const booked = new Set<string>();
-    const held = new Set<string>();
-    const blocked = new Set<string>();
-    for (const s of monthSlots) {
-      const boatKey = s.boatId && s.boatId.trim() ? s.boatId : ticketedForSlot ? "_ticketed" : null;
-      if (boatKey === null) continue;
-      if (new Date(s.startAt).getTime() !== selectedStartMs) continue;
-      const slotDuration = (parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))?.durationHours ?? null;
-      if (slotDuration !== selectedDurationHours) continue;
-      if (s.status === "open") available.add(boatKey);
-      else {
-        unavailable.add(boatKey);
-        if (s.status === "booked") booked.add(boatKey);
-        else if (s.status === "held") held.add(boatKey);
-        else blocked.add(boatKey);
-      }
-    }
-    return {
-      availableBoatIdsForSelectedSlot: available,
-      unavailableBoatIdsForSelectedSlot: unavailable,
-      bookedBoatIdsForSelectedSlot: booked,
-      heldBoatIdsForSelectedSlot: held,
-      blockedBoatIdsForSelectedSlot: blocked,
-    };
-  }, [selectedSlot?.startAt, selectedSlot?.id, selectedSlot?.boatId, monthSlots, ticketedForSlot]);
+  } = useMemo(
+    () =>
+      boatAvailabilitySetsForSelectedCharterSlot(
+        monthSlots,
+        selectedSlot
+          ? {
+              id: selectedSlot.id,
+              startAt: selectedSlot.startAt,
+              endAt: selectedSlot.endAt ?? "",
+            }
+          : null,
+        ticketedForSlot,
+      ),
+    [selectedSlot?.startAt, selectedSlot?.endAt, selectedSlot?.id, monthSlots, ticketedForSlot],
+  );
   const slotsByDate = useMemo(() => aggregateSlotsByDate(monthSlots, isTicketed), [monthSlots, isTicketed]);
 
   /** Ticketed: dates where the slots API could not load hold counts — calendar shows uncertain styling. */

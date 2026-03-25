@@ -120,7 +120,7 @@ function buildCsp(nonce: string): string {
     "https://checkout.stripe.com",
     "https://*.js.stripe.com",
     "https://www.googletagmanager.com",
-    "https://www.google-analytics.com",
+    "https://*.google-analytics.com",
     "https://www.gstatic.com",
     "https://*.gstatic.com",
     "https://*.firebaseapp.com",
@@ -140,7 +140,8 @@ function buildCsp(nonce: string): string {
     // Google Pay / Payment Handler manifest fetch (browser → www.google.com/pay, pay.google.com)
     "https://www.google.com",
     "https://pay.google.com",
-    "https://www.google-analytics.com",
+    // GA4 may use regional collect hosts (e.g. region1.google-analytics.com), not only www.
+    "https://*.google-analytics.com",
     "https://www.googletagmanager.com",
   ].join(" ");
   return [

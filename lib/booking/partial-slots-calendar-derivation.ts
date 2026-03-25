@@ -1,10 +1,13 @@
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { intervalsOverlapMs } from "@/lib/booking/booking-interval";
+import { parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 
 /** Minimal slot shape for calendar open-date / open-slot derivation (modal + booking page). */
 export type SlotLikeForCalendar = {
   id: string;
   status: string;
   startAt: string;
+  endAt?: string;
   dateStr?: string;
   boatId?: string;
   spotsRemaining?: number;
@@ -70,4 +73,99 @@ export function step2SelectedSlotVerifiedOpen(
 ): boolean {
   if (selectedSlot == null) return false;
   return openSlotsForDateFromMonthSlots(monthSlots, selectedDate, isTicketed).some((s) => s.id === selectedSlot.id);
+}
+
+/**
+ * Charter step 3: per-boat availability for the selected trip window. Uses interval overlap on
+ * `startAt`/`endAt` so a shorter paid trip (e.g. 4h) still marks the boat unavailable for a longer
+ * tier (e.g. 8h) at the same start time — matching GET /api/booking/slots overlap rules.
+ */
+export function boatAvailabilitySetsForSelectedCharterSlot(
+  monthSlots: SlotLikeForCalendar[],
+  selectedSlot: Pick<SlotLikeForCalendar, "id" | "startAt" | "endAt"> | null,
+  isTicketed: boolean,
+): {
+  availableBoatIdsForSelectedSlot: Set<string>;
+  unavailableBoatIdsForSelectedSlot: Set<string>;
+  bookedBoatIdsForSelectedSlot: Set<string>;
+  heldBoatIdsForSelectedSlot: Set<string>;
+  blockedBoatIdsForSelectedSlot: Set<string>;
+} {
+  const empty = new Set<string>();
+  if (!selectedSlot?.startAt) {
+    return {
+      availableBoatIdsForSelectedSlot: empty,
+      unavailableBoatIdsForSelectedSlot: empty,
+      bookedBoatIdsForSelectedSlot: empty,
+      heldBoatIdsForSelectedSlot: empty,
+      blockedBoatIdsForSelectedSlot: empty,
+    };
+  }
+  const selStart = new Date(selectedSlot.startAt).getTime();
+  const selEndRaw = selectedSlot.endAt != null && String(selectedSlot.endAt).trim() !== ""
+    ? new Date(selectedSlot.endAt).getTime()
+    : NaN;
+  const parsedDur = (parseSlotIdRelaxed(selectedSlot.id) ?? parseSlotId(selectedSlot.id))?.durationHours ?? null;
+  const selEnd =
+    Number.isFinite(selEndRaw) && !Number.isNaN(selEndRaw)
+      ? selEndRaw
+      : parsedDur != null && Number.isFinite(selStart)
+        ? selStart + parsedDur * 3600000
+        : NaN;
+  if (!Number.isFinite(selStart) || !Number.isFinite(selEnd) || selEnd <= selStart) {
+    return {
+      availableBoatIdsForSelectedSlot: empty,
+      unavailableBoatIdsForSelectedSlot: empty,
+      bookedBoatIdsForSelectedSlot: empty,
+      heldBoatIdsForSelectedSlot: empty,
+      blockedBoatIdsForSelectedSlot: empty,
+    };
+  }
+
+  const byBoat = new Map<string, SlotLikeForCalendar[]>();
+  for (const s of monthSlots) {
+    const boatKey = s.boatId && s.boatId.trim() ? s.boatId.trim() : isTicketed ? "_ticketed" : null;
+    if (boatKey == null) continue;
+    const sStart = new Date(s.startAt).getTime();
+    const eRaw = s.endAt != null && String(s.endAt).trim() !== "" ? new Date(s.endAt).getTime() : NaN;
+    const sdur = (parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))?.durationHours ?? null;
+    const sEnd =
+      Number.isFinite(eRaw) && !Number.isNaN(eRaw)
+        ? eRaw
+        : sdur != null && Number.isFinite(sStart)
+          ? sStart + sdur * 3600000
+          : NaN;
+    if (!Number.isFinite(sStart) || !Number.isFinite(sEnd) || sEnd <= sStart) continue;
+    if (!intervalsOverlapMs(selStart, selEnd, sStart, sEnd)) continue;
+    const list = byBoat.get(boatKey) ?? [];
+    list.push(s);
+    byBoat.set(boatKey, list);
+  }
+
+  const available = new Set<string>();
+  const unavailable = new Set<string>();
+  const booked = new Set<string>();
+  const held = new Set<string>();
+  const blocked = new Set<string>();
+
+  for (const [boatKey, rows] of byBoat) {
+    const nonOpen = rows.filter((r) => r.status !== "open");
+    const openExact = rows.some((r) => r.id === selectedSlot.id && r.status === "open");
+    if (nonOpen.length > 0) {
+      unavailable.add(boatKey);
+      if (nonOpen.some((r) => r.status === "booked")) booked.add(boatKey);
+      else if (nonOpen.some((r) => r.status === "held")) held.add(boatKey);
+      else blocked.add(boatKey);
+    } else if (openExact) {
+      available.add(boatKey);
+    }
+  }
+
+  return {
+    availableBoatIdsForSelectedSlot: available,
+    unavailableBoatIdsForSelectedSlot: unavailable,
+    bookedBoatIdsForSelectedSlot: booked,
+    heldBoatIdsForSelectedSlot: held,
+    blockedBoatIdsForSelectedSlot: blocked,
+  };
 }
