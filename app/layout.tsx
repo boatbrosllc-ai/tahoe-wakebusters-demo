@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
-import { Ga4Scripts } from "@/components/Ga4Scripts";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
+import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import "./globals.css";
 
@@ -53,7 +53,23 @@ export default async function RootLayout({
         {isStripeCheckoutReady ? (
           <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
         ) : null}
-        {gaMeasurementId ? <Ga4Scripts measurementId={gaMeasurementId} nonce={nonce} /> : null}
+        {gaMeasurementId ? (
+          <>
+            {/*
+              GA4: async gtag/js first, then inline (Google’s order). Inline runs before gtag.js finishes,
+              queues config on dataLayer; gtag.js then processes. No React hydration required.
+            */}
+            <Script
+              id="ga-gtag-lib"
+              src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
+              strategy="beforeInteractive"
+              nonce={nonce}
+            />
+            <Script id="ga-inline-config" strategy="beforeInteractive" nonce={nonce}>
+              {getGtagInlineBootstrapJs(gaMeasurementId)}
+            </Script>
+          </>
+        ) : null}
         {children}
       </body>
     </html>
