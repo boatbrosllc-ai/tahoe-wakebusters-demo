@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { scheduleSkipHeroEntranceOnce } from "@/lib/site/skip-hero-entrance";
 
 export default function WaiverSignSuccessPage() {
   return (
@@ -15,6 +18,7 @@ export default function WaiverSignSuccessPage() {
         </p>
         <Link
           href="/"
+          onClick={scheduleSkipHeroEntranceOnce}
           className="inline-block rounded-xl bg-brand-primary px-6 py-3 text-base font-semibold text-white hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
         >
           Back to home

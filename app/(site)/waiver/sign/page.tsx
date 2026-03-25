@@ -95,7 +95,7 @@ export default function WaiverSignPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-6 sm:py-8 max-w-lg">
+    <div className="container mx-auto w-full min-w-0 max-w-lg px-4 py-6 sm:py-8">
       <WaiverSigningWizard data={data} token={token} />
     </div>
   );

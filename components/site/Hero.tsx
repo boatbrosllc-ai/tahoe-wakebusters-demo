@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useLayoutEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { brand } from "@/content/brand";
+import { consumeSkipHeroEntranceOnce } from "@/lib/site/skip-hero-entrance";
 import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
@@ -24,6 +25,11 @@ export function Hero() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
   const [posterHidden, setPosterHidden] = useState(false);
   const onVideoReady = useCallback(() => setPosterHidden(true), []);
+  /** Skip entrance motion when arriving from waiver success (session flag consumed before first paint). */
+  const [skipEntrance, setSkipEntrance] = useState(false);
+  useLayoutEffect(() => {
+    if (consumeSkipHeroEntranceOnce()) setSkipEntrance(true);
+  }, []);
   return (
     <section className="relative min-h-[100dvh] sm:min-h-[90vh] lg:min-h-[88vh] flex flex-col justify-center overflow-hidden bg-brand-dark">
       {/* Background: video when assets exist under public/videos/; gradient fallback always underneath. */}
@@ -70,17 +76,21 @@ export function Hero() {
           {/* Logo – pop in: scale up with a satisfying spring overshoot; hover: cartoonish enlarge */}
           <motion.div
             className="relative flex justify-center mb-4 sm:mb-5 lg:mb-8 cursor-pointer"
-            initial={{ opacity: 0, scale: 0.5 }}
+            initial={skipEntrance ? false : { opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.08 }}
             whileTap={{ scale: 0.92 }}
-            transition={{
-              type: "spring",
-              stiffness: 380,
-              damping: 19,
-              opacity: { duration: 0.25 },
-              scale: { type: "spring", stiffness: 400, damping: 12 },
-            }}
+            transition={
+              skipEntrance
+                ? { duration: 0 }
+                : {
+                    type: "spring",
+                    stiffness: 380,
+                    damping: 19,
+                    opacity: { duration: 0.25 },
+                    scale: { type: "spring", stiffness: 400, damping: 12 },
+                  }
+            }
           >
             <Link
               href="/"
@@ -114,18 +124,18 @@ export function Hero() {
           {/* Headline: one line on mobile and desktop – fluid on mobile, sized for one line on desktop */}
           <motion.div
             className="lg:mt-2 w-full"
-            initial={{ opacity: 0, y: 12 }}
+            initial={skipEntrance ? false : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.1 }}
+            transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.1 }}
           >
             <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
               Lake Austin boat rentals, done right.
             </h1>
             <motion.p
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
-              initial={{ opacity: 0, y: 12 }}
+              initial={skipEntrance ? false : { opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.18 }}
+              transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.18 }}
             >
               Captained charters for lake days & celebrations — check availability & book online now.
             </motion.p>
@@ -134,9 +144,9 @@ export function Hero() {
           {/* Bullets */}
           <motion.ul
             className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1.5 sm:mt-5 sm:gap-x-4 lg:mt-6 lg:gap-x-5 lg:gap-y-2"
-            initial={{ opacity: 0 }}
+            initial={skipEntrance ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, delay: 0.25 }}
+            transition={skipEntrance ? { duration: 0 } : { duration: 0.4, delay: 0.25 }}
           >
             {bullets.map((item, i) => (
               <li key={i} className="flex items-center justify-center gap-1.5 text-xs text-white/85 sm:text-sm lg:text-base">
@@ -149,9 +159,9 @@ export function Hero() {
           {/* Trust – directly under bullets so it reads with the headline */}
           <motion.div
             className="mt-5 sm:mt-6 mb-4 sm:mb-5"
-            initial={{ opacity: 0 }}
+            initial={skipEntrance ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, delay: 0.28 }}
+            transition={skipEntrance ? { duration: 0 } : { duration: 0.4, delay: 0.28 }}
           >
             <TrustRow className="text-xs sm:text-sm lg:text-base text-white/85" />
           </motion.div>
@@ -159,9 +169,9 @@ export function Hero() {
           {/* CTAs */}
           <motion.div
             className="mt-4 w-full max-w-sm mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
-            initial={{ opacity: 0, y: 12 }}
+            initial={skipEntrance ? false : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: 0.35 }}
+            transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.35 }}
           >
             <div className="relative rounded-2xl p-[1px] bg-gradient-to-b from-white/20 to-transparent shadow-[0_0_40px_rgba(254,63,147,0.12)] lg:rounded-3xl">
               <div className="rounded-2xl bg-brand-dark/50 backdrop-blur-sm p-4 sm:p-5 lg:p-6 lg:rounded-3xl">

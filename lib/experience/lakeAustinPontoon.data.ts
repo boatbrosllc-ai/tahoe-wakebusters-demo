@@ -130,7 +130,6 @@ export const INCLUDED_ITEMS = [
 export const PRICING = {
   note: "Deposit due today. Balance due 48 hours before your trip.",
   tipNote: "Tips for your captain are not included but appreciated.",
-  guarantee: "Weather flexibility — we'll work with you.",
   popularHours: 4,
 };
 
@@ -215,7 +214,7 @@ export const FAQ_ITEMS = [
   {
     question: "What if weather is bad?",
     answer:
-      "We keep an eye on the forecast and will work with you to reschedule if conditions aren't safe or fun. Weather flexibility — we'll work with you.",
+      "We keep an eye on the forecast and will work with you to reschedule if conditions aren't safe or fun.",
   },
   {
     question: "Is music allowed?",

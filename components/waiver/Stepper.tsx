@@ -41,13 +41,13 @@ export function Stepper({
   const isLast = currentStepIndex >= steps.length - 1;
 
   return (
-    <div className={cn("flex flex-col min-h-0", className)}>
-      <div className="flex items-center justify-center gap-1.5 sm:gap-2 mb-4 sm:mb-6">
+    <div className={cn("flex flex-col min-h-0 min-w-0", className)}>
+      <div className="flex items-center justify-center gap-1 sm:gap-2 mb-4 sm:mb-6 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {steps.map((step, i) => (
           <React.Fragment key={step.id}>
             <div
               className={cn(
-                "flex items-center justify-center w-9 h-9 sm:w-8 sm:h-8 rounded-full text-sm font-medium border-2 transition-colors shrink-0",
+                "flex items-center justify-center w-8 h-8 sm:w-8 sm:h-8 rounded-full text-xs sm:text-sm font-medium border-2 transition-colors shrink-0",
                 i < currentStepIndex && "bg-brand-primary border-brand-primary text-white",
                 i === currentStepIndex && "border-brand-primary text-brand-primary bg-white",
                 i > currentStepIndex && "border-brand-dark/20 text-brand-muted bg-white"
@@ -59,7 +59,7 @@ export function Stepper({
             {i < steps.length - 1 && (
               <div
                 className={cn(
-                  "w-6 sm:w-8 h-0.5 rounded shrink",
+                  "w-4 sm:w-8 h-0.5 rounded shrink-0 min-w-[12px]",
                   i < currentStepIndex ? "bg-brand-primary" : "bg-brand-dark/20"
                 )}
               />
@@ -67,31 +67,43 @@ export function Stepper({
           </React.Fragment>
         ))}
       </div>
-      <p className="text-center text-sm text-brand-muted mb-4" aria-live="polite">
+      <p className="text-center text-xs sm:text-sm text-brand-muted mb-4 px-1 leading-snug" aria-live="polite">
         Step {currentStepIndex + 1} of {steps.length}: {steps[currentStepIndex]?.label}
       </p>
 
-      <div className="flex-1 min-h-0">{children}</div>
+      {/* Extra bottom space on small screens so the last field can scroll above the sticky CTA bar */}
+      <div className="flex-1 min-h-0 min-w-0 max-sm:pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))] sm:pb-0">
+        {children}
+      </div>
 
-      <div className="flex items-center justify-between gap-4 mt-6 pt-4 border-t border-brand-dark/10">
-        <div className="min-w-[4rem]">
-          {!hideBack && !isFirst && onBack && (
+      <div
+        className={cn(
+          "mt-6 pt-4 border-t border-brand-dark/10",
+          /* Mobile: full-width stacked CTAs + sticky above home indicator; cancel parent horizontal padding via page wrapper -mx-4 px-4 */
+          "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4",
+          "max-sm:sticky max-sm:bottom-0 max-sm:z-30 max-sm:-mx-4 max-sm:px-4 max-sm:pt-4 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-sm:bg-white max-sm:shadow-[0_-10px_30px_-12px_rgba(0,28,48,0.15)]"
+        )}
+      >
+        <div className="flex w-full sm:w-auto sm:min-w-0 sm:flex-1 justify-start order-2 sm:order-1">
+          {!hideBack && !isFirst && onBack ? (
             <button
               type="button"
               onClick={onBack}
-              className="min-h-[48px] px-3 -ml-3 rounded-xl text-brand-primary hover:bg-brand-primary/10 font-medium touch-manipulation"
+              className="min-h-[48px] w-full sm:w-auto px-4 sm:px-3 sm:-ml-3 rounded-xl text-brand-primary hover:bg-brand-primary/10 font-medium touch-manipulation border border-brand-primary/25 sm:border-0"
             >
               {backLabel}
             </button>
+          ) : (
+            <span className="hidden sm:block sm:min-w-[4rem]" aria-hidden />
           )}
         </div>
-        <div>
+        <div className="w-full sm:w-auto sm:flex-shrink-0 order-1 sm:order-2">
           {!hideNext && onNext && (
             <button
               type="button"
               onClick={onNext}
               disabled={nextDisabled}
-              className="min-h-[48px] min-w-[120px] rounded-xl bg-brand-primary text-white px-6 py-3 text-base font-medium hover:bg-brand-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors touch-manipulation inline-flex items-center justify-center gap-2"
+              className="min-h-[52px] w-full sm:w-auto sm:min-w-[120px] rounded-xl bg-brand-primary text-white px-5 sm:px-6 py-3 text-base font-semibold hover:bg-brand-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors touch-manipulation inline-flex items-center justify-center gap-2"
             >
               {nextLoading && (
                 <svg

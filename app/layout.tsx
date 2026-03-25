@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
-import { headers } from "next/headers";
 import { Syne } from "next/font/google";
 import { getGaMeasurementId } from "@/lib/ga-measurement-id";
 import "./globals.css";
@@ -33,15 +32,12 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const gaMeasurementId = getGaMeasurementId();
-  const headersList = await headers();
-  /** Required by middleware CSP `script-src 'nonce-…'`; omitting it blocks the inline gtag bootstrap. */
-  const nonce = headersList.get("x-nonce") ?? undefined;
 
   return (
     <html lang="en" className={syne.variable}>
@@ -49,21 +45,13 @@ export default async function RootLayout({
         <link rel="preload" as="image" href="/videos/hero-poster.jpg" />
       </head>
       <body>
-        {gaMeasurementId && nonce ? (
+        {gaMeasurementId ? (
           <>
             <Script
               src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
               strategy="afterInteractive"
-              nonce={nonce}
             />
-            <Script id="google-analytics" strategy="afterInteractive" nonce={nonce}>
-              {`
-                window.dataLayer = window.dataLayer || [];
-                function gtag(){dataLayer.push(arguments);}
-                gtag('js', new Date());
-                gtag('config', '${gaMeasurementId}');
-              `}
-            </Script>
+            <Script src="/gtag-bootstrap" strategy="afterInteractive" />
           </>
         ) : null}
         {children}

@@ -238,8 +238,8 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
   const labelClass = "block text-sm font-medium text-brand-dark mb-1.5";
 
   return (
-    <div className="max-w-lg mx-auto w-full">
-      <h1 className="text-xl font-bold text-brand-dark mb-1">{template.title}</h1>
+    <div className="max-w-lg mx-auto w-full min-w-0">
+      <h1 className="text-lg sm:text-xl font-bold text-brand-dark mb-2 pr-1 leading-tight">{template.title}</h1>
       <Stepper
         steps={STEPS}
         currentStepIndex={step}

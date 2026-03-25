@@ -1197,7 +1197,7 @@ export async function GET(request: NextRequest) {
           const slotId = buildSlotId(dateStr, startHour, durationHours, startMinute);
           const key = `${bid}:${slotId}`;
           const existing = existingByBoatAndKey.get(key);
-          if (existing) {
+          if (existing && existing.status !== "open") {
             slots.push(existing);
             continue;
           }
@@ -1243,6 +1243,7 @@ export async function GET(request: NextRequest) {
             }
           }
 
+          const openSlotDocRow = existing?.status === "open" ? existing : null;
           slots.push({
             id: slotId,
             dateStr,
@@ -1250,8 +1251,8 @@ export async function GET(request: NextRequest) {
             endAt: slotEnd.toISOString(),
             status: rowStatus,
             holdId: null,
-            bookingId: rowBookingId,
-            updatedAt: null,
+            bookingId: rowStatus === "booked" ? rowBookingId : null,
+            updatedAt: openSlotDocRow ? openSlotDocRow.updatedAt : null,
             boatId: bid,
             experienceId,
             ...(bookingDurationHours != null ? { bookingDurationHours } : {}),

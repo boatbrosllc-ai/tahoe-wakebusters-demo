@@ -50,7 +50,7 @@ export function TermsAccept({
     <div className={cn("space-y-4", className)}>
       <div
         ref={scrollRef}
-        className="max-h-[50vh] sm:max-h-80 overflow-y-auto overflow-x-hidden rounded-xl border border-brand-dark/20 bg-brand-bg/30 p-4 text-sm text-brand-dark prose prose-sm max-w-none overscroll-contain touch-pan-y"
+        className="max-h-[min(42dvh,320px)] sm:max-h-80 overflow-y-auto overflow-x-hidden rounded-xl border border-brand-dark/20 bg-brand-bg/30 p-3 sm:p-4 text-sm text-brand-dark prose prose-sm max-w-none overscroll-contain touch-pan-y [overflow-wrap:anywhere] [&_img]:max-w-full [&_img]:h-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
         dangerouslySetInnerHTML={{ __html: safeTermsHtml }}
       />
       {requiredScrollToBottom && !scrolledToBottom && (

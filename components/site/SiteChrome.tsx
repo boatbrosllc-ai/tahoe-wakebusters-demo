@@ -35,8 +35,11 @@ export function SiteChrome({
         <Header adminSessionCookiePresent={adminSessionCookiePresent} />
         <main
           className={cn(
-            "flex-1",
-            isWaiverSigning ? "pb-6 sm:pb-8" : "pb-[72px] lg:pb-0"
+            "flex-1 min-h-0",
+            /* Footer uses mt-[-72px] on mobile; waiver omitted MobileStickyBar but still needs the same bottom band so step CTAs are not covered */
+            isWaiverSigning
+              ? "pb-[calc(72px+env(safe-area-inset-bottom,0px))] sm:pb-12 lg:pb-14"
+              : "pb-[72px] lg:pb-0"
           )}
         >
           {children}

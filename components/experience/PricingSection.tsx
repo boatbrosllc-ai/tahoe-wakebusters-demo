@@ -87,7 +87,6 @@ export function PricingSection({
           >
             Check Availability
           </Button>
-          <p className="text-brand-primary/90 text-sm mt-6">{PRICING.guarantee}</p>
         </motion.div>
       </div>
     </section>
