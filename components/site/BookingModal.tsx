@@ -709,7 +709,6 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         else blocked.add(boatKey);
       }
     }
-    if (available.size === 0 && selectedSlot.boatId) available.add(selectedSlot.boatId);
     return {
       availableBoatIdsForSelectedSlot: available,
       unavailableBoatIdsForSelectedSlot: unavailable,
@@ -2147,15 +2146,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         }
         const { slots } = fresh;
         if (selectedSlot && selectedDate) {
-          const stillOpen = slots.some((s) => {
-            if (s.id !== selectedSlot.id || s.status !== "open") return false;
-            if (isoToChicagoDateStr(s.startAt) !== selectedDate) return false;
-            if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0)
-              return false;
-            return true;
-          });
+          const baseOpen = (s: (typeof slots)[number]) =>
+            s.id === selectedSlot.id &&
+            s.status === "open" &&
+            isoToChicagoDateStr(s.startAt) === selectedDate &&
+            !(isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0);
+
+          const needsBoatFreshness = !isTicketed && boats.length > 0 && selectedBoat != null;
+          const stillOpen = needsBoatFreshness
+            ? slots.some((s) => baseOpen(s) && s.boatId === selectedBoat.id)
+            : slots.some(baseOpen);
+
           if (!stillOpen) {
-            setPaymentError("That time slot is no longer available. Please choose another time.");
+            if (needsBoatFreshness && slots.some(baseOpen)) {
+              setPaymentError(
+                "That boat is no longer available for this time. Please choose another boat or a different time.",
+              );
+            } else {
+              setPaymentError("That time slot is no longer available. Please choose another time.");
+            }
             return;
           }
         }

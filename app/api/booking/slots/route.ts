@@ -713,6 +713,11 @@ export async function GET(request: NextRequest) {
         startDate,
         -bookingLookbackDaysFromMaxDuration(maxDurationCharterSlots),
       );
+      /** Widen startDateStr upper bound so bookings starting just after `endDate` are loaded; overlap vs winStart/winEnd still gates merges. */
+      const charterBookingEndDateStrUpper = addCalendarDaysToDateStr(
+        endDate,
+        bookingLookbackDaysFromMaxDuration(maxDurationCharterSlots),
+      );
       const slotDocsQueryEnd = winEnd;
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
       const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
@@ -892,7 +897,7 @@ export async function GET(request: NextRequest) {
             db.collection("bookings")
               .where("experienceId", "==", expId)
               .where("startDateStr", ">=", charterBookingStartDateStrLower)
-              .where("startDateStr", "<=", endDate)
+              .where("startDateStr", "<=", charterBookingEndDateStrUpper)
               .get()
           )
         );
@@ -932,8 +937,6 @@ export async function GET(request: NextRequest) {
             snap.docs.forEach(doc => {
               if (seenBookingIds.has(doc.id)) return;
               const d = doc.data() as { startDateStr?: string; slotId?: string; slot_id?: string };
-              // Only include docs without startDateStr (legacy); then filter by interval overlap with request window.
-              if (d.startDateStr) return;
               const iv = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
               if (!iv || !intervalOverlapsRequestWindow(iv.startMs, iv.endMs, winStart, winEnd)) return;
               addBookingDoc(doc);
@@ -1325,7 +1328,8 @@ export async function GET(request: NextRequest) {
       const charterPartial =
         legacyQueryHitLimitCharter ||
         charterBlocksQueryFailed ||
-        charterHoldsResolutionFailed;
+        charterHoldsResolutionFailed ||
+        !windowedIndexReady;
       const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
       if (unresolvedBookingIds.length > 0) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
