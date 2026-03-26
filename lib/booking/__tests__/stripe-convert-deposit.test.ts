@@ -10,14 +10,14 @@ import {
 import type Stripe from "stripe";
 
 describe("buildConvertHoldInputFromSucceededPaymentIntent (deposit)", () => {
-  it("sets stripe.depositCents from PI amount and finalCents from total − deposit", () => {
+  it("sets stripe.depositCents from PI amount and finalCents from total − deposit", async () => {
     const pi = {
       id: "pi_test",
       amount: 7500,
       currency: "usd",
       metadata: { payment_stage: "deposit", totalCents: "15000" },
     } as unknown as Stripe.PaymentIntent;
-    const out = buildConvertHoldInputFromSucceededPaymentIntent(pi, { pricing: { totalCents: 15000 } });
+    const out = await buildConvertHoldInputFromSucceededPaymentIntent(pi, { pricing: { totalCents: 15000 } });
     assert.strictEqual(out.paymentStage, "deposit");
     if (out.paymentStage !== "deposit") return;
     assert.strictEqual(out.stripe.depositCents, 7500);

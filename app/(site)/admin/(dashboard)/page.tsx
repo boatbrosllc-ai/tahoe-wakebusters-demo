@@ -47,6 +47,18 @@ type DashboardStats = {
     customerEmail: string;
     totalCents: number;
   }[];
+  notificationOutboxStats?: {
+    byType: {
+      booking_confirmation: { pending: number; deadLetter: number; stuckClaims: number };
+      final_charge_success: { pending: number; deadLetter: number; stuckClaims: number };
+      discount_limit_exceeded_notification: { pending: number; deadLetter: number; stuckClaims: number };
+      waiver_invite_send: { pending: number; deadLetter: number; stuckClaims: number };
+    };
+    staleClaimCountsByTemplate: Record<string, number>;
+    deadLetterTotal: number;
+    pendingTotal: number;
+    stuckClaimsTotal: number;
+  };
 };
 
 function StatCard({
@@ -251,6 +263,17 @@ export default function AdminHomePage() {
                   Bookings
                 </Link>{" "}
                 and use resend confirmation, or check operational alerts in Firestore.
+              </p>
+            </div>
+          )}
+          {stats.notificationOutboxStats && (
+            <div className="rounded-2xl border border-brand-dark/10 bg-white px-4 py-3 text-sm shadow-sm sm:px-5">
+              <p className="font-semibold text-brand-dark">Notification outbox</p>
+              <p className="mt-1 text-brand-muted">
+                Booking confirmations — pending: {stats.notificationOutboxStats.byType.booking_confirmation.pending}, dead
+                letter: {stats.notificationOutboxStats.byType.booking_confirmation.deadLetter}, stuck claims:{" "}
+                {stats.notificationOutboxStats.byType.booking_confirmation.stuckClaims}. Final-charge / waiver / discount
+                rows also tracked in ops; see cron logs for full breakdown.
               </p>
             </div>
           )}

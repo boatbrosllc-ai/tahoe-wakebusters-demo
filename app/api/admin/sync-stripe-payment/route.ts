@@ -9,13 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { convertHoldToBooking } from "@/lib/booking/convert-hold-to-booking";
-import {
-  buildConvertHoldInputFromSucceededPaymentIntent,
-  paymentIntentMatchesHoldForConversion,
-} from "@/lib/booking/stripe-payment-intent-convert";
-import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
 
 function parseBody(body: unknown): { paymentIntentId: string } | null {
   if (body == null || typeof body !== "object") return null;
@@ -67,64 +61,13 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
-    const holdData = holdSnap.data() as {
-      pricing?: { totalCents?: number };
-      tipCents?: number;
-      discountCents?: number;
-      depositPaymentIntentId?: string;
-      fullPaymentIntentId?: string;
-      paymentAttemptVersion?: number;
-      customerDraft?: { email?: string };
-    };
-    const holdForPricing = {
-      pricing: holdData.pricing,
-      tipCents: holdData.tipCents,
-      discountCents: holdData.discountCents,
-    };
-    const holdIntentIds = {
-      depositPaymentIntentId: holdData.depositPaymentIntentId,
-      fullPaymentIntentId: holdData.fullPaymentIntentId,
-      paymentAttemptVersion: holdData.paymentAttemptVersion,
-    };
-    if (!paymentIntentMatchesHoldForConversion(pi, holdIntentIds, holdForPricing).ok) {
-      try {
-        await upsertPendingRefundRecord(
-          db,
-          {
-            reason: "admin_sync_pi_hold_mismatch",
-            holdId,
-            paymentIntentId: input.paymentIntentId,
-          },
-          {
-            holdId,
-            paymentIntentId: input.paymentIntentId,
-            holdDepositPaymentIntentId: holdIntentIds.depositPaymentIntentId ?? null,
-            holdFullPaymentIntentId: holdIntentIds.fullPaymentIntentId ?? null,
-            ...(holdData.customerDraft?.email && { customerEmail: holdData.customerDraft.email }),
-          }
-        );
-      } catch (e) {
-        console.error("[admin/sync-stripe-payment] pendingRefunds write failed", e);
-      }
-      await writeOperationalAlert({
-        type: "admin_sync_payment_intent_hold_mismatch",
-        holdId,
-        paymentIntentId: input.paymentIntentId,
-        holdDepositPaymentIntentId: holdIntentIds.depositPaymentIntentId,
-        holdFullPaymentIntentId: holdIntentIds.fullPaymentIntentId,
-        source: "admin-sync-stripe-payment",
-      });
-      return NextResponse.json(
-        {
-          error:
-            "This PaymentIntent does not match the deposit/full intent IDs stored on the hold. Conversion is blocked pending reconciliation.",
-          code: "PI_HOLD_MISMATCH",
-        },
-        { status: 409 }
-      );
-    }
-    const convertInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, holdForPricing);
-    const result = await convertHoldToBooking(db, holdId, convertInput);
+    const conversion = await resolveAndConvertPayment(db, {
+      paymentIntentId: input.paymentIntentId,
+      holdId,
+      source: "client",
+      paymentIntent: pi,
+    });
+    const result = conversion.result;
 
     if ("amountIntegrityMismatch" in result) {
       return NextResponse.json(

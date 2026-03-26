@@ -20,8 +20,6 @@ import {
 } from "@/lib/booking/final-charge-idempotency";
 import { checkRateLimit, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
 import type { Booking } from "@/lib/booking/types";
-import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
-import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import {
   persistFinalBalanceNormalizationIfNeeded,
@@ -29,8 +27,12 @@ import {
 } from "@/lib/booking/final-balance-resolver";
 import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
+import { resetBookingToFinalDue, transitionToFinalPaid } from "@/lib/booking/final-paid-transition";
 
 const ALLOWED_STATUSES = ["final_due", "final_failed", "final_requires_action", "final_processing"] as const;
+
+/** Safety cap for the customer final-PI gate loop (unexpected Stripe/Firestore states). */
+const MAX_PAY_REMAINING_GATE_ITERATIONS = 4;
 
 type FinalPiGateResult =
   | { kind: "busy_cron" }
@@ -289,31 +291,20 @@ export async function POST(request: NextRequest) {
         const storedPi = b.stripe?.finalPaymentIntentId;
         if (storedPi && storedPi !== piId) return;
         if (b.status === "final_paid" && storedPi === piId && b.stripe?.finalChargedAt) return;
-        const transitioningToFinalPaid = b.status !== "final_paid";
-        const sb = b.stripe;
-        const isDepositFlow = typeof sb?.depositAmountCents === "number";
-        const finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
-        if (isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true) {
-          applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingRef.id);
-        }
-        const patch: Record<string, unknown> = {
-          "stripe.finalPaymentIntentId": piId,
-          "stripe.finalChargedAt": FieldValue.serverTimestamp(),
-          "stripe.finalError": FieldValue.delete(),
-          "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
-          "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-          ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
-            ? { "stripe.finalRevenueSummaryApplied": true }
-            : {}),
-        };
-        if (transitioningToFinalPaid) {
-          patch.status = "final_paid";
-        }
-        tx.update(bookingRef, patch as UpdateData<DocumentData>);
-        if (transitioningToFinalPaid) {
-          await addFinalChargeSuccessOutboxInTransaction(tx, db, payload.bookingId);
-        }
+        const finalRev = typeof b.stripe?.finalAmountCents === "number" ? b.stripe.finalAmountCents : 0;
+        const authoritativeFinalCents =
+          finalRev > 0 ? finalRev : resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
+        await transitionToFinalPaid(
+          tx,
+          db,
+          bookingRef,
+          b,
+          payload.bookingId,
+          piId,
+          FieldValue,
+          Timestamp,
+          authoritativeFinalCents
+        );
       });
     };
 
@@ -322,7 +313,23 @@ export async function POST(request: NextRequest) {
       booking.stripe.paymentMethodId.trim().length > 0 &&
       !skipSavedPaymentMethod;
 
+    let gateIterations = 0;
     for (;;) {
+      gateIterations++;
+      if (gateIterations > MAX_PAY_REMAINING_GATE_ITERATIONS) {
+        console.warn("[manage/pay-remaining] max gate iterations reached", {
+          bookingId: payload.bookingId,
+          gateIterations,
+        });
+        await clearCustomerFinalPiInFlight().catch(() => {});
+        return NextResponse.json(
+          {
+            error:
+              "We could not complete your payment setup due to an unexpected state. Please try again in a few minutes or contact us.",
+          },
+          { status: 500 }
+        );
+      }
       const integritySnapForKeys = await bookingRef.get();
       if (!integritySnapForKeys.exists) {
         return NextResponse.json({ error: "Booking not found" }, { status: 404 });
@@ -423,11 +430,12 @@ export async function POST(request: NextRequest) {
           });
         }
         if (pi.status === "canceled") {
-          await bookingRef.update({
-            status: "final_due",
-            "stripe.finalPaymentIntentId": FieldValue.delete(),
-            "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
-            updatedAt: FieldValue.serverTimestamp(),
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(bookingRef);
+            if (!snap.exists) return;
+            const b = snap.data() as Booking;
+            if (!ALLOWED_STATUSES.includes(b.status as (typeof ALLOWED_STATUSES)[number])) return;
+            resetBookingToFinalDue(tx, bookingRef, FieldValue, Timestamp);
           });
           continue;
         }
@@ -581,11 +589,12 @@ export async function POST(request: NextRequest) {
                 });
               }
               if (pi.status === "canceled") {
-                await bookingRef.update({
-                  status: "final_due",
-                  "stripe.finalPaymentIntentId": FieldValue.delete(),
-                  "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
-                  updatedAt: FieldValue.serverTimestamp(),
+                await db.runTransaction(async (tx) => {
+                  const snap = await tx.get(bookingRef);
+                  if (!snap.exists) return;
+                  const b = snap.data() as Booking;
+                  if (!ALLOWED_STATUSES.includes(b.status as (typeof ALLOWED_STATUSES)[number])) return;
+                  resetBookingToFinalDue(tx, bookingRef, FieldValue, Timestamp);
                 });
                 continue;
               }

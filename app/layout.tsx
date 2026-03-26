@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Script from "next/script";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
@@ -68,9 +67,9 @@ export default async function RootLayout({
   return (
     <html lang="en" className={syne.variable}>
       <body>
-        {/* GA4 + CSP: allowlisted googletag* / google-analytics in middleware; nonce on Script tags. */}
+        {/* Stripe.js: loaded early in layout; CSP nonce + strict-dynamic. */}
         {isStripeCheckoutReady ? (
-          <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
+          <script src={STRIPE_JS_SRC} async nonce={nonce} suppressHydrationWarning />
         ) : null}
         {gaMeasurementId ? (
           <>

@@ -54,6 +54,8 @@ export type AssertSlotAvailableOpts = {
   boatId?: string;
   experienceSlug?: string;
   useBoatSlots: boolean;
+  /** Excludes this booking doc id from overlap checks (useful during reschedule). */
+  excludeBookingId?: string;
   /** When true, run same-day slot scan (e.g. when slot doc does not exist yet). */
   runSameDaySlotScan: boolean;
   /** Slot document ids to ignore during same-day scan (e.g. current slot during hold resume). */
@@ -78,6 +80,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     boatId,
     experienceSlug,
     useBoatSlots,
+    excludeBookingId,
     runSameDaySlotScan,
     ignoreSlotDocIds,
   } = opts;
@@ -154,6 +157,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     durationHours: parsed.durationHours,
     targetStartMs: slotStartMs,
     targetEndMs: slotEndMs,
+    excludeBookingId,
   });
   if (takenIntervals.length > 0) {
     throw new SlotConflictError("Slot no longer available");
@@ -252,7 +256,8 @@ export async function assertLegacyBoatSlotAvailable(opts: {
       .where("startAt", ">=", Timestamp.fromDate(dayStart))
       .where("startAt", "<=", Timestamp.fromDate(dayEnd))
   );
-  for (const doc of sameDaySnap.docs) {
+  const sameDayDocs = "docs" in sameDaySnap ? sameDaySnap.docs : [];
+  for (const doc of sameDayDocs) {
     const data = doc.data() as Slot;
     if (data.status === "open") continue;
     if (data.status === "held" && data.holdId) {
@@ -280,21 +285,22 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     boatId: bid,
     slotStart,
     slotEnd,
-    get,
+    get: async (q) =>
+      get(q) as Promise<import("firebase-admin/firestore").QuerySnapshot>,
   });
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
   const lookbackLegacy = bookingLookbackDaysFromMaxDuration(parsed.durationHours);
   const lowerLegacy = addCalendarDaysToDateStr(parsed.dateStr, -lookbackLegacy);
   const upperLegacy = addCalendarDaysToDateStr(parsed.dateStr, lookbackLegacy);
-  const paidSnap = await get(
+  const paidSnap = (await get(
     db
       .collection("bookings")
       .where("boatId", "==", bid)
       .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
       .where("startDateStr", ">=", lowerLegacy)
       .where("startDateStr", "<=", upperLegacy)
-  );
+  )) as import("firebase-admin/firestore").QuerySnapshot;
   const seenIds = new Set<string>();
   for (const doc of paidSnap.docs) {
     if (seenIds.has(doc.id)) continue;
@@ -308,9 +314,9 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   }
 
   if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
-    const legacyNullSnap = await get(
+    const legacyNullSnap = (await get(
       db.collection("bookings").where("boatId", "==", bid).where("startDateStr", "==", null).limit(1)
-    );
+    )) as import("firebase-admin/firestore").QuerySnapshot;
     if (!legacyNullSnap.empty) {
       throw new LegacyScanLimitReachedError();
     }
@@ -318,7 +324,9 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   }
   warnIfLegacyBookingFallbackEnabled();
   const LEGACY_BOOKING_LIMIT = getLegacyBookingScanLimit();
-  const legacySnap = await get(db.collection("bookings").where("boatId", "==", bid).limit(LEGACY_BOOKING_LIMIT));
+  const legacySnap = (await get(
+    db.collection("bookings").where("boatId", "==", bid).limit(LEGACY_BOOKING_LIMIT)
+  )) as import("firebase-admin/firestore").QuerySnapshot;
   const legacyLimitHit = legacySnap.docs.length >= LEGACY_BOOKING_LIMIT;
   if (legacyLimitHit) {
     await writeOperationalAlert({

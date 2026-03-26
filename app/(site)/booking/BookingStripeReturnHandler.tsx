@@ -25,7 +25,18 @@ export function BookingStripeReturnHandler({
   const [retryNonce, setRetryNonce] = useState(0);
   const [showStillConfirming, setShowStillConfirming] = useState(false);
   const [showContactHelp, setShowContactHelp] = useState(false);
+  const [reconciliationPending, setReconciliationPending] = useState(false);
   const fetchErrorAutoRetryDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (!reconciliationPending) return;
+    const w = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", w);
+    return () => window.removeEventListener("beforeunload", w);
+  }, [reconciliationPending]);
 
   useEffect(() => {
     if (!processing) {
@@ -62,6 +73,7 @@ export function BookingStripeReturnHandler({
       setLoading(true);
       setError(null);
       setProcessing(false);
+      setReconciliationPending(false);
       setHoldExpired(false);
       const holdIdFromSession = readModalSessionHoldId() ?? undefined;
       const receiptClaimFromSession = readModalSessionReceiptClaimToken();
@@ -108,6 +120,9 @@ export function BookingStripeReturnHandler({
 
         if (outcome.kind === "processing_timeout") {
           setProcessing(false);
+          if (typeof outcome.experienceId === "string" && outcome.experienceId) {
+            invalidateBookingCaches(outcome.experienceId);
+          }
           setError(outcome.message);
           setLoading(false);
           return;
@@ -115,11 +130,12 @@ export function BookingStripeReturnHandler({
 
         if (outcome.kind === "reconciliation_pending") {
           setProcessing(false);
+          setLoading(false);
+          setReconciliationPending(true);
           if (typeof outcome.experienceId === "string" && outcome.experienceId) {
             invalidateBookingCaches(outcome.experienceId);
           }
           setError(outcome.message);
-          setLoading(false);
           return;
         }
 
@@ -162,6 +178,26 @@ export function BookingStripeReturnHandler({
       abortController.abort();
     };
   }, [paymentIntentId, router, retryNonce, redirectStatus]);
+
+  if (reconciliationPending) {
+    return (
+      <div className="section-padding bg-brand-bg/30">
+        <div className="container-narrow px-4 sm:px-6 lg:px-8 text-center text-brand-muted flex flex-col items-center gap-4">
+          <div
+            className="h-10 w-10 shrink-0 rounded-full border-2 border-brand-primary border-t-transparent animate-spin"
+            aria-hidden
+          />
+          <div>
+            <p className="text-brand-dark font-medium mb-2">Confirming your booking</p>
+            <p>{error}</p>
+            <p className="mt-4 text-sm text-amber-900">
+              Do not close this tab — we are still reconciling your payment with your reservation.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (processing) {
     return (

@@ -35,19 +35,24 @@ import type { Booking } from "@/lib/booking/types";
 import { bookingLog, bookingError, bookingWarn } from "@/lib/booking/debug";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
-import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import {
   persistFinalBalanceNormalizationIfNeeded,
   resolveFinalBalanceFromBooking,
 } from "@/lib/booking/final-balance-resolver";
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
+import { transitionBookingStatus } from "@/lib/booking/transition-booking-status";
+import { resetBookingToFinalDue, transitionToFinalPaid } from "@/lib/booking/final-paid-transition";
+import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 
 const PAGE_SIZE = 100;
 const FINAL_FAILED_GRACE_HOURS = (() => {
   const n = parseInt(process.env.FINAL_FAILED_GRACE_HOURS ?? "72", 10);
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 30) : 72;
+})();
+const FINAL_REQUIRES_ACTION_RELEASE_HOURS = (() => {
+  const n = parseInt(process.env.FINAL_REQUIRES_ACTION_RELEASE_HOURS ?? "48", 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 30) : 48;
 })();
 
 async function alertIfPiAmountDiffersFromBookingExpected(
@@ -159,25 +164,23 @@ export async function POST(request: NextRequest) {
               }
               const sb = b.stripe;
               const isDepositFlow = typeof sb?.depositAmountCents === "number";
-              let finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
-              if (finalRev <= 0 && isDepositFlow) {
-                finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
-                if (finalRev <= 0) {
-                  depositFlowMissingAuthoritativeRevenue = true;
-                }
+              const finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
+              const authoritativeFinalCents =
+                finalRev > 0 ? finalRev : resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
+              if (isDepositFlow && finalRev <= 0) {
+                depositFlowMissingAuthoritativeRevenue = true;
               }
-              if (isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true) {
-                applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingId);
-              }
-              tx.update(ref, {
-                status: "final_paid",
-                "stripe.finalChargedAt": FieldValue.serverTimestamp(),
-                ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
-                  ? { "stripe.finalRevenueSummaryApplied": true }
-                  : {}),
-                updatedAt: Timestamp.now(),
-              });
-              await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
+              await transitionToFinalPaid(
+                tx,
+                db,
+                ref,
+                b,
+                bookingId,
+                existingFinalPiId,
+                FieldValue,
+                Timestamp,
+                authoritativeFinalCents
+              );
             });
             if (depositFlowMissingAuthoritativeRevenue) {
               const piAmt = typeof existingPi.amount === "number" ? existingPi.amount : 0;
@@ -211,11 +214,7 @@ export async function POST(request: NextRequest) {
                 isCustomerPayLockRecent(b.stripe?.customerPayLockAt, now) ||
                 isCustomerFinalPiInFlightRecent(b.stripe?.customerFinalPiInFlightAt, now);
               if (customerLocksFresh) return;
-              tx.update(ref, {
-                status: "final_due",
-                "stripe.finalPaymentIntentId": FieldValue.delete(),
-                updatedAt: Timestamp.now(),
-              });
+              resetBookingToFinalDue(tx, ref, FieldValue, Timestamp);
               resetApplied = true;
             });
             if (!resetApplied) {
@@ -243,10 +242,7 @@ export async function POST(request: NextRequest) {
             continue;
           }
           if (piStatus === "requires_action") {
-            await db.collection("bookings").doc(bookingId).update({
-              status: "final_requires_action",
-              updatedAt: Timestamp.now(),
-            });
+            await transitionBookingStatus(db, bookingId, "final_processing", "final_requires_action", {});
             console.log("[run-final-charges] reconciled final_processing → final_requires_action", {
               bookingId,
               piId: existingFinalPiId,
@@ -279,11 +275,7 @@ export async function POST(request: NextRequest) {
                 isCustomerPayLockRecent(b.stripe?.customerPayLockAt, now) ||
                 isCustomerFinalPiInFlightRecent(b.stripe?.customerFinalPiInFlightAt, now);
               if (customerLocksFresh) return;
-              tx.update(ref, {
-                status: "final_due",
-                "stripe.finalPaymentIntentId": FieldValue.delete(),
-                updatedAt: Timestamp.now(),
-              });
+              resetBookingToFinalDue(tx, ref, FieldValue, Timestamp);
               resetApplied = true;
             });
             if (resetApplied) {
@@ -392,28 +384,25 @@ export async function POST(request: NextRequest) {
                 if (b.status === "final_paid" && b.stripe?.finalChargedAt) {
                   return;
                 }
-                const sb = b.stripe;
-                const isDepositFlow = typeof sb?.depositAmountCents === "number";
-                let finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
-                if (finalRev <= 0 && isDepositFlow) {
-                  finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
-                  if (finalRev <= 0) {
-                    depositFlowMissingAuthoritativeRevenueReconcile = true;
-                  }
-                }
-                const alreadySummarized = sb?.finalRevenueSummaryApplied === true;
-                if (isDepositFlow && finalRev > 0 && !alreadySummarized) {
-                  applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingId);
-                }
-                tx.update(bookingRef, {
-                  status: "final_paid",
-                  "stripe.finalChargedAt": FieldValue.serverTimestamp(),
-                  updatedAt: Timestamp.now(),
-                  ...(isDepositFlow && finalRev > 0 && !alreadySummarized
-                    ? { "stripe.finalRevenueSummaryApplied": true }
-                    : {}),
-                });
-                await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
+              const sb = b.stripe;
+              const isDepositFlow = typeof sb?.depositAmountCents === "number";
+              const finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
+              const authoritativeFinalCents =
+                finalRev > 0 ? finalRev : resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
+              if (isDepositFlow && finalRev <= 0) {
+                depositFlowMissingAuthoritativeRevenueReconcile = true;
+              }
+              await transitionToFinalPaid(
+                tx,
+                db,
+                bookingRef,
+                b,
+                bookingId,
+                existingFinalPiId,
+                FieldValue,
+                Timestamp,
+                authoritativeFinalCents
+              );
               });
               if (depositFlowMissingAuthoritativeRevenueReconcile) {
                 const piAmt = typeof existingPi.amount === "number" ? existingPi.amount : 0;
@@ -717,6 +706,7 @@ export async function POST(request: NextRequest) {
           const newStatus = requiresAction ? "final_requires_action" : "final_failed";
           await db.collection("bookings").doc(bookingId).update({
             status: newStatus,
+            ...(failedPiId ? { "stripe.finalPaymentIntentId": failedPiId } : {}),
             "stripe.finalError": { code, message: err.message ?? undefined },
             "stripe.finalChargeLockAt": FieldValue.delete(),
             updatedAt: FieldValue.serverTimestamp(),
@@ -771,26 +761,24 @@ export async function POST(request: NextRequest) {
               const b = snap.data() as Booking;
               const sb = b.stripe;
               const isDepositFlow = typeof sb?.depositAmountCents === "number";
-              let finalRev = typeof sb?.finalAmountCents === "number" && sb.finalAmountCents > 0 ? sb.finalAmountCents : 0;
-              if (finalRev <= 0 && isDepositFlow) {
-                finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
-                if (finalRev <= 0) {
-                  depositFlowMissingAuthoritativeRevenueCreate = true;
-                }
+              const finalRev =
+                typeof sb?.finalAmountCents === "number" && sb.finalAmountCents > 0 ? sb.finalAmountCents : 0;
+              const authoritativeFinalCents =
+                finalRev > 0 ? finalRev : resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
+              if (isDepositFlow && finalRev <= 0) {
+                depositFlowMissingAuthoritativeRevenueCreate = true;
               }
-              if (isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true) {
-                applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingId);
-              }
-              tx.update(bookingRef, {
-                "stripe.finalPaymentIntentId": pi.id,
-                "stripe.finalChargedAt": FieldValue.serverTimestamp(),
-                status: "final_paid",
-                ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
-                  ? { "stripe.finalRevenueSummaryApplied": true }
-                  : {}),
-                updatedAt: Timestamp.now(),
-              });
-              await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
+              await transitionToFinalPaid(
+                tx,
+                db,
+                bookingRef,
+                b,
+                bookingId,
+                pi.id,
+                FieldValue,
+                Timestamp,
+                authoritativeFinalCents
+              );
             });
             if (depositFlowMissingAuthoritativeRevenueCreate) {
               const piAmt = typeof pi.amount === "number" ? pi.amount : 0;
@@ -815,6 +803,10 @@ export async function POST(request: NextRequest) {
             });
           }
         } catch (fsErr: unknown) {
+          const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
+          if (fsMsg.includes("Illegal booking status transition")) {
+            throw fsErr;
+          }
           console.error("[run-final-charges] Firestore persist failed after Stripe PI create", bookingId, fsErr);
           await recoverFinalChargeAfterFirestorePersistFailure(bookingRef, pi, fsErr);
           attempted++;
@@ -944,7 +936,7 @@ export async function POST(request: NextRequest) {
       const staleFailedDocs = new Map<string, QueryDocumentSnapshot<DocumentData>>();
       for (const doc of staleByFinalChargeAtSnap.docs) staleFailedDocs.set(doc.id, doc);
       for (const doc of staleByUpdatedAtSnap.docs) staleFailedDocs.set(doc.id, doc);
-      for (const doc of staleFailedDocs.values()) {
+      for (const doc of Array.from(staleFailedDocs.values())) {
         const b = doc.data() as Booking;
         if (!b.finalChargeAt) {
           await writeOperationalAlert({
@@ -965,7 +957,15 @@ export async function POST(request: NextRequest) {
             const fresh = snap.data() as Booking;
             if (fresh.status !== "final_failed") return;
             tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-            await resetBookingSlotsToOpenInTransaction(db, tx, doc.id, fresh);
+            const expResolved = await resolveExperienceDocAndSlug(db, fresh.experienceId);
+            const bookingForReset = expResolved ? ({ ...fresh, experienceId: expResolved.docId } as Booking) : fresh;
+            await resetBookingSlotsToOpenInTransaction(
+              db,
+              tx,
+              doc.id,
+              bookingForReset,
+              expResolved?.slug ?? ""
+            );
           });
           await writeOperationalAlert({
             type: "final_failed_auto_canceled",
@@ -996,6 +996,79 @@ export async function POST(request: NextRequest) {
           finalFailedAutoCancelErr instanceof Error
             ? finalFailedAutoCancelErr.message
             : String(finalFailedAutoCancelErr),
+      }).catch(() => {});
+    }
+
+    // Auto-release long-stuck final_requires_action bookings by transitioning to final_failed
+    // so the existing reconcile-final-failed-bookings cron can release inventory.
+    try {
+      const raCutoff = new Date(Date.now() - FINAL_REQUIRES_ACTION_RELEASE_HOURS * 60 * 60 * 1000);
+      const raCutoffTs = Timestamp.fromDate(raCutoff);
+      const [staleByAttemptedSnap, staleByUpdatedSnap] = await Promise.all([
+        db
+          .collection("bookings")
+          .where("status", "==", "final_requires_action")
+          .where("stripe.finalChargeAttemptedAt", "<=", raCutoffTs)
+          .limit(200)
+          .get(),
+        db
+          .collection("bookings")
+          .where("status", "==", "final_requires_action")
+          .where("updatedAt", "<=", raCutoffTs)
+          .limit(200)
+          .get(),
+      ]);
+      const raDocs = new Map<string, QueryDocumentSnapshot<DocumentData>>();
+      for (const doc of staleByAttemptedSnap.docs) raDocs.set(doc.id, doc);
+      for (const doc of staleByUpdatedSnap.docs) raDocs.set(doc.id, doc);
+      for (const doc of Array.from(raDocs.values())) {
+        const b = doc.data() as Booking;
+        try {
+          const result = await transitionBookingStatus(
+            db,
+            doc.id,
+            "final_requires_action",
+            "final_failed",
+            { transitionSource: "final_requires_action_auto_release" },
+          );
+          if (!result.ok && result.reason === "illegal_transition") {
+            await writeOperationalAlert({
+              type: "final_requires_action_auto_release_illegal_transition",
+              source: "run-final-charges",
+              bookingId: doc.id,
+              currentStatus: result.currentStatus ?? null,
+            }).catch(() => {});
+            continue;
+          }
+          if (!result.ok && result.reason === "unexpected_from") {
+            continue;
+          }
+          await writeOperationalAlert({
+            type: "final_requires_action_auto_released",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            autoReleaseHours: FINAL_REQUIRES_ACTION_RELEASE_HOURS,
+            slotId: b.slotId ?? null,
+            boatId: b.boatId ?? null,
+            experienceId: b.experienceId ?? null,
+          }).catch(() => {});
+        } catch (raErr) {
+          await writeOperationalAlert({
+            type: "final_requires_action_auto_release_error",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            error: raErr instanceof Error ? raErr.message : String(raErr),
+          }).catch(() => {});
+        }
+      }
+    } catch (finalRequiresActionAutoReleaseErr) {
+      await writeOperationalAlert({
+        type: "final_requires_action_auto_release_scan_error",
+        source: "run-final-charges",
+        error:
+          finalRequiresActionAutoReleaseErr instanceof Error
+            ? finalRequiresActionAutoReleaseErr.message
+            : String(finalRequiresActionAutoReleaseErr),
       }).catch(() => {});
     }
 

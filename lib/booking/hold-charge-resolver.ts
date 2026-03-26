@@ -40,6 +40,8 @@ export async function resolveHoldBookingPricing(
   options?: { mode?: HoldPricingMode }
 ): Promise<ResolvedHoldBookingPricing> {
   const mode = options?.mode ?? "checkout";
+  // Invariant: hold.pricing is the canonical snapshot created at hold creation and should be reused verbatim.
+  // Transitional fallback remains only while legacy holds are backfilled.
   const hasExperience = !!hold.experienceId;
   const hasBoat = !!hold.boatId;
   const isListingBoatFlow = hasExperience && hasBoat;
@@ -89,6 +91,10 @@ export async function resolveHoldBookingPricing(
       useSnapshotLineItems: true,
       ticketQtyForLineItems,
     };
+  }
+
+  if (mode === "payment_intent" && !hold.pricing) {
+    throw new Error("HOLD_PRICING_REQUIRED_FOR_PAYMENT_INTENT");
   }
 
   if (mode === "checkout" && hold.pricing && hold.effectiveRateCents != null && !isSharedTicketed) {

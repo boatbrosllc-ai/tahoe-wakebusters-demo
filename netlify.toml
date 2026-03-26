@@ -18,6 +18,8 @@
 #   POST /api/admin/cron/waiver-reminder
 #   POST /api/admin/cron/process-confirmation-outbox
 #   POST /api/admin/cron/process-pending-refunds
+#   POST /api/admin/cron/reconcile-rollback-pending-holds
+#   POST /api/admin/cron/reconcile-pending-pi-metadata
 [build]
   command = "npm run build"
   # Publish dir is set by @netlify/plugin-nextjs when present; omit or use .next for static fallback.
@@ -44,6 +46,10 @@
 [functions."___netlify-handler"]
   timeout = 26
 
+# Stripe webhook: conversion can exceed default 10s; align with maxDuration in route.ts.
+[functions."api-stripe-webhook"]
+  timeout = 26
+
 # Timeouts for cron handlers (Next.js API routes under /api/admin/cron/*). Netlify may map these by path.
 [functions."api-admin-cron-reminder-cron"]
   timeout = 60
@@ -64,6 +70,12 @@
   timeout = 60
 
 [functions."api-admin-cron-process-pending-refunds"]
+  timeout = 60
+
+[functions."api-admin-cron-reconcile-rollback-pending-holds"]
+  timeout = 60
+
+[functions."api-admin-cron-reconcile-pending-pi-metadata"]
   timeout = 60
 
 # Scheduled in netlify/functions/warm-booking.mts via schedule("*/5 * * * *") — every 5 minutes to keep

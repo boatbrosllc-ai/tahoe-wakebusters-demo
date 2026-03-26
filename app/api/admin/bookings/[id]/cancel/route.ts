@@ -22,6 +22,7 @@ import {
   PENDING_STRIPE_REFUND_POLL_MS,
 } from "@/lib/booking/stripe-refund-status";
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
+import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 
 const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
 
@@ -253,15 +254,20 @@ export async function POST(
         }
 
         if (slotId && experienceId) {
-          const expSlug =
-            expSnapForName?.exists && typeof (expSnapForName.data() as { slug?: unknown })?.slug === "string"
-              ? String((expSnapForName.data() as { slug: string }).slug).trim()
-              : "";
-          const releasedCount = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, expSlug, {
+          const expResolved = await resolveExperienceDocAndSlug(db, b.experienceId);
+          const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
+          const releasedCount = await resetBookingSlotsToOpenInTransaction(
+            db,
+            tx,
+            bookingId,
+            bookingForReset,
+            expResolved?.slug ?? "",
+            {
             onHeldReleased: () => {
               heldSlotsReleased++;
             },
-          });
+            }
+          );
           if (releasedCount > 0) slotReleased = true;
         } else if (slotId) {
           console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
@@ -367,6 +373,10 @@ export async function POST(
             });
           } else if (outcome === "terminal_failure") {
             const msg = `${refund.failure_reason ?? refund.status ?? "failed"}`.slice(0, 1000);
+            const failIdx = refunds.length - 1;
+            if (failIdx >= 0 && refunds[failIdx]?.paymentIntentId === piId) {
+              refunds[failIdx] = { ...refunds[failIdx], error: msg };
+            }
             await prRef.update({
               status: "failed",
               stripeRefundId: refund.id,
@@ -535,10 +545,18 @@ export async function POST(
       }
     }
 
+    const refundFailureCount = refunds.filter((r) => r.error).length;
+    const refundPartialFailure =
+      body.refund !== false &&
+      distinctIds.length > 0 &&
+      refundFailureCount > 0 &&
+      !refunds.every((r) => r.error);
+
     return NextResponse.json({
       ok: true,
       slotReleased,
       refunds,
+      ...(refundPartialFailure && { refundPartialFailure: true as const }),
       ...(skippedRefunds.length > 0 && { skippedRefunds }),
       ...(cancellationPolicyWarning && { cancellationPolicyWarning }),
     });

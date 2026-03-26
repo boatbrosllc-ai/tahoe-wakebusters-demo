@@ -13,7 +13,7 @@ function firestoreConcurrencyEnabled(): boolean {
 }
 
 describe(
-  "direct checkout slot document transaction isolation",
+  "charter slot document transaction isolation",
   { skip: !firestoreConcurrencyEnabled() },
   () => {
     it("two concurrent transactions cannot both mark the same open slot as held", async () => {

@@ -9,6 +9,7 @@ export type BookingModalPaymentPhase =
   | "stripe"
   | "completing"
   | "completeAfterPaymentRetry"
+  | "reconciliationPending"
   | "success"
   | "successWithWarning"
   | "successRecoveryFailed";
@@ -50,6 +51,6 @@ export function bookingModalReducer(state: BookingModalState, action: BookingMod
  */
 export function bookingModalEffectsPhase(state: BookingModalState): "selection" | "checkout" {
   const p = state.paymentPhase;
-  if (p === "stripe" || p === "loading" || p === "completing") return "checkout";
+  if (p === "stripe" || p === "loading" || p === "completing" || p === "reconciliationPending") return "checkout";
   return "selection";
 }

@@ -12,6 +12,7 @@ import type { Firestore, DocumentReference } from "firebase-admin/firestore";
 import { getFirestoreExports } from "./firebase-admin";
 import { writeOperationalAlert } from "./operational-alerts";
 import type { NotificationOutboxEntry, NotificationOutboxStatus } from "./types";
+import { randomUUID } from "crypto";
 import { isPlaceholderCheckoutEmail } from "@/lib/booking/stripe-payment-intent-convert";
 import { isDepositMode } from "./deposit-mode";
 import { getReminderRetryQueueStatsByTemplate } from "./reminder-retry";
@@ -22,8 +23,11 @@ const MAX_ATTEMPTS = 5;
 const INITIAL_BACKOFF_MS = 60 * 1000; // 1 min
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000; // 24 h
 
-/** Lease on a claimed outbox row; if the worker dies, stale claims reset to pending after this window. */
-const CLAIM_LEASE_MS = 2 * 60 * 1000;
+/**
+ * Lease on a claimed outbox row; if the worker dies, stale claims reset to pending after this window.
+ * Kept conservatively because Netlify cold starts / slow Brevo/SMS calls can exceed ~2 minutes.
+ */
+const CLAIM_LEASE_MS = 8 * 60 * 1000;
 
 function nextAttemptAt(attemptCount: number): Date {
   const delay = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attemptCount), MAX_BACKOFF_MS);
@@ -35,13 +39,40 @@ function claimExpiresAtTimestamp() {
   return Timestamp.fromMillis(Date.now() + CLAIM_LEASE_MS);
 }
 
-export function createPendingConfirmationPayload(bookingId: string): Omit<NotificationOutboxEntry, "sentAt" | "lastAttemptAt" | "lastError" | "claimedAt" | "claimedBy"> {
+async function updateOutboxIfStillClaimed(
+  db: Firestore,
+  ref: DocumentReference,
+  claimerId: string,
+  patch: Record<string, unknown>
+): Promise<boolean> {
+  let ok = false;
+  await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(ref);
+    if (!fresh.exists) return;
+    const d = fresh.data() as NotificationOutboxEntry;
+    if (d.status !== "claimed") return;
+    const claimedByOk = d.claimedBy == null || d.claimedBy === claimerId;
+    if (!claimedByOk) return;
+    tx.update(ref, patch);
+    ok = true;
+  });
+  return ok;
+}
+
+export function createPendingConfirmationPayload(
+  bookingId: string,
+  opts?: { rescheduled?: boolean; waiverPointerCleared?: boolean }
+): Omit<NotificationOutboxEntry, "sentAt" | "lastAttemptAt" | "lastError" | "claimedAt" | "claimedBy"> {
   const { Timestamp } = getFirestoreExports();
   const now = Timestamp.now();
   return {
     bookingId,
     type: "booking_confirmation",
-    payload: { bookingId },
+    payload: {
+      bookingId,
+      ...(opts?.rescheduled ? { rescheduled: true } : {}),
+      ...(opts?.waiverPointerCleared ? { waiverPointerCleared: true } : {}),
+    },
     status: "pending",
     attemptCount: 0,
     maxAttempts: MAX_ATTEMPTS,
@@ -59,16 +90,39 @@ export function confirmationOutboxDocId(bookingId: string): string {
 export async function addConfirmationOutboxInTransaction(
   tx: FirebaseFirestore.Transaction,
   db: Firestore,
-  bookingId: string
+  bookingId: string,
+  opts?: { rescheduled?: boolean; waiverPointerCleared?: boolean }
 ): Promise<void> {
   const ref = db.collection(COLLECTION).doc(confirmationOutboxDocId(bookingId));
   const snap = await tx.get(ref);
   if (snap.exists) {
     const st = (snap.data() as Partial<NotificationOutboxEntry>).status;
-    if (st === "sent" || st === "dead_letter") return;
+    // Dead-letter is terminal.
+    if (st === "dead_letter") return;
+    // Normal idempotency: if already sent, do not resend unless explicitly marked as rescheduled.
+    if (st === "sent" && !opts?.rescheduled) return;
+    // Reschedule supersedes an in-flight claim: reset to pending so cron sends the latest trip (Comment 11).
+    if (st === "claimed" && opts?.rescheduled) {
+      tx.set(ref, createPendingConfirmationPayload(bookingId, opts));
+      return;
+    }
+    // If already claimed by another worker, only update payload; claim holder will read latest doc.
+    if (st === "claimed") {
+      tx.update(ref, {
+        payload: {
+          ...(snap.data()?.payload ?? { bookingId }),
+          ...(opts?.rescheduled ? { rescheduled: true } : {}),
+          ...(opts?.waiverPointerCleared ? { waiverPointerCleared: true } : {}),
+        },
+        updatedAt: getFirestoreExports().FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+    // For pending/failed, or explicit reschedules, reset to pending so cron workers can resend.
+    tx.set(ref, createPendingConfirmationPayload(bookingId, opts));
     return;
   }
-  tx.set(ref, createPendingConfirmationPayload(bookingId));
+  tx.set(ref, createPendingConfirmationPayload(bookingId, opts));
 }
 
 export function createPendingFinalChargeSuccessPayload(
@@ -203,7 +257,10 @@ export async function addWaiverInviteOutboxInTransaction(
 /**
  * Resets claimed rows whose lease expired (e.g. Netlify function killed mid-send) back to pending.
  */
-export async function processStaleClaims(db: Firestore): Promise<number> {
+export async function processStaleClaims(
+  db: Firestore,
+  opts?: { currentClaimerId?: string }
+): Promise<number> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
   let total = 0;
@@ -225,11 +282,16 @@ export async function processStaleClaims(db: Firestore): Promise<number> {
     let batch = db.batch();
     let ops = 0;
     for (const doc of snap.docs) {
+      const d = doc.data() as NotificationOutboxEntry;
+      if (opts?.currentClaimerId && d.claimedBy === opts.currentClaimerId) {
+        continue;
+      }
       // Merge: do not clear providerMessageId — Brevo may have succeeded before the status write.
       batch.update(doc.ref, {
         status: "pending",
         claimExpiresAt: FieldValue.delete(),
         claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         nextAttemptAt: now,
         updatedAt: FieldValue.serverTimestamp(),
       });
@@ -319,11 +381,38 @@ export async function getNotificationOutboxStats(db: Firestore): Promise<Notific
   };
 }
 
+export async function alertOnStalledOutbox(db: Firestore, thresholdMinutes: number): Promise<void> {
+  const { Timestamp } = getFirestoreExports();
+  const now = Timestamp.now();
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - thresholdMinutes * 60 * 1000));
+
+  const col = db.collection(COLLECTION);
+  const [pendingSnap, deadSnap] = await Promise.all([
+    col.where("status", "==", "pending").where("nextAttemptAt", "<=", cutoff).count().get(),
+    col.where("status", "==", "dead_letter").where("createdAt", "<", cutoff).count().get(),
+  ]);
+
+  const pendingStalledCount = pendingSnap.data().count;
+  const deadLetterStalledCount = deadSnap.data().count;
+
+  if (pendingStalledCount === 0 && deadLetterStalledCount === 0) return;
+
+  await writeOperationalAlert({
+    type: "confirmation_outbox_stalled",
+    pendingStalledCount,
+    deadLetterStalledCount,
+    thresholdMinutes,
+    source: "process-confirmation-outbox",
+    now: now.toDate ? now.toDate().toISOString() : String(now),
+  });
+}
+
 async function deliverClaimedConfirmationEntry(
   db: Firestore,
   ref: DocumentReference,
   bookingId: string,
-  data: NotificationOutboxEntry
+  data: NotificationOutboxEntry,
+  claimerId: string
 ): Promise<"sent" | "failed" | "dead_letter"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
@@ -341,12 +430,15 @@ async function deliverClaimedConfirmationEntry(
 
     let bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Booking not found",
         lastAttemptAt: now,
         attemptCount: data.attemptCount + 1,
         nextAttemptAt: Timestamp.fromDate(nextAttemptAt(data.attemptCount + 1)),
+        claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
       return "failed";
@@ -354,22 +446,46 @@ async function deliverClaimedConfirmationEntry(
 
     let booking = bookingSnap.data() as Booking;
     const customerEmailEarly = booking.customer?.email?.trim() ?? "";
-    if (!customerEmailEarly || isPlaceholderCheckoutEmail(customerEmailEarly)) {
-      await ref.update({
+    if (!customerEmailEarly) {
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
-        lastError: !customerEmailEarly
-          ? "Customer email not ready"
-          : "Customer email is placeholder checkout address",
+        lastError: "Customer email not ready",
         lastAttemptAt: now,
         attemptCount: data.attemptCount + 1,
         nextAttemptAt: Timestamp.fromMillis(Date.now() + 30_000),
         claimExpiresAt: FieldValue.delete(),
         claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
       return "failed";
     }
+    if (isPlaceholderCheckoutEmail(customerEmailEarly)) {
+      // Placeholder emails are a permanent delivery failure mode for this outbox row:
+      // dead-letter immediately to avoid retry exhaustion + notification spam.
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
+        status: "dead_letter",
+        lastError: "placeholder_email",
+        lastAttemptAt: now,
+        attemptCount: data.attemptCount + 1,
+        nextAttemptAt: now,
+        claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return "dead_letter";
+    }
+    const rescheduled = data.payload?.rescheduled === true;
+    const waiverPointerCleared = data.payload?.waiverPointerCleared === true;
+
     if (!booking.waiver?.requestId && booking.customer?.email?.trim()) {
+      // Reschedule flow explicitly clears booking.waiver inside the slot/booking transaction,
+      // then recreates the waiver request after. Avoid auto-creating a duplicate waiver here;
+      // let the outbox retry after the reschedule handler finishes.
+      if (rescheduled && waiverPointerCleared) {
+        throw new Error("RESCHEDULE_WAIVER_NOT_READY");
+      }
       const { createWaiverForBooking } = await import("@/lib/waiver/on-booking-created");
       await createWaiverForBooking({
         bookingId,
@@ -381,12 +497,15 @@ async function deliverClaimedConfirmationEntry(
     }
     const parsed = parseSlotId(booking.slotId ?? "");
     if (!parsed) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Invalid slotId",
         lastAttemptAt: now,
         attemptCount: data.attemptCount + 1,
         nextAttemptAt: Timestamp.fromDate(nextAttemptAt(data.attemptCount + 1)),
+        claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
       return "failed";
@@ -507,7 +626,7 @@ async function deliverClaimedConfirmationEntry(
           "[notification-outbox] Brevo booking confirmation returned no messageId — marking failed for retry",
           { bookingId }
         );
-        await ref.update({
+        await updateOutboxIfStillClaimed(db, ref, claimerId, {
           status: "failed",
           lastError: "Brevo response missing provider messageId",
           lastAttemptAt: now,
@@ -515,24 +634,49 @@ async function deliverClaimedConfirmationEntry(
           nextAttemptAt: Timestamp.fromDate(nextAttemptAt(data.attemptCount + 1)),
           claimExpiresAt: FieldValue.delete(),
           claimedAt: FieldValue.delete(),
+          claimedBy: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
         });
         return "failed";
       }
-      await ref.update({
-        providerMessageId,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
     } else {
       subject = "Booking confirmation (delivery recovered)";
     }
 
-    await ref.update({
-      status: "sent",
-      sentAt: now,
-      claimExpiresAt: FieldValue.delete(),
-      updatedAt: FieldValue.serverTimestamp(),
+    // Comment 7: finalize providerMessageId + sent status atomically, verifying our claim still holds.
+    // This prevents two concurrent workers from both proceeding past the send step.
+    let finalized = false;
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(ref);
+      if (!fresh.exists) return;
+      const d = fresh.data() as NotificationOutboxEntry;
+      if (d.status !== "claimed") return;
+      const claimedByOk = d.claimedBy == null || d.claimedBy === claimerId;
+      if (!claimedByOk) return;
+
+      const patch: Record<string, unknown> = {
+        status: "sent",
+        sentAt: now,
+        claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (providerMessageId) patch.providerMessageId = providerMessageId;
+      tx.update(ref, patch);
+      finalized = true;
     });
+
+    if (!finalized) return "sent";
+
+    try {
+      await db.collection("bookings").doc(bookingId).update({
+        confirmationSentAt: now,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error("[notification-outbox] confirmationSentAt update failed", bookingId, e);
+    }
 
     const { notifyStaffBookingConfirmation } = await import("./staff-notifications");
     try {
@@ -615,28 +759,32 @@ async function deliverClaimedConfirmationEntry(
     const attemptCount = data.attemptCount + 1;
     const isDeadLetter = attemptCount >= data.maxAttempts;
     const status: NotificationOutboxStatus = isDeadLetter ? "dead_letter" : "pending";
-    await ref.update({
+    const updated = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status,
       lastError: errMsg,
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
-      await writeOperationalAlert({
-        type: "confirmation_dead_letter",
-        bookingId,
-        lastError: errMsg,
-        source: "notification-outbox",
-      });
-      const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
-      await sendNotificationOutboxDeadLetterOpsEmail({
-        outboxType: "booking_confirmation",
-        bookingId,
-        lastError: errMsg,
-      }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      if (updated) {
+        await writeOperationalAlert({
+          type: "confirmation_dead_letter",
+          bookingId,
+          lastError: errMsg,
+          source: "notification-outbox",
+        });
+        const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
+        await sendNotificationOutboxDeadLetterOpsEmail({
+          outboxType: "booking_confirmation",
+          bookingId,
+          lastError: errMsg,
+        }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      }
     }
     return isDeadLetter ? "dead_letter" : "failed";
   }
@@ -646,7 +794,8 @@ async function deliverClaimedFinalChargeSuccessEntry(
   db: Firestore,
   ref: DocumentReference,
   bookingId: string,
-  data: NotificationOutboxEntry
+  data: NotificationOutboxEntry,
+  claimerId: string
 ): Promise<"sent" | "failed" | "dead_letter"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
@@ -655,7 +804,7 @@ async function deliverClaimedFinalChargeSuccessEntry(
     const { notifyFinalChargeSuccess } = await import("./notify-final-charge-success");
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Booking not found",
         lastAttemptAt: now,
@@ -668,40 +817,46 @@ async function deliverClaimedFinalChargeSuccessEntry(
     const booking = bookingSnap.data() as Booking;
     const result = await notifyFinalChargeSuccess(db, bookingId, booking, { skipReminderRetryQueue: true });
     if (result.ok) {
-      await ref.update({
+      const ok = await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "sent",
         sentAt: now,
         ...(result.providerMessageId ? { providerMessageId: result.providerMessageId } : {}),
         claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      return "sent";
+      return ok ? "sent" : "sent";
     }
     const attemptCount = data.attemptCount + 1;
     const isDeadLetter = attemptCount >= data.maxAttempts;
     const status: NotificationOutboxStatus = isDeadLetter ? "dead_letter" : "pending";
-    await ref.update({
+    const updated = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status,
       lastError: "notifyFinalChargeSuccess returned false",
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
-      await writeOperationalAlert({
-        type: "final_charge_success_outbox_dead_letter",
-        bookingId,
-        lastError: "notifyFinalChargeSuccess returned false",
-        source: "notification-outbox",
-      });
-      const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
-      await sendNotificationOutboxDeadLetterOpsEmail({
-        outboxType: "final_charge_success",
-        bookingId,
-        lastError: "notifyFinalChargeSuccess returned false",
-      }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      if (updated) {
+        await writeOperationalAlert({
+          type: "final_charge_success_outbox_dead_letter",
+          bookingId,
+          lastError: "notifyFinalChargeSuccess returned false",
+          source: "notification-outbox",
+        });
+        const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
+        await sendNotificationOutboxDeadLetterOpsEmail({
+          outboxType: "final_charge_success",
+          bookingId,
+          lastError: "notifyFinalChargeSuccess returned false",
+        }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      }
     }
     return isDeadLetter ? "dead_letter" : "failed";
   } catch (err) {
@@ -709,28 +864,32 @@ async function deliverClaimedFinalChargeSuccessEntry(
     const attemptCount = data.attemptCount + 1;
     const isDeadLetter = attemptCount >= data.maxAttempts;
     const status: NotificationOutboxStatus = isDeadLetter ? "dead_letter" : "pending";
-    await ref.update({
+    const updated = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status,
       lastError: errMsg,
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
-      await writeOperationalAlert({
-        type: "final_charge_success_outbox_dead_letter",
-        bookingId,
-        lastError: errMsg,
-        source: "notification-outbox",
-      });
-      const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
-      await sendNotificationOutboxDeadLetterOpsEmail({
-        outboxType: "final_charge_success",
-        bookingId,
-        lastError: errMsg,
-      }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      if (updated) {
+        await writeOperationalAlert({
+          type: "final_charge_success_outbox_dead_letter",
+          bookingId,
+          lastError: errMsg,
+          source: "notification-outbox",
+        });
+        const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
+        await sendNotificationOutboxDeadLetterOpsEmail({
+          outboxType: "final_charge_success",
+          bookingId,
+          lastError: errMsg,
+        }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      }
     }
     return isDeadLetter ? "dead_letter" : "failed";
   }
@@ -740,7 +899,8 @@ async function deliverClaimedDiscountLimitExceededEntry(
   db: Firestore,
   ref: DocumentReference,
   bookingId: string,
-  data: NotificationOutboxEntry
+  data: NotificationOutboxEntry,
+  claimerId: string
 ): Promise<"sent" | "failed" | "dead_letter"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
@@ -751,7 +911,7 @@ async function deliverClaimedDiscountLimitExceededEntry(
     const { parseSlotId, getSlotStartEnd } = await import("./experience-slots");
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Booking not found",
         lastAttemptAt: now,
@@ -764,7 +924,7 @@ async function deliverClaimedDiscountLimitExceededEntry(
     const booking = bookingSnap.data() as Booking;
     const email = booking.customer?.email?.trim();
     if (!email) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "No customer email",
         lastAttemptAt: now,
@@ -814,40 +974,46 @@ async function deliverClaimedDiscountLimitExceededEntry(
       experienceName,
       tripDate,
     });
-    await ref.update({
+    const ok = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status: "sent",
       sentAt: now,
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return "sent";
+    return ok ? "sent" : "sent";
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const attemptCount = data.attemptCount + 1;
     const isDeadLetter = attemptCount >= data.maxAttempts;
     const status: NotificationOutboxStatus = isDeadLetter ? "dead_letter" : "pending";
-    await ref.update({
+    const updated = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status,
       lastError: errMsg,
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
-      await writeOperationalAlert({
-        type: "discount_limit_exceeded_notification_dead_letter",
-        bookingId,
-        lastError: errMsg,
-        source: "notification-outbox",
-      });
-      const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
-      await sendNotificationOutboxDeadLetterOpsEmail({
-        outboxType: "discount_limit_exceeded_notification",
-        bookingId,
-        lastError: errMsg,
-      }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      if (updated) {
+        await writeOperationalAlert({
+          type: "discount_limit_exceeded_notification_dead_letter",
+          bookingId,
+          lastError: errMsg,
+          source: "notification-outbox",
+        });
+        const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
+        await sendNotificationOutboxDeadLetterOpsEmail({
+          outboxType: "discount_limit_exceeded_notification",
+          bookingId,
+          lastError: errMsg,
+        }).catch((e) => console.error("[notification-outbox] dead letter ops email", e));
+      }
     }
     return isDeadLetter ? "dead_letter" : "failed";
   }
@@ -857,7 +1023,8 @@ async function deliverClaimedWaiverInviteEntry(
   db: Firestore,
   ref: DocumentReference,
   bookingId: string,
-  data: NotificationOutboxEntry
+  data: NotificationOutboxEntry,
+  claimerId: string
 ): Promise<"sent" | "failed" | "dead_letter"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
@@ -873,7 +1040,7 @@ async function deliverClaimedWaiverInviteEntry(
     const { formatBookingTime } = await import("./format-booking-datetime");
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Booking not found",
         lastAttemptAt: now,
@@ -886,7 +1053,7 @@ async function deliverClaimedWaiverInviteEntry(
     const booking = bookingSnap.data() as Booking;
     const reqId = booking.waiver?.requestId;
     if (!reqId) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Booking has no waiver request",
         lastAttemptAt: now,
@@ -898,7 +1065,7 @@ async function deliverClaimedWaiverInviteEntry(
     }
     const req = await getRequestById(reqId);
     if (!req) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "Waiver request not found",
         lastAttemptAt: now,
@@ -910,10 +1077,12 @@ async function deliverClaimedWaiverInviteEntry(
     }
     const sent = req.sent as { initialSentAt?: unknown } | undefined;
     if (sent?.initialSentAt != null) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "sent",
         sentAt: now,
         claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
       });
       return "sent";
@@ -938,7 +1107,7 @@ async function deliverClaimedWaiverInviteEntry(
     }
     const email = booking.customer?.email?.trim() ?? "";
     if (!email) {
-      await ref.update({
+      await updateOutboxIfStillClaimed(db, ref, claimerId, {
         status: "failed",
         lastError: "No customer email",
         lastAttemptAt: now,
@@ -972,10 +1141,12 @@ async function deliverClaimedWaiverInviteEntry(
       to: email,
       name: (booking.customer?.name ?? "Guest").trim(),
     });
-    await ref.update({
+    await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status: "sent",
       sentAt: now,
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     return "sent";
@@ -984,38 +1155,44 @@ async function deliverClaimedWaiverInviteEntry(
     const attemptCount = data.attemptCount + 1;
     const isDeadLetter = attemptCount >= data.maxAttempts;
     const status: NotificationOutboxStatus = isDeadLetter ? "dead_letter" : "pending";
-    await ref.update({
+    const updated = await updateOutboxIfStillClaimed(db, ref, claimerId, {
       status,
       lastError: errMsg,
       lastAttemptAt: now,
       attemptCount,
       nextAttemptAt: isDeadLetter ? now : Timestamp.fromDate(nextAttemptAt(attemptCount)),
       claimExpiresAt: FieldValue.delete(),
+      claimedAt: FieldValue.delete(),
+      claimedBy: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     if (isDeadLetter) {
-      await writeOperationalAlert({
-        type: "waiver_invite_outbox_dead_letter",
-        bookingId,
-        lastError: errMsg,
-        source: "notification-outbox",
-      });
-      const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
-      await sendNotificationOutboxDeadLetterOpsEmail({
-        outboxType: "waiver_invite_send",
-        bookingId,
-        lastError: errMsg,
-      }).catch((e) => console.error("[notification-outbox] dead letter ops email waiver invite", e));
+      if (updated) {
+        await writeOperationalAlert({
+          type: "waiver_invite_outbox_dead_letter",
+          bookingId,
+          lastError: errMsg,
+          source: "notification-outbox",
+        });
+        const { sendNotificationOutboxDeadLetterOpsEmail } = await import("./brevo");
+        await sendNotificationOutboxDeadLetterOpsEmail({
+          outboxType: "waiver_invite_send",
+          bookingId,
+          lastError: errMsg,
+        }).catch((e) => console.error("[notification-outbox] dead letter ops email waiver invite", e));
+      }
     }
     return isDeadLetter ? "dead_letter" : "failed";
   }
 }
 
 export async function processNextPendingFinalChargeSuccess(
-  db: Firestore
+  db: Firestore,
+  claimerId?: string
 ): Promise<"sent" | "failed" | "dead_letter" | "none"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
+  const cid = claimerId ?? randomUUID();
   const snap = await db
     .collection(COLLECTION)
     .where("type", "==", "final_charge_success")
@@ -1039,6 +1216,7 @@ export async function processNextPendingFinalChargeSuccess(
     tx.update(ref, {
       status: "claimed",
       claimedAt: now,
+      claimedBy: cid,
       claimExpiresAt: claimExpiresAtTimestamp(),
       lastAttemptAt: now,
       updatedAt: FieldValue.serverTimestamp(),
@@ -1048,14 +1226,16 @@ export async function processNextPendingFinalChargeSuccess(
 
   if (!claimed) return "none";
 
-  return deliverClaimedFinalChargeSuccessEntry(db, ref, bookingId, data);
+  return deliverClaimedFinalChargeSuccessEntry(db, ref, bookingId, data, cid);
 }
 
 export async function processNextPendingDiscountLimitExceeded(
-  db: Firestore
+  db: Firestore,
+  claimerId?: string
 ): Promise<"sent" | "failed" | "dead_letter" | "none"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
+  const cid = claimerId ?? randomUUID();
   const snap = await db
     .collection(COLLECTION)
     .where("type", "==", "discount_limit_exceeded_notification")
@@ -1078,6 +1258,7 @@ export async function processNextPendingDiscountLimitExceeded(
     tx.update(ref, {
       status: "claimed",
       claimedAt: now,
+      claimedBy: cid,
       claimExpiresAt: claimExpiresAtTimestamp(),
       lastAttemptAt: now,
       updatedAt: FieldValue.serverTimestamp(),
@@ -1087,14 +1268,16 @@ export async function processNextPendingDiscountLimitExceeded(
 
   if (!claimed) return "none";
 
-  return deliverClaimedDiscountLimitExceededEntry(db, ref, bookingId, data);
+  return deliverClaimedDiscountLimitExceededEntry(db, ref, bookingId, data, cid);
 }
 
 export async function processNextPendingWaiverInvite(
-  db: Firestore
+  db: Firestore,
+  claimerId?: string
 ): Promise<"sent" | "failed" | "dead_letter" | "none"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
+  const cid = claimerId ?? randomUUID();
   const snap = await db
     .collection(COLLECTION)
     .where("type", "==", "waiver_invite_send")
@@ -1118,6 +1301,7 @@ export async function processNextPendingWaiverInvite(
     tx.update(ref, {
       status: "claimed",
       claimedAt: now,
+      claimedBy: cid,
       claimExpiresAt: claimExpiresAtTimestamp(),
       lastAttemptAt: now,
       updatedAt: FieldValue.serverTimestamp(),
@@ -1127,12 +1311,16 @@ export async function processNextPendingWaiverInvite(
 
   if (!claimed) return "none";
 
-  return deliverClaimedWaiverInviteEntry(db, ref, bookingId, data);
+  return deliverClaimedWaiverInviteEntry(db, ref, bookingId, data, cid);
 }
 
-export async function processNextPendingConfirmation(db: Firestore): Promise<"sent" | "failed" | "dead_letter" | "none"> {
+export async function processNextPendingConfirmation(
+  db: Firestore,
+  claimerId?: string
+): Promise<"sent" | "failed" | "dead_letter" | "none"> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
+  const cid = claimerId ?? randomUUID();
   const col = db.collection(COLLECTION);
   const directPendingSnap = await col
     .where("type", "==", "booking_confirmation")
@@ -1163,6 +1351,7 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"se
     tx.update(ref, {
       status: "claimed",
       claimedAt: now,
+      claimedBy: cid,
       claimExpiresAt: claimExpiresAtTimestamp(),
       lastAttemptAt: now,
       updatedAt: FieldValue.serverTimestamp(),
@@ -1172,7 +1361,7 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"se
 
   if (!claimed) return "none";
 
-  return deliverClaimedConfirmationEntry(db, ref, bookingId, data);
+  return deliverClaimedConfirmationEntry(db, ref, bookingId, data, cid);
 }
 
 /**
@@ -1184,6 +1373,7 @@ export async function tryImmediateConfirmationSendForBooking(db: Firestore, book
   try {
     const { Timestamp, FieldValue } = getFirestoreExports();
     const now = Timestamp.now();
+    const claimerId = randomUUID();
     const ref = db.collection(COLLECTION).doc(confirmationOutboxDocId(bookingId));
     const primarySnap = await ref.get();
     let data: NotificationOutboxEntry | null = primarySnap.exists
@@ -1212,6 +1402,7 @@ export async function tryImmediateConfirmationSendForBooking(db: Firestore, book
       tx.update(claimRef, {
         status: "claimed",
         claimedAt: now,
+        claimedBy: claimerId,
         claimExpiresAt: claimExpiresAtTimestamp(),
         lastAttemptAt: now,
         updatedAt: FieldValue.serverTimestamp(),
@@ -1221,7 +1412,7 @@ export async function tryImmediateConfirmationSendForBooking(db: Firestore, book
 
     if (!claimed) return;
 
-    await deliverClaimedConfirmationEntry(db, claimRef, bookingId, data);
+    await deliverClaimedConfirmationEntry(db, claimRef, bookingId, data, claimerId);
   } catch (err) {
     console.warn("[notification-outbox] tryImmediateConfirmationSendForBooking failed", err);
   }
@@ -1232,6 +1423,7 @@ export async function tryImmediateWaiverInviteSendForBooking(db: Firestore, book
   try {
     const { Timestamp, FieldValue } = getFirestoreExports();
     const now = Timestamp.now();
+    const claimerId = randomUUID();
     const ref = db.collection(COLLECTION).doc(waiverInviteOutboxDocId(bookingId));
     const snap = await ref.get();
     if (!snap.exists) return;
@@ -1246,6 +1438,7 @@ export async function tryImmediateWaiverInviteSendForBooking(db: Firestore, book
       tx.update(ref, {
         status: "claimed",
         claimedAt: now,
+        claimedBy: claimerId,
         claimExpiresAt: claimExpiresAtTimestamp(),
         lastAttemptAt: now,
         updatedAt: FieldValue.serverTimestamp(),
@@ -1255,7 +1448,7 @@ export async function tryImmediateWaiverInviteSendForBooking(db: Firestore, book
 
     if (!claimed) return;
 
-    await deliverClaimedWaiverInviteEntry(db, ref, bookingId, data);
+    await deliverClaimedWaiverInviteEntry(db, ref, bookingId, data, claimerId);
   } catch (err) {
     console.warn("[notification-outbox] tryImmediateWaiverInviteSendForBooking failed", err);
   }

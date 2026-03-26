@@ -46,11 +46,6 @@ describe("ModalHoldRecoveryPayloadV1 (refresh recovery)", () => {
       viewMonthMonth: 6,
       selectedBoatId: null,
       isTicketed: false,
-      depositCentsFromServer: 5000,
-      totalCentsFromServer: 10000,
-      finalCentsFromServer: 5000,
-      isDepositFromServer: true,
-      payFullAmount: false,
     };
     const raw = JSON.stringify(payload);
     const back = JSON.parse(raw) as ModalHoldRecoveryPayloadV1;

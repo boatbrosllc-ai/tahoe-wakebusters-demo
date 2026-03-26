@@ -148,25 +148,24 @@ export const SESSION_HOLD_ID_KEY = "booking_holdId_modal";
 export type ModalHoldRecoveryPayloadV1 = {
   v: 1;
   holdId: string;
-  releaseToken: string | null;
-  receiptClaimToken: string | null;
   clientSecret: string;
-  paymentIntentId: string | null;
   holdExpiresAt: string | null;
-  experienceSnapshot: ExperienceItem;
-  selectedDate: string | null;
-  selectedSlot: SlotDto;
-  selectedRateIdForCalendar: string | null;
-  partySize: number;
-  viewMonthYear: number;
-  viewMonthMonth: number;
-  selectedBoatId: string | null;
-  isTicketed: boolean;
-  depositCentsFromServer: number | null;
-  totalCentsFromServer: number | null;
-  finalCentsFromServer: number | null;
-  isDepositFromServer: boolean | null;
-  payFullAmount: boolean;
+  /** Minimal experience identity for recovery before refetching fresh details. */
+  experienceId?: string;
+  experienceSlug?: string;
+  /** @deprecated legacy recovery fields; server hold-summary now rehydrates these. */
+  releaseToken?: string | null;
+  receiptClaimToken?: string | null;
+  paymentIntentId?: string | null;
+  experienceSnapshot?: ExperienceItem;
+  selectedDate?: string | null;
+  selectedSlot?: SlotDto;
+  selectedRateIdForCalendar?: string | null;
+  partySize?: number;
+  viewMonthYear?: number;
+  viewMonthMonth?: number;
+  selectedBoatId?: string | null;
+  isTicketed?: boolean;
 };
 
 function persistModalHoldRecoveryPayload(payload: ModalHoldRecoveryPayloadV1): void {
@@ -685,41 +684,37 @@ export function useHoldCreation(
       if (typeof pi.depositCents === "number") opts.setDepositCentsFromServer(pi.depositCents);
       if (typeof pi.totalCents === "number") opts.setTotalCentsFromServer(pi.totalCents);
       if (typeof pi.finalCents === "number") opts.setFinalCentsFromServer(pi.finalCents);
+      if (
+        typeof pi.totalCents === "number" &&
+        Number.isFinite(pi.totalCents) &&
+        typeof opts.priceSummary?.totalCents === "number" &&
+        Number.isFinite(opts.priceSummary.totalCents)
+      ) {
+        const delta = Math.abs(pi.totalCents - opts.priceSummary.totalCents);
+        if (delta > 2) {
+          bookingWarn("client", "priceSummary drift vs totalCentsFromServer after create-payment-intent", {
+            totalCentsFromServer: pi.totalCents,
+            totalCentsClient: opts.priceSummary.totalCents,
+            deltaCents: delta,
+          });
+        }
+      }
       if (typeof pi.expiresAtFromIntent === "string" && pi.expiresAtFromIntent) {
         opts.setHoldExpiresAt(pi.expiresAtFromIntent);
       }
-      const rct =
-        typeof pi.receiptClaimToken === "string" && pi.receiptClaimToken.trim()
-          ? pi.receiptClaimToken.trim()
-          : null;
       const holdExpires =
         (typeof pi.expiresAtFromIntent === "string" && pi.expiresAtFromIntent) ||
         opts.holdExpiresAt ||
         null;
-      // Persist in-flight payment even when receiptClaimToken is missing so release_token + clientSecret survive refresh.
+      // Persist only minimal recovery fields needed to remount Stripe Elements after refresh.
       if (opts.selectedExperience && opts.selectedSlot && pi.holdId && pi.clientSecret) {
         persistModalHoldRecoveryPayload({
           v: 1,
           holdId: pi.holdId,
-          releaseToken: pi.releaseToken,
-          receiptClaimToken: rct,
           clientSecret: pi.clientSecret,
-          paymentIntentId: pi.paymentIntentId,
           holdExpiresAt: holdExpires,
-          experienceSnapshot: opts.selectedExperience,
-          selectedDate: opts.selectedDate,
-          selectedSlot: opts.selectedSlot,
-          selectedRateIdForCalendar: opts.selectedRateId,
-          partySize: opts.partySize,
-          viewMonthYear: opts.viewMonthYear,
-          viewMonthMonth: opts.viewMonthMonth,
-          selectedBoatId: opts.selectedBoat?.id ?? null,
-          isTicketed: opts.isTicketed,
-          depositCentsFromServer: typeof pi.depositCents === "number" ? pi.depositCents : null,
-          totalCentsFromServer: typeof pi.totalCents === "number" ? pi.totalCents : null,
-          finalCentsFromServer: typeof pi.finalCents === "number" ? pi.finalCents : null,
-          isDepositFromServer: typeof pi.payFullAmount === "boolean" ? !pi.payFullAmount : null,
-          payFullAmount: typeof pi.payFullAmount === "boolean" ? pi.payFullAmount : opts.payFullAmount,
+          experienceId: opts.selectedExperience.id,
+          experienceSlug: opts.selectedExperience.slug,
         });
       }
     })();

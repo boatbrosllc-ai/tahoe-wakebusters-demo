@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Experience } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getExperienceBySlug } from "@/content/experiences";
 
 function inferTicketedFromSlugOrTitle(exp: Experience): boolean {
   const slug = (exp.slug ?? "").toLowerCase();
@@ -36,10 +35,7 @@ export async function GET() {
     const snap = await db.collection("experiences").where("active", "==", true).get();
     const list: ExperienceListItem[] = snap.docs.map((doc) => {
         const exp = doc.data() as Experience;
-        // Read the denormalized field written by admin save paths; fall back to content override when set.
-        let fromPriceCents: number | null = exp.fromPriceCents ?? null;
-        const contentExp = getExperienceBySlug(exp.slug ?? "");
-        if (contentExp?.fromPriceCents != null) fromPriceCents = contentExp.fromPriceCents;
+        const fromPriceCents: number | null = exp.fromPriceCents ?? null;
         const isTicketed = exp.pricingType === "ticketed" || (exp.pricingType !== "charter" && inferTicketedFromSlugOrTitle(exp));
         return {
           id: doc.id,

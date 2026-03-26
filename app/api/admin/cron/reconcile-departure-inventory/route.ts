@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
         const key = docIdFor(exp, dateStr);
         expectedByDoc.set(key, (expectedByDoc.get(key) ?? 0) + Math.max(0, h.partySize ?? 0));
       });
-      for (const [inventoryId, expected] of expectedByDoc.entries()) {
+      for (const [inventoryId, expected] of Array.from(expectedByDoc.entries())) {
         const invRef = db.collection("departureInventory").doc(inventoryId);
         const invSnap = await invRef.get();
         const current = invSnap.exists ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;

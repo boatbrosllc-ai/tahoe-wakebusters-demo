@@ -6,6 +6,7 @@ import { BOOKING_STATUSES_SLOT_TAKEN, bookingRequiresBoatIdForOccupancyAlert } f
 import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 import { countMissingStartDateStr } from "@/lib/booking/backfill-start-date-str-status";
+import { getNotificationOutboxStats } from "@/lib/booking/notification-outbox";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
@@ -142,7 +143,10 @@ export async function GET(request: NextRequest) {
       return a.timeLabel.localeCompare(b.timeLabel);
     });
 
-    const deadLetterSnap = await db.collection("notificationOutbox").where("status", "==", "dead_letter").limit(50).get();
+    const [deadLetterSnap, notificationOutboxStats] = await Promise.all([
+      db.collection("notificationOutbox").where("status", "==", "dead_letter").limit(50).get(),
+      getNotificationOutboxStats(db),
+    ]);
     const finalFailedReleaseSlaHoursRaw = parseInt(process.env.FINAL_FAILED_RELEASE_SLA_HOURS ?? "6", 10);
     const finalFailedReleaseSlaHours = Number.isFinite(finalFailedReleaseSlaHoursRaw)
       ? Math.max(1, finalFailedReleaseSlaHoursRaw)
@@ -181,6 +185,13 @@ export async function GET(request: NextRequest) {
       finalFailedReleaseSlaHours,
       missingBookingStartDateStrCount,
       missingHoldsStartDateStrCount,
+      notificationOutboxStats: {
+        byType: notificationOutboxStats.byType,
+        staleClaimCountsByTemplate: notificationOutboxStats.staleClaimCountsByTemplate,
+        deadLetterTotal: notificationOutboxStats.deadLetter,
+        pendingTotal: notificationOutboxStats.pending,
+        stuckClaimsTotal: notificationOutboxStats.stuckClaims,
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

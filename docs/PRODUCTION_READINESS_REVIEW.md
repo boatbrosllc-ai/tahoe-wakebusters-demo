@@ -147,6 +147,7 @@ When Redis is configured but **unavailable**, default is fail-open. Set `RATE_LI
 | Final payment reminder | `POST /api/admin/cron/final-payment-reminder-cron` | e.g. hourly | Email 48h before trip with “Pay now” link. |
 | Booking reminder | `POST /api/admin/cron/reminder-cron` | As desired | Trip reminder emails. |
 | Waiver reminder | `POST /api/admin/cron/waiver-reminder` | As desired | Waiver signing reminders. |
+| Reconcile rollback-pending holds | `netlify/functions/reconcile-rollback-pending-holds.mts` → `POST /api/admin/cron/reconcile-rollback-pending-holds` | Every 10 min | Reconcile holds stuck in `rollbackPending` by checking Stripe PaymentIntent and auto-releasing slots when no succeeded charge exists. |
 
 All require `Authorization: Bearer CRON_SECRET`. Netlify scheduled functions call the app with this header.
 
@@ -159,7 +160,7 @@ All require `Authorization: Bearer CRON_SECRET`. Netlify scheduled functions cal
 - [ ] **Stripe webhook:** Endpoint URL = `https://YOUR_DOMAIN/api/stripe/webhook`; events `payment_intent.succeeded`, `checkout.session.completed`, `payment_intent.payment_failed`; `STRIPE_WEBHOOK_SECRET` set and redeployed.
 - [ ] **Admin:** `ADMIN_EMAIL` set; Firebase Auth enabled; admin user created; `NEXT_PUBLIC_FIREBASE_*` and (if used) `FIREBASE_PRIVATE_KEY` for server verification. `FIREBASE_PROJECT_ID` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` identical. `ADMIN_EDGE_SECRET` set in Netlify (required for admin edge guard; without it the guard is silently disabled — verify before first deploy).
 - [ ] **Health:** `GET /api/health` returns 200. If privileged health used, `HEALTH_INTERNAL_SECRET` set.
-- [ ] **Cron:** `CRON_SECRET` set; Netlify (or other) scheduled functions call cleanup-holds, run-final-charges, final-payment-reminder with Bearer token.
+- [ ] **Cron:** `CRON_SECRET` set; Netlify (or other) scheduled functions call cleanup-holds, run-final-charges, final-payment-reminder, reconcile-rollback-pending-holds, and process-pending-refunds with Bearer token.
 - [ ] **50/50 and manage:** `MANAGE_BOOKING_SECRET` set for manage links and final charge emails. Optional: `RELEASE_TOKEN_SECRET` for cancel-page release link.
 - [ ] **Firestore index:** Composite index on `bookings`: `status` + `finalChargeAt` if using run-final-charges (create via link in error if needed).
 - [ ] **Legacy fallback:** Set `DISABLE_LEGACY_BOOKING_FALLBACK=true` and `DISABLE_LEGACY_HOLDS_FALLBACK=true` in Netlify from day one (required-in-production; `npm run check-env` fails if missing). This disables O(n) legacy Firestore scans; ensure Firestore indexes are deployed and, if migrating existing data, run startDateStr backfill before or immediately after first deployment.

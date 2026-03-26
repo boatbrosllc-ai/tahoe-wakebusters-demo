@@ -26,7 +26,7 @@ export async function resetBookingSlotsToOpenInTransaction(
     }
   }
   let updated = 0;
-  for (const ref of refs.values()) {
+  for (const ref of Array.from(refs.values())) {
     const snap = await tx.get(ref);
     if (!snap.exists) continue;
     const data = snap.data() as { bookingId?: string | null; status?: string };

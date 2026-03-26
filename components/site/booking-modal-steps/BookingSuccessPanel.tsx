@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef } from "react";
 import { siteConfig } from "@/config/site";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import type { ExperienceItem } from "@/lib/booking/booking-modal-types";
+import { bookingWarn } from "@/lib/booking/debug";
 
 type BookingSuccessPanelProps = {
   paymentPhase: string;
@@ -62,6 +64,28 @@ export function BookingSuccessPanel({
   priceSummary,
   discountLimitExceeded = false,
 }: BookingSuccessPanelProps) {
+  const hasLoggedPriceDriftRef = useRef(false);
+  useEffect(() => {
+    if (
+      paymentPhase !== "successRecoveryFailed" &&
+      paymentPhase !== "successWithWarning" &&
+      paymentPhase !== "success"
+    ) {
+      return;
+    }
+    if (hasLoggedPriceDriftRef.current) return;
+    if (typeof totalCentsFromServer !== "number" || !Number.isFinite(totalCentsFromServer)) return;
+    if (typeof priceSummary?.totalCents !== "number" || !Number.isFinite(priceSummary.totalCents)) return;
+    const delta = Math.abs(priceSummary.totalCents - totalCentsFromServer);
+    if (delta <= 1) return;
+    hasLoggedPriceDriftRef.current = true;
+    bookingWarn("client", "priceSummary drift vs totalCentsFromServer on success panel", {
+      totalCentsFromServer,
+      totalCentsClient: priceSummary.totalCents,
+      deltaCents: delta,
+    });
+  }, [paymentPhase, priceSummary?.totalCents, totalCentsFromServer]);
+
   if (paymentPhase !== "successRecoveryFailed" && paymentPhase !== "successWithWarning" && paymentPhase !== "success") return null;
 
   if (paymentPhase === "successRecoveryFailed") {
@@ -219,53 +243,62 @@ export function BookingSuccessPanel({
               const showDeposit = serverSaysDeposit || amountsShowDeposit;
               const paymentModeUnknown = isDepositFromServer === null && !amountsShowDeposit && !serverSaysDeposit;
               if (showDeposit) {
-                const depositCents = Math.max(
-                  0,
-                  depositCentsFromServer ?? Math.round(priceSummary.totalCents * DEPOSIT_FRACTION),
-                );
-                let remainingCents: number;
-                if (typeof finalCentsFromServer === "number" && finalCentsFromServer > 0) {
-                  remainingCents = finalCentsFromServer;
-                } else if (totalCentsFromServer != null && depositCentsFromServer != null && totalCentsFromServer > depositCentsFromServer) {
-                  remainingCents = totalCentsFromServer - depositCentsFromServer;
-                } else {
-                  remainingCents = Math.round(priceSummary.totalCents * DEPOSIT_FRACTION);
+                if (
+                  typeof depositCentsFromServer === "number" &&
+                  typeof totalCentsFromServer === "number" &&
+                  depositCentsFromServer >= 0 &&
+                  totalCentsFromServer > depositCentsFromServer
+                ) {
+                  const depositCents = Math.max(0, depositCentsFromServer);
+                  let remainingCents: number;
+                  if (typeof finalCentsFromServer === "number" && finalCentsFromServer > 0) {
+                    remainingCents = finalCentsFromServer;
+                  } else {
+                    remainingCents = totalCentsFromServer - depositCentsFromServer;
+                  }
+                  remainingCents = Math.max(0, remainingCents);
+                  const ambiguousRemainingBalance =
+                    (finalCentsFromServer == null || finalCentsFromServer <= 0) &&
+                    depositCents > 0 &&
+                    remainingCents === depositCents;
+                  const detailsHref = successReceiptHref;
+                  return (
+                    <>
+                      We&apos;ve received your <strong>50% deposit</strong> of{" "}
+                      <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span>.
+                      {ambiguousRemainingBalance ? (
+                        <>
+                          {" "}
+                          <span className="font-semibold text-brand-dark">The remaining balance</span> will be charged 48 hours before your trip.
+                          {detailsHref ? (
+                            <>
+                              {" "}
+                              <Link
+                                href={detailsHref}
+                                className="font-semibold text-brand-primary underline underline-offset-2"
+                              >
+                                View booking details
+                              </Link>
+                              .
+                            </>
+                          ) : null}{" "}
+                        </>
+                      ) : (
+                        <>
+                          {" "}
+                          The remaining balance of{" "}
+                          <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(remainingCents)}</span> will be charged 48 hours before your trip.{" "}
+                        </>
+                      )}
+                      Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
+                    </>
+                  );
                 }
-                remainingCents = Math.max(0, remainingCents);
-                const ambiguousRemainingBalance =
-                  (finalCentsFromServer == null || finalCentsFromServer <= 0) &&
-                  depositCents > 0 &&
-                  remainingCents === depositCents;
-                const detailsHref = successReceiptHref;
                 return (
                   <>
-                    We&apos;ve received your <strong>50% deposit</strong> of{" "}
-                    <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span>.
-                    {ambiguousRemainingBalance ? (
-                      <>
-                        {" "}
-                        <span className="font-semibold text-brand-dark">The remaining balance</span> will be charged 48 hours before your trip.
-                        {detailsHref ? (
-                          <>
-                            {" "}
-                            <Link
-                              href={detailsHref}
-                              className="font-semibold text-brand-primary underline underline-offset-2"
-                            >
-                              View booking details
-                            </Link>
-                            .
-                          </>
-                        ) : null}{" "}
-                      </>
-                    ) : (
-                      <>
-                        {" "}
-                        The remaining balance of{" "}
-                        <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(remainingCents)}</span> will be charged 48 hours before your trip.{" "}
-                      </>
-                    )}
-                    Your booking is confirmed. We&apos;re sending your confirmation email — please allow a few minutes and check your spam folder if it doesn&apos;t arrive.
+                    We&apos;ve received your <strong>deposit</strong>. The remaining balance will be charged 48 hours before your trip.
+                    {" "}
+                    For your exact amounts, please refer to your confirmation email or contact us.
                   </>
                 );
               }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -198,6 +198,8 @@ export function AdminCalendarWeekView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedIdsKey, fromStr, toStr]);
 
+  const visibilityDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     fetchEvents();
     const intervalId = setInterval(() => fetchEvents(), 30_000);
@@ -206,11 +208,18 @@ export function AdminCalendarWeekView({
 
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") fetchEvents();
+    const scheduleFetch = () => {
+      if (visibilityDebounceRef.current) clearTimeout(visibilityDebounceRef.current);
+      visibilityDebounceRef.current = setTimeout(() => {
+        visibilityDebounceRef.current = null;
+        if (document.visibilityState === "visible") fetchEvents();
+      }, 2000);
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", scheduleFetch);
+    return () => {
+      document.removeEventListener("visibilitychange", scheduleFetch);
+      if (visibilityDebounceRef.current) clearTimeout(visibilityDebounceRef.current);
+    };
   }, [fetchEvents]);
 
   const days = Array.from({ length: 7 }, (_, i) => {

@@ -18,7 +18,24 @@ export type HoldPricingFallback = {
   tipCents?: number;
   discountCents?: number;
 } | null;
-type DepositClassification = { useDepositInput: boolean; requiresManualReview: boolean };
+type OperationalAlertPayload = {
+  type: string;
+  severity?: string;
+  requiresManualReview?: boolean;
+  paymentIntentIdPrefix?: string;
+  totalCents?: number;
+  amountCharged?: number;
+  ratio?: number;
+  source: string;
+  message: string;
+  [key: string]: unknown;
+};
+
+type DepositClassification = {
+  useDepositInput: boolean;
+  requiresManualReview: boolean;
+  operationalAlert?: OperationalAlertPayload;
+};
 
 const PLACEHOLDER_EMAIL_DOMAIN = "@pending.internal";
 const DEPOSIT_RATIO_EPSILON = 0.02;
@@ -123,39 +140,37 @@ function resolveDepositClassificationFromPaymentIntent(
   const ratio = totalCents > 0 ? amountCharged / totalCents : 0;
   const ratioLooksLikeDeposit = Math.abs(ratio - DEPOSIT_FRACTION) <= DEPOSIT_RATIO_EPSILON;
   if (ratioLooksLikeDeposit) {
-    void import("@/lib/booking/operational-alerts")
-      .then(({ writeOperationalAlert }) =>
-        writeOperationalAlert({
-          type: "deposit_vs_full_missing_payment_stage_metadata_manual_review",
-          severity: "critical",
-          requiresManualReview: true,
-          paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
-          totalCents,
-          amountCharged,
-          ratio,
-          source: "resolveUsesDepositInputFromPaymentIntent",
-          message:
-            "payment_stage metadata missing; amount ratio matched deposit fraction and was classified as deposit. Manual verification required.",
-        })
-      )
-      .catch(() => {});
-    return { useDepositInput: true, requiresManualReview: true };
-  }
-
-  void import("@/lib/booking/operational-alerts")
-    .then(({ writeOperationalAlert }) =>
-      writeOperationalAlert({
-        type: "deposit_vs_full_missing_payment_stage_metadata",
+    return {
+      useDepositInput: true,
+      requiresManualReview: true,
+      operationalAlert: {
+        type: "deposit_vs_full_missing_payment_stage_metadata_manual_review",
+        severity: "critical",
+        requiresManualReview: true,
         paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
         totalCents,
         amountCharged,
+        ratio,
         source: "resolveUsesDepositInputFromPaymentIntent",
         message:
-          "payment_stage metadata absent on PaymentIntent; defaulting to full payment (avoids misclassifying full as deposit).",
-      })
-    )
-    .catch(() => {});
-  return { useDepositInput: false, requiresManualReview: false };
+          "payment_stage metadata missing; amount ratio matched deposit fraction and was classified as deposit. Manual verification required.",
+      },
+    };
+  }
+
+  return {
+    useDepositInput: false,
+    requiresManualReview: false,
+    operationalAlert: {
+      type: "deposit_vs_full_missing_payment_stage_metadata",
+      paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+      totalCents,
+      amountCharged,
+      source: "resolveUsesDepositInputFromPaymentIntent",
+      message:
+        "payment_stage metadata absent on PaymentIntent; defaulting to full payment (avoids misclassifying full as deposit).",
+    },
+  };
 }
 
 export type HoldStripeIntentIds = {
@@ -238,11 +253,11 @@ export function checkoutIncomingMismatchAgainstHold(
   return { ok: true };
 }
 
-export function buildConvertHoldInputFromSucceededPaymentIntent(
+export async function buildConvertHoldInputFromSucceededPaymentIntent(
   pi: Stripe.PaymentIntent,
   holdPricingFallback: HoldPricingFallback,
   options?: { customerOverride?: { name: string; email: string; phone: string } }
-): ConvertHoldInput {
+): Promise<ConvertHoldInput> {
   const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
   const pm = pi.payment_method as Stripe.PaymentMethod | string | null | undefined;
   let card: BookingCardDisplay | undefined;
@@ -276,6 +291,10 @@ export function buildConvertHoldInputFromSucceededPaymentIntent(
   }
   const classification = resolveDepositClassificationFromPaymentIntent(pi, holdPricingFallback);
   const useDepositInput = classification.useDepositInput;
+  if (classification.operationalAlert) {
+    const { writeOperationalAlert } = await import("@/lib/booking/operational-alerts");
+    await writeOperationalAlert(classification.operationalAlert);
+  }
 
   const baseFull = {
     paymentIntentId: pi.id,
@@ -315,23 +334,26 @@ export async function patchBookingCustomerIfPlaceholderFromCheckoutSession(
   holdId: string,
   session: Stripe.Checkout.Session,
   updatedAt: FirestoreTimestamp
-): Promise<void> {
+): Promise<boolean> {
   const holdSnap = await db.collection("holds").doc(holdId).get();
-  if (!holdSnap.exists) return;
+  if (!holdSnap.exists) return false;
   const bookingId = (holdSnap.data() as { bookingId?: string }).bookingId;
-  if (!bookingId) return;
+  if (!bookingId) return false;
   const bookingRef = db.collection("bookings").doc(bookingId);
   const bookingSnap = await bookingRef.get();
-  if (!bookingSnap.exists) return;
+  if (!bookingSnap.exists) return false;
   const c = (bookingSnap.data() as { customer?: { email?: string; name?: string; phone?: string } }).customer;
-  if (!c?.email || !isPlaceholderCheckoutEmail(c.email)) return;
+  // When customer email is already non-placeholder (or missing), there's nothing to patch.
+  if (!c?.email || !isPlaceholderCheckoutEmail(c.email)) return true;
   const d = session.customer_details;
   const name = (d?.name ?? "").trim() || c.name || "Guest";
   const email = (d?.email ?? "").trim();
   const phone = (d?.phone ?? "").trim() || c.phone || "";
-  if (!email || isPlaceholderCheckoutEmail(email)) return;
+  // If Checkout didn't provide a real email (or provided placeholder), we can't complete the patch.
+  if (!email || isPlaceholderCheckoutEmail(email)) return false;
   await bookingRef.update({
     customer: { name, email, phone },
     updatedAt,
   });
+  return true;
 }

@@ -81,6 +81,16 @@ export async function GET(
 
     const bWaiver = (b as { waiver?: { requestId: string; status: string; templateId: string; templateVersion: number } }).waiver;
 
+    const bConf = b as { confirmationSentAt?: { toDate?: () => Date; seconds?: number } };
+    let confirmationSentAt: string | null = null;
+    if (bConf.confirmationSentAt) {
+      if (typeof bConf.confirmationSentAt.toDate === "function") {
+        confirmationSentAt = bConf.confirmationSentAt.toDate().toISOString();
+      } else if (typeof (bConf.confirmationSentAt as { seconds?: number }).seconds === "number") {
+        confirmationSentAt = new Date((bConf.confirmationSentAt as { seconds: number }).seconds * 1000).toISOString();
+      }
+    }
+
     return NextResponse.json({
       id: doc.id,
       experienceId: b.experienceId,
@@ -107,6 +117,7 @@ export async function GET(
       startTime,
       endTime,
       waiver: bWaiver ?? undefined,
+      confirmationSentAt,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

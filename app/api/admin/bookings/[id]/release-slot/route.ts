@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
-import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDb } from "@/lib/booking/firebase-admin";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { BOOKING_STATUSES_SLOT_TAKEN, type Booking } from "@/lib/booking/types";
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
+import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Intentionally releases slot documents only; it does not transition booking status.
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
   const { id: bookingId } = await params;
@@ -16,7 +18,6 @@ export async function POST(
 
   try {
     const db = getDb();
-    const { FieldValue } = getFirestoreExports();
     const bookingRef = db.collection("bookings").doc(bookingId);
     let updated = 0;
     let slotId: string | null = null;
@@ -36,18 +37,17 @@ export async function POST(
         notReleasable = true;
         return;
       }
-      let expSlug = "";
-      if (typeof booking.experienceId === "string" && booking.experienceId.trim()) {
-        const expSnap = await tx.get(db.collection("experiences").doc(booking.experienceId));
-        expSlug =
-          expSnap.exists && typeof (expSnap.data() as { slug?: unknown })?.slug === "string"
-            ? String((expSnap.data() as { slug: string }).slug).trim()
-            : "";
-      }
-      updated = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug);
-      if (updated > 0) {
-        tx.update(bookingRef, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
-      }
+      const expResolved = await resolveExperienceDocAndSlug(db, booking.experienceId);
+      const bookingForReset = expResolved
+        ? ({ ...booking, experienceId: expResolved.docId } as Booking)
+        : booking;
+      updated = await resetBookingSlotsToOpenInTransaction(
+        db,
+        tx,
+        bookingId,
+        bookingForReset,
+        expResolved?.slug ?? ""
+      );
     });
     if (alreadyCanceled) return NextResponse.json({ ok: true, bookingId, already: true, slotReleased: false });
     if (notReleasable) {

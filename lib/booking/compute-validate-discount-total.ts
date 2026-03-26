@@ -6,9 +6,14 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { DocumentSnapshot, QuerySnapshot } from "firebase-admin/firestore";
 import { parseSlotIdRelaxed, parseSlotId } from "./experience-slots";
-import { buildAddonSelectionsForPricing, computePricing, getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents } from "./pricing";
+import {
+  buildAddonSelectionsForPricing,
+  computePricing,
+  getEffectiveBoatRatePriceCents,
+  getEffectiveRatePriceCents,
+} from "./pricing";
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "./pricing-calendar-fetch";
-import type { Experience, ExperienceAddon, ExperienceRate, ListingBoat } from "./types";
+import type { BookingPricing, Experience, ExperienceAddon, ExperienceRate, ListingBoat } from "./types";
 
 export type ValidateDiscountAddonInput = { addonId: string; qty: number };
 
@@ -19,6 +24,8 @@ export type ValidateDiscountAddonInput = { addonId: string; qty: number };
 export async function computeValidateDiscountTotalCents(
   db: Firestore,
   params: {
+    /** When set, use hold.pricing snapshot as the authoritative base total instead of live recompute. */
+    holdPricing?: BookingPricing | null;
     slotId: string;
     rateId: string;
     experienceId: string;
@@ -28,6 +35,19 @@ export async function computeValidateDiscountTotalCents(
     addonSelections: ValidateDiscountAddonInput[];
   }
 ): Promise<number | null> {
+  const holdPricing = params.holdPricing;
+  if (holdPricing) {
+    const subtotal = Number.isFinite(holdPricing.subtotalCents)
+      ? Math.max(0, Math.floor(holdPricing.subtotalCents))
+      : 0;
+    const tax = Number.isFinite(holdPricing.taxCents) ? Math.max(0, Math.floor(holdPricing.taxCents)) : 0;
+    const fees = Number.isFinite(holdPricing.feesCents) ? Math.max(0, Math.floor(holdPricing.feesCents)) : 0;
+    const baseTotal = subtotal + tax + fees;
+    if (baseTotal > 0) {
+      return baseTotal;
+    }
+  }
+
   const { slotId, rateId, experienceId, partySize } = params;
   const bookingMode = params.bookingMode ?? "shared";
   const addonSelections = Array.isArray(params.addonSelections) ? params.addonSelections : [];

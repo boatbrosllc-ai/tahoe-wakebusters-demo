@@ -1234,7 +1234,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           outcome.message ||
             "Your payment is being reconciled. Please wait for email confirmation or contact us.",
         );
-        setPaymentPhase("successWithWarning");
+        setPaymentPhase("reconciliationPending");
         break;
       }
       case "terminal_error": {
@@ -1410,10 +1410,81 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               parsed.v === 1 &&
               parsed.holdId &&
               typeof parsed.clientSecret === "string" &&
-              parsed.clientSecret.trim() &&
-              parsed.receiptClaimToken?.trim()
+              parsed.clientSecret.trim()
             ) {
-              const expIdRecover = parsed.experienceSnapshot?.id;
+              if (!parsed.receiptClaimToken?.trim()) {
+                try {
+                  const summaryRes = await fetch(
+                    `/api/booking/hold-summary?holdId=${encodeURIComponent(parsed.holdId)}`,
+                    { cache: "no-store" }
+                  );
+                  const summary = (await summaryRes.json().catch(() => ({}))) as {
+                    holdId?: string;
+                    expiresAt?: string | null;
+                    experience?: {
+                      id?: string | null;
+                      slug?: string;
+                      title?: string;
+                      pricingType?: "charter" | "ticketed";
+                      maxGuests?: number;
+                      maxCapacity?: number | null;
+                      departureHour?: number | null;
+                      departureMinute?: number | null;
+                      allowDeposit?: boolean;
+                    } | null;
+                    bookingMode?: "shared" | "charter";
+                    selectedDate?: string | null;
+                    selectedSlot?: { id: string; startAt: string; endAt: string; boatId?: string | null } | null;
+                    selectedRateId?: string | null;
+                    selectedBoatId?: string | null;
+                    partySize?: number;
+                  };
+                  if (!summaryRes.ok || !summary.holdId || !summary.selectedSlot?.id) {
+                    clearModalHoldRecoverySession();
+                    setHoldSessionVerifyError("Could not restore your saved payment session. Please start a new booking.");
+                    return;
+                  }
+                  if (summary.experience?.id) {
+                    setSelectedExperience({
+                      id: summary.experience.id,
+                      slug: summary.experience.slug ?? "",
+                      title: summary.experience.title ?? "Experience",
+                      maxGuests: summary.experience.maxGuests ?? 14,
+                      maxCapacity: summary.experience.maxCapacity ?? undefined,
+                      pricingType: summary.experience.pricingType,
+                      departureHour: summary.experience.departureHour ?? undefined,
+                      departureMinute: summary.experience.departureMinute ?? undefined,
+                      allowDeposit: summary.experience.allowDeposit === true,
+                    } as ExperienceItem);
+                  }
+                  setBookingMode(summary.bookingMode ?? "charter");
+                  setSelectedDate(summary.selectedDate ?? null);
+                  setSelectedSlot({
+                    id: summary.selectedSlot.id,
+                    startAt: summary.selectedSlot.startAt ?? "",
+                    endAt: summary.selectedSlot.endAt ?? "",
+                    status: "open",
+                    boatId: summary.selectedSlot.boatId ?? undefined,
+                  });
+                  setSelectedRateIdForCalendar(summary.selectedRateId ?? null);
+                  setPartySize(Math.max(1, Number(summary.partySize ?? 1)));
+                  setHoldId(summary.holdId);
+                  setHoldExpiresAt(summary.expiresAt ?? parsed.holdExpiresAt ?? null);
+                  setClientSecret(parsed.clientSecret.trim());
+                  setReceiptClaimToken(null);
+                  setPaymentIntentId(null);
+                  pendingRecoveryBoatIdRef.current = summary.selectedBoatId ?? null;
+                  lastHoldRef.current = { slotId: summary.selectedSlot.id, holdId: summary.holdId };
+                  setStep(4);
+                  setPaymentPhase("stripe");
+                  return;
+                } catch {
+                  clearModalHoldRecoverySession();
+                  setHoldSessionVerifyError("Could not restore your saved payment session. Please start a new booking.");
+                  return;
+                }
+              }
+              const expIdRecover = parsed.experienceId;
               if (expIdRecover) {
                 bookingCache.invalidate(`slots|${expIdRecover}|`);
                 retrySlots();
@@ -1505,32 +1576,38 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     }
                     return;
                   }
-                  setSelectedExperience(parsed.experienceSnapshot);
-                  setSelectedDate(parsed.selectedDate);
-                  setViewMonthYear(parsed.viewMonthYear);
-                  setViewMonthMonth(parsed.viewMonthMonth);
-                  setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
+                  if (!parsed.experienceId || !parsed.selectedSlot) {
+                    clearModalHoldRecoverySession();
+                    setHoldSessionVerifyError("Could not restore your saved payment session. Please start a new booking.");
+                    return;
+                  }
+                  await bookingCache.fetchExperienceDetail(parsed.experienceId);
+                  setSelectedExperience({
+                    id: parsed.experienceId,
+                    slug: parsed.experienceSlug ?? "",
+                    title: "Experience",
+                    maxGuests: 14,
+                  } as ExperienceItem);
+                  setSelectedDate(parsed.selectedDate ?? null);
+                  setViewMonthYear(parsed.viewMonthYear ?? today.year);
+                  setViewMonthMonth(parsed.viewMonthMonth ?? today.month);
+                  setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar ?? null);
                   setSelectedSlot(parsed.selectedSlot);
-                  setPartySize(parsed.partySize);
+                  setPartySize(parsed.partySize ?? 1);
                   setHoldId(parsed.holdId);
-                  setReleaseToken(parsed.releaseToken);
-                  setReceiptClaimToken(parsed.receiptClaimToken);
+                  setReleaseToken(parsed.releaseToken ?? null);
+                  setReceiptClaimToken(parsed.receiptClaimToken ?? null);
                   setClientSecret(null);
                   setPaymentIntentId(null);
-                  if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
-                  if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
-                  if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
-                  if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
-                  setPayFullAmount(parsed.payFullAmount);
                   lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
-                  pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
+                  pendingRecoveryBoatIdRef.current = parsed.selectedBoatId ?? null;
                   setStep(4);
                   setPaymentPhase("loading");
-                  const payFull = parsed.isTicketed ? true : parsed.payFullAmount;
+                  const payFull = parsed.isTicketed ? true : (parsed.payFullAmount ?? true);
                   const pi = await runCreatePaymentIntentForHold({
                     holdId: parsed.holdId,
                     payFullAmount: payFull,
-                    releaseToken: parsed.releaseToken,
+                    releaseToken: parsed.releaseToken ?? null,
                   });
                   if (cancelled) return;
                   if (!pi.ok) {
@@ -1619,7 +1696,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
               parsed.paymentIntentId.trim() &&
               (!parsed.receiptClaimToken || !String(parsed.receiptClaimToken).trim())
             ) {
-              const expIdRecoverPi = parsed.experienceSnapshot?.id;
+              const expIdRecoverPi = parsed.experienceId;
               if (expIdRecoverPi) {
                 bookingCache.invalidate(`slots|${expIdRecoverPi}|`);
                 retrySlots();
@@ -1645,16 +1722,23 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 typeof AbortSignal.any === "function"
                   ? AbortSignal.any([timeoutSig, ac.signal])
                   : ac.signal;
-              const hydrateCheckoutFromParsedNoReceipt = () => {
-                setSelectedExperience(parsed.experienceSnapshot);
-                setSelectedDate(parsed.selectedDate);
-                setViewMonthYear(parsed.viewMonthYear);
-                setViewMonthMonth(parsed.viewMonthMonth);
-                setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar);
+              const hydrateCheckoutFromParsedNoReceipt = async () => {
+                if (!parsed.experienceId || !parsed.selectedSlot) return;
+                await bookingCache.fetchExperienceDetail(parsed.experienceId);
+                setSelectedExperience({
+                  id: parsed.experienceId,
+                  slug: parsed.experienceSlug ?? "",
+                  title: "Experience",
+                  maxGuests: 14,
+                } as ExperienceItem);
+                setSelectedDate(parsed.selectedDate ?? null);
+                setViewMonthYear(parsed.viewMonthYear ?? today.year);
+                setViewMonthMonth(parsed.viewMonthMonth ?? today.month);
+                setSelectedRateIdForCalendar(parsed.selectedRateIdForCalendar ?? null);
                 setSelectedSlot(parsed.selectedSlot);
-                setPartySize(parsed.partySize);
+                setPartySize(parsed.partySize ?? 1);
                 setHoldId(parsed.holdId);
-                setReleaseToken(parsed.releaseToken);
+                setReleaseToken(parsed.releaseToken ?? null);
                 setReceiptClaimToken(
                   typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
                     ? parsed.receiptClaimToken.trim()
@@ -1666,13 +1750,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     ? parsed.paymentIntentId.trim()
                     : null,
                 );
-                if (typeof parsed.depositCentsFromServer === "number") setDepositCentsFromServer(parsed.depositCentsFromServer);
-                if (typeof parsed.totalCentsFromServer === "number") setTotalCentsFromServer(parsed.totalCentsFromServer);
-                if (typeof parsed.finalCentsFromServer === "number") setFinalCentsFromServer(parsed.finalCentsFromServer);
-                if (typeof parsed.isDepositFromServer === "boolean") setIsDepositFromServer(parsed.isDepositFromServer);
-                setPayFullAmount(parsed.payFullAmount);
                 lastHoldRef.current = { slotId: parsed.selectedSlot.id, holdId: parsed.holdId };
-                pendingRecoveryBoatIdRef.current = parsed.selectedBoatId;
+                pendingRecoveryBoatIdRef.current = parsed.selectedBoatId ?? null;
                 if (parsed.holdExpiresAt) setHoldExpiresAt(parsed.holdExpiresAt);
                 setStep(4);
                 setPaymentPhase("stripe");
@@ -1766,11 +1845,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 }
 
                 if (outcome.kind === "fetch_error") {
-                  hydrateCheckoutFromParsedNoReceipt();
+                  await hydrateCheckoutFromParsedNoReceipt();
                   setPaymentError(outcome.message);
                   return;
                 }
-                hydrateCheckoutFromParsedNoReceipt();
+                await hydrateCheckoutFromParsedNoReceipt();
                 setHoldSessionVerifyError(
                   "We couldn't confirm your payment status yet. If you already paid, check your email — otherwise complete payment below.",
                 );
@@ -1908,6 +1987,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       paymentPhase === "loading" ||
       paymentPhase === "completing" ||
       paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "reconciliationPending" ||
       paymentPhase === "success" ||
       paymentPhase === "successWithWarning"
     )
@@ -1978,6 +2058,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [paymentPhase]);
 
   useEffect(() => {
+    if (paymentPhase !== "reconciliationPending") return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [paymentPhase]);
+
+  useEffect(() => {
     if (appliedDiscountError && discountCode.trim()) {
       setDiscountRemovedNotice(`Could not apply "${discountCode.trim()}" — pricing or availability changed.`);
     }
@@ -1995,6 +2085,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (
       paymentPhase === "completing" ||
       paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "reconciliationPending" ||
       paymentPhase === "success" ||
       paymentPhase === "successWithWarning" ||
       paymentPhase === "successRecoveryFailed"
@@ -2296,7 +2387,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       paymentPhase === "loading" ||
       paymentPhase === "stripe" ||
       paymentPhase === "completing" ||
-      paymentPhase === "completeAfterPaymentRetry");
+      paymentPhase === "completeAfterPaymentRetry" ||
+      paymentPhase === "reconciliationPending");
 
   return (
     <Dialog
@@ -3781,6 +3873,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       <p className="text-xs text-brand-muted text-center">Please don&apos;t close this window.</p>
                     </>
                   )}
+                </div>
+              )}
+              {paymentPhase === "reconciliationPending" && (
+                <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-4 py-10 px-4 text-center">
+                  <div
+                    className="h-12 w-12 animate-spin rounded-full border-2 border-brand-primary border-t-transparent"
+                    aria-hidden
+                  />
+                  <p className="text-sm font-medium text-brand-dark">Confirming your booking</p>
+                  <p className="text-xs text-brand-muted max-w-[300px]">{paymentError}</p>
+                  <p className="text-xs text-amber-900">
+                    Do not leave this page — your payment is still being reconciled. You will see the receipt when ready.
+                  </p>
                 </div>
               )}
               {paymentPhase === "completeAfterPaymentRetry" && (

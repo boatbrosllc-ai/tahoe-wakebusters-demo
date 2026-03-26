@@ -7,7 +7,6 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, getCentralCalendarDayBounds, buildSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import {
   addCalendarDaysToDateStr,
   bookingLookbackDaysFromMaxDuration,
@@ -356,6 +355,16 @@ export async function POST(request: NextRequest) {
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     const exp = expSnap.data() as Experience;
 
+    if (exp.pricingType === "ticketed") {
+      return NextResponse.json(
+        {
+          error:
+            "Manual bookings are currently disabled for ticketed experiences. Use the customer booking flow instead so availability and departure inventory stay in sync.",
+        },
+        { status: 400 }
+      );
+    }
+
     const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
     const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, experienceId, expSlug);
     const listingBoatIds = listingBoatDocs.map((d) => d.id);
@@ -382,10 +391,6 @@ export async function POST(request: NextRequest) {
     }
 
     const partySizeNum = Number.isInteger(partySize) && partySize > 0 ? partySize : 1;
-    let inventoryRef: ReturnType<typeof getDepartureInventoryRef> | null = null;
-    if (exp.pricingType === "ticketed") {
-      inventoryRef = getDepartureInventoryRef(db, experienceId, tripDate);
-    }
 
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
     const firstRate = ratesSnap.docs[0];
@@ -430,7 +435,6 @@ export async function POST(request: NextRequest) {
       status: "paid",
       stripe: {},
       ...(pricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
-      ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "charter" as const }),
       ...(hasBilling && billingAddress && { billingAddress }),
       ...(hasCard && cardDisplay && { card: cardDisplay }),
       createdAt: Timestamp.now(),
@@ -452,13 +456,6 @@ export async function POST(request: NextRequest) {
     );
 
     await db.runTransaction(async (tx) => {
-      let preReadReservedSeats = 0;
-      if (exp.pricingType === "ticketed" && inventoryRef !== null) {
-        const invSnapFirst = await tx.get(inventoryRef);
-        preReadReservedSeats = invSnapFirst.exists
-          ? ((invSnapFirst.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-          : 0;
-      }
       const blocked = await hasOverlappingBlock({
         db,
         Timestamp,
@@ -477,47 +474,6 @@ export async function POST(request: NextRequest) {
           { code: "BLOCK_CONFLICT" }
         );
       }
-      // Ticketed capacity check inside transaction to prevent over-selling under concurrency.
-      if (exp.pricingType === "ticketed" && inventoryRef !== null) {
-        const slugVariants = getExperienceIdVariants(experienceId, exp.slug ?? "");
-        const soldSnaps = await Promise.all(
-          slugVariants.map((v) =>
-            tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate))
-          )
-        );
-        const seen = new Set<string>();
-        let sold = 0;
-        for (const snap of soldSnaps) {
-          for (const doc of snap.docs) {
-            if (seen.has(doc.id)) continue;
-            seen.add(doc.id);
-            const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
-            if (typeof b.partySize !== "number") continue;
-            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-            if (b.bookingMode === "charter") throw Object.assign(new Error("This departure is reserved as a private charter"), { code: "SLOT_CONFLICT" });
-            sold += b.partySize;
-          }
-        }
-        const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as import("@/lib/booking/types").Experience);
-        const reservedSeats = preReadReservedSeats;
-        if (sold + reservedSeats + partySizeNum > capacity) {
-          const available = Math.max(0, capacity - sold - reservedSeats);
-          throw new Error(
-            available === 0
-              ? "This date is sold out."
-              : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
-          );
-        }
-        tx.set(
-          inventoryRef,
-          {
-            reservedSeats: FieldValue.increment(-partySizeNum),
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-      }
-
       const slotsRef = boatId
         ? db.collection("boats").doc(boatId).collection("slots")
         : db.collection("experiences").doc(experienceId).collection("slots");

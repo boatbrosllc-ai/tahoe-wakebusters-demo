@@ -4,7 +4,7 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitValidateDiscount, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { computeValidateDiscountTotalCents } from "@/lib/booking/compute-validate-discount-total";
-import type { Discount } from "@/lib/booking/types";
+import type { BookingPricing, Discount, Hold } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +80,20 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
+    let holdPricing: BookingPricing | null = null;
+    const holdId = typeof body.holdId === "string" ? body.holdId.trim() : "";
+    if (holdId) {
+      const holdSnap = await db.collection("holds").doc(holdId).get();
+      if (holdSnap.exists) {
+        const hold = holdSnap.data() as Hold;
+        if (hold.pricing) {
+          holdPricing = hold.pricing;
+        }
+      }
+    }
+
     const serverTotal = await computeValidateDiscountTotalCents(db, {
+      holdPricing,
       slotId,
       rateId,
       experienceId,

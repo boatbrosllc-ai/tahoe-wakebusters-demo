@@ -98,6 +98,25 @@ export async function GET(request: NextRequest) {
     checks.adminEdgeSecret = isProduction
       ? (process.env.ADMIN_EDGE_SECRET?.trim() ? "configured" : "not_configured")
       : "n/a";
+
+    try {
+      const { getDb } = await import("@/lib/booking/firebase-admin");
+      const db = getDb();
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60_000);
+      const pendingSnap = await db
+        .collection("pendingRefunds")
+        .where("status", "==", "pending")
+        .where("firstSeenAt", "<", thirtyMinutesAgo)
+        .limit(1001)
+        .get();
+      const count = pendingSnap.size;
+      checks.pendingRefundsStalePendingCount = count;
+      if (count > 0) {
+        ok = false;
+      }
+    } catch (e) {
+      checks.pendingRefundsStalePendingCount = "probe_failed";
+    }
   }
 
   const gaMeasurementId = getGaMeasurementId();

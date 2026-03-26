@@ -251,6 +251,12 @@ export default function CalendarsPage() {
     waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
   } | null>(null);
   const [bookingDetailLoading, setBookingDetailLoading] = useState(false);
+  const [cancelCalConfirmOpen, setCancelCalConfirmOpen] = useState(false);
+  const [cancelCalRefund, setCancelCalRefund] = useState(true);
+  const [cancelCalOverride, setCancelCalOverride] = useState(false);
+  const [cancelCalNoRefundWarn, setCancelCalNoRefundWarn] = useState<string | null>(null);
+  const [cancelCalPendingId, setCancelCalPendingId] = useState<string | null>(null);
+  const [cancelCalLoading, setCancelCalLoading] = useState(false);
   /** User-assigned boat colors (boatId -> rgb). Persisted in localStorage. */
   const [boatColors, setBoatColors] = useState<Record<string, string>>({});
   const [boatColorsSectionOpen, setBoatColorsSectionOpen] = useState(false);
@@ -811,22 +817,56 @@ export default function CalendarsPage() {
     }
   };
 
-  const cancelBooking = async (bookingId: string) => {
-    if (!confirm("Cancel this booking? The slot will become available again. This cannot be undone.")) return;
-    setActionLoading(bookingId);
+  const openCancelCalendarBooking = (bookingId: string) => {
+    setCancelCalPendingId(bookingId);
+    setCancelCalRefund(true);
+    setCancelCalOverride(false);
+    setCancelCalNoRefundWarn(null);
+    setCancelCalConfirmOpen(true);
+  };
+
+  const executeCancelCalendarBooking = async () => {
+    if (!cancelCalPendingId) return;
+    setCancelCalLoading(true);
+    setCancelCalNoRefundWarn(null);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: "POST", credentials: "include" });
+      const res = await fetch(`/api/admin/bookings/${cancelCalPendingId}/cancel`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refund: cancelCalRefund, overridePolicy: cancelCalOverride }),
+      });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to cancel booking");
+      if (res.status === 409 && (data as { code?: string }).code === "NO_REFUND_WINDOW_REQUIRES_CONFIRMATION") {
+        setCancelCalNoRefundWarn(
+          typeof (data as { error?: string }).error === "string"
+            ? (data as { error: string }).error
+            : "Confirmation required."
+        );
+        return;
+      }
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed to cancel booking");
+      const refunds = Array.isArray((data as { refunds?: Array<{ error?: string }> }).refunds)
+        ? (data as { refunds: Array<{ error?: string }> }).refunds
+        : [];
+      if (refunds.some((r) => r.error)) {
+        setError(
+          "Cancel completed but one or more Stripe refunds failed. Open Bookings to see which payment intents failed."
+        );
+      }
+      setCancelCalConfirmOpen(false);
+      setCancelCalPendingId(null);
       await fetchSlots();
       await fetchBookings();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to cancel booking");
     } finally {
-      setActionLoading(null);
+      setCancelCalLoading(false);
     }
   };
+
+  const calendarGridPending = slotsLoading || bookingsLoading;
 
   const openDayDetail = (dateStr: string) => {
     setSelectedDate(dateStr);
@@ -1205,6 +1245,14 @@ export default function CalendarsPage() {
           )}
 
           {calendarView === "week" ? (
+            calendarGridPending ? (
+              <div className="grid min-h-[320px] place-items-center rounded-2xl border border-brand-dark/10 bg-white/80 text-brand-muted text-sm">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                  Loading slots and bookings…
+                </div>
+              </div>
+            ) : (
             <AdminCalendarWeekView
               experienceIds={uniqueExperienceIds}
               boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
@@ -1217,6 +1265,7 @@ export default function CalendarsPage() {
               onBookingClick={(bookingId) => { setBookingDetailId(bookingId); setBookingDetailOpen(true); }}
               onRefresh={() => { fetchSlots(); fetchBookings(); }}
             />
+            )
           ) : (
           <>
           {/* Blocked dates panel */}
@@ -1497,8 +1546,13 @@ export default function CalendarsPage() {
                 </div>
               </div>
 
-              {slotsLoading ? (
-                <div className="grid min-h-[380px] place-items-center text-brand-muted text-sm">Loading calendar…</div>
+              {calendarGridPending ? (
+                <div className="grid min-h-[380px] place-items-center rounded-2xl border border-brand-dark/10 bg-white/80 text-brand-muted text-sm">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
+                    Loading slots and bookings…
+                  </div>
+                </div>
               ) : (
                 <>
                   {slots.length === 0 && (
@@ -1800,7 +1854,7 @@ export default function CalendarsPage() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => cancelBooking(bookingId)}
+                                  onClick={() => openCancelCalendarBooking(bookingId)}
                                   disabled={!!actionLoading}
                                   className="border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400"
                                 >
@@ -2013,13 +2067,7 @@ export default function CalendarsPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    if (confirm("Cancel this booking? The slot will become available.")) {
-                      cancelBooking(bookingDetail.id);
-                      setBookingDetailOpen(false);
-                      setBookingDetailId(null);
-                      fetchSlots();
-                      fetchBookings();
-                    }
+                    openCancelCalendarBooking(bookingDetail.id);
                   }}
                   className="border-red-300 text-red-700 hover:bg-red-50 gap-1.5"
                 >
@@ -2049,6 +2097,60 @@ export default function CalendarsPage() {
       </Dialog>
         </>
       )}
+
+      <Dialog
+        open={cancelCalConfirmOpen}
+        onOpenChange={(open) => {
+          setCancelCalConfirmOpen(open);
+          if (!open) {
+            setCancelCalRefund(true);
+            setCancelCalOverride(false);
+            setCancelCalNoRefundWarn(null);
+            setCancelCalPendingId(null);
+          }
+        }}
+        title="Cancel booking?"
+      >
+        <div className="space-y-4 text-sm">
+          <p className="text-brand-dark">This will cancel the booking and release the slot.</p>
+          {cancelCalNoRefundWarn && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950 text-sm">
+              <p>{cancelCalNoRefundWarn}</p>
+              <label className="mt-2 flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cancelCalOverride}
+                  onChange={(e) => setCancelCalOverride(e.target.checked)}
+                  className="rounded border-brand-dark/30"
+                />
+                Override policy and proceed
+              </label>
+            </div>
+          )}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cancelCalRefund}
+              onChange={(e) => setCancelCalRefund(e.target.checked)}
+              className="rounded border-brand-dark/30"
+            />
+            Issue refund via Stripe
+          </label>
+          <div className="flex gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setCancelCalConfirmOpen(false)}>
+              Back
+            </Button>
+            <Button
+              type="button"
+              className="bg-amber-600 hover:bg-amber-700"
+              disabled={cancelCalLoading}
+              onClick={() => void executeCancelCalendarBooking()}
+            >
+              {cancelCalLoading ? "Canceling…" : "Confirm cancel"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       <AddBookingModal
         open={addBookingOpen}

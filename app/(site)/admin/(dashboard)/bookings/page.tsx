@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
 import { AdminSessionRedirectError, subscribeAdminAuthRevalidate, throwIfAdminApiError } from "@/lib/admin-auth-client";
 import { ADMIN_BOOKING_VISIBILITY_SLA_MS } from "@/lib/admin-booking-visibility-sla";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 type StripeEventItem = {
   id: string;
@@ -80,6 +81,7 @@ type BookingItem = {
   startTime?: string | null;
   endTime?: string | null;
   waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
+  confirmationSentAt?: string | null;
 };
 
 function mergeBookingLists(prev: BookingItem[], fresh: BookingItem[], order: "trip" | "created"): BookingItem[] {
@@ -173,7 +175,11 @@ export default function AdminBookingsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [cancelRefund, setCancelRefund] = useState(true);
+  const [cancelOverridePolicy, setCancelOverridePolicy] = useState(false);
+  const [cancelNoRefundWarning, setCancelNoRefundWarning] = useState<string | null>(null);
+  const [cancelRefundFailures, setCancelRefundFailures] = useState<Array<{ paymentIntentId: string; error?: string }>>([]);
   const [cancelLoading, setCancelLoading] = useState(false);
+  const [listLastUpdatedAt, setListLastUpdatedAt] = useState<Date | null>(null);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendFinalLoading, setResendFinalLoading] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => {
@@ -188,6 +194,7 @@ export default function AdminBookingsPage() {
   const listFetchGenRef = useRef(0);
   const loadMoreGenRef = useRef(0);
   const calendarFetchGenRef = useRef(0);
+  const reconcileDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return subscribeAdminAuthRevalidate(() => {
@@ -266,6 +273,10 @@ export default function AdminBookingsPage() {
       });
     return () => ac.abort();
   }, [buildParams, refreshKey]);
+
+  useEffect(() => {
+    if (!loading) setListLastUpdatedAt(new Date());
+  }, [loading, list, refreshKey]);
 
   const loadMore = useCallback(() => {
     if (!nextCursor || loadingMore) return;
@@ -351,19 +362,26 @@ export default function AdminBookingsPage() {
     return () => clearInterval(id);
   }, [silentMergeFirstPage]);
 
-  useEffect(() => {
-    const onReconcile = () => {
+  const scheduleReconcile = useCallback(() => {
+    if (reconcileDebounceRef.current) clearTimeout(reconcileDebounceRef.current);
+    reconcileDebounceRef.current = setTimeout(() => {
+      reconcileDebounceRef.current = null;
       if (document.visibilityState !== "visible") return;
       void silentMergeFirstPage();
       setCalendarPollTick((t) => t + 1);
-    };
-    window.addEventListener("focus", onReconcile);
-    document.addEventListener("visibilitychange", onReconcile);
-    return () => {
-      window.removeEventListener("focus", onReconcile);
-      document.removeEventListener("visibilitychange", onReconcile);
-    };
+    }, 2000);
   }, [silentMergeFirstPage]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") scheduleReconcile();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (reconcileDebounceRef.current) clearTimeout(reconcileDebounceRef.current);
+    };
+  }, [scheduleReconcile]);
 
   useEffect(() => {
     if (!webhookEventsOpen) return;
@@ -517,18 +535,35 @@ export default function AdminBookingsPage() {
     if (fromList) {
       setSelectedBooking(fromList);
       setDetailOpen(true);
-      return;
+    } else {
+      setSelectedBooking(null);
+      setDetailOpen(true);
     }
     try {
       const res = await fetch(`/api/admin/bookings/${booking.id}`, { credentials: "include" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throwIfAdminApiError(res, data, "Failed to load booking");
       setSelectedBooking(data as BookingItem);
-      setDetailOpen(true);
     } catch (e) {
       if (e instanceof AdminSessionRedirectError) return;
       setLoadError(e instanceof Error ? e.message : "Failed to open booking");
     }
+  };
+
+  const openBookingDetailFromList = (b: BookingItem) => {
+    setSelectedBooking(b);
+    setDetailOpen(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/admin/bookings/${b.id}`, { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throwIfAdminApiError(res, data, "Failed to load booking");
+        setSelectedBooking(data as BookingItem);
+      } catch (e) {
+        if (e instanceof AdminSessionRedirectError) return;
+        setLoadError(e instanceof Error ? e.message : "Failed to refresh booking");
+      }
+    })();
   };
 
   const filteredList = useMemo(() => {
@@ -570,6 +605,19 @@ export default function AdminBookingsPage() {
             <p className="mt-1 text-sm text-brand-muted">
               Trip date, party size, and full details. Click a row to open booking details (customer, add-ons, payment breakdown).
             </p>
+            {listLastUpdatedAt && (
+              <p className="mt-2 text-xs text-brand-muted">
+                List updated {Math.max(0, Math.floor((Date.now() - listLastUpdatedAt.getTime()) / 1000))}s ago
+                {" · "}
+                <button
+                  type="button"
+                  className="text-brand-primary font-medium hover:underline"
+                  onClick={() => setRefreshKey((k) => k + 1)}
+                >
+                  Refresh
+                </button>
+              </p>
+            )}
           </div>
           <Button onClick={() => setAddBookingOpen(true)} className="shrink-0 inline-flex items-center gap-2">
             <Plus className="h-4 w-4" aria-hidden />
@@ -785,10 +833,7 @@ export default function AdminBookingsPage() {
                   {filteredList.map((b) => (
                     <tr
                       key={b.id}
-                      onClick={() => {
-                        setSelectedBooking(b);
-                        setDetailOpen(true);
-                      }}
+                      onClick={() => openBookingDetailFromList(b)}
                       className="border-b border-brand-dark/5 hover:bg-brand-primary/5 cursor-pointer transition-all duration-200 ease-out hover:shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
                     >
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark whitespace-nowrap">
@@ -844,7 +889,7 @@ export default function AdminBookingsPage() {
               <button
                 key={b.id}
                 type="button"
-                onClick={() => { setSelectedBooking(b); setDetailOpen(true); }}
+                onClick={() => openBookingDetailFromList(b)}
                 className="w-full text-left rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-4 space-y-2 hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between gap-2">
@@ -1031,6 +1076,9 @@ export default function AdminBookingsPage() {
             setSelectedBooking(null);
             setCancelConfirmOpen(false);
             setCancelRefund(true);
+            setCancelOverridePolicy(false);
+            setCancelNoRefundWarning(null);
+            setCancelRefundFailures([]);
             void silentMergeFirstPage();
             setCalendarPollTick((t) => t + 1);
           }
@@ -1038,6 +1086,9 @@ export default function AdminBookingsPage() {
         title={selectedBooking ? `Booking — ${selectedBooking.customer?.name ?? "Customer"}` : undefined}
         fullScreenOnMobile
       >
+        {!selectedBooking && detailOpen && (
+          <div className="py-12 text-center text-brand-muted text-sm">Loading booking…</div>
+        )}
         {selectedBooking && (
           <div className="space-y-6 text-sm max-h-[80vh] overflow-y-auto">
             {/* Status + Trip */}
@@ -1051,6 +1102,16 @@ export default function AdminBookingsPage() {
                 Booked {selectedBooking.createdAt ? formatDate(selectedBooking.createdAt) : "—"}
               </span>
             </div>
+
+            {BOOKING_STATUSES_SLOT_TAKEN.has(selectedBooking.status as never) &&
+              !selectedBooking.confirmationSentAt &&
+              selectedBooking.createdAt &&
+              Date.now() - new Date(selectedBooking.createdAt).getTime() > 15 * 60 * 1000 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950" role="status">
+                  <strong>Confirmation email not on file</strong> after the usual cron window. Check the notification outbox on the
+                  dashboard or resend confirmation if the guest did not receive it.
+                </div>
+              )}
 
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Trip</h3>
@@ -1357,7 +1418,12 @@ export default function AdminBookingsPage() {
         open={cancelConfirmOpen}
         onOpenChange={(open) => {
           setCancelConfirmOpen(open);
-          if (!open) setCancelRefund(true);
+          if (!open) {
+            setCancelRefund(true);
+            setCancelOverridePolicy(false);
+            setCancelNoRefundWarning(null);
+            setCancelRefundFailures([]);
+          }
         }}
         title="Cancel booking?"
       >
@@ -1372,6 +1438,33 @@ export default function AdminBookingsPage() {
             <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               A Stripe refund will be issued to the customer unless you opt out below (e.g. for penalty-free cancellations).
             </p>
+            {cancelNoRefundWarning && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950">
+                <p className="text-sm">{cancelNoRefundWarning}</p>
+                <label className="mt-2 flex items-center gap-2 cursor-pointer text-brand-dark">
+                  <input
+                    type="checkbox"
+                    checked={cancelOverridePolicy}
+                    onChange={(e) => setCancelOverridePolicy(e.target.checked)}
+                    className="rounded border-brand-dark/30"
+                  />
+                  <span>Override policy and proceed with cancellation</span>
+                </label>
+              </div>
+            )}
+            {cancelRefundFailures.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950" role="alert">
+                <p className="font-medium">Stripe refund issue</p>
+                <ul className="mt-1 list-disc pl-5 text-xs font-mono space-y-0.5">
+                  {cancelRefundFailures.map((r) => (
+                    <li key={r.paymentIntentId}>
+                      {r.paymentIntentId}: {r.error ?? "failed"}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs">Resolve in Stripe or retry; the booking is already canceled.</p>
+              </div>
+            )}
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -1396,20 +1489,39 @@ export default function AdminBookingsPage() {
                 onClick={async () => {
                   if (!selectedBooking?.id) return;
                   setCancelLoading(true);
+                  setCancelNoRefundWarning(null);
                   try {
                     const res = await fetch(`/api/admin/bookings/${selectedBooking.id}/cancel`, {
                       method: "POST",
                       credentials: "include",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ refund: cancelRefund }),
+                      body: JSON.stringify({ refund: cancelRefund, overridePolicy: cancelOverridePolicy }),
                     });
                     const data = await res.json().catch(() => ({}));
-                    if (!res.ok) throw new Error(data.error ?? "Failed to cancel");
+                    if (res.status === 409 && (data as { code?: string }).code === "NO_REFUND_WINDOW_REQUIRES_CONFIRMATION") {
+                      setCancelNoRefundWarning(
+                        typeof (data as { error?: string }).error === "string"
+                          ? (data as { error: string }).error
+                          : "Policy confirmation required."
+                      );
+                      return;
+                    }
+                    if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed to cancel");
+                    const refunds = Array.isArray((data as { refunds?: unknown }).refunds)
+                      ? ((data as { refunds: Array<{ paymentIntentId: string; error?: string }> }).refunds)
+                      : [];
+                    const failed = refunds.filter((r) => r.error);
+                    if (failed.length > 0) {
+                      setCancelRefundFailures(failed);
+                      return;
+                    }
                     setLoadError(null);
                     setCancelConfirmOpen(false);
+                    setCancelRefundFailures([]);
                     setDetailOpen(false);
                     setSelectedBooking(null);
                     setCancelRefund(true);
+                    setCancelOverridePolicy(false);
                     setRefreshKey((k) => k + 1);
                   } catch (e) {
                     setLoadError(e instanceof Error ? e.message : "Failed to cancel booking");

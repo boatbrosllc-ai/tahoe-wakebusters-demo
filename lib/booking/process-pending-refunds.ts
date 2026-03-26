@@ -122,6 +122,8 @@ export async function processPendingRefundsBatch(
 ): Promise<{ scanned: number; refunded: number; skipped: number; errors: number }> {
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = new Date();
+  const staleAgeMs = parseInt(process.env.PENDING_REFUND_STALE_ALERT_MINUTES ?? "60", 10) * 60_000;
+  const staleCutoff = Number.isFinite(staleAgeMs) && staleAgeMs > 0 ? staleAgeMs : 60 * 60_000;
 
   await backfillPendingRefundsMissingNextRetryAt(db);
 
@@ -131,6 +133,7 @@ export async function processPendingRefundsBatch(
   let scanned = 0;
   let processedThisRun = 0;
   let lastDoc: QueryDocumentSnapshot | null = null;
+  let stalePendingCount = 0;
 
   const processOne = async (doc: QueryDocumentSnapshot) => {
     const data = doc.data() as {
@@ -143,7 +146,16 @@ export async function processPendingRefundsBatch(
       requiresReview?: boolean;
       refundAmountCents?: number;
       stripeRefundId?: string;
+      firstSeenAt?: { toDate?: () => Date };
+      createdAt?: { toDate?: () => Date };
     };
+    const created =
+      data.firstSeenAt?.toDate?.() ??
+      data.createdAt?.toDate?.() ??
+      null;
+    if (created && now.getTime() - created.getTime() > staleCutoff && data.status === "pending") {
+      stalePendingCount++;
+    }
     if (data.requiresReview === true && data.reason !== "amount_integrity_mismatch") {
       skipped++;
       return;
@@ -444,6 +456,20 @@ export async function processPendingRefundsBatch(
 
     lastDoc = snap.docs[snap.docs.length - 1]!;
     if (snap.size < PAGE_SIZE) break;
+  }
+
+  if (stalePendingCount > 0) {
+    try {
+      await writeOperationalAlert({
+        type: "pending_refunds_stale_pending",
+        source: "process-pending-refunds",
+        severity: "critical",
+        stalePendingCount,
+        staleMinutes: Math.round(staleCutoff / 60_000),
+      });
+    } catch {
+      // Alert pipeline failures should not block the batch.
+    }
   }
 
   return { scanned, refunded, skipped, errors };

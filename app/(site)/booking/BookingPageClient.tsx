@@ -359,7 +359,6 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     }
     openWithSelection({
       experienceId: selectedExperience.id,
-      experienceSlug: selectedExperience.slug,
       boatId: selectedBoat?.id,
       date: selectedDate ?? undefined,
     });

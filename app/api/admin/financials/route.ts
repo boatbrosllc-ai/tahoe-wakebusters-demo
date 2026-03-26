@@ -16,6 +16,19 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
 }
 
 const PAGE_SIZE = 100;
+const MAX_RECENT_PAGES = 20;
+
+/** Month keys `revenue_YYYY_MM` between two dates (inclusive of month boundaries). */
+function monthKeysBetween(from: Date, to: Date): string[] {
+  const keys: string[] = [];
+  const cur = new Date(from.getFullYear(), from.getMonth(), 1);
+  const end = new Date(to.getFullYear(), to.getMonth(), 1);
+  while (cur <= end) {
+    keys.push(`revenue_${cur.getFullYear()}_${String(cur.getMonth() + 1).padStart(2, "0")}`);
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return keys;
+}
 
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -39,31 +52,62 @@ export async function GET(request: NextRequest) {
       return end;
     };
 
+    const summarySnap = await db.collection("summaries").doc("revenue").get();
+    const summary = summarySnap.exists ? (summarySnap.data() as { totalRevenueCents?: number; bookingCount?: number }) : null;
+    const totalRevenueCents = summary?.totalRevenueCents ?? 0;
+    const activeBookingCount = summary?.bookingCount ?? 0;
+
+    const now = new Date();
+    const thisMonthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const thisMonthSnap = await db.collection("summaries").doc(thisMonthKey).get();
+    const revenueThisMonthCents = thisMonthSnap.exists
+      ? ((thisMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0)
+      : 0;
+
+    let revenueInRangeCents: number | undefined;
+    if (!experienceIdFilter && (fromDateVal || toDateVal)) {
+      const fromD = fromDateVal ?? new Date(0);
+      const toD = toDateVal ?? new Date(8640000000000000);
+      const keys = monthKeysBetween(fromD, toD);
+      const monthSnaps = await Promise.all(keys.map((k) => db.collection("summaries").doc(k).get()));
+      revenueInRangeCents = 0;
+      for (const ms of monthSnaps) {
+        if (ms.exists) {
+          revenueInRangeCents += (ms.data() as { revenueCents?: number })?.revenueCents ?? 0;
+        }
+      }
+    }
+
     let baseQuery = db.collection("bookings").orderBy("createdAt", "desc");
     if (fromDateVal || toDateVal) {
       if (fromDateVal) baseQuery = baseQuery.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
       if (toDateVal) baseQuery = baseQuery.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
     }
 
-    let totalRevenueCents = 0;
-    let revenueInRangeCents = 0;
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    let revenueThisMonthCents = 0;
-    let activeBookingCount = 0;
-    let totalBookingCount = 0;
-    const recent: { id: string; createdAt: string; customerEmail: string; totalCents: number; status: string; experienceName: string }[] = [];
     const byExperienceMap = new Map<string, { revenueCents: number; bookingCount: number }>();
     const experienceIds = new Set<string>();
+    const recent: {
+      id: string;
+      createdAt: string;
+      customerEmail: string;
+      totalCents: number;
+      status: string;
+      experienceName: string;
+    }[] = [];
 
     let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
-    while (true) {
+    let totalBookingCount = 0;
+    let pageNum = 0;
+    let truncated = false;
+
+    while (pageNum < MAX_RECENT_PAGES) {
       let query = baseQuery.limit(PAGE_SIZE);
       if (cursor) query = query.startAfter(cursor);
       const snap = await query.get();
       if (snap.empty) break;
-
+      pageNum++;
       totalBookingCount += snap.size;
+
       snap.docs.forEach((d) => {
         const b = d.data() as Booking;
         if (b.experienceId) experienceIds.add(b.experienceId);
@@ -82,19 +126,13 @@ export async function GET(request: NextRequest) {
         const matchesExperience = !experienceIdFilter || b.experienceId === experienceIdFilter;
         const include = inRange && matchesExperience;
 
-        if (bookingCountsTowardActiveRevenueTotals(b)) {
+        if (bookingCountsTowardActiveRevenueTotals(b) && include) {
           const totalCentsForRevenue = totalSummaryAttributedRevenueCents(b);
-          activeBookingCount += 1;
-          totalRevenueCents += totalCentsForRevenue;
-          if (createdAt && createdAt >= startOfMonth) revenueThisMonthCents += totalCentsForRevenue;
-          if (include) {
-            revenueInRangeCents += totalCentsForRevenue;
-            const prev = byExperienceMap.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
-            byExperienceMap.set(eid, {
-              revenueCents: prev.revenueCents + totalCentsForRevenue,
-              bookingCount: prev.bookingCount + 1,
-            });
-          }
+          const prev = byExperienceMap.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
+          byExperienceMap.set(eid, {
+            revenueCents: prev.revenueCents + totalCentsForRevenue,
+            bookingCount: prev.bookingCount + 1,
+          });
         }
         if (include) {
           recent.push({
@@ -110,6 +148,10 @@ export async function GET(request: NextRequest) {
 
       if (snap.size < PAGE_SIZE) break;
       cursor = snap.docs[snap.docs.length - 1];
+    }
+
+    if (pageNum >= MAX_RECENT_PAGES) {
+      truncated = true;
     }
 
     recent.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -133,6 +175,10 @@ export async function GET(request: NextRequest) {
       revenueCents,
       bookingCount,
     }));
+
+    if (experienceIdFilter && (fromDateVal || toDateVal)) {
+      revenueInRangeCents = byExperience.find((r) => r.experienceId === experienceIdFilter)?.revenueCents ?? 0;
+    }
 
     let stripeData: {
       balanceAvailableCents: number;
@@ -185,6 +231,11 @@ export async function GET(request: NextRequest) {
       activeBookingCount,
       totalBookingCount,
       recent: recentSlice,
+      recentListTruncated: truncated,
+      recentListMaxPages: MAX_RECENT_PAGES,
+      ...(truncated && {
+        truncationWarning: `Booking list aggregation stopped after ${MAX_RECENT_PAGES} pages (${MAX_RECENT_PAGES * PAGE_SIZE} rows). Totals above use summary documents; narrow date filters for full detail.`,
+      }),
       byExperience,
       stripe: stripeData,
     });

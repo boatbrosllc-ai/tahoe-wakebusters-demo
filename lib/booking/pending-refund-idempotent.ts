@@ -34,14 +34,16 @@ export async function upsertPendingRefundRecord(
   db: Firestore,
   stable: PendingRefundStableParts,
   payload: Record<string, unknown>
-): Promise<void> {
+): Promise<{ wasNew: boolean }> {
   const { FieldValue, Timestamp } = getFirestoreExports();
   const docId = pendingRefundDocumentId(stable);
   const ref = db.collection("pendingRefunds").doc(docId);
+  let wasNew = false;
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const now = Timestamp.now();
     if (!snap.exists) {
+      wasNew = true;
       tx.set(ref, {
         ...payload,
         reason: stable.reason,
@@ -67,4 +69,5 @@ export async function upsertPendingRefundRecord(
       );
     }
   });
+  return { wasNew };
 }

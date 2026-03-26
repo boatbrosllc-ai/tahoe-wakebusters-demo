@@ -19,10 +19,10 @@ export const WH_RETRY_CHECKOUT_ACTIVE_HOLD_HOLD_NOT_ACTIVE = "whRetry_checkoutAc
 export const WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_PI = "whRetry_checkoutActiveHoldNoPi";
 export const WH_RETRY_CHECKOUT_ACTIVE_HOLD_CONVERT_ERR = "whRetry_checkoutActiveHoldConvertErr";
 
-export const WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND = "whRetry_asyncCheckoutHoldNotFound";
-export const WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID = "whRetry_asyncCheckoutMissingHoldId";
-export const WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI = "whRetry_asyncConvertedHoldNoPi";
-export const WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR = "whRetry_asyncCheckoutConvertErr";
+export const WH_RETRY_CHECKOUT_CONVERTED_HOLD_NOT_FOUND = "whRetry_asyncCheckoutHoldNotFound";
+export const WH_RETRY_CHECKOUT_CONVERTED_MISSING_HOLD_ID = "whRetry_asyncCheckoutMissingHoldId";
+export const WH_RETRY_CHECKOUT_CONVERTED_NO_PI = "whRetry_asyncConvertedHoldNoPi";
+export const WH_RETRY_CHECKOUT_CONVERTED_CONVERT_ERR = "whRetry_asyncCheckoutConvertErr";
 
 export const WH_RETRY_CHECKOUT_COMPLETED_HOLD_NOT_FOUND = "checkoutCompletedHoldNotFoundRetryCount";
 export const WH_RETRY_CHECKOUT_COMPLETED_NO_PI = "whRetry_checkoutCompletedNoPi";

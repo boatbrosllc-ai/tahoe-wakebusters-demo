@@ -131,9 +131,7 @@ async function seedTicketedSharedDepositBooking(): Promise<{
 async function reconcileFinalDueToPaidLikeRunFinalCharges(db: import("firebase-admin/firestore").Firestore, bookingId: string) {
   const { getFirestoreExports } = await import("../lib/booking/firebase-admin");
   const { Timestamp, FieldValue } = getFirestoreExports();
-  const { addFinalChargeSuccessOutboxInTransaction } = await import("../lib/booking/notification-outbox");
-  const { applyFinalPaymentRevenueIncrement } = await import("../lib/booking/summary-revenue");
-  const { resolveFinalBalanceFromBooking } = await import("../lib/booking/final-balance-resolver");
+  const { transitionToFinalPaid } = await import("../lib/booking/final-paid-transition");
   type Booking = import("../lib/booking/types").Booking;
 
   await db.runTransaction(async (tx) => {
@@ -144,23 +142,16 @@ async function reconcileFinalDueToPaidLikeRunFinalCharges(db: import("firebase-a
     if (b.status === "final_paid" && b.stripe?.finalChargedAt) {
       return;
     }
-    const sb = b.stripe;
-    const isDepositFlow = typeof sb?.depositAmountCents === "number";
-    let finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
-    if (finalRev <= 0 && isDepositFlow) {
-      finalRev = resolveFinalBalanceFromBooking(b).authoritativeFinalCents;
-    }
-    const alreadySummarized = sb?.finalRevenueSummaryApplied === true;
-    if (isDepositFlow && finalRev > 0 && !alreadySummarized) {
-      applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, b, bookingId);
-    }
-    tx.update(bookingRef, {
-      status: "final_paid",
-      "stripe.finalChargedAt": Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      ...(isDepositFlow && finalRev > 0 && !alreadySummarized ? { "stripe.finalRevenueSummaryApplied": true } : {}),
-    });
-    await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
+    await transitionToFinalPaid(
+      tx,
+      db,
+      bookingRef,
+      b,
+      bookingId,
+      "pi_test_reconcile",
+      FieldValue,
+      Timestamp
+    );
   });
 }
 
@@ -261,7 +252,7 @@ describe(
         currency: "usd",
         metadata: {},
       } as import("stripe").Stripe.PaymentIntent;
-      const convertInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, {
+      const convertInput = await buildConvertHoldInputFromSucceededPaymentIntent(pi, {
         pricing: { totalCents },
         tipCents: 0,
         discountCents: 0,
@@ -293,6 +284,24 @@ describe(
       assert.strictEqual(outSnap.exists, true);
       const o = outSnap.data() as { type?: string };
       assert.strictEqual(o.type, "final_charge_success");
+    });
+
+    it("reconcile path increments revenue when stripe.finalAmountCents is absent", async () => {
+      const { getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { FieldValue } = getFirestoreExports();
+      const { db, bookingId } = await seedTicketedSharedDepositBooking();
+      await db.collection("bookings").doc(bookingId).update({
+        "stripe.finalAmountCents": FieldValue.delete(),
+        "stripe.finalRevenueSummaryApplied": FieldValue.delete(),
+      });
+
+      await reconcileFinalDueToPaidLikeRunFinalCharges(db, bookingId);
+
+      const bSnap = await db.collection("bookings").doc(bookingId).get();
+      assert.strictEqual(bSnap.exists, true);
+      const b = bSnap.data() as { stripe?: { finalRevenueSummaryApplied?: boolean }; status?: string };
+      assert.strictEqual(b.status, "final_paid");
+      assert.strictEqual(b.stripe?.finalRevenueSummaryApplied, true);
     });
 
     it("post_conversion_preconversion_success pendingRefund upsert does not create a second booking", async () => {

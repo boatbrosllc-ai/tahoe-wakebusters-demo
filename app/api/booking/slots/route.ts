@@ -267,6 +267,7 @@ export async function GET(request: NextRequest) {
       const inferredSlugFromTitle = inferSlugFromTitle(expData?.title ?? expData?.name);
       const effectiveSlug = experienceSlug || inferredSlugFromTitle;
       const slugForBoatType = getSlugForBoatTypeFilter(experienceSlug, inferredSlugFromTitle, experienceId ?? "", expData?.title ?? expData?.name).toLowerCase();
+      // Transitional compatibility shim while legacy slug-based experienceId rows are backfilled.
       const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
       const boatSnapPromises = experienceIdVariants.map((variantId) =>
         db
@@ -402,6 +403,7 @@ export async function GET(request: NextRequest) {
 
         // Build experience ID variants once so all queries run in parallel across all IDs.
         // Use effectiveSlug (incl. inferred from title) so sunset/holiday match when Firestore slug is missing.
+        // Transitional compatibility shim while legacy slug-based experienceId rows are backfilled.
         const tAllExpIds = getExperienceIdVariants(experienceId, effectiveSlug);
         const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
 
@@ -1223,8 +1225,9 @@ export async function GET(request: NextRequest) {
             const updatedAt = data.updatedAt as { toDate?: () => Date } | undefined;
             const updatedAtIso = updatedAt?.toDate?.()?.toISOString?.() ?? null;
             // Consistency model: bookings collection is source-of-truth; slot docs are eventual projections.
-            // Known risk window: shortly after write propagation, stale slot rows can still say "booked".
-            const status = data.status === "booked" ? "open" : data.status;
+            // Conservative rule: do not demote slot docs from "booked" -> "open" when the merge is absent.
+            // When bookings haven't propagated yet, keeping "booked" avoids showing phantom availability.
+            const status = data.status;
             // Resolve bookingId from bookings collection so admin calendar detail fetch works (slot doc may store non-doc id).
             const resolvedBookingId = bookingIdByBoatAndSlot.get(`${bid}:${slotIdNorm}`) ?? data.bookingId;
             const hid = typeof data.holdId === "string" && data.holdId.trim() ? data.holdId.trim() : null;
@@ -1646,8 +1649,8 @@ export async function GET(request: NextRequest) {
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
       const parsed = parseSlotIdRelaxed(doc.id);
-      // Same eventual-consistency rule: stale slot-doc "booked" is demoted to open.
-      let status: string = data.status === "booked" ? "open" : data.status;
+      // Same conservative rule as charter: never demote slot-doc "booked" -> "open".
+      let status: string = data.status;
       const hidRaw = typeof data.holdId === "string" && data.holdId.trim() ? data.holdId.trim() : null;
       if (status === "held" && hidRaw) legacySlotHoldIdByDocId.set(doc.id, hidRaw);
       return {

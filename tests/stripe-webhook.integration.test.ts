@@ -67,8 +67,8 @@ describe("stripe webhook route (source contracts)", () => {
     assert.match(webhookSrc, /reclaimedStale:\s*true/);
   });
 
-  it("final-stage payment_intent.succeeded uses outbox for receipt email (durable with final_paid)", () => {
-    assert.match(webhookSrc, /addFinalChargeSuccessOutboxInTransaction/);
+  it("final-stage payment_intent.succeeded delegates durable final-paid transition", () => {
+    assert.match(webhookSrc, /transitionToFinalPaid/);
     assert.match(webhookSrc, /final_paid_idempotent/);
   });
 
@@ -77,11 +77,15 @@ describe("stripe webhook route (source contracts)", () => {
     assert.match(webhookSrc, /sendFinalChargeFailedEmail/);
   });
 
-  it("checkout.session.completed (paid, active hold) delegates conversion through convertHoldToBooking", () => {
+  it("checkout.session.completed (paid, active hold) delegates conversion through resolveAndConvertPayment", () => {
     assert.ok(
       webhookSrc.includes('runCheckoutSessionActiveHoldConversion(session, eventId, "checkout_session_completed")')
     );
-    assert.ok(webhookSrc.includes("await convertHoldToBooking(db, holdId, convertInput)"));
+    assert.ok(webhookSrc.includes("resolveAndConvertPayment"));
+  });
+
+  it("async converted-hold branch uses the shared conversion resolver", () => {
+    assert.ok(webhookSrc.includes('source: "checkout_webhook"'));
   });
 
   it("async_payment_succeeded missing holdId retries first before permanent dead-letter", () => {

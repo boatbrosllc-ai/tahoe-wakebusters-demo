@@ -14,6 +14,11 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { getCleanupHoldSlotAction } from "@/lib/booking/cleanup-holds-slot-action";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import type Stripe from "stripe";
+import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
+import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
+import { isBookingBlockedByOperatorError } from "@/lib/booking/convert-hold-to-booking";
 
 export { getCleanupHoldSlotAction };
 
@@ -203,51 +208,168 @@ export async function runRollbackPendingAutoResolveTransaction(
     if (!holdSnap.exists) return "skipped";
     const hold = holdSnap.data() as Record<string, unknown>;
     if ((hold.status as string | undefined) !== "active" || hold.rollbackPending !== true) return "skipped";
-
     if (!isRollbackPendingPastAutoReleaseDeadline(hold)) return "skipped";
+
+    const releaseSlot = async (): Promise<boolean> => {
+      const releasedOk = await db.runTransaction(async (tx) => {
+        const live = await tx.get(holdRef);
+        if (!live.exists) return false;
+        const h = live.data() as Record<string, unknown>;
+        if ((h.status as string | undefined) !== "active" || h.rollbackPending !== true) return false;
+        if (!isRollbackPendingPastAutoReleaseDeadline(h)) return false;
+        return await expireHoldAndReleaseSlotInTransaction(tx, db, FieldValue, holdRef, h);
+      });
+      return releasedOk;
+    };
 
     const fullPi = (hold as { fullPaymentIntentId?: string }).fullPaymentIntentId;
     const depPi = (hold as { depositPaymentIntentId?: string }).depositPaymentIntentId;
     const piIds = [fullPi, depPi].filter((id): id is string => typeof id === "string" && id.trim().length > 0);
 
-    for (const piId of piIds) {
+    for (const piIdRaw of piIds) {
+      const piId = piIdRaw.trim();
       try {
-        const pi = await stripe.paymentIntents.retrieve(piId.trim());
-        if (pi.status === "succeeded") {
+        const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
+        if (pi.status !== "succeeded") continue;
+
+        try {
+          const conversion = await resolveAndConvertPayment(db, {
+            paymentIntentId: piId,
+            holdId: holdRef.id,
+            source: "pi_webhook",
+            paymentIntent: pi,
+          });
+
+          if ("alreadyConverted" in conversion.result || "bookingId" in conversion.result) {
+            await writeOperationalAlert({
+              type: "rollback_pending_hold_late_conversion_recovered",
+              source: "rollback-pending-reconcile",
+              holdId: holdRef.id,
+              paymentIntentId: piId,
+              hint: "rollbackPending auto-release deadline passed; late conversion succeeded.",
+            });
+            return "released";
+          }
+
+          // amountIntegrityMismatch is a permanent conversion block; pendingRefund is already upserted by convertHoldToBooking.
           await writeOperationalAlert({
-            type: "rollback_pending_hold_pi_succeeded_after_deadline",
+            type: "rollback_pending_hold_late_conversion_amount_integrity_mismatch",
             source: "rollback-pending-reconcile",
             holdId: holdRef.id,
             paymentIntentId: piId,
-            hint:
-              "Rollback auto-release deadline passed but Stripe reports succeeded PaymentIntent; slot may still be held — review conversion / complete-after-payment.",
+            hint: "Conversion returned amountIntegrityMismatch; releasing slot after flagging pendingRefund.",
           });
-          return "skipped";
+
+          const releasedOk = await releaseSlot();
+          return releasedOk ? "released" : "skipped";
+        } catch (convErr) {
+          // Retriable conversion errors: keep rollbackPending for the next cron cycle.
+          if (
+            convErr instanceof ResolveAndConvertPaymentError ||
+            convErr instanceof BlockCheckUnavailableError ||
+            convErr instanceof LegacyScanLimitReachedError
+          ) {
+            await writeOperationalAlert({
+              type: "rollback_pending_hold_late_conversion_retriable_error",
+              source: "rollback-pending-reconcile",
+              holdId: holdRef.id,
+              paymentIntentId: piId,
+              hint:
+                convErr instanceof Error
+                  ? convErr.message.slice(0, 500)
+                  : String(convErr).slice(0, 500),
+            });
+            return "skipped";
+          }
+
+          // Permanent conversion errors: flag pendingRefund then release slot.
+          const piAmountTotal = typeof pi.amount === "number" ? pi.amount : undefined;
+          const piCurrency = typeof pi.currency === "string" ? pi.currency : undefined;
+          const customerEmail = (hold.customerDraft as { email?: string } | undefined)?.email;
+          const errMsg = convErr instanceof Error ? convErr.message : String(convErr);
+
+          try {
+            if (isBookingBlockedByOperatorError(convErr)) {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "operator_date_blocked_at_conversion",
+                  holdId: holdRef.id,
+                  paymentIntentId: piId,
+                },
+                {
+                  holdId: holdRef.id,
+                  paymentIntentId: piId,
+                  amountTotal: piAmountTotal,
+                  currency: piCurrency,
+                  ...(customerEmail && { customerEmail }),
+                }
+              );
+            } else if (errMsg === "Hold has expired") {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "hold_expired_after_payment",
+                  holdId: holdRef.id,
+                  duplicatePaymentIntentId: piId,
+                },
+                {
+                  holdId: holdRef.id,
+                  duplicatePaymentIntentId: piId,
+                  ...(customerEmail && { customerEmail }),
+                }
+              );
+            } else {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "rollback_pending_hold_conversion_permanent_error",
+                  holdId: holdRef.id,
+                  paymentIntentId: piId,
+                },
+                {
+                  holdId: holdRef.id,
+                  paymentIntentId: piId,
+                  amountTotal: piAmountTotal,
+                  currency: piCurrency,
+                  convertError: errMsg.slice(0, 500),
+                  ...(customerEmail && { customerEmail }),
+                }
+              );
+            }
+          } catch (refundFlagErr) {
+            console.error("[rollback-pending-reconcile] upsertPendingRefundRecord failed", {
+              holdId: holdRef.id,
+              paymentIntentId: piId,
+              error: refundFlagErr instanceof Error ? refundFlagErr.message : String(refundFlagErr),
+            });
+          }
+
+          await writeOperationalAlert({
+            type: "rollback_pending_hold_late_conversion_permanent_error_releasing",
+            source: "rollback-pending-reconcile",
+            holdId: holdRef.id,
+            paymentIntentId: piId,
+            lastError: errMsg.slice(0, 500),
+          });
+
+          const releasedOk = await releaseSlot();
+          return releasedOk ? "released" : "skipped";
         }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn("[rollback-pending-reconcile] PI retrieve failed; proceeding with release attempt", {
+      } catch (piErr) {
+        const msg = piErr instanceof Error ? piErr.message : String(piErr);
+        console.warn("[rollback-pending-reconcile] payment_intent retrieve failed; skipping PI", {
           holdId: holdRef.id,
           piId,
           msg: msg.slice(0, 200),
         });
+        continue;
       }
     }
 
-    const outcomeRef = { released: false };
-    await db.runTransaction(async (tx) => {
-      const live = await tx.get(holdRef);
-      if (!live.exists) return;
-      const h = live.data() as Record<string, unknown>;
-      if ((h.status as string | undefined) !== "active" || h.rollbackPending !== true) return;
-
-      if (!isRollbackPendingPastAutoReleaseDeadline(h)) return;
-
-      const releasedOk = await expireHoldAndReleaseSlotInTransaction(tx, db, FieldValue, holdRef, h);
-      if (releasedOk) outcomeRef.released = true;
-    });
-
-    if (outcomeRef.released) {
+    // No succeeded PaymentIntent observed: release the slot after rollbackPendingExpiresAt.
+    const releasedOk = await releaseSlot();
+    if (releasedOk) {
       await writeOperationalAlert({
         type: "rollback_pending_hold_auto_released_after_deadline",
         source: "rollback-pending-reconcile",
@@ -255,8 +377,7 @@ export async function runRollbackPendingAutoResolveTransaction(
         hint: "Slot released after rollbackPendingExpiresAt with no succeeded PaymentIntent observed.",
       }).catch(() => {});
     }
-
-    return outcomeRef.released ? "released" : "skipped";
+    return releasedOk ? "released" : "skipped";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[rollback-pending-reconcile] transaction failed", { holdId: holdRef.id, error: message }, err);

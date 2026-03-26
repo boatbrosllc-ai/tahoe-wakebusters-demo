@@ -7,7 +7,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { getFirestoreExports } from "./firebase-admin";
 
-const LEASE_MS = 2 * 60 * 1000;
+const LEASE_MS = 10 * 60 * 1000;
 
 function dedupeKey(bookingId: string, paymentIntentId?: string): string {
   return paymentIntentId ?? `cron_${bookingId}`;
@@ -45,6 +45,7 @@ export async function tryBeginFinalFailureNotificationSend(
     if (leaseUntil && leaseUntil.getTime() > nowMs) return false;
     tx.update(ref, {
       "stripe.finalFailureNotifyLeaseUntil": Timestamp.fromDate(new Date(nowMs + LEASE_MS)),
+      "stripe.finalFailureNotifiedPaymentIntentId": key,
       updatedAt: FieldValue.serverTimestamp(),
     });
     return true;

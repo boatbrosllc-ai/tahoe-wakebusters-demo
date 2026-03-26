@@ -86,6 +86,17 @@ export async function hasOverlappingBlock(opts: {
       const message = err instanceof Error ? err.message : String(err);
       const indexRelated = code === "failed-precondition" || /index/i.test(message);
       if (indexRelated) {
+        const failOpen =
+          process.env.NODE_ENV !== "production" || process.env.BLOCK_CHECK_FAIL_OPEN === "true";
+        if (failOpen) {
+          bookingWarn("slot-availability", "blocks query failed; treating as unblocked in fail-open mode", {
+            experienceId: expIdForQuery,
+            firestoreCode: code ?? null,
+            message: message.slice(0, 800),
+            hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
+          });
+          return false;
+        }
         bookingWarn("slot-availability", "blocks query failed; cannot verify admin blocks — returning 503 to callers", {
           experienceId: expIdForQuery,
           firestoreCode: code ?? null,
@@ -112,6 +123,17 @@ export async function hasOverlappingBlock(opts: {
       const message = err instanceof Error ? err.message : String(err);
       const indexRelated = code === "failed-precondition" || /index/i.test(message);
       if (indexRelated) {
+        const failOpen =
+          process.env.NODE_ENV !== "production" || process.env.BLOCK_CHECK_FAIL_OPEN === "true";
+        if (failOpen) {
+          bookingWarn("slot-availability", "blocks slug query failed; treating as unblocked in fail-open mode", {
+            experienceSlug: slugForQuery,
+            firestoreCode: code ?? null,
+            message: message.slice(0, 800),
+            hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
+          });
+          return false;
+        }
         bookingWarn("slot-availability", "blocks slug query failed; cannot verify admin blocks — returning 503 to callers", {
           experienceSlug: slugForQuery,
           firestoreCode: code ?? null,

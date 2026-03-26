@@ -172,10 +172,10 @@ export type CompleteAfterPaymentClientOutcome =
       holdExpired?: boolean;
       status: number;
     }
-  | { kind: "processing_timeout"; message: string; pollHardTimeoutMs?: number }
+  | { kind: "processing_timeout"; message: string; pollHardTimeoutMs?: number; experienceId?: string }
   | { kind: "aborted" }
   | { kind: "fetch_error"; message: string; isAbort: boolean }
-  | { kind: "stall_timeout"; message: string; pollHardTimeoutMs?: number };
+  | { kind: "stall_timeout"; message: string; pollHardTimeoutMs?: number; experienceId?: string };
 
 function parseJsonSafe<T>(res: Response): Promise<T> {
   return res.json().catch(() => ({} as T));
@@ -263,6 +263,8 @@ export async function completeAfterPaymentWithPolling(options: {
   }
 
   let json = (await parseJsonSafe<CompleteAfterJson>(res)) as CompleteAfterJson;
+  const experienceIdInitial =
+    typeof json.experienceId === "string" && json.experienceId.trim() ? json.experienceId.trim() : undefined;
 
   const isProcessing =
     json?.processing === true || (res.status === 202 && json?.processing !== false);
@@ -288,11 +290,13 @@ export async function completeAfterPaymentWithPolling(options: {
           receiptClaimToken: token,
         });
         signal.removeEventListener("abort", onParentAbort);
+        if (experienceIdInitial) invalidateBookingCaches(experienceIdInitial);
         return {
           kind: "processing_timeout",
           message:
             "Your payment was received — we are confirming your booking. You will receive a confirmation email shortly.",
           pollHardTimeoutMs: hardLimitMs,
+          experienceId: experienceIdInitial,
         };
       }
       await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
@@ -315,10 +319,12 @@ export async function completeAfterPaymentWithPolling(options: {
         const isAbort = e instanceof Error && e.name === "AbortError";
         const isTimeout = e instanceof Error && e.name === "TimeoutError";
         if (isAbort || isTimeout) {
+          if (experienceIdInitial) invalidateBookingCaches(experienceIdInitial);
           return {
             kind: "stall_timeout",
             message: COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE,
             pollHardTimeoutMs: hardLimitMs,
+            experienceId: experienceIdInitial,
           };
         }
         return {
@@ -344,12 +350,17 @@ export async function completeAfterPaymentWithPolling(options: {
 
       if (pollRes.ok && pollJson?.reconciliationPending) {
         signal.removeEventListener("abort", onParentAbort);
+        const expId =
+          typeof pollJson.experienceId === "string" && pollJson.experienceId.trim()
+            ? pollJson.experienceId.trim()
+            : undefined;
+        if (expId) invalidateBookingCaches(expId);
         return {
           kind: "reconciliation_pending",
           message:
             (typeof pollJson.message === "string" && pollJson.message) ||
             "Your payment is being reconciled. Please wait for email confirmation or contact us.",
-          experienceId: typeof pollJson.experienceId === "string" ? pollJson.experienceId : undefined,
+          experienceId: expId,
         };
       }
 
@@ -397,6 +408,7 @@ export async function completeAfterPaymentWithPolling(options: {
   signal.removeEventListener("abort", onParentAbort);
 
   if (res.ok && json?.reconciliationPending) {
+    if (typeof json.experienceId === "string" && json.experienceId.trim()) invalidateBookingCaches(json.experienceId.trim());
     return {
       kind: "reconciliation_pending",
       message:

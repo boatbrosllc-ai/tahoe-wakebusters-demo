@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+
+/** Netlify Pro max serverless duration; webhook conversion must finish or stripeEvents may stall mid-flight. */
+export const maxDuration = 26;
 import { getStripe } from "@/lib/booking/stripe-client";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import {
@@ -14,7 +17,6 @@ import { bookingEnv, validateWebhookEnv } from "@/lib/booking/env";
 import {
   convertHoldToBooking,
   isBookingBlockedByOperatorError,
-  type ConvertHoldInput,
 } from "@/lib/booking/convert-hold-to-booking";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
@@ -30,12 +32,12 @@ import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import {
-  buildConvertHoldInputFromSucceededPaymentIntent,
   checkoutIncomingMismatchAgainstHold,
   customerOverrideFromPaymentIntent,
   patchBookingCustomerIfPlaceholderFromCheckoutSession,
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
+import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
 import { sendBookingConfirmationCopyToBusiness } from "@/lib/booking/brevo";
 import {
   tryBeginFinalFailureNotificationSend,
@@ -46,8 +48,9 @@ import { logNotificationSent } from "@/lib/booking/email-log";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
-import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
-import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import { transitionToFinalPaid } from "@/lib/booking/final-paid-transition";
+import { resolveFinalBalanceFromBooking } from "@/lib/booking/final-balance-resolver";
+import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
 import { executeFinalFailedBookingReleaseTransaction } from "@/lib/booking/release-hold-transaction";
 import type { BookingStatus } from "@/lib/booking/types";
@@ -124,17 +127,40 @@ export async function POST(request: NextRequest) {
     /** Bumps per-path retry counters on `stripeEvents/{eventId}`; use with `webhookTransientFailureShouldRetry`. */
     const recordWebhookRetryAttempt = (counterField: string) =>
       incrementStripeWebhookRetryCounter(db, eventsRef, eventId, counterField);
-    /** 2 minutes blocks the ~1-minute Stripe retry window from concurrent duplicate processing; ~5-minute Stripe retries proceed after a crashed handler. */
-    const PROCESSING_LEASE_MS = 5 * 60 * 1000;
+    /** 2 minutes blocks the ~1-minute Stripe retry window from concurrent duplicate processing; later Stripe retries proceed after a crashed handler. */
+    const PROCESSING_LEASE_MS = 2 * 60 * 1000;
 
-    type ClaimResult = { runHandler: boolean; alreadyCompleted: boolean; reclaimedStale?: boolean };
+    type ClaimResult = { runHandler: boolean; alreadyCompleted: boolean; reclaimedStale?: boolean; needsCustomerPatch?: boolean };
     const claimResult = await db.runTransaction(async (tx): Promise<ClaimResult> => {
       const ref = eventsRef.doc(eventId);
       const d = await tx.get(ref);
       const now = Timestamp.now();
       if (d.exists) {
-        const data = d.data() as { status?: string; receivedAt?: { toDate(): Date }; leaseExpiresAt?: { toDate(): Date }; eventType?: string };
-        if (data.status === "completed") return { runHandler: false, alreadyCompleted: true };
+        const data = d.data() as {
+          status?: string;
+          receivedAt?: { toDate(): Date };
+          leaseExpiresAt?: { toDate(): Date };
+          eventType?: string;
+          outcome?: string;
+        };
+        if (data.status === "completed") {
+          const outcome = data.outcome;
+          const requiresConversionCustomerPatch =
+            typeof outcome === "string" &&
+            (outcome.includes("_already_converted") ||
+              outcome.includes("_booking_created") ||
+              outcome.includes("_hold_converted_idempotent") ||
+              outcome.includes("duplicate_checkout_flagged_refund") ||
+              outcome.includes("_expired_hold_refund_required"));
+          return {
+            runHandler: false,
+            alreadyCompleted: true,
+            needsCustomerPatch:
+              (data as { customerPatched?: boolean }).customerPatched !== true &&
+              event!.type.startsWith("checkout.session.") &&
+              requiresConversionCustomerPatch,
+          };
+        }
         if (data.status === "processing") {
           const leaseExpiresAt = data.leaseExpiresAt?.toDate?.();
           const stale = leaseExpiresAt && leaseExpiresAt.getTime() < Date.now();
@@ -169,6 +195,52 @@ export async function POST(request: NextRequest) {
 
     bookingLog("stripe-webhook", "event received", { eventIdPrefix: eventId.slice(0, 8), eventType: event.type });
     if (claimResult.alreadyCompleted) {
+      if (claimResult.needsCustomerPatch) {
+        bookingLog("stripe-webhook", "event already completed; retrying customer placeholder patch", {
+          eventIdPrefix: eventId.slice(0, 8),
+          eventType: event.type,
+        });
+        if (event.type.startsWith("checkout.session.")) {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const holdId = typeof session.metadata?.holdId === "string" ? session.metadata?.holdId.trim() : undefined;
+          const paymentIntentId =
+            typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? undefined;
+          if (holdId) {
+            let customerPatched = false;
+            try {
+              customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+            } catch (patchErr) {
+              const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+              await writeOperationalAlert({
+                type: "stripe_webhook_customer_patch_failed",
+                source: "stripe-webhook",
+                holdId,
+                sessionId: session.id,
+                paymentIntentId,
+                lastError: lastError.slice(0, 500),
+              });
+              customerPatched = false;
+            }
+            await eventsRef.doc(eventId).set(
+              { customerPatched, updatedAt: FieldValue.serverTimestamp() },
+              { merge: true }
+            );
+            if (!customerPatched) {
+              return NextResponse.json(
+                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                { status: 500 }
+              );
+            }
+          } else {
+            // Avoid infinite 5xx loops if we can't correlate to a hold.
+            await eventsRef.doc(eventId).set(
+              { customerPatched: true, updatedAt: FieldValue.serverTimestamp() },
+              { merge: true }
+            );
+          }
+          return NextResponse.json({ received: true });
+        }
+      }
       bookingLog("stripe-webhook", "event already completed, skipping", { eventIdPrefix: eventId.slice(0, 8) });
       return NextResponse.json({ received: true });
     }
@@ -199,6 +271,7 @@ export async function POST(request: NextRequest) {
         paymentIntentId?: string;
         amountTotal?: number;
         currency?: string;
+        customerPatched?: boolean;
       }
     ) => {
       await eventsRef.doc(docId).set(
@@ -253,6 +326,21 @@ export async function POST(request: NextRequest) {
         source: "stripe-webhook",
         outcome,
       });
+      let customerPatched = false;
+      try {
+        customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+      } catch (patchErr) {
+        const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+        await writeOperationalAlert({
+          type: "stripe_webhook_customer_patch_failed",
+          source: "stripe-webhook",
+          holdId,
+          sessionId,
+          paymentIntentId,
+          lastError: lastError.slice(0, 500),
+        });
+        customerPatched = false;
+      }
       await writeEventResult(evId, {
         status: "completed",
         processedAt: Timestamp.now(),
@@ -263,8 +351,9 @@ export async function POST(request: NextRequest) {
         paymentIntentId,
         amountTotal,
         currency,
+        customerPatched,
       });
-      await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+      return customerPatched;
     };
 
     /** Active-hold Checkout Session → booking conversion (guard PI vs hold, convert, coupon, patch customer). */
@@ -494,7 +583,7 @@ export async function POST(request: NextRequest) {
         holdPricingActive
       );
       if (!activeGuard.ok) {
-        await rejectStaleCheckoutIds(
+        const customerPatchedOk = await rejectStaleCheckoutIds(
           evId,
           holdId,
           hold,
@@ -507,6 +596,12 @@ export async function POST(request: NextRequest) {
             ? `${outcomePrefix}_checkout_session_id_mismatch`
             : `${outcomePrefix}_payment_intent_mismatch_hold`
         );
+        if (!customerPatchedOk) {
+          return NextResponse.json(
+            { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+            { status: 500 }
+          );
+        }
         return true;
       }
       const customerDetails = session.customer_details;
@@ -526,16 +621,19 @@ export async function POST(request: NextRequest) {
               ? String(v.value).trim() || undefined
               : undefined;
       }
-      const convertInput: ConvertHoldInput = {
-        paymentIntentId,
-        amountTotalCents: amountTotal,
-        currency,
-        customerOverride,
-        specialNotesOverride,
-        checkoutSessionId: sessionId,
-      };
       try {
-        const result = await convertHoldToBooking(db, holdId, convertInput);
+        const conversion = await resolveAndConvertPayment(db, {
+          paymentIntentId,
+          holdId,
+          amountTotalCents: amountTotal,
+          currency,
+          source: "checkout_webhook",
+          paymentIntent: piActiveGuard,
+          customerOverride,
+          specialNotes: specialNotesOverride,
+          checkoutSessionId: sessionId,
+        });
+        const result = conversion.result;
         if ("amountIntegrityMismatch" in result) {
           await writeOperationalAlert({
             type: "stripe_webhook_amount_integrity_mismatch",
@@ -577,6 +675,22 @@ export async function POST(request: NextRequest) {
           });
           return true;
         }
+        // Patch placeholder checkout emails; if incomplete, mark event completed but force Stripe retry.
+        let customerPatched = false;
+        try {
+          customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+        } catch (patchErr) {
+          const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+          await writeOperationalAlert({
+            type: "stripe_webhook_customer_patch_failed",
+            source: "stripe-webhook",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            lastError: lastError.slice(0, 500),
+          });
+          customerPatched = false;
+        }
         if ("alreadyConverted" in result) {
           bookingLog("stripe-webhook", "checkout session active-hold conversion (already converted)", {
             holdId,
@@ -592,6 +706,7 @@ export async function POST(request: NextRequest) {
             paymentIntentId,
             amountTotal,
             currency,
+            customerPatched,
           });
         } else {
           bookingLog("stripe-webhook", "checkout session active-hold conversion (booking created)", {
@@ -609,13 +724,27 @@ export async function POST(request: NextRequest) {
             paymentIntentId,
             amountTotal,
             currency,
+            customerPatched,
           });
         }
-        await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
         deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
+        if (!customerPatched) return false;
         return true;
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+        if (convertErr instanceof ResolveAndConvertPaymentError && convertErr.kind === "PI_MATCH_FAILED") {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "PI_MATCH_FAILED",
+            holdId,
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
         if (convertErr instanceof BlockCheckUnavailableError || convertErr instanceof LegacyScanLimitReachedError) {
           await writeEventResult(evId, {
             status: "failed_retryable",
@@ -874,7 +1003,7 @@ export async function POST(request: NextRequest) {
         if (hold.status === "converted") {
           const authCsConv = hold.checkoutSessionId?.trim();
           if (authCsConv && authCsConv !== sessionId) {
-            await rejectStaleCheckoutIds(
+            const customerPatchedOk = await rejectStaleCheckoutIds(
               evId,
               holdId,
               hold,
@@ -885,6 +1014,12 @@ export async function POST(request: NextRequest) {
               currency,
               "async_checkout_stale_checkout_session_id"
             );
+            if (!customerPatchedOk) {
+              return NextResponse.json(
+                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                { status: 500 }
+              );
+            }
             return true;
           }
           if (!paymentIntentId) {
@@ -953,7 +1088,7 @@ export async function POST(request: NextRequest) {
             holdPricingConv
           );
           if (!convGuard.ok) {
-            await rejectStaleCheckoutIds(
+            const customerPatchedOk = await rejectStaleCheckoutIds(
               evId,
               holdId,
               hold,
@@ -966,6 +1101,12 @@ export async function POST(request: NextRequest) {
                 ? "async_payment_succeeded_checkout_session_id_mismatch"
                 : "async_payment_succeeded_payment_intent_mismatch_hold"
             );
+            if (!customerPatchedOk) {
+              return NextResponse.json(
+                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                { status: 500 }
+              );
+            }
             return true;
           }
           const customerDetails = session.customer_details;
@@ -985,16 +1126,20 @@ export async function POST(request: NextRequest) {
                   ? String(v.value).trim() || undefined
                   : undefined;
           }
-          const convertInput: ConvertHoldInput = {
-            paymentIntentId,
-            amountTotalCents: amountTotal,
-            currency,
-            customerOverride,
-            specialNotesOverride,
-            checkoutSessionId: sessionId,
-          };
           try {
-            const result = await convertHoldToBooking(db, holdId, convertInput);
+            const conversion = await resolveAndConvertPayment(db, {
+              paymentIntentId,
+              holdId,
+              source: "checkout_webhook",
+              checkoutSession: session,
+              checkoutSessionId: sessionId,
+              paymentIntent: piConvGuard,
+              amountTotalCents: amountTotal ?? undefined,
+              currency: currency ?? undefined,
+              customerOverride,
+              specialNotes: specialNotesOverride,
+            });
+            const result = conversion.result;
             if ("amountIntegrityMismatch" in result) {
               await writeOperationalAlert({
                 type: "stripe_webhook_amount_integrity_mismatch",
@@ -1036,6 +1181,21 @@ export async function POST(request: NextRequest) {
               });
               return true;
             }
+            let customerPatched = false;
+            try {
+              customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+            } catch (patchErr) {
+              const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+              await writeOperationalAlert({
+                type: "stripe_webhook_customer_patch_failed",
+                source: "stripe-webhook",
+                holdId,
+                sessionId,
+                paymentIntentId,
+                lastError: lastError.slice(0, 500),
+              });
+              customerPatched = false;
+            }
             if ("alreadyConverted" in result) {
               await writeEventResult(evId, {
                 status: "completed",
@@ -1046,6 +1206,7 @@ export async function POST(request: NextRequest) {
                 paymentIntentId,
                 amountTotal,
                 currency,
+                customerPatched,
               });
             } else {
               await writeEventResult(evId, {
@@ -1058,10 +1219,11 @@ export async function POST(request: NextRequest) {
                 paymentIntentId,
                 amountTotal,
                 currency,
+                customerPatched,
               });
             }
-            await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
             deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
+            if (!customerPatched) return false;
             return true;
           } catch (convertErr) {
             const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
@@ -1250,6 +1412,21 @@ export async function POST(request: NextRequest) {
           } catch (refundErr) {
             console.error("[stripe-webhook] Failed to write pendingRefunds for async checkout expired hold", refundErr);
           }
+          let customerPatched = false;
+          try {
+            customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          } catch (patchErr) {
+            const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+            await writeOperationalAlert({
+              type: "stripe_webhook_customer_patch_failed",
+              source: "stripe-webhook",
+              holdId,
+              sessionId,
+              paymentIntentId,
+              lastError: lastError.slice(0, 500),
+            });
+            customerPatched = false;
+          }
           await writeEventResult(evId, {
             status: "completed",
             processedAt: Timestamp.now(),
@@ -1260,8 +1437,9 @@ export async function POST(request: NextRequest) {
             paymentIntentId,
             amountTotal,
             currency,
+            customerPatched,
           });
-          await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          if (!customerPatched) return false;
           return true;
         }
         await writeEventResult(evId, {
@@ -1374,7 +1552,7 @@ export async function POST(request: NextRequest) {
         if (hold.status === "converted") {
           const authCs = hold.checkoutSessionId?.trim();
           if (authCs && authCs !== sessionId) {
-            await rejectStaleCheckoutIds(
+            const customerPatchedOk = await rejectStaleCheckoutIds(
               eventId,
               holdId,
               hold,
@@ -1385,6 +1563,12 @@ export async function POST(request: NextRequest) {
               currency,
               "checkout_session_completed_stale_checkout_session_id"
             );
+            if (!customerPatchedOk) {
+              return NextResponse.json(
+                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                { status: 500 }
+              );
+            }
             return NextResponse.json({ received: true });
           }
           const recordedPiId = (hold as { fullPaymentIntentId?: string }).fullPaymentIntentId;
@@ -1397,7 +1581,7 @@ export async function POST(request: NextRequest) {
                 const mainPi = bookingRow.stripe?.paymentIntentId;
                 const depPi = bookingRow.stripe?.depositPaymentIntentId;
                 if (mainPi !== paymentIntentId && depPi !== paymentIntentId) {
-                  await rejectStaleCheckoutIds(
+                  const customerPatchedOk = await rejectStaleCheckoutIds(
                     eventId,
                     holdId,
                     hold,
@@ -1408,21 +1592,33 @@ export async function POST(request: NextRequest) {
                     currency,
                     "checkout_session_completed_converted_hold_pi_mismatch_no_full_pi_on_hold"
                   );
+                  if (!customerPatchedOk) {
+                    return NextResponse.json(
+                      { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                      { status: 500 }
+                    );
+                  }
                   return NextResponse.json({ received: true });
                 }
               } else {
-                await rejectStaleCheckoutIds(
-                  eventId,
-                  holdId,
-                  hold,
-                  session,
-                  sessionId,
-                  paymentIntentId,
-                  amountTotal,
-                  currency,
-                  "checkout_session_completed_converted_hold_booking_missing"
+              const customerPatchedOk = await rejectStaleCheckoutIds(
+                eventId,
+                holdId,
+                hold,
+                session,
+                sessionId,
+                paymentIntentId,
+                amountTotal,
+                currency,
+                "checkout_session_completed_converted_hold_booking_missing"
+              );
+              if (!customerPatchedOk) {
+                return NextResponse.json(
+                  { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                  { status: 500 }
                 );
-                return NextResponse.json({ received: true });
+              }
+              return NextResponse.json({ received: true });
               }
             }
           }
@@ -1455,6 +1651,21 @@ export async function POST(request: NextRequest) {
             } catch (refundErr) {
               console.error("[stripe-webhook] Failed to write pendingRefunds for duplicate checkout", refundErr);
             }
+            let customerPatched = false;
+            try {
+              customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+            } catch (patchErr) {
+              const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+              await writeOperationalAlert({
+                type: "stripe_webhook_customer_patch_failed",
+                source: "stripe-webhook",
+                holdId,
+                sessionId,
+                paymentIntentId,
+                lastError: lastError.slice(0, 500),
+              });
+              customerPatched = false;
+            }
             await writeEventResult(eventId, {
               status: "completed",
               processedAt: Timestamp.now(),
@@ -1464,12 +1675,33 @@ export async function POST(request: NextRequest) {
               paymentIntentId,
               amountTotal,
               currency,
+              customerPatched,
             });
-            await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
             deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
+            if (!customerPatched) {
+              return NextResponse.json(
+                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+                { status: 500 }
+              );
+            }
             return NextResponse.json({ received: true });
           }
           bookingLog("stripe-webhook", "checkout.session.completed hold already converted (idempotent)", { holdId });
+          let customerPatched = false;
+          try {
+            customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          } catch (patchErr) {
+            const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+            await writeOperationalAlert({
+              type: "stripe_webhook_customer_patch_failed",
+              source: "stripe-webhook",
+              holdId,
+              sessionId,
+              paymentIntentId,
+              lastError: lastError.slice(0, 500),
+            });
+            customerPatched = false;
+          }
           await writeEventResult(eventId, {
             status: "completed",
             processedAt: Timestamp.now(),
@@ -1479,9 +1711,15 @@ export async function POST(request: NextRequest) {
             paymentIntentId,
             amountTotal,
             currency,
+            customerPatched,
           });
-          await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
           deleteStripeCouponFromHoldIfSet(stripe, hold, holdId);
+          if (!customerPatched) {
+            return NextResponse.json(
+              { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+              { status: 500 }
+            );
+          }
           return NextResponse.json({ received: true });
         }
         if (hold.status === "expired") {
@@ -1510,6 +1748,21 @@ export async function POST(request: NextRequest) {
           } catch (refundFlagErr) {
             console.error("[stripe-webhook] Failed to write pendingRefunds for expired hold checkout", refundFlagErr);
           }
+          let customerPatched = false;
+          try {
+            customerPatched = await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          } catch (patchErr) {
+            const lastError = patchErr instanceof Error ? patchErr.message : String(patchErr);
+            await writeOperationalAlert({
+              type: "stripe_webhook_customer_patch_failed",
+              source: "stripe-webhook",
+              holdId,
+              sessionId,
+              paymentIntentId,
+              lastError: lastError.slice(0, 500),
+            });
+            customerPatched = false;
+          }
           await writeEventResult(eventId, {
             status: "completed",
             processedAt: Timestamp.now(),
@@ -1520,8 +1773,14 @@ export async function POST(request: NextRequest) {
             paymentIntentId,
             amountTotal,
             currency,
+            customerPatched,
           });
-          await patchBookingCustomerIfPlaceholderFromCheckoutSession(db, holdId, session, Timestamp.now());
+          if (!customerPatched) {
+            return NextResponse.json(
+              { error: "Customer email placeholder patch incomplete; Stripe will retry" },
+              { status: 500 }
+            );
+          }
           return NextResponse.json({ received: true });
         }
         console.error("[stripe-webhook] checkout.session.completed unexpected hold status", { holdId, status: hold.status });
@@ -1844,28 +2103,20 @@ export async function POST(request: NextRequest) {
             return { action: "event_only", outcome: "final_succeeded_unexpected_status_no_mutation" };
           }
 
-          const stripeB = bookingData.stripe;
-          const isDepositFlow = typeof stripeB?.depositAmountCents === "number";
-          const finalRev =
-            typeof stripeB?.finalAmountCents === "number"
-              ? stripeB.finalAmountCents
-              : typeof piAmountTotal === "number"
-                ? piAmountTotal
-                : 0;
-          const alreadySummarized = stripeB?.finalRevenueSummaryApplied === true;
-          if (isDepositFlow && finalRev > 0 && !alreadySummarized) {
-            applyFinalPaymentRevenueIncrement(tx, db, FieldValue, finalRev, bookingData, bookingId);
-          }
-
-          tx.update(bookingRef, {
-            status: "final_paid",
-            "stripe.finalPaymentIntentId": piId,
-            "stripe.finalChargedAt": Timestamp.now(),
-            "stripe.finalError": FieldValue.delete(),
-            ...(isDepositFlow && finalRev > 0 && !alreadySummarized ? { "stripe.finalRevenueSummaryApplied": true } : {}),
-            updatedAt: FieldValue.serverTimestamp(),
-          });
-          await addFinalChargeSuccessOutboxInTransaction(tx, db, bookingId);
+          const finalRev = typeof bookingData.stripe?.finalAmountCents === "number" ? bookingData.stripe.finalAmountCents : 0;
+          const authoritativeFinalCents =
+            finalRev > 0 ? finalRev : resolveFinalBalanceFromBooking(bookingData).authoritativeFinalCents;
+          await transitionToFinalPaid(
+            tx,
+            db,
+            bookingRef,
+            bookingData,
+            bookingId,
+            piId,
+            FieldValue,
+            Timestamp,
+            authoritativeFinalCents
+          );
           return { action: "write_final_paid" };
         });
 
@@ -1879,7 +2130,15 @@ export async function POST(request: NextRequest) {
                   if (!bs.exists) return;
                   const b = bs.data() as Booking;
                   if (b.status !== "canceled" && b.status !== "refunded") return;
-                  await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b);
+                  const expResolved = await resolveExperienceDocAndSlug(db, b.experienceId);
+                  const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
+                  await resetBookingSlotsToOpenInTransaction(
+                    db,
+                    tx,
+                    bookingId,
+                    bookingForReset,
+                    expResolved?.slug ?? ""
+                  );
                 });
                 bookingLog("stripe-webhook", "payment_intent.succeeded final: terminal booking at tx time — pending refund", { bookingId });
                 await upsertPendingRefundRecord(
@@ -2115,11 +2374,6 @@ export async function POST(request: NextRequest) {
             discountCents: (holdRow as { discountCents?: number }).discountCents,
           }
         : null;
-      const convertInput: ConvertHoldInput = buildConvertHoldInputFromSucceededPaymentIntent(
-        pi,
-        holdForPricing,
-        customerOverridePi ? { customerOverride: customerOverridePi } : undefined
-      );
 
       if (holdRow) {
         const holdIntentIds = {
@@ -2169,8 +2423,34 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (holdRow?.status === "converted" && holdRow.bookingId) {
+        bookingLog("stripe-webhook", "payment_intent.succeeded hold already converted before resolveAndConvertPayment", {
+          holdId,
+          bookingId: holdRow.bookingId,
+          paymentIntentIdPrefix: piId.slice(0, 8),
+        });
+        await writeEventResult(eventId, {
+          status: "completed",
+          processedAt: Timestamp.now(),
+          outcome: "already_converted",
+          holdId,
+          bookingId: holdRow.bookingId,
+          paymentIntentId: piId,
+          amountTotal: piAmountTotal,
+          currency: piCurrency,
+        });
+        return NextResponse.json({ received: true });
+      }
+
       try {
-        const result = await convertHoldToBooking(db, holdId, convertInput);
+        const conversion = await resolveAndConvertPayment(db, {
+          paymentIntentId: piId,
+          holdId,
+          source: "pi_webhook",
+          paymentIntent: pi,
+          customerOverride: customerOverridePi,
+        });
+        const result = conversion.result;
         if ("amountIntegrityMismatch" in result) {
           bookingWarn("stripe-webhook", "convertHoldToBooking amount integrity mismatch", { holdId, paymentIntentIdPrefix: piId.slice(0, 8) });
           await writeOperationalAlert({
@@ -2222,6 +2502,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
+        if (convertErr instanceof ResolveAndConvertPaymentError && convertErr.kind === "PI_MATCH_FAILED") {
+          await writeEventResult(eventId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "PI_MATCH_FAILED",
+            holdId,
+            paymentIntentId: piId,
+            amountTotal: piAmountTotal,
+            currency: piCurrency,
+          });
+          return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+        }
         if (convertErr instanceof BlockCheckUnavailableError || convertErr instanceof LegacyScanLimitReachedError) {
           await writeEventResult(eventId, {
             status: "failed_retryable",
@@ -2376,6 +2668,9 @@ export async function POST(request: NextRequest) {
         bookingData: Booking;
         requiresAction: boolean;
       } | null = null;
+      // When the final_failed release transaction fails, we must retry the full webhook handler
+      // so the release attempt can be made again.
+      let releaseRetryErrMsg: string | null = null;
 
       if (paymentStage === "final") {
         const bookingId = pi.metadata?.bookingId;
@@ -2450,7 +2745,8 @@ export async function POST(request: NextRequest) {
               const newStatus = requiresAction ? "final_requires_action" : "final_failed";
               type FinalFailTxResult =
                 | { kind: "updated"; bookingData: Booking }
-                | { kind: "noop"; outcome: string };
+                | { kind: "noop"; outcome: string }
+                | { kind: "slotReleaseNeeded"; bookingData: Booking };
               const txFail: FinalFailTxResult = await db.runTransaction(async (tx): Promise<FinalFailTxResult> => {
                 const snap = await tx.get(bookingRef);
                 if (!snap.exists) {
@@ -2475,6 +2771,25 @@ export async function POST(request: NextRequest) {
                   return { kind: "noop", outcome: "final_payment_failed_no_authoritative_pi_no_mutation" };
                 }
                 if ((stIn === "final_failed" || stIn === "final_requires_action") && authIn === piId) {
+                  if (stIn === "final_failed") {
+                    const slotId = b.slotId;
+                    const boatId = b.boatId;
+                    const experienceId = b.experienceId;
+                    if (slotId && (boatId || experienceId)) {
+                      const slotRef = boatId
+                        ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+                        : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
+                      const slotSnap = await tx.get(slotRef);
+                      if (slotSnap.exists) {
+                        const slot = slotSnap.data() as Slot;
+                        const slotStatus = slot.status;
+                        const slotBookingId = typeof slot.bookingId === "string" ? slot.bookingId : "";
+                        if (slotStatus === "booked" && slotBookingId === bookingId) {
+                          return { kind: "slotReleaseNeeded", bookingData: b };
+                        }
+                      }
+                    }
+                  }
                   return { kind: "noop", outcome: "final_payment_failed_idempotent" };
                 }
                 tx.update(bookingRef, {
@@ -2487,6 +2802,34 @@ export async function POST(request: NextRequest) {
               });
               if (txFail.kind === "noop") {
                 paymentFailedOutcome = txFail.outcome;
+              } else if (txFail.kind === "slotReleaseNeeded") {
+                paymentFailedOutcome = "final_payment_failed_slot_release_needed";
+                if (!requiresAction) {
+                  try {
+                    await executeFinalFailedBookingReleaseTransaction(db, bookingId);
+                    paymentFailedOutcome = "final_payment_failed_slot_released_after_idempotent_status";
+                  } catch (releaseErr) {
+                    const releaseErrMsg = releaseErr instanceof Error ? releaseErr.message : String(releaseErr);
+                    await writeOperationalAlert({
+                      type: "final_failed_release_transaction_failed",
+                      source: "stripe-webhook",
+                      bookingId,
+                      paymentIntentId: piId,
+                      lastError: releaseErrMsg.slice(0, 500),
+                    });
+                    paymentFailedOutcome = "final_payment_failed_slot_release_failed_after_idempotent_status";
+                    releaseRetryErrMsg = releaseErrMsg;
+                    console.error("[stripe-webhook] final_failed slot release retry failed", {
+                      bookingId,
+                      error: releaseErrMsg,
+                    });
+                  }
+                }
+                finalFailureEmailAfterEvent = {
+                  bookingId,
+                  bookingData: txFail.bookingData,
+                  requiresAction,
+                };
               } else {
                 console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
                 paymentFailedOutcome = "final_payment_failed_applied";
@@ -2496,9 +2839,21 @@ export async function POST(request: NextRequest) {
                     await executeFinalFailedBookingReleaseTransaction(db, bookingId);
                     paymentFailedOutcome = "final_payment_failed_applied_and_released";
                   } catch (releaseErr) {
+                    const releaseErrMsg = releaseErr instanceof Error ? releaseErr.message : String(releaseErr);
+                    // Critical: if we cannot release the slot, we must let Stripe retry the webhook so we can attempt release again.
+                    await writeOperationalAlert({
+                      type: "final_failed_release_transaction_failed",
+                      source: "stripe-webhook",
+                      bookingId,
+                      paymentIntentId: piId,
+                      lastError: releaseErrMsg.slice(0, 500),
+                    });
+                    // Mark for retry below (event status + HTTP response).
+                    paymentFailedOutcome = "final_payment_failed_applied_release_failed";
+                    releaseRetryErrMsg = releaseErrMsg;
                     console.error("[stripe-webhook] immediate final_failed release failed", {
                       bookingId,
-                      error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+                      error: releaseErrMsg,
                     });
                   }
                 }
@@ -2525,10 +2880,14 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      const releaseRetryErr =
+        typeof releaseRetryErrMsg === "string" && releaseRetryErrMsg.trim().length > 0 ? releaseRetryErrMsg : undefined;
+      const shouldRetryRelease = releaseRetryErr != null;
       await writeEventResult(eventId, {
-        status: "completed",
+        status: shouldRetryRelease ? "failed_retryable" : "completed",
         processedAt: Timestamp.now(),
         outcome: paymentFailedOutcome,
+        ...(shouldRetryRelease ? { error: releaseRetryErr } : {}),
         ...failedEventExtras,
       });
       if (finalFailureEmailAfterEvent) {
@@ -2566,6 +2925,9 @@ export async function POST(request: NextRequest) {
             );
           }
         }
+      }
+      if (shouldRetryRelease) {
+        return NextResponse.json({ error: "Final release failed; Stripe will retry webhook" }, { status: 500 });
       }
       return NextResponse.json({ received: true });
     }

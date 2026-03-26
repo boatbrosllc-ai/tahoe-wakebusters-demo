@@ -6,16 +6,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type Stripe from "stripe";
 import type { Hold } from "@/lib/booking/types";
-import {
-  buildConvertHoldInputFromSucceededPaymentIntent,
-  customerOverrideFromPaymentIntent,
-  paymentIntentMatchesHoldForConversion,
-} from "@/lib/booking/stripe-payment-intent-convert";
-import {
-  convertHoldToBooking,
-  isConvertHoldInputDeposit,
-  type ConvertHoldInput,
-} from "@/lib/booking/convert-hold-to-booking";
+import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
 import { bookingWarn } from "@/lib/booking/debug";
 
 export async function tryResolvePendingReceiptViaCheckoutSession(
@@ -56,36 +47,27 @@ export async function tryResolvePendingReceiptViaCheckoutSession(
       : null;
   if (!pi || pi.status !== "succeeded") return { status: "still_pending" };
 
-  const holdForPricing = {
-    pricing: holdRow.pricing,
-    tipCents: (holdRow as { tipCents?: number }).tipCents,
-    discountCents: (holdRow as { discountCents?: number }).discountCents,
-  };
-  const holdStripeIds = {
-    depositPaymentIntentId: holdRow.depositPaymentIntentId,
-    fullPaymentIntentId: holdRow.fullPaymentIntentId,
-    paymentAttemptVersion: holdRow.paymentAttemptVersion,
-  };
-  if (!paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok) {
-    bookingWarn("receipt", "PI does not match hold for checkout session recovery", {
+  let result: Awaited<ReturnType<typeof resolveAndConvertPayment>>["result"];
+  try {
+    const conversion = await resolveAndConvertPayment(db, {
+      paymentIntentId: pi.id,
       holdId: claimHoldId,
+      source: "client",
+      checkoutSession: session,
       checkoutSessionId: cs,
+      paymentIntent: pi,
     });
-    return { status: "still_pending" };
+    result = conversion.result;
+  } catch (err) {
+    if (err instanceof ResolveAndConvertPaymentError && err.kind === "PI_MATCH_FAILED") {
+      bookingWarn("receipt", "PI does not match hold for checkout session recovery", {
+        holdId: claimHoldId,
+        checkoutSessionId: cs,
+      });
+      return { status: "still_pending" };
+    }
+    throw err;
   }
-
-  const holdDraft = holdRow.customerDraft ?? { name: "", email: "", phone: "" };
-  const customerOverridePi = customerOverrideFromPaymentIntent(pi, holdDraft);
-  const convertInput: ConvertHoldInput = buildConvertHoldInputFromSucceededPaymentIntent(
-    pi,
-    holdForPricing,
-    customerOverridePi ? { customerOverride: customerOverridePi } : undefined
-  );
-  if (!isConvertHoldInputDeposit(convertInput)) {
-    (convertInput as { checkoutSessionId?: string }).checkoutSessionId = cs;
-  }
-
-  const result = await convertHoldToBooking(db, claimHoldId, convertInput);
   if ("amountIntegrityMismatch" in result) {
     return { status: "still_pending" };
   }

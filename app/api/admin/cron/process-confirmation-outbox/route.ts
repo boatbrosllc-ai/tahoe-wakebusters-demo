@@ -7,31 +7,43 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { randomUUID } from "crypto";
 import {
   processNextPendingConfirmation,
   processNextPendingDiscountLimitExceeded,
   processNextPendingFinalChargeSuccess,
   processNextPendingWaiverInvite,
   processStaleClaims,
+  alertOnStalledOutbox,
+  getNotificationOutboxStats,
 } from "@/lib/booking/notification-outbox";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
+import { processStaleReconcilingPayments } from "@/lib/booking/reconciling-payments";
+import { alertOnStripeEventsProcessingStale } from "@/lib/booking/stripe-events-stale";
 
 const MAX_PER_RUN = 10;
+const STALLED_OUTBOX_ALERT_THRESHOLD_MINUTES = 10;
+const STRIPE_EVENTS_PROCESSING_STALE_MINUTES = 5;
 
 export async function POST(request: NextRequest) {
   const authErr = await assertCronPostAuthorized(request);
   if (authErr) return authErr;
 
   const db = getDb();
-  const staleClaimsReset = await processStaleClaims(db);
+  const claimerId = randomUUID();
+  const staleClaimsReset = await processStaleClaims(db, { currentClaimerId: claimerId });
+  await alertOnStalledOutbox(db, STALLED_OUTBOX_ALERT_THRESHOLD_MINUTES);
+  const outboxStats = await getNotificationOutboxStats(db);
+  const reconcilingPayments = await processStaleReconcilingPayments(db);
+  const staleStripeEvents = await alertOnStripeEventsProcessingStale(db, STRIPE_EVENTS_PROCESSING_STALE_MINUTES);
 
   let sentCount = 0;
   let failedCount = 0;
   let noneCount = 0;
 
   for (let i = 0; i < MAX_PER_RUN; i++) {
-    const result = await processNextPendingConfirmation(db);
+    const result = await processNextPendingConfirmation(db, claimerId);
     if (result === "sent") sentCount++;
     else if (result === "failed" || result === "dead_letter") failedCount++;
     else {
@@ -45,7 +57,7 @@ export async function POST(request: NextRequest) {
   let finalChargeNoneCount = 0;
 
   for (let i = 0; i < MAX_PER_RUN; i++) {
-    const result = await processNextPendingFinalChargeSuccess(db);
+    const result = await processNextPendingFinalChargeSuccess(db, claimerId);
     if (result === "sent") finalChargeSentCount++;
     else if (result === "failed" || result === "dead_letter") finalChargeFailedCount++;
     else {
@@ -58,7 +70,7 @@ export async function POST(request: NextRequest) {
   let discountLimitFailedCount = 0;
   let discountLimitNoneCount = 0;
   for (let i = 0; i < MAX_PER_RUN; i++) {
-    const result = await processNextPendingDiscountLimitExceeded(db);
+    const result = await processNextPendingDiscountLimitExceeded(db, claimerId);
     if (result === "sent") discountLimitSentCount++;
     else if (result === "failed" || result === "dead_letter") discountLimitFailedCount++;
     else {
@@ -71,7 +83,7 @@ export async function POST(request: NextRequest) {
   let waiverInviteFailedCount = 0;
   let waiverInviteNoneCount = 0;
   for (let i = 0; i < MAX_PER_RUN; i++) {
-    const result = await processNextPendingWaiverInvite(db);
+    const result = await processNextPendingWaiverInvite(db, claimerId);
     if (result === "sent") waiverInviteSentCount++;
     else if (result === "failed" || result === "dead_letter") waiverInviteFailedCount++;
     else {
@@ -103,5 +115,8 @@ export async function POST(request: NextRequest) {
     waiverInviteSentCount,
     waiverInviteFailedCount,
     waiverInviteNoneCount,
+    notificationOutboxStats: outboxStats,
+    reconcilingPayments,
+    staleStripeEventsProcessingCount: staleStripeEvents,
   });
 }

@@ -286,6 +286,18 @@ export async function POST(request: NextRequest) {
       ...(hold.experienceId && { experienceId: hold.experienceId }),
       ...(hold.boatId && { boatId: hold.boatId }),
     };
+    if (!paymentIntentMetadata.payment_stage || paymentIntentMetadata.payment_stage.trim().length === 0) {
+      bookingError(
+        "create-checkout-session",
+        "PaymentIntent metadata invariant failed: payment_stage must be set before creating Checkout Session",
+        null,
+        { holdId: input.holdId }
+      );
+      return NextResponse.json(
+        { error: "Checkout is temporarily unavailable. Please try again." },
+        { status: 500 }
+      );
+    }
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       payment_method_types: ["card"],

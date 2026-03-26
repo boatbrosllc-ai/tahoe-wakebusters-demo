@@ -4,6 +4,10 @@ import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
 
 const PAGE_SIZE = 150;
+const FINAL_FAILED_RELEASE_SLA_HOURS = (() => {
+  const n = parseInt(process.env.FINAL_FAILED_RELEASE_SLA_HOURS ?? "6", 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 30) : 6;
+})();
 
 export async function POST(request: NextRequest) {
   const authErr = await assertCronPostAuthorized(request);
@@ -33,17 +37,34 @@ export async function POST(request: NextRequest) {
           if (!bookingSnap.exists) {
             shouldReopen = true;
           } else {
-            const st = (bookingSnap.data() as { status?: BookingStatus }).status;
-            shouldReopen = !BOOKING_STATUSES_SLOT_TAKEN.has(st as BookingStatus);
+            const b = bookingSnap.data() as { status?: BookingStatus; finalChargeAt?: { toDate(): Date } };
+            const st = b.status;
+            if (st === "final_failed") {
+              const finalChargeAt = b.finalChargeAt?.toDate?.();
+              const cutoff = new Date(Date.now() - FINAL_FAILED_RELEASE_SLA_HOURS * 60 * 60 * 1000);
+              shouldReopen = !!finalChargeAt && finalChargeAt <= cutoff;
+            } else {
+              shouldReopen = !BOOKING_STATUSES_SLOT_TAKEN.has(st as BookingStatus);
+            }
           }
         }
         if (shouldReopen) {
-          await slotDoc.ref.update({
-            status: "open",
-            bookingId: FieldValue.delete(),
-            updatedAt: FieldValue.serverTimestamp(),
+          const expectedBookingId = bookingId;
+          const didReopen = await db.runTransaction(async (tx) => {
+            const fresh = await tx.get(slotDoc.ref);
+            if (!fresh.exists) return false;
+            const fd = fresh.data() as { bookingId?: string };
+            const currentBookingId =
+              typeof fd.bookingId === "string" ? fd.bookingId.trim() : "";
+            if (currentBookingId !== expectedBookingId) return false;
+            tx.update(slotDoc.ref, {
+              status: "open",
+              bookingId: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            return true;
           });
-          reopened++;
+          if (didReopen) reopened++;
         }
       }
       if (snap.size < PAGE_SIZE) break;

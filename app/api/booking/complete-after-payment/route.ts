@@ -12,10 +12,8 @@ import { checkRateLimitPostPayment, getClientKey, getHoldRateLimitKey } from "@/
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 import {
-  convertHoldToBooking,
   isBookingBlockedByOperatorError,
   isConvertHoldInputDeposit,
-  type ConvertHoldInput,
   type ConvertHoldInputDeposit,
 } from "@/lib/booking/convert-hold-to-booking";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
@@ -24,11 +22,14 @@ import {
   buildConvertHoldInputFromSucceededPaymentIntent,
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
+import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
 import { signReceiptClaimToken, verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
-import type { BookingPricing } from "@/lib/booking/types";
+import {
+  operationalAlertDedupeDocId,
+  writeOperationalAlert,
+  writeOperationalAlertIfNewDocId,
+} from "@/lib/booking/operational-alerts";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
 import type { Booking, Experience, Hold } from "@/lib/booking/types";
 import type Stripe from "stripe";
@@ -38,8 +39,24 @@ import {
   sendAmountIntegrityMismatchOpsEmail,
 } from "@/lib/booking/brevo";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
+import { recordReconcilingPayment } from "@/lib/booking/reconciling-payments";
 
 const PI_MISMATCH_DELAY_MS = 80;
+
+async function logReconcilingPending(
+  db: Firestore,
+  holdId: string | null,
+  paymentIntentId: string,
+  reason: string
+): Promise<void> {
+  try {
+    await recordReconcilingPayment(db, { holdId, paymentIntentId, reason });
+  } catch (e) {
+    bookingWarn("complete-after-payment", "recordReconcilingPayment failed", {
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
 const PI_MISMATCH_RETRY_ATTEMPTS = 3;
 const PI_MISMATCH_RETRY_DELAY_MS = 500;
 
@@ -243,6 +260,7 @@ export async function POST(request: NextRequest) {
      */
     const stripe = getStripe();
     let pi = await stripe.paymentIntents.retrieve(input.paymentIntentId, { expand: ["payment_method"] });
+    const db = getDb();
 
     let holdId: string;
     if (input.receiptClaimToken) {
@@ -264,6 +282,7 @@ export async function POST(request: NextRequest) {
       const metaHold = typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
       if (!metaHold) {
         bookingLog("complete-after-payment", "PI missing holdId metadata and no receipt_claim_token — reconciliation pending");
+        await logReconcilingPending(db, null, input.paymentIntentId, "pi_missing_hold_metadata");
         return NextResponse.json(
           {
             reconciliationPending: true,
@@ -338,7 +357,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const db = getDb();
     const holdRef = db.collection("holds").doc(holdId);
     let holdSnap = await holdRef.get();
     if (!holdSnap.exists) {
@@ -366,7 +384,7 @@ export async function POST(request: NextRequest) {
           });
         }
         bookingLog("complete-after-payment", "booking recovered without hold document", { holdId, recoveredBookingId });
-        const ciRecover = buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
+        const ciRecover = await buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
         const useDepRecover = isConvertHoldInputDeposit(ciRecover);
         const amtRecover = pi.amount ?? 0;
         const totRecover = useDepRecover
@@ -402,6 +420,7 @@ export async function POST(request: NextRequest) {
         paymentIntentId: input.paymentIntentId,
         source: "complete-after-payment",
       });
+      await logReconcilingPending(db, holdId, input.paymentIntentId, "hold_missing_no_booking");
       return NextResponse.json(
         {
           success: false,
@@ -456,13 +475,20 @@ export async function POST(request: NextRequest) {
           bookingLog("complete-after-payment", "returning 202 — hold paymentAttemptVersion>=1 and PI not matched after server retries", {
             holdId,
           });
-          await writeOperationalAlert({
-            type: "complete_after_payment_pi_mismatch_likely_hold_read_lag",
-            holdId,
-            paymentIntentId: input.paymentIntentId,
-            holdPaymentAttemptVersion: holdVerEarly,
-            source: "complete-after-payment",
-          });
+          await writeOperationalAlertIfNewDocId(
+            operationalAlertDedupeDocId([
+              "complete_after_payment_pi_mismatch_likely_hold_read_lag",
+              holdId,
+              input.paymentIntentId,
+            ]),
+            {
+              type: "complete_after_payment_pi_mismatch_likely_hold_read_lag",
+              holdId,
+              paymentIntentId: input.paymentIntentId,
+              holdPaymentAttemptVersion: holdVerEarly,
+              source: "complete-after-payment",
+            }
+          );
           return NextResponse.json(
             {
               processing: true,
@@ -517,69 +543,11 @@ export async function POST(request: NextRequest) {
       await new Promise((r) => setTimeout(r, PI_MISMATCH_DELAY_MS));
       return NextResponse.json({ error: "Payment intent does not match this reservation" }, { status: 400 });
     }
-    const convertInput: ConvertHoldInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, holdForPricing);
-    const useDepositInput = isConvertHoldInputDeposit(convertInput);
-    const amountCharged = pi.amount ?? 0;
-    let totalCents: number;
-    if (useDepositInput) {
-      const depStripe = (convertInput as ConvertHoldInputDeposit).stripe;
-      const fromConvert = depStripe.totalCents;
-      const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-      if (typeof fromConvert === "number" && fromConvert > 0) {
-        totalCents = fromConvert;
-      } else if (fromMeta > 0) {
-        totalCents = fromMeta;
-      } else if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
-        const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
-        const discountCents =
-          typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
-        totalCents = computeFinalChargeTotalCentsFromHoldPricing(
-          holdForPricing.pricing as BookingPricing,
-          tipCents,
-          discountCents
-        );
-      } else {
-        totalCents = 0;
-        bookingWarn("complete-after-payment", "deposit flow: totalCents unresolved (no convert total, metadata, or hold pricing)", {
-          holdId,
-          paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
-        });
-      }
-    } else {
-      const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-      if (fromMeta > 0) totalCents = fromMeta;
-      else if (holdForPricing?.pricing && typeof holdForPricing.pricing.totalCents === "number") {
-        const tipCents = typeof holdForPricing.tipCents === "number" ? holdForPricing.tipCents : 0;
-        const discountCents =
-          typeof holdForPricing.discountCents === "number" ? holdForPricing.discountCents : 0;
-        totalCents = computeFinalChargeTotalCentsFromHoldPricing(
-          holdForPricing.pricing as BookingPricing,
-          tipCents,
-          discountCents
-        );
-      } else totalCents = amountCharged;
-    }
-    const finalCentsComputed = useDepositInput ? Math.max(0, totalCents - amountCharged) : 0;
-    if (useDepositInput && totalCents > 0 && finalCentsComputed === 0) {
-      bookingWarn("complete-after-payment", "deposit flow: finalCents would be zero while totalCents > 0 — check PI metadata and hold pricing", {
-        holdId,
-        totalCents,
-        amountCharged,
-      });
-    }
-    bookingLog("complete-after-payment", "PI metadata and convert decision", {
-      holdId,
-      paymentStage: (pi.metadata?.payment_stage ?? null) as string | null,
-      totalCents,
-      amountCharged,
-      useDepositInput,
-    });
-
     const paymentSummaryForClient = {
-      isDeposit: useDepositInput,
-      depositCents: useDepositInput ? amountCharged : totalCents,
-      totalCents,
-      finalCents: finalCentsComputed,
+      isDeposit: false,
+      depositCents: 0,
+      totalCents: pi.amount ?? 0,
+      finalCents: 0,
     };
 
     if (!piMatchesHold) {
@@ -638,9 +606,23 @@ export async function POST(request: NextRequest) {
             requiresReview: true,
           }
         );
+        await writeOperationalAlertIfNewDocId(
+          operationalAlertDedupeDocId([
+            "complete_after_payment_pi_mismatch",
+            holdId,
+            input.paymentIntentId,
+          ]),
+          {
+            type: "complete_after_payment_pi_mismatch",
+            holdId,
+            paymentIntentId: input.paymentIntentId,
+            source: "complete-after-payment",
+          }
+        );
       } catch (prErr) {
         console.error("[complete-after-payment] pendingRefunds pi mismatch", prErr);
       }
+      await logReconcilingPending(db, holdId, input.paymentIntentId, "pi_mismatch_reconciliation");
       return NextResponse.json(
         {
           success: false,
@@ -655,11 +637,41 @@ export async function POST(request: NextRequest) {
 
     bookingLog("complete-after-payment", "calling convertHoldToBooking", {
       holdId: input.holdId,
-      paymentStage: useDepositInput ? "deposit" : "full",
+      paymentStage: (pi.metadata?.payment_stage ?? "full") as string,
     });
     holdIdForAlert = holdId;
     paymentIntentIdForAlert = input.paymentIntentId;
-    const result = await convertHoldToBooking(db, holdId, convertInput);
+    let conversion: Awaited<ReturnType<typeof resolveAndConvertPayment>> | null = null;
+    for (let lagAttempt = 0; lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS && conversion == null; lagAttempt++) {
+      if (lagAttempt > 0) {
+        await propagationLagDelayMs(lagAttempt - 1);
+      }
+      try {
+        conversion = await resolveAndConvertPayment(db, {
+          paymentIntentId: input.paymentIntentId,
+          holdId,
+          source: "client",
+          paymentIntent: pi,
+        });
+      } catch (convertErr) {
+        if (
+          convertErr instanceof ResolveAndConvertPaymentError &&
+          convertErr.kind === "PI_MATCH_FAILED" &&
+          lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1
+        ) {
+          continue;
+        }
+        throw convertErr;
+      }
+    }
+    if (!conversion) {
+      throw new ResolveAndConvertPaymentError("PI_MATCH_FAILED", "Payment intent does not match hold");
+    }
+    const result = conversion.result;
+    paymentSummaryForClient.isDeposit = conversion.paymentSummary.isDeposit;
+    paymentSummaryForClient.depositCents = conversion.paymentSummary.depositCents;
+    paymentSummaryForClient.totalCents = conversion.paymentSummary.totalCents;
+    paymentSummaryForClient.finalCents = conversion.paymentSummary.finalCents;
 
     if ("amountIntegrityMismatch" in result) {
       bookingWarn("complete-after-payment", "amount integrity mismatch — conversion blocked", { holdId });
@@ -691,6 +703,7 @@ export async function POST(request: NextRequest) {
           console.error("[complete-after-payment] sendAmountIntegrityMismatchCustomerEmail", e);
         }
       }
+      await logReconcilingPending(db, holdId, input.paymentIntentId, "amount_integrity_mismatch");
       return NextResponse.json(
         {
           success: false,
@@ -730,6 +743,7 @@ export async function POST(request: NextRequest) {
           paymentIntentId: input.paymentIntentId,
           source: "complete-after-payment",
         });
+        await logReconcilingPending(db, holdId, input.paymentIntentId, "already_converted_no_booking");
         return NextResponse.json(
           {
             success: false,
@@ -835,6 +849,9 @@ export async function POST(request: NextRequest) {
         }
       } catch (opErr) {
         console.error("[complete-after-payment] operator block pendingRefunds/alert", opErr);
+      }
+      if (holdIdForAlert && paymentIntentIdForAlert) {
+        await logReconcilingPending(getDb(), holdIdForAlert, paymentIntentIdForAlert, "operator_date_blocked");
       }
       return NextResponse.json(
         {
@@ -952,6 +969,7 @@ export async function POST(request: NextRequest) {
       } catch (reconErr) {
         bookingWarn("complete-after-payment", "reconciliation path failed", { err: reconErr });
       }
+      await logReconcilingPending(getDb(), holdIdForAlert, paymentIntentIdForAlert, "conversion_failed");
       return NextResponse.json(
         {
           success: false,

@@ -1596,43 +1596,23 @@ export function ExperienceCalendarSectionView(props: ExperienceCalendarSectionVi
                             setDirectCheckoutError(null);
                             setDirectCheckoutLoading(slot.id);
                             try {
-                              const discountNorm = directDiscountCode.trim().toUpperCase();
-                              const res = await fetch("/api/booking/create-checkout-session-direct", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  experienceId,
+                              setSlotModalOpen(false);
+                              if (onOpenInModal) {
+                                const openModal = onOpenInModal as OnOpenInModalFn;
+                                openModal({
+                                  experienceId: experienceId ?? undefined,
+                                  experienceSlug: experienceSlug ?? undefined,
+                                  date: selectedDate ?? "",
                                   slotId: slot.id,
-                                  ...(slot.boatId && { boatId: slot.boatId }),
-                                  partySize: 1,
-                                  petsCount: 0,
-                                  ...(discountNorm && { discountCode: discountNorm }),
-                                }),
-                              });
-                              const data = await res.json().catch(() => ({}));
-                              if (!res.ok && data?.ticketedFlowRequired && data?.bookingUrl) {
-                                setSlotModalOpen(false);
-                                if (onOpenInModal) {
-                                  const openModal = onOpenInModal as OnOpenInModalFn;
-                                  openModal({
-                                    experienceId: experienceId ?? undefined,
-                                    experienceSlug: experienceSlug ?? undefined,
-                                    date: selectedDate ?? "",
-                                    slotId: slot.id,
-                                    boatId: (slot as { boatId?: string }).boatId,
-                                  });
-                                } else {
-                                  window.location.href = data.bookingUrl as string;
-                                }
+                                  boatId: (slot as { boatId?: string }).boatId,
+                                });
                                 return;
                               }
-                              if (res.ok && data?.url) {
-                                setSlotModalOpen(false);
-                                window.location.href = data.url;
+                              if (checkoutHref) {
+                                window.location.href = checkoutHref;
                                 return;
                               }
-                              const msg = (data as { error?: string }).error ?? "Checkout failed";
-                              setDirectCheckoutError(msg);
+                              setDirectCheckoutError("Checkout failed");
                             } finally {
                               setDirectCheckoutLoading(null);
                             }

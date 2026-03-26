@@ -477,17 +477,28 @@ export async function persistCheckoutSessionAfterStripeSessionCreate(
         metaErr,
         { holdId, sessionId: session.id, paymentIntentIdPrefix: piId.slice(0, 12) }
       );
+      // Webhook routing still keys off hold.checkoutSessionId; PI metadata is best-effort for Stripe dashboard / tooling.
       await writeOperationalAlert({
         type: "checkout_session_payment_intent_metadata_write_failed",
-        severity: "critical",
+        severity: "warning",
         holdId,
         sessionId: session.id,
         paymentIntentId: piId,
         source: "persistCheckoutSessionAfterStripeSessionCreate",
         message:
-          "Failed to attach checkoutSessionId metadata to PaymentIntent after checkout session create; downstream webhook matching may be degraded.",
+          "Failed to attach checkoutSessionId metadata to PaymentIntent after checkout session create; reconcile cron will retry or ops can clear pendingPiMetadataUpdate.",
         error: metaErr instanceof Error ? metaErr.message : String(metaErr),
       });
+      const { FieldValue } = firestoreExports;
+      // Retryable recovery: store PI metadata patch for reconciliation outside this webhook.
+      try {
+        await holdRef.update({
+          pendingPiMetadataUpdate: { checkoutSessionId: session.id },
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } catch (holdUpdateErr) {
+        console.error("[persistCheckoutSessionAfterStripeSessionCreate] storing pendingPiMetadataUpdate failed", holdUpdateErr);
+      }
     }
   }
   return persistResult;
