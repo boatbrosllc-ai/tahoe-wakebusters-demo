@@ -1069,13 +1069,7 @@ export async function processNextPendingDiscountLimitExceeded(
   const doc = snap.docs[0];
   const data = doc.data() as NotificationOutboxEntry;
   const bookingId = data.bookingId as string;
-  const deterministicRef = col.doc(confirmationOutboxDocId(bookingId));
-  const deterministicSnap = await deterministicRef.get();
-  const ref =
-    deterministicSnap.exists &&
-    (deterministicSnap.data() as NotificationOutboxEntry).type === "booking_confirmation"
-      ? deterministicRef
-      : doc.ref;
+  const ref = doc.ref;
   const claimed = await db.runTransaction(async (tx) => {
     const fresh = await tx.get(ref);
     if (!fresh.exists) return false;
