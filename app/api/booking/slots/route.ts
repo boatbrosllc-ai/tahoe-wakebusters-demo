@@ -1409,7 +1409,9 @@ export async function GET(request: NextRequest) {
       const slotsToReturn = seasonalCharter?.enabled
         ? slots.filter((s) => isSeasonalAllowed(seasonalCharter, new Date(s.startAt), s.dateStr))
         : slots;
-      if (charterBlocksQueryFailed || legacyQueryHitLimitCharter || !windowedIndexReady) {
+      // Keep open slots visible unless block/hold resolution itself failed.
+      // Legacy/query-cap partial data is surfaced via headers/body; it should not hard-block the entire calendar.
+      if (charterBlocksQueryFailed || charterHoldsResolutionFailed) {
         for (const s of slotsToReturn) {
           s.status = conservativeOpenSlotStatus(s.status as "open" | "blocked" | "booked", true);
         }
