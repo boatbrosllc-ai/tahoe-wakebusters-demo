@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { hasFirebaseConfig } from "@/lib/booking/env";
 import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
-import { parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
 import type { Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -17,6 +17,8 @@ import {
   scanLegacyActiveHoldsForExperience,
 } from "@/lib/booking/legacy-hold-scan";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
+import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,7 @@ export interface TicketAvailabilityResponse {
   conservativeEstimate?: boolean;
   /** When `conservativeEstimate` is true, show this message instead of the numeric `available` count. */
   availabilityNote?: string;
+  adminBlocked?: boolean;
 }
 
 const CONSERVATIVE_AVAILABILITY_NOTE = LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE;
@@ -131,6 +134,7 @@ export async function GET(request: NextRequest) {
     const seenBookingIds = new Set<string>();
     let sold = 0;
     let charterLockedForDate = false;
+    let legacyBookingsCapHit = false;
     for (const snap of bookingsSnaps) {
       for (const doc of snap.docs) {
         if (seenBookingIds.has(doc.id)) continue;
@@ -168,6 +172,9 @@ export async function GET(request: NextRequest) {
             .get()
         )
       );
+      if (legacyBookingSnaps.some((snap) => snap.size >= LEGACY_BOOKING_SCAN_LIMIT)) {
+        legacyBookingsCapHit = true;
+      }
       for (const snap of legacyBookingSnaps) {
         for (const doc of snap.docs) {
           if (seenBookingIds.has(doc.id)) continue;
@@ -217,8 +224,9 @@ export async function GET(request: NextRequest) {
     }
 
     let available = charterLockedForDate ? 0 : Math.max(0, total - sold - onHold);
+    let adminBlocked = false;
     let conservativeEstimate = false;
-    if (legacyHoldsPartial) {
+    if (legacyHoldsPartial || legacyBookingsCapHit) {
       conservativeEstimate = true;
       available = charterLockedForDate ? 0 : Math.max(0, total - sold - onHold);
       void writeOperationalAlert({
@@ -228,6 +236,27 @@ export async function GET(request: NextRequest) {
         source: "ticket-availability",
         maxPages: MAX_PAGES,
       }).catch(() => {});
+    }
+    try {
+      const departure = getTicketedDepartureAndDuration(exp, []);
+      const depHour = departure.deptHour;
+      const depMinute = departure.deptMinute;
+      const depDuration = departure.tripDuration;
+      const { start: depStart, end: depEnd } = getSlotStartEnd(date, depHour, depDuration, depMinute);
+      const blocked = await hasOverlappingBlock({
+        db,
+        Timestamp: getFirestoreExports().Timestamp,
+        experienceId,
+        experienceIdVariants: allExpIds,
+        slotStart: depStart,
+        slotEnd: depEnd,
+      });
+      if (blocked) {
+        available = 0;
+        adminBlocked = true;
+      }
+    } catch (blockErr) {
+      console.warn("[ticket-availability] block check failed", blockErr);
     }
 
     const response: TicketAvailabilityResponse = {
@@ -239,9 +268,10 @@ export async function GET(request: NextRequest) {
       ...(conservativeEstimate
         ? { conservativeEstimate: true as const, availabilityNote: CONSERVATIVE_AVAILABILITY_NOTE }
         : {}),
+      ...(adminBlocked ? { adminBlocked: true as const } : {}),
     };
     const headers: Record<string, string> = { "Cache-Control": "no-store, max-age=0" };
-    if (legacyHoldsPartial) {
+    if (legacyHoldsPartial || legacyBookingsCapHit) {
       headers["X-Slots-Partial-Data"] = "true";
     }
     return NextResponse.json(response, { headers });

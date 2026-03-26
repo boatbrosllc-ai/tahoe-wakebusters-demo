@@ -170,7 +170,7 @@ export function isSeasonalAllowed(
   const startDate = toDateStrOnly(seasonal.startDate);
   const endDate = toDateStrOnly(seasonal.endDate);
   if (startDate && endDate) {
-    const dateStr = slotDateStr ?? slotStart.toISOString().slice(0, 10);
+    const dateStr = slotDateStr ?? getDateStrInSlotTimezone(slotStart);
     return dateStr >= startDate && dateStr <= endDate;
   }
   const startMonth = seasonal.startMonth ?? 1;

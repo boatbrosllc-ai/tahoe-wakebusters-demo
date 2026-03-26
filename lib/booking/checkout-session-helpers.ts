@@ -11,6 +11,7 @@ import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { bookingError } from "@/lib/booking/debug";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import type { Discount } from "@/lib/booking/types";
+import { getRollbackPendingAutoReleaseMs } from "@/lib/booking/cleanup-holds-logic";
 
 /** Thrown inside Firestore transactions when discount validation fails (no retry). */
 export class CheckoutDiscountPersistError extends Error {
@@ -68,7 +69,7 @@ export async function rollbackCheckoutSession(
   hold: HoldLike,
   firestoreExports: FirestoreExports
 ): Promise<RollbackCheckoutSessionResult> {
-  const { FieldValue } = firestoreExports;
+  const { FieldValue, Timestamp } = firestoreExports;
   const slotRef = hold.boatId
     ? db.collection("boats").doc(hold.boatId).collection("slots").doc(hold.slotId)
     : hold.experienceId
@@ -167,8 +168,10 @@ export async function rollbackCheckoutSession(
     lastError: lastErr instanceof Error ? lastErr.message : String(lastErr),
   }).catch(() => {});
   try {
+    if (!Timestamp) throw new Error("Firestore Timestamp export missing");
     await holdRef.update({
       rollbackPending: true,
+      rollbackPendingExpiresAt: Timestamp.fromMillis(Date.now() + getRollbackPendingAutoReleaseMs()),
       updatedAt: FieldValue.serverTimestamp(),
     });
   } catch (markErr) {

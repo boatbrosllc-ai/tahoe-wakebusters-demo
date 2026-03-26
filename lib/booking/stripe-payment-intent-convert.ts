@@ -18,6 +18,7 @@ export type HoldPricingFallback = {
   tipCents?: number;
   discountCents?: number;
 } | null;
+type DepositClassification = { useDepositInput: boolean; requiresManualReview: boolean };
 
 const PLACEHOLDER_EMAIL_DOMAIN = "@pending.internal";
 const DEPOSIT_RATIO_EPSILON = 0.02;
@@ -64,6 +65,13 @@ export function resolveUsesDepositInputFromPaymentIntent(
   pi: Pick<Stripe.PaymentIntent, "metadata" | "amount"> & { id?: string },
   holdPricingFallback: HoldPricingFallback
 ): boolean {
+  return resolveDepositClassificationFromPaymentIntent(pi, holdPricingFallback).useDepositInput;
+}
+
+function resolveDepositClassificationFromPaymentIntent(
+  pi: Pick<Stripe.PaymentIntent, "metadata" | "amount"> & { id?: string },
+  holdPricingFallback: HoldPricingFallback
+): DepositClassification {
   const paymentStageRaw = (pi.metadata?.payment_stage ?? "") as string;
   const paymentStage = paymentStageRaw.trim();
   const totalCentsFromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
@@ -93,14 +101,14 @@ export function resolveUsesDepositInputFromPaymentIntent(
     bookingWarn("convert-hold", "deposit vs full: no totalCents metadata and no hold pricing — defaulting to full payment (avoid amount ratio heuristic)", {
       paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
     });
-    return false;
+    return { useDepositInput: false, requiresManualReview: false };
   }
 
-  if (paymentStage === "deposit") return true;
-  if (paymentStage === "full" || paymentStage === "final") return false;
+  if (paymentStage === "deposit") return { useDepositInput: true, requiresManualReview: false };
+  if (paymentStage === "full" || paymentStage === "final") return { useDepositInput: false, requiresManualReview: false };
 
   if (paymentStage !== "") {
-    return false;
+    return { useDepositInput: false, requiresManualReview: false };
   }
 
   if (holdPricingFallback == null) {
@@ -109,7 +117,7 @@ export function resolveUsesDepositInputFromPaymentIntent(
       totalCentsFromMeta,
       amountCharged,
     });
-    return false;
+    return { useDepositInput: false, requiresManualReview: false };
   }
 
   const ratio = totalCents > 0 ? amountCharged / totalCents : 0;
@@ -131,7 +139,7 @@ export function resolveUsesDepositInputFromPaymentIntent(
         })
       )
       .catch(() => {});
-    return true;
+    return { useDepositInput: true, requiresManualReview: true };
   }
 
   void import("@/lib/booking/operational-alerts")
@@ -147,7 +155,7 @@ export function resolveUsesDepositInputFromPaymentIntent(
       })
     )
     .catch(() => {});
-  return false;
+  return { useDepositInput: false, requiresManualReview: false };
 }
 
 export type HoldStripeIntentIds = {
@@ -266,10 +274,12 @@ export function buildConvertHoldInputFromSucceededPaymentIntent(
   } else {
     totalCents = amountCharged;
   }
-  const useDepositInput = resolveUsesDepositInputFromPaymentIntent(pi, holdPricingFallback);
+  const classification = resolveDepositClassificationFromPaymentIntent(pi, holdPricingFallback);
+  const useDepositInput = classification.useDepositInput;
 
   const baseFull = {
     paymentIntentId: pi.id,
+    ...(classification.requiresManualReview ? { requiresManualReview: true } : {}),
     amountTotalCents: pi.amount ?? undefined,
     currency: pi.currency ?? undefined,
     ...(options?.customerOverride && { customerOverride: options.customerOverride }),
@@ -278,6 +288,7 @@ export function buildConvertHoldInputFromSucceededPaymentIntent(
   if (useDepositInput) {
     return {
       paymentStage: "deposit",
+      ...(classification.requiresManualReview ? { requiresManualReview: true } : {}),
       paymentIntentId: pi.id,
       amountTotalCents: amountCharged,
       currency: pi.currency ?? undefined,

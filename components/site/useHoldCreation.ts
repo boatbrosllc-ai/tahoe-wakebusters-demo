@@ -565,6 +565,7 @@ export function useHoldCreation(
       createdHoldForRelease = { holdId: holdResult.holdId, releaseToken: holdResult.releaseToken ?? null };
       opts.setHoldId(holdResult.holdId);
       opts.setReleaseToken(holdResult.releaseToken);
+      bookingCache.bumpSlotCacheVersion();
       if (
         process.env.NODE_ENV !== "production" &&
         holdResult.holdId &&

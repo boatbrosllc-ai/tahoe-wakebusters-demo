@@ -3,14 +3,8 @@ import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
-import {
-  addCalendarDaysToDateStr,
-  bookingIntervalMsFromSlotFields,
-  bookingLookbackDaysFromMaxDuration,
-  intervalsOverlapMs,
-} from "@/lib/booking/booking-interval";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Block } from "@/lib/booking/types";
+import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -47,16 +41,20 @@ export async function GET(request: NextRequest) {
       ? (expSnap.data() as { slug: string }).slug.trim()
       : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
-
-    const blocksSnaps = await Promise.all(
-      variantIds.map((variantId) =>
-        db
-          .collection("blocks")
-          .where("experienceId", "==", variantId)
-          .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
-          .get()
-      )
-    );
+    const blocksSnaps = await Promise.all([
+      db
+        .collection("blocks")
+        .where("experienceId", "==", experienceId)
+        .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
+        .get(),
+      experienceSlug
+        ? db
+            .collection("blocks")
+            .where("experienceSlug", "==", experienceSlug)
+            .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
+            .get()
+        : Promise.resolve({ docs: [] } as { docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] }),
+    ]);
     const seenBlockIds = new Set<string>();
     const docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
     for (const snap of blocksSnaps) {
@@ -130,65 +128,19 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const now = new Date();
-    const blockStartMs = startAt.getTime();
-    const blockEndMs = endAt.getTime();
-    const startDateStr = startAt.toISOString().slice(0, 10);
-    const endDateStr = endAt.toISOString().slice(0, 10);
-    const lookbackDays = bookingLookbackDaysFromMaxDuration(24 * 14);
-    const startDateLower = addCalendarDaysToDateStr(startDateStr, -lookbackDays);
-    const startDateUpper = addCalendarDaysToDateStr(endDateStr, lookbackDays);
     const expSnap = await db.collection("experiences").doc(experienceId).get();
     const experienceSlug = expSnap.exists && typeof (expSnap.data() as { slug?: string })?.slug === "string"
       ? (expSnap.data() as { slug: string }).slug.trim()
       : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
-    const holdQueryBase = db
-      .collection("holds")
-      .where("status", "==", "active")
-      .where("expiresAt", ">=", Timestamp.fromDate(now));
-    const holdSnaps = await Promise.all(
-      (boatId
-        ? [holdQueryBase.where("boatId", "==", boatId).get()]
-        : variantIds.map((variantId) => holdQueryBase.where("experienceId", "==", variantId).get()))
-    );
-    const conflicts: Array<{ type: "hold" | "booking"; id: string }> = [];
-    const seenConflictIds = new Set<string>();
-    for (const snap of holdSnaps) {
-      for (const docSnap of snap.docs) {
-        const h = docSnap.data() as { slotId?: string; slot_id?: string; holdId?: string };
-        const iv = bookingIntervalMsFromSlotFields(h.slotId, h.slot_id);
-        if (!iv) continue;
-        if (!intervalsOverlapMs(blockStartMs, blockEndMs, iv.startMs, iv.endMs)) continue;
-        const key = `hold:${docSnap.id}`;
-        if (seenConflictIds.has(key)) continue;
-        seenConflictIds.add(key);
-        conflicts.push({ type: "hold", id: docSnap.id });
-      }
-    }
-    const bookingSnaps = await Promise.all(
-      variantIds.map((variantId) =>
-        db
-          .collection("bookings")
-          .where("experienceId", "==", variantId)
-          .where("startDateStr", ">=", startDateLower)
-          .where("startDateStr", "<=", startDateUpper)
-          .get()
-      )
-    );
-    for (const snap of bookingSnaps) {
-      for (const docSnap of snap.docs) {
-        const b = docSnap.data() as { status?: string; slotId?: string; slot_id?: string; boatId?: string };
-        if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-        if (boatId && b.boatId !== boatId) continue;
-        const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
-        if (!iv) continue;
-        if (!intervalsOverlapMs(blockStartMs, blockEndMs, iv.startMs, iv.endMs)) continue;
-        const key = `booking:${docSnap.id}`;
-        if (seenConflictIds.has(key)) continue;
-        seenConflictIds.add(key);
-        conflicts.push({ type: "booking", id: docSnap.id });
-      }
-    }
+    const conflicts = await findBlockConflicts({
+      db,
+      variantIds,
+      blockStart: startAt,
+      blockEnd: endAt,
+      boatId,
+      now,
+    });
     if (conflicts.length > 0) {
       return NextResponse.json(
         { error: "Block overlaps active holds or bookings", conflicts },
@@ -196,7 +148,11 @@ export async function POST(request: NextRequest) {
       );
     }
     const doc = await db.collection("blocks").add({
+      // Invariant: store both canonical id and slug so display/enforcement paths can query either key.
       experienceId,
+      experienceCanonicalId: experienceId,
+      experienceSlug: experienceSlug || null,
+      slugVariants: variantIds,
       boatId: boatId ?? null,
       startAt: Timestamp.fromDate(startAt),
       endAt: Timestamp.fromDate(endAt),

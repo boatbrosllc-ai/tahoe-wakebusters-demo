@@ -79,6 +79,7 @@ export function step2SelectedSlotVerifiedOpen(
  * Charter step 3: per-boat availability for the selected trip window. Uses interval overlap on
  * `startAt`/`endAt` so a shorter paid trip (e.g. 4h) still marks the boat unavailable for a longer
  * tier (e.g. 8h) at the same start time — matching GET /api/booking/slots overlap rules.
+ * Rows with `holdDataMissing` are excluded from "held" classification and treated as generic unavailable.
  */
 export function boatAvailabilitySetsForSelectedCharterSlot(
   monthSlots: SlotLikeForCalendar[],
@@ -154,7 +155,10 @@ export function boatAvailabilitySetsForSelectedCharterSlot(
     if (nonOpen.length > 0) {
       unavailable.add(boatKey);
       if (nonOpen.some((r) => r.status === "booked")) booked.add(boatKey);
-      else if (nonOpen.some((r) => r.status === "held")) held.add(boatKey);
+      else if (nonOpen.some((r) => r.status === "held")) {
+        const hasMissingHoldData = nonOpen.some((r) => r.status === "held" && r.holdDataMissing === true);
+        if (!hasMissingHoldData) held.add(boatKey);
+      }
       else blocked.add(boatKey);
     } else if (openExact) {
       available.add(boatKey);

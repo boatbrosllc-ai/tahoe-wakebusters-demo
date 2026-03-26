@@ -128,6 +128,56 @@ export async function getReservedSeats(
 }
 
 /**
+ * Periodic audit helper: compare inventory.reservedSeats to active shared hold partySize total.
+ */
+export async function auditDepartureInventoryReservedSeats(
+  db: Firestore,
+  experienceId: string,
+  dateStr: string
+): Promise<{ ok: boolean; expectedReservedSeats: number; observedReservedSeats: number }> {
+  const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+  const [inventorySnap, holdsSnap] = await Promise.all([
+    inventoryRef.get(),
+    db
+      .collection("holds")
+      .where("experienceId", "==", experienceId)
+      .where("startDateStr", "==", dateStr)
+      .where("status", "==", "active")
+      .get(),
+  ]);
+  const now = Date.now();
+  const expectedReservedSeats = holdsSnap.docs.reduce((sum, doc) => {
+    const h = doc.data() as {
+      bookingMode?: string;
+      expiresAt?: { toDate?: () => Date };
+      partySize?: number;
+      rollbackPending?: boolean;
+    };
+    if (h.bookingMode !== "shared") return sum;
+    if (h.rollbackPending === true) return sum;
+    const exp = h.expiresAt?.toDate?.();
+    if (exp && exp.getTime() < now) return sum;
+    return sum + (typeof h.partySize === "number" ? h.partySize : 0);
+  }, 0);
+  const observedReservedSeats = inventorySnap.exists
+    ? ((inventorySnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+    : 0;
+  const ok = expectedReservedSeats === observedReservedSeats;
+  if (!ok) {
+    await writeOperationalAlert({
+      type: "departure_inventory_reserved_mismatch",
+      source: "shared-departure-inventory",
+      experienceId,
+      dateStr,
+      expectedReservedSeats,
+      observedReservedSeats,
+      hint: "reservedSeats differs from active shared holds sum; investigate hold resume/cleanup flow.",
+    }).catch(() => {});
+  }
+  return { ok, expectedReservedSeats, observedReservedSeats };
+}
+
+/**
  * Re-validate capacity before finalizing a shared booking: ensure sold + reservedSeats <= capacity
  * and reservedSeats >= holdPartySize, then decrement reservedSeats by holdPartySize.
  * Caller must compute sold from bookings in the same transaction.

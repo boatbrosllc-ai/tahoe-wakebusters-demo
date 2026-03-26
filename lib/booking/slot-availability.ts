@@ -52,9 +52,12 @@ export type AssertSlotAvailableOpts = {
   slotStart: Date;
   slotEnd: Date;
   boatId?: string;
+  experienceSlug?: string;
   useBoatSlots: boolean;
   /** When true, run same-day slot scan (e.g. when slot doc does not exist yet). */
   runSameDaySlotScan: boolean;
+  /** Slot document ids to ignore during same-day scan (e.g. current slot during hold resume). */
+  ignoreSlotDocIds?: string[];
 };
 
 /**
@@ -73,16 +76,20 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     slotStart,
     slotEnd,
     boatId,
+    experienceSlug,
     useBoatSlots,
     runSameDaySlotScan,
+    ignoreSlotDocIds,
   } = opts;
   const slotStartMs = slotStart.getTime();
   const slotEndMs = slotEnd.getTime();
   const { dayStart, dayEnd } = getCentralCalendarDayBounds(parsed.dateStr);
 
   if (runSameDaySlotScan) {
+    const ignoreSet = new Set((ignoreSlotDocIds ?? []).filter(Boolean));
     const slotConflicts = async (docs: import("firebase-admin/firestore").QueryDocumentSnapshot[]) => {
       for (const doc of docs) {
+        if (ignoreSet.has(doc.id)) continue;
         const data = doc.data() as Slot;
         if (data.status === "open") continue;
         if (data.status === "held" && data.holdId) {
@@ -126,6 +133,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     Timestamp,
     experienceId,
     experienceIdVariants,
+    experienceSlug,
     boatId,
     slotStart,
     slotEnd,
@@ -221,7 +229,11 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
 export async function assertLegacyBoatSlotAvailable(opts: {
   db: Firestore;
   Timestamp: typeof import("firebase-admin/firestore").Timestamp;
-  get: (q: import("firebase-admin/firestore").Query) => Promise<import("firebase-admin/firestore").QuerySnapshot>;
+  get: (
+    refOrQuery: import("firebase-admin/firestore").Query | import("firebase-admin/firestore").DocumentReference
+  ) => Promise<
+    import("firebase-admin/firestore").QuerySnapshot | import("firebase-admin/firestore").DocumentSnapshot
+  >;
   boatId: string;
   parsed: { dateStr: string; startHour: number; durationHours: number; startMinute?: number };
   slotStart: Date;
@@ -243,6 +255,16 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   for (const doc of sameDaySnap.docs) {
     const data = doc.data() as Slot;
     if (data.status === "open") continue;
+    if (data.status === "held" && data.holdId) {
+      const holdSnap = (await get(db.collection("holds").doc(data.holdId))) as import("firebase-admin/firestore").DocumentSnapshot;
+      if (!holdSnap.exists) continue;
+      const hold = holdSnap.data() as { status?: string; expiresAt?: { toDate?: () => Date; seconds?: number } };
+      if (hold.status !== "active") continue;
+      const exp = hold.expiresAt;
+      const expiresAt =
+        exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+      if (expiresAt <= new Date()) continue;
+    }
     const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
     const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
     if (slotStartMs < existingEnd && slotEndMs > existingStart) {

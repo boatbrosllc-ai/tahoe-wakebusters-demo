@@ -147,6 +147,7 @@ export interface InlineBookingDetailsStepProps {
   onSuccess: () => void;
   bookingMode?: "shared" | "charter";
   spotsRemaining?: number;
+  beforeSubmitHold?: () => Promise<boolean>;
 }
 
 export function InlineBookingDetailsStep({
@@ -169,6 +170,7 @@ export function InlineBookingDetailsStep({
   onSuccess,
   bookingMode,
   spotsRemaining,
+  beforeSubmitHold,
 }: InlineBookingDetailsStepProps) {
   const [effectiveRateCents, setEffectiveRateCents] = useState<number | null>(null);
   const [priceLoading, setPriceLoading] = useState(true);
@@ -446,6 +448,13 @@ export function InlineBookingDetailsStep({
       return;
     }
     setPaymentError(null);
+    if (beforeSubmitHold) {
+      const freshOk = await beforeSubmitHold();
+      if (!freshOk) {
+        setPaymentError("This time slot changed while you were filling details. Please go back and select a fresh slot.");
+        return;
+      }
+    }
     setClientSecret(null);
     userChoseDepositRef.current = bookingMode !== "shared" && !payFullAmount;
     setShowDepositCoercionBanner(false);

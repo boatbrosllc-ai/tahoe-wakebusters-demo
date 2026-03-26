@@ -18,6 +18,7 @@ import { aggregateSlotsByDate } from "@/lib/booking/aggregate-slots-by-date";
 import { toDateStr, getMonthRange, getMonthRangeWithAdjacent, getDaysInMonth as getDaysInMonthFromLib, getChicagoToday } from "@/lib/booking/booking-date-range";
 import { Dialog } from "@/components/ui/dialog";
 import { InlineBookingDetailsStep } from "@/components/booking/InlineBookingDetailsStep";
+import { boatAvailabilitySetsForSelectedCharterSlot } from "@/lib/booking/partial-slots-calendar-derivation";
 
 export type SlotStatus = "open" | "held" | "booked" | "blocked";
 
@@ -471,44 +472,34 @@ export function ExperienceCalendarSection({
     heldBoatIdsForInlineSlot,
     blockedBoatIdsForInlineSlot,
   } = useMemo(() => {
-    const empty = new Set<string>();
-    if (!selectedSlotInline?.startAt || !slots.length) {
-      return {
-        availableBoatIdsForInlineSlot: empty,
-        unavailableBoatIdsForInlineSlot: empty,
-        bookedBoatIdsForInlineSlot: empty,
-        heldBoatIdsForInlineSlot: empty,
-        blockedBoatIdsForInlineSlot: empty,
-      };
-    }
-    const startMs = new Date(selectedSlotInline.startAt).getTime();
-    const endMs = selectedSlotInline.endAt ? new Date(selectedSlotInline.endAt).getTime() : null;
-    const available = new Set<string>();
-    const unavailable = new Set<string>();
-    const booked = new Set<string>();
-    const held = new Set<string>();
-    const blocked = new Set<string>();
-    for (const s of slots) {
-      const boatId = (s as SlotDto & { boatId?: string }).boatId;
-      if (!boatId) continue;
-      if (new Date(s.startAt).getTime() !== startMs) continue;
-      if (endMs !== null && new Date(s.endAt).getTime() !== endMs) continue;
-      if (s.status === "open") available.add(boatId);
-      else {
-        unavailable.add(boatId);
-        if (s.status === "booked") booked.add(boatId);
-        else if (s.status === "held") held.add(boatId);
-        else blocked.add(boatId);
-      }
-    }
+    const sets = boatAvailabilitySetsForSelectedCharterSlot(
+      slots,
+      selectedSlotInline
+        ? { id: selectedSlotInline.id, startAt: selectedSlotInline.startAt, endAt: selectedSlotInline.endAt }
+        : null,
+      isTicketed
+    );
     return {
-      availableBoatIdsForInlineSlot: available,
-      unavailableBoatIdsForInlineSlot: unavailable,
-      bookedBoatIdsForInlineSlot: booked,
-      heldBoatIdsForInlineSlot: held,
-      blockedBoatIdsForInlineSlot: blocked,
+      availableBoatIdsForInlineSlot: sets.availableBoatIdsForSelectedSlot,
+      unavailableBoatIdsForInlineSlot: sets.unavailableBoatIdsForSelectedSlot,
+      bookedBoatIdsForInlineSlot: sets.bookedBoatIdsForSelectedSlot,
+      heldBoatIdsForInlineSlot: sets.heldBoatIdsForSelectedSlot,
+      blockedBoatIdsForInlineSlot: sets.blockedBoatIdsForSelectedSlot,
     };
-  }, [selectedSlotInline?.startAt, selectedSlotInline?.endAt, slots]);
+  }, [selectedSlotInline, slots, isTicketed]);
+
+  const confirmInlineSlotsFresh = useCallback(async (): Promise<boolean> => {
+    if (!experienceId) return true;
+    const { start, end } = getVisibleMonthRange(calendarMonth);
+    try {
+      const data = await bookingCache.fetchSlotsFresh(experienceId, start, end, undefined, { ticketed: isTicketed });
+      const freshSlots = (data?.slots ?? []) as SlotDto[];
+      setSlots((prev) => mergeSlots(prev, freshSlots));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [experienceId, calendarMonth, isTicketed]);
 
   // Fetch listing (experience) day pricing so calendar shows the same numbers as the listing page
   const rateIdForPricing = selectedDurationForModal != null ? rates.find((r) => r.durationHours === selectedDurationForModal)?.id : undefined;
@@ -1026,6 +1017,7 @@ export function ExperienceCalendarSection({
     slotDataByDate,
     soldOutFeedbackDate,
     setSoldOutFeedbackDate,
+    confirmInlineSlotsFresh,
   };
   return React.createElement(ExperienceCalendarSectionView, viewProps);
 }

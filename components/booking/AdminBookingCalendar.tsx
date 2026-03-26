@@ -3,7 +3,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 
 export type AdminBookingCalendarItem = {
@@ -25,11 +24,6 @@ const MONTH_NAMES = [
 ];
 
 const DAY_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** Date key in America/Chicago so calendar cells and booking grouping match the business timezone. */
-function toDateStrCentral(d: Date): string {
-  return isoToChicagoDateStr(d.toISOString());
-}
 
 export function AdminBookingCalendar({
   bookings,
@@ -102,12 +96,15 @@ export function AdminBookingCalendar({
     const month = currentDate.getMonth();
 
     for (let i = 0; i < firstDay; i++) {
-      const d = new Date(year, month, 1 - (firstDay - i));
+      const dayInPrevMonth = new Date(year, month, 0).getDate() - (firstDay - i) + 1;
+      const prevMonth = month === 0 ? 11 : month - 1;
+      const prevYear = month === 0 ? year - 1 : year;
+      const prevDateStr = `${prevYear}-${String(prevMonth + 1).padStart(2, "0")}-${String(dayInPrevMonth).padStart(2, "0")}`;
       cells.push({
-        dateStr: toDateStrCentral(d),
-        day: d.getDate(),
+        dateStr: prevDateStr,
+        day: dayInPrevMonth,
         isCurrentMonth: false,
-        isToday: toDateStrCentral(d) === todayStr,
+        isToday: prevDateStr === todayStr,
       });
     }
     for (let day = 1; day <= daysInMonth; day++) {
@@ -121,12 +118,14 @@ export function AdminBookingCalendar({
     }
     const remaining = 42 - cells.length;
     for (let i = 1; i <= remaining; i++) {
-      const d = new Date(year, month + 1, i);
+      const nextMonth = month === 11 ? 0 : month + 1;
+      const nextYear = month === 11 ? year + 1 : year;
+      const nextDateStr = `${nextYear}-${String(nextMonth + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
       cells.push({
-        dateStr: toDateStrCentral(d),
-        day: d.getDate(),
+        dateStr: nextDateStr,
+        day: i,
         isCurrentMonth: false,
-        isToday: toDateStrCentral(d) === todayStr,
+        isToday: nextDateStr === todayStr,
       });
     }
     return cells;

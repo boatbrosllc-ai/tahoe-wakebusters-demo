@@ -20,6 +20,12 @@ import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/h
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 import { computePricing } from "@/lib/booking/pricing";
 import { TAX_RATE } from "@/lib/booking/constants";
+import {
+  assertNoOverlappingActiveSameDaySlots,
+  assertSlotAvailable,
+  transactionGetQueryOrDoc,
+  SlotConflictError,
+} from "@/lib/booking/slot-availability";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -566,6 +572,36 @@ export async function POST(request: NextRequest) {
       }
 
       const slugVariantsForOverlap = getExperienceIdVariants(experienceId, exp.slug ?? "");
+      const parsedForOverlap = parseSlotIdRelaxed(slotId);
+      if (parsedForOverlap) {
+        await assertNoOverlappingActiveSameDaySlots({
+          db,
+          Timestamp,
+          get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+          experienceId,
+          boatId,
+          useBoatSlots: !!boatId,
+          parsed: parsedForOverlap,
+          slotStart,
+          slotEnd,
+          now,
+        });
+        await assertSlotAvailable({
+          db,
+          Timestamp,
+          get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+          experienceId,
+          experienceIdVariants: slugVariantsForOverlap,
+          parsed: parsedForOverlap,
+          slotStart,
+          slotEnd,
+          boatId,
+          useBoatSlots: !!boatId,
+          runSameDaySlotScan: false,
+          experienceSlug: typeof exp.slug === "string" ? exp.slug.trim() : undefined,
+          ignoreSlotDocIds: [slotId],
+        });
+      }
       const lookbackDays = bookingLookbackDaysFromMaxDuration(durationHours);
       const startDateLower = addCalendarDaysToDateStr(tripDate, -lookbackDays);
       const startDateUpper = addCalendarDaysToDateStr(tripDate, lookbackDays);
@@ -619,7 +655,6 @@ export async function POST(request: NextRequest) {
           {
             totalRevenueCents: FieldValue.increment(pricing.totalCents),
             bookingCount: FieldValue.increment(1),
-            customerCount: FieldValue.increment(1),
           },
           { merge: true }
         );
@@ -674,6 +709,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Unable to verify admin blocks. Deploy Firestore indexes and try again." },
         { status: 503 }
+      );
+    }
+    if (err instanceof SlotConflictError) {
+      return NextResponse.json(
+        { error: `Manual booking conflict: ${err.message}` },
+        { status: 409 }
       );
     }
     if ((err as { code?: string }).code === "SLOT_CONFLICT" || (err as { code?: string }).code === "BLOCK_CONFLICT") {

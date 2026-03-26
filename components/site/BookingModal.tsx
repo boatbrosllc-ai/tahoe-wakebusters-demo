@@ -732,6 +732,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => availableDateSetFromMonthSlots(monthSlots, isTicketed),
     [monthSlots, isTicketed],
   );
+  const selectedDateVerifiedInPartial =
+    Boolean(selectedDate) && (availableDateSet?.has(selectedDate!) ?? false);
 
   /** Remount calendar when month or selected rate changes (scroll/state reset); slot/price updates reconcile without remounting. */
   const calendarRenderKey = `${viewMonthKey}|${selectedRateIdForCalendar ?? ""}`;
@@ -2598,7 +2600,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       if the problem persists.
                     </p>
                   )}
-                  {slotsPartialData && selectedDate != null && !selectedSlotVerifiedOpen && (
+                  {slotsPartialData && selectedDate != null && !selectedDateVerifiedInPartial && (
                     <div
                       className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
                       role="status"

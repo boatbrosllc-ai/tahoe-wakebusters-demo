@@ -17,12 +17,11 @@ import type { DocumentSnapshot, Firestore } from "firebase-admin/firestore";
 import { pendingRefundDocumentId } from "@/lib/booking/pending-refund-idempotent";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { buildAdminCancelRefundIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
-import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import {
   classifyStripeRefundStatus,
   PENDING_STRIPE_REFUND_POLL_MS,
 } from "@/lib/booking/stripe-refund-status";
+import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 
 const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
 
@@ -150,13 +149,6 @@ export async function POST(
     tripDateStr = booking.startDateStr ?? parseSlotId(slotId ?? "")?.dateStr;
     expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
 
-    const slotRef = slotId
-      ? boatId
-          ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
-          : experienceId
-            ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
-            : null
-      : null;
 
     /** Must match increments in convert-hold (deposit + optional final), webhook/cron final, and admin POST. */
     const revenueCentsPre = totalSummaryAttributedRevenueCents(booking);
@@ -175,6 +167,7 @@ export async function POST(
     }
 
     let slotReleased = false;
+    let heldSlotsReleased = 0;
     let distinctIds: string[] = getDistinctStripePaymentIntentIds(booking);
     let shouldAdjustSummary = false;
     let concurrentCanceled = false;
@@ -249,7 +242,6 @@ export async function POST(
           tx.set(summaryRef, {
             totalRevenueCents: FieldValue.increment(-revenueCents),
             bookingCount: FieldValue.increment(-1),
-            customerCount: FieldValue.increment(-1),
           }, { merge: true });
           if (monthKey) {
             const monthRef = db.collection("summaries").doc(monthKey);
@@ -260,35 +252,17 @@ export async function POST(
           }
         }
 
-        if (slotRef) {
-          const slotSnap = await tx.get(slotRef);
-          if (slotSnap.exists) {
-            const slot = slotSnap.data() as { status?: string; bookingId?: string };
-            if (slot.status === "booked") {
-              const slotBookingId =
-                typeof slot.bookingId === "string" && slot.bookingId.trim() ? slot.bookingId.trim() : "";
-              if (slotBookingId && slotBookingId !== bookingId) {
-                console.warn(
-                  "[admin/cancel] data integrity: slot.bookingId does not match canceled booking — releasing slot using booking as source of truth",
-                  { bookingId, slotBookingId, slotPath: slotRef.path }
-                );
-                void writeOperationalAlert({
-                  type: "admin_cancel_slot_booking_id_mismatch",
-                  source: "admin-cancel",
-                  bookingId,
-                  slotBookingId,
-                  slotPath: slotRef.path,
-                }).catch(() => {});
-              }
-              tx.update(slotRef, {
-                status: "open",
-                holdId: FieldValue.delete(),
-                bookingId: FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-              });
-              slotReleased = true;
-            }
-          }
+        if (slotId && experienceId) {
+          const expSlug =
+            expSnapForName?.exists && typeof (expSnapForName.data() as { slug?: unknown })?.slug === "string"
+              ? String((expSnapForName.data() as { slug: string }).slug).trim()
+              : "";
+          const releasedCount = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, expSlug, {
+            onHeldReleased: () => {
+              heldSlotsReleased++;
+            },
+          });
+          if (releasedCount > 0) slotReleased = true;
         } else if (slotId) {
           console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
             bookingId,
@@ -307,24 +281,6 @@ export async function POST(
           }).catch(() => {});
         }
 
-        if (tripDateStr && b.experienceId && Number.isFinite(b.partySize)) {
-          const expRef = db.collection("experiences").doc(b.experienceId);
-          const expTxSnap = await tx.get(expRef);
-          if (expTxSnap.exists) {
-            const expTx = expTxSnap.data() as { pricingType?: string };
-            if (expTx.pricingType === "ticketed") {
-              const inventoryRef = getDepartureInventoryRef(db, b.experienceId, tripDateStr);
-              tx.set(
-                inventoryRef,
-                {
-                  reservedSeats: FieldValue.increment(b.partySize ?? 0),
-                  updatedAt: FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-              );
-            }
-          }
-        }
       });
     } else {
       distinctIds = getDistinctStripePaymentIntentIds(booking);
@@ -361,69 +317,13 @@ export async function POST(
     if (!isResume && concurrentCanceled) {
       return NextResponse.json({ ok: true, already: true, slotReleased: false });
     }
-
-    // Best-effort slot cleanup for legacy bookings missing boatId/experienceId.
-    if (!slotReleased && !slotRef && slotId && experienceId) {
-      try {
-        const expSlug =
-          expSnapForName?.exists && typeof (expSnapForName.data() as { slug?: unknown })?.slug === "string"
-            ? String((expSnapForName.data() as { slug: string }).slug).trim()
-            : "";
-        const variants = getExperienceIdVariants(experienceId, expSlug);
-        const boatSnaps = await Promise.all(
-          variants.map((v) =>
-            db
-              .collection("boats")
-              .where("isListingBoat", "==", true)
-              .where("active", "==", true)
-              .where("experienceIds", "array-contains", v)
-              .get()
-          )
-        );
-        const boatIds = Array.from(
-          new Set(boatSnaps.flatMap((s) => s.docs.map((d) => d.id)))
-        );
-        const candidateRefs = [
-          db.collection("experiences").doc(experienceId).collection("slots").doc(slotId),
-          ...boatIds.map((bid) => db.collection("boats").doc(bid).collection("slots").doc(slotId)),
-        ];
-        const snaps = await db.getAll(...candidateRefs);
-        const batch = db.batch();
-        let anyUpdated = false;
-        for (const s of snaps) {
-          if (!s.exists) continue;
-          const d = s.data() as { status?: string };
-          if (d?.status !== "booked") continue;
-          batch.update(s.ref, {
-            status: "open",
-            holdId: FieldValue.delete(),
-            bookingId: FieldValue.delete(),
-            updatedAt: FieldValue.serverTimestamp(),
-          });
-          anyUpdated = true;
-        }
-        if (anyUpdated) {
-          await batch.commit();
-          slotReleased = true;
-        }
-      } catch (cleanupErr) {
-        console.warn(
-          "[admin/cancel] best-effort slot cleanup failed",
-          cleanupErr instanceof Error ? cleanupErr.message : cleanupErr
-        );
-        void writeOperationalAlert({
-          type: "admin_cancel_slot_cleanup_failed",
-          source: "admin-cancel",
-          bookingId,
-          slotId,
-          boatId: boatId ?? null,
-          experienceId: experienceId ?? null,
-          error:
-            cleanupErr instanceof Error
-              ? cleanupErr.message.slice(0, 500)
-              : String(cleanupErr).slice(0, 500),
-        }).catch(() => {});
-      }
+    if (heldSlotsReleased > 0) {
+      void writeOperationalAlert({
+        type: "admin_cancel_slot_held_released",
+        source: "admin-cancel",
+        bookingId,
+        releasedHeldSlotCount: heldSlotsReleased,
+      }).catch(() => {});
     }
 
     let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; amount?: number; error?: string }> = [];

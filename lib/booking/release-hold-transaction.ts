@@ -4,10 +4,11 @@
  */
 
 import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
-import { parseSlotId } from "@/lib/booking/experience-slots";
-import type { Hold, Slot } from "@/lib/booking/types";
+import { parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import type { Booking, Hold, Slot } from "@/lib/booking/types";
 import type { DocumentReference, Firestore } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 /**
  * Re-reads the hold inside the transaction and only performs slot/capacity/discount
@@ -50,8 +51,16 @@ export async function executeReleaseHoldTransaction(
       : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
 
     const isSharedHold = (hold as { bookingMode?: string }).bookingMode === "shared";
-    const dateStr =
-      (hold as { startDateStr?: string }).startDateStr ?? parseSlotId(hold.slotId)?.dateStr ?? "";
+    const resolveSharedReleaseDateStr = (): string => {
+      const startDateStr = (hold as { startDateStr?: string }).startDateStr;
+      if (typeof startDateStr === "string" && startDateStr.trim() !== "") return startDateStr.trim();
+      const strictDateStr = parseSlotId(hold.slotId)?.dateStr;
+      if (strictDateStr) return strictDateStr;
+      const relaxedDateStr = parseSlotIdRelaxed(hold.slotId)?.dateStr;
+      if (relaxedDateStr) return relaxedDateStr;
+      return "";
+    };
+    const dateStr = resolveSharedReleaseDateStr();
 
     let discountDocRef: DocumentReference | null = null;
     const discountDocId = (hold as { discountDocId?: string }).discountDocId;
@@ -78,6 +87,15 @@ export async function executeReleaseHoldTransaction(
       if (isSharedHold && experienceId && dateStr) {
         const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
         await releaseCapacity(tx, inventoryRef, hold.partySize);
+      } else if (isSharedHold) {
+        void writeOperationalAlert({
+          type: "release_hold_missing_date_str",
+          source: "release-hold-transaction",
+          holdId,
+          experienceId: experienceId ?? null,
+          slotId,
+          hint: "Shared hold was expired without capacity release because startDateStr/slot date could not be resolved.",
+        }).catch(() => {});
       }
       tx.update(holdRef, {
         status: "expired",
@@ -93,6 +111,15 @@ export async function executeReleaseHoldTransaction(
       if (isSharedHold && experienceId && dateStr) {
         const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
         await releaseCapacity(tx, inventoryRef, hold.partySize);
+      } else if (isSharedHold) {
+        void writeOperationalAlert({
+          type: "release_hold_missing_date_str",
+          source: "release-hold-transaction",
+          holdId,
+          experienceId: experienceId ?? null,
+          slotId,
+          hint: "Shared hold was expired without capacity release because startDateStr/slot date could not be resolved.",
+        }).catch(() => {});
       }
       tx.update(holdRef, {
         status: "expired",
@@ -111,6 +138,15 @@ export async function executeReleaseHoldTransaction(
     if (isSharedHold && experienceId && dateStr) {
       const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
       await releaseCapacity(tx, inventoryRef, hold.partySize);
+    } else if (isSharedHold) {
+      void writeOperationalAlert({
+        type: "release_hold_missing_date_str",
+        source: "release-hold-transaction",
+        holdId,
+        experienceId: experienceId ?? null,
+        slotId,
+        hint: "Shared hold was expired without capacity release because startDateStr/slot date could not be resolved.",
+      }).catch(() => {});
     }
     tx.update(holdRef, {
       status: "expired",
@@ -118,6 +154,81 @@ export async function executeReleaseHoldTransaction(
       rollbackPendingExpiresAt: FieldValue.delete(),
     });
     await applyDiscountDecrementTx();
+    outcome = { released: true };
+  });
+
+  return outcome;
+}
+
+/**
+ * Transitions a final_failed booking to canceled and releases slot/inventory atomically.
+ * Uses the same transaction release semantics as hold release.
+ */
+export async function executeFinalFailedBookingReleaseTransaction(
+  db: Firestore,
+  bookingId: string
+): Promise<{ released: true } | { released: false; message: string }> {
+  const { FieldValue } = getFirestoreExports();
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  let outcome: { released: true } | { released: false; message: string } = {
+    released: false,
+    message: "Booking not releasable",
+  };
+
+  await db.runTransaction(async (tx) => {
+    const bookingSnap = await tx.get(bookingRef);
+    if (!bookingSnap.exists) {
+      outcome = { released: false, message: "Booking not found" };
+      return;
+    }
+    const booking = bookingSnap.data() as Booking;
+    if (booking.status !== "final_failed") {
+      outcome = { released: false, message: "Booking not in final_failed status" };
+      return;
+    }
+
+    const slotId = booking.slotId;
+    const boatId = booking.boatId;
+    const experienceId = booking.experienceId;
+    if (!slotId || (!boatId && !experienceId)) {
+      outcome = { released: false, message: "Booking missing slot/owner" };
+      return;
+    }
+    const slotRef = boatId
+      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+      : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
+    const slotSnap = await tx.get(slotRef);
+    if (slotSnap.exists) {
+      const slot = slotSnap.data() as Slot;
+      const slotBookingId = typeof slot.bookingId === "string" ? slot.bookingId : "";
+      if (!slotBookingId || slotBookingId === bookingId) {
+        tx.update(slotRef, {
+          status: "open",
+          holdId: FieldValue.delete(),
+          bookingId: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    const expSnap = experienceId ? await tx.get(db.collection("experiences").doc(experienceId)) : null;
+    const pricingType = expSnap?.exists ? ((expSnap.data() as { pricingType?: string }).pricingType ?? "") : "";
+    if (pricingType === "ticketed" && experienceId) {
+      const startDateStr =
+        booking.startDateStr?.trim() ||
+        parseSlotId(slotId)?.dateStr ||
+        parseSlotIdRelaxed(slotId)?.dateStr ||
+        "";
+      if (startDateStr) {
+        const inventoryRef = getDepartureInventoryRef(db, experienceId, startDateStr);
+        await releaseCapacity(tx, inventoryRef, Math.max(0, booking.partySize ?? 0));
+      }
+    }
+
+    tx.update(bookingRef, {
+      status: "canceled",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     outcome = { released: true };
   });
 

@@ -11,6 +11,7 @@ import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
   const secret = process.env.BLOCK_SECRET?.trim();
@@ -68,20 +69,42 @@ export async function POST(request: NextRequest) {
     // Central-timezone-aware day boundaries so 7 AM–7 PM Central slots on dateStr are inside the block.
     const { start: dayStart } = getSlotStartEnd(dateStr, 0, 0, 0);
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+    const now = new Date();
+
+    if (action === "block") {
+      const conflicts = await findBlockConflicts({
+        db,
+        variantIds: experienceIdVariants,
+        blockStart: dayStart,
+        blockEnd: dayEnd,
+        now,
+      });
+      if (conflicts.length > 0) {
+        return NextResponse.json(
+          { error: "Block overlaps active holds or bookings", conflicts },
+          { status: 409 }
+        );
+      }
+    }
 
     if (action === "unblock") {
-      const blockSnapsByVariant = await Promise.all(
-        experienceIdVariants.map((variantId) =>
-          db
-            .collection("blocks")
-            .where("experienceId", "==", variantId)
-            .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-            .get()
-        )
-      );
+      const [canonicalSnap, slugSnap] = await Promise.all([
+        db
+          .collection("blocks")
+          .where("experienceId", "==", experienceId)
+          .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+          .get(),
+        experienceSlug
+          ? db
+              .collection("blocks")
+              .where("experienceSlug", "==", experienceSlug)
+              .where("startAt", "<=", Timestamp.fromDate(dayEnd))
+              .get()
+          : Promise.resolve({ docs: [] } as { docs: import("firebase-admin").firestore.QueryDocumentSnapshot[] }),
+      ]);
       const mergedBlockDocs: import("firebase-admin").firestore.QueryDocumentSnapshot[] = [];
       const seenBlockDocIds = new Set<string>();
-      for (const snap of blockSnapsByVariant) {
+      for (const snap of [canonicalSnap, slugSnap]) {
         for (const doc of snap.docs) {
           if (seenBlockDocIds.has(doc.id)) continue;
           seenBlockDocIds.add(doc.id);
@@ -93,7 +116,8 @@ export async function POST(request: NextRequest) {
         const endAt = b.endAt?.toDate?.();
         if (!endAt || endAt.getTime() < dayStart.getTime()) return false;
         if (boatIds.length === 0) return true;
-        return b.boatId == null || boatIds.includes(b.boatId);
+        if (b.boatId == null) return false;
+        return boatIds.includes(b.boatId);
       });
       const BATCH_SIZE = 500;
       for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
@@ -106,25 +130,22 @@ export async function POST(request: NextRequest) {
 
     let created = 0;
     const batch = db.batch();
-    // Create one block per (experienceId variant, boat) so lookups by slug/doc-id both work.
-    // This avoids relying on every caller passing the correct experienceIdVariants set.
-    for (const expIdVariant of experienceIdVariants) {
-      for (const boatId of boatIds) {
-        const blockRef = db.collection("blocks").doc();
-        batch.set(blockRef, {
-          experienceId: expIdVariant,
-          experienceCanonicalId: experienceId,
-          experienceSlug: experienceSlug || null,
-          boatId,
-          startAt: Timestamp.fromDate(dayStart),
-          endAt: Timestamp.fromDate(dayEnd),
-          note: null,
-          slotId: null,
-          createdAt: FieldValue.serverTimestamp(),
-          createdBy: null,
-        });
-        created++;
-      }
+    for (const boatId of boatIds) {
+      const blockRef = db.collection("blocks").doc();
+      batch.set(blockRef, {
+        experienceId,
+        experienceCanonicalId: experienceId,
+        experienceSlug: experienceSlug || null,
+        slugVariants: experienceIdVariants,
+        boatId,
+        startAt: Timestamp.fromDate(dayStart),
+        endAt: Timestamp.fromDate(dayEnd),
+        note: null,
+        slotId: null,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: null,
+      });
+      created++;
     }
     await batch.commit();
     return NextResponse.json({ ok: true, date: dateStr, blocksCreated: created });

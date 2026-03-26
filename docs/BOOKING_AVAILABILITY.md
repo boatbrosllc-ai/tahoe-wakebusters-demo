@@ -75,7 +75,7 @@ That would make "calendars read from bookings (and holds/blocks) and put each on
 
 1. **Slots API**
    - **Bookings first**: Queries `bookings` where `status` is in `paid`, `deposit_paid`, `final_due`, `final_paid`, `final_processing` and merges them into the slot map as `booked` (by experience + boat or boat only in legacy path). This is the only source of "booked". A booking is merged **only when** `booking.boatId` is present and matches a boat for the experience; if `boatId` is missing or unmatched, the booking is **not** attributed to any boat (unresolved path: log, skip from boat-specific occupancy, and emit telemetry).
-   - **Unresolved bookings**: The API logs `[slots] booking missing or unmatched boatId — skipped from boat-specific occupancy` and emits telemetry (`[slots] unresolved_booking_no_boat_id telemetry` with count and booking IDs). Responses include an `X-Unresolved-Booking-Count` header when any such bookings were seen. Track this until zero; use the backfill migration to populate missing `boatId` on legacy bookings.
+- **Unresolved bookings**: The API logs `[slots] booking missing or unmatched boatId — skipped from boat-specific occupancy` and emits telemetry (`[slots] unresolved_booking_no_boat_id telemetry` with count and booking IDs). Responses include an `X-Unresolved-Booking-Count` header when any such bookings were seen. Affected rows are marked with `unresolvedBoatId: true` so UIs can show an operator warning instead of treating them as normal bookings. Track this until zero; use the backfill migration to populate missing `boatId` on legacy bookings.
    - **Slot docs**: Loads boat slot docs in the date range. Does **not** overwrite keys already set by bookings. For any slot doc with `status: "booked"`, the API treats it as `open` (stale slot doc) unless that slot was already set from a booking.
    - Builds a grid of possible slots; for each boat, `takenRanges` = all non-open slots (held, booked, blocked). Any grid slot that **overlaps** a taken range is returned as `blocked`, not `open`.
    - So the API never returns `open` for a time that overlaps an existing hold or booking, and never shows "booked" without a real booking.
@@ -99,6 +99,12 @@ That would make "calendars read from bookings (and holds/blocks) and put each on
 
 6. **Slots API: held slots**
    - Any slot with `status: "held"` is returned as `open` if the hold document is **missing**, **inactive** (e.g. `status !== "active"`), or **expired**. So after you delete holds (or bookings) in Firestore, calendars show full availability without needing to delete or edit slot docs.
+
+7. **Final-failed booking SLA**
+   - Bookings in `final_failed` are treated as inventory-taking rows until released.
+  - Cron route `POST /api/admin/cron/reconcile-final-failed-bookings` scans `final_failed` rows where `finalChargeAt` is older than `FINAL_FAILED_RELEASE_SLA_HOURS` (default `6`).
+   - For each eligible row, it attempts an atomic release: transition booking to `canceled`, open the slot doc, and for ticketed experiences decrement `departureInventory.reservedSeats`.
+   - If automatic release is unsafe or cannot be completed, the job emits an operational alert so a human can review before release.
 
 ## Why do I only see 2 times (or a few) on a date?
 
@@ -152,11 +158,19 @@ Bookings that have a slot-taken status but missing or empty `boatId` are no long
 2. **Monitor**  
    Use the slots API response header `X-Unresolved-Booking-Count` and server logs (`unresolved_booking_no_boat_id` telemetry) until the count is zero. Re-run the backfill after fixing any bookings that could not be inferred automatically (e.g. set `boatId` manually in Firestore or via admin).
 
+   Before launching any multi-boat experience to production, unresolved count must be **zero** (including dry-run/backfill checks). Do not launch while unresolved rows exist.
+
 3. **Production deploy runbook**  
    After indexes are deployed and you have verified backfill in staging, include **`POST /api/admin/backfill-booking-boat-ids`** with `{ "applyUpdates": true }` or `{ "dryRun": false }` (admin session required) in the production release checklist so missing `boatId` values are corrected before traffic hits the new build. Deploy **blocks** composites from `firestore.indexes.json`; overlap checks fail closed (503) if the query cannot complete. `ENABLE_BLOCK_CHECK_FAIL_OPEN` is obsolete.
 
 4. **`DISABLE_LEGACY_BOOKING_FALLBACK` and `startDateStr` completeness**  
    Turning on **`DISABLE_LEGACY_BOOKING_FALLBACK=true`** before every booking document has a populated **`startDateStr`** can cause `assertSlotAvailable` to miss legacy rows and allow double-booking. Before enabling the flag in production: run the **`startDateStr` backfill** for the `bookings` collection until no documents remain with `startDateStr == null`. After deploy, **`GET /api/health`** with a privileged request (`X-Internal-Health-Secret` or admin cookie) runs a probe when the flag is true: if any such booking exists, the server logs a **production error** and (for privileged callers) reports `legacyBookingStartDateStrBackfill: "incomplete"`. **`npm run check-env`** (`scripts/check-production-env.js`) warns when the flag is set so operators verify backfill completeness before release.
+
+## Frontend freshness window
+
+- Slots/date-prices cache staleness target is ~`12s` by default (`NEXT_PUBLIC_SLOTS_REFETCH_ON_MOUNT_MS`, fallback `12000`).
+- Before progressing to payment, the modal calls `confirmSlotsFresh()` to force a no-store refetch and block checkout if freshness validation fails.
+- Creating a hold now bumps the shared slot cache version key immediately, so other tabs invalidate cached availability even before booking completion.
 
 ## Checkout consistency (site + mobile)
 

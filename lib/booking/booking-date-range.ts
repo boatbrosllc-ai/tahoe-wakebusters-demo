@@ -61,7 +61,10 @@ export function getMonthRange(year: number, month: number): { start: string; end
 export function getMonthRangeWithAdjacent(year: number, month: number): { start: string; end: string } {
   const start = new Date(year, month - 1, 1);
   const end = new Date(year, month + 2, 0);
-  return { start: toDateStr(start), end: toDateStr(end) };
+  return {
+    start: getChicagoDateStringForInstant(start),
+    end: getChicagoDateStringForInstant(end),
+  };
 }
 
 /**

@@ -6,7 +6,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
-import { isTicketedExperienceForBooking } from "@/lib/booking/experience-aliases";
+import { resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
 import { bookingError } from "@/lib/booking/debug";
 import type {
   ExperienceItem,
@@ -21,6 +21,7 @@ import type { ExperienceSeasonal } from "@/lib/booking/types";
 export type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption, BookingModalInitialSelection };
 
 const EMPTY_RATES: bookingCache.CachedRateOption[] = [];
+const VISIBILITY_REFRESH_MAX_CACHE_AGE_MS = 30_000;
 
 export type UseBookingModalDataSelection = {
   selectedExperience: ExperienceItem | null;
@@ -394,7 +395,7 @@ export function useBookingModalData(
       viewMonthStartStr,
       viewMonthEndStr,
       controller.signal,
-      { ticketed: isTicketedExperienceForBooking(exp) }
+      { ticketed: resolveExperiencePricingType(exp) === "ticketed" }
     )
       .then((data) => {
         if (slotsExperienceIdRef.current !== requestedExpId) return;
@@ -416,7 +417,7 @@ export function useBookingModalData(
           slots.length === 0 &&
           (typeof ur !== "number" || ur === 0) &&
           !serverError &&
-          !isTicketedExperienceForBooking(exp)
+          resolveExperiencePricingType(exp) !== "ticketed"
         ) {
           const misconfiguredMessage =
             "No availability was returned for this charter experience. Please contact support if this persists.";
@@ -442,7 +443,7 @@ export function useBookingModalData(
         const nextMonth0 = viewMonth === 12 ? 0 : viewMonth;
         const { start: nextStart, end: nextEnd } = getMonthRange(nextYear, nextMonth0);
         if (slotsExperienceIdRef.current === requestedExpId) {
-          bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: isTicketedExperienceForBooking(exp) }).catch(() => {});
+          bookingCache.fetchSlots(exp.id, nextStart, nextEnd, undefined, { ticketed: resolveExperiencePricingType(exp) === "ticketed" }).catch(() => {});
         }
       })
       .catch((err: unknown) => {
@@ -483,8 +484,16 @@ export function useBookingModalData(
   useEffect(() => {
     if (typeof document === "undefined") return;
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible" && selection?.selectedExperience?.id) {
+      if (
+        document.visibilityState === "visible" &&
+        selection?.selectedExperience?.id &&
+        viewMonthStartStr &&
+        viewMonthEndStr
+      ) {
         const experienceId = selection.selectedExperience.id;
+        const cacheFetchedAt = bookingCache.getSlotsCacheFetchedAt(experienceId, viewMonthStartStr, viewMonthEndStr);
+        const stale = cacheFetchedAt == null || Date.now() - cacheFetchedAt > VISIBILITY_REFRESH_MAX_CACHE_AGE_MS;
+        if (!stale) return;
         bookingCache.invalidate(`slots|${experienceId}|`);
         bookingCache.invalidate(`boats|${experienceId}`);
         bookingCache.invalidate(`experience-detail|${experienceId}`);
@@ -496,18 +505,15 @@ export function useBookingModalData(
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [selection?.selectedExperience?.id]);
+  }, [selection?.selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
 
-  // On mount/open: if last slots fetch is old, force refresh even if visibilitychange doesn't fire.
+  // On modal open: if slots cache is older than the strict slots TTL, force refresh immediately.
   useEffect(() => {
     if (!open) return;
     const expId = selection?.selectedExperience?.id;
     if (!expId || !viewMonthStartStr || !viewMonthEndStr) return;
-    const raw = process.env.NEXT_PUBLIC_SLOTS_REFETCH_ON_MOUNT_MS ?? "";
-    const n = parseInt(String(raw), 10);
-    const thresholdMs = Number.isFinite(n) && n >= 1_000 ? Math.min(n, 10 * 60_000) : 30_000;
     const last = bookingCache.getSlotsCacheFetchedAt(expId, viewMonthStartStr, viewMonthEndStr);
-    if (last != null && Date.now() - last > thresholdMs) {
+    if (last != null && Date.now() - last > bookingCache.STALE_MS_SLOTS) {
       bookingCache.invalidate(`slots|${expId}|`);
       setSlotsRetryTrigger((t) => t + 1);
     }
@@ -689,8 +695,8 @@ export function useBookingModalData(
     setSlotsLoading(true);
     setSlotsLoadError(null);
     try {
-      const data = await bookingCache.fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, {
-        ticketed: isTicketedExperienceForBooking(exp),
+      const data = await bookingCache.fetchSlotsFresh(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, {
+        ticketed: resolveExperiencePricingType(exp) === "ticketed",
       });
       const slots = (data?.slots ?? []) as SlotDto[];
       setMonthSlots(slots);
@@ -763,7 +769,7 @@ export function useBookingModalData(
     const exp = selection?.selectedExperience;
     if (!exp?.id || !viewMonthStartStr || !viewMonthEndStr) return;
     bookingCache.invalidate(`slots|${exp.id}|`);
-    const ticketed = isTicketedExperienceForBooking(exp);
+      const ticketed = resolveExperiencePricingType(exp) === "ticketed";
     bookingCache
       .fetchSlots(exp.id, viewMonthStartStr, viewMonthEndStr, undefined, { ticketed })
       .then((data) => {

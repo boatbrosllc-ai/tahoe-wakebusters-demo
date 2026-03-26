@@ -113,6 +113,8 @@ const STALE_MS = {
 const FETCH_TIMEOUT_MS = 20_000;
 
 const SLOT_CACHE_VERSION_KEY = "bb_slot_cache_version";
+const SLOT_CACHE_BROADCAST_CHANNEL = "bb_slot_cache_invalidation";
+let slotInvalidationBroadcast: BroadcastChannel | null = null;
 
 /** Returns a cache-bust version so slot/date-price fetches bypass in-memory cache across tabs after a booking. */
 function getSlotCacheVersion(): string {
@@ -127,10 +129,21 @@ function getSlotCacheVersion(): string {
 /** Bump slot/date-price cache version so next fetch in any tab uses a new key and refetches. */
 function setSlotCacheVersion(): void {
   if (typeof window === "undefined") return;
+  const nextVersion = String(Date.now());
   try {
-    localStorage.setItem(SLOT_CACHE_VERSION_KEY, String(Date.now()));
+    localStorage.setItem(SLOT_CACHE_VERSION_KEY, nextVersion);
   } catch {
     // ignore
+  }
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      if (!slotInvalidationBroadcast) {
+        slotInvalidationBroadcast = new BroadcastChannel(SLOT_CACHE_BROADCAST_CHANNEL);
+      }
+      slotInvalidationBroadcast.postMessage({ key: SLOT_CACHE_VERSION_KEY, version: nextVersion });
+    }
+  } catch {
+    // fallback remains storage event
   }
 }
 
@@ -355,6 +368,7 @@ export interface CachedSlotDto {
   isCharterLocked?: boolean;
   showSpotsRemaining?: boolean;
   maxCapacity?: number;
+  unresolvedBoatId?: boolean;
 }
 
 export interface DatePricesResult {
@@ -434,6 +448,34 @@ export function fetchSlots(
   const url = `/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}&v=${encodeURIComponent(v)}`;
   const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;
   return fetchCached(key, url, staleMs, signal);
+}
+
+/** Force-fresh slots read (no in-memory reuse) for pre-checkout validation. */
+export async function fetchSlotsFresh(
+  experienceId: string,
+  startDate: string,
+  endDate: string,
+  signal?: AbortSignal,
+  options?: { ticketed?: boolean },
+): Promise<{ slots: CachedSlotDto[]; partialData?: boolean }> {
+  const v = getSlotCacheVersion();
+  const base = getApiBaseUrl();
+  const url = `${base ? `${base}` : ""}/api/booking/slots?experienceId=${encodeURIComponent(experienceId)}&startDate=${startDate}&endDate=${endDate}&v=${encodeURIComponent(v)}`;
+  const res = await fetch(url, {
+    signal,
+    cache: "no-store",
+    credentials: typeof window !== "undefined" && (!base || base === window.location.origin) ? "include" : "omit",
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as { slots: CachedSlotDto[]; partialData?: boolean };
+  const key = `slots|${experienceId}|${startDate}|${endDate}|${v}`;
+  const staleMs = options?.ticketed ? STALE_MS.slotsTicketed : STALE_MS.slots;
+  dataCache.delete(key);
+  dataCache.set(key, { data, fetchedAt: Date.now() - Math.max(0, staleMs - 1) });
+  return data;
 }
 
 /** Milliseconds since epoch when the current in-memory slots cache entry was stored (for staleness checks in the booking modal). */
@@ -566,6 +608,11 @@ export function invalidateBookingCaches(experienceId: string): void {
   setSlotCacheVersion();
 }
 
+/** Bump slot/date-price cache version without invalidating a specific experience key prefix. */
+export function bumpSlotCacheVersion(): void {
+  setSlotCacheVersion();
+}
+
 let crossTabInvalidationRegistered = false;
 
 /**
@@ -575,6 +622,20 @@ let crossTabInvalidationRegistered = false;
 export function initCrossTabInvalidation(): void {
   if (typeof window === "undefined" || crossTabInvalidationRegistered) return;
   crossTabInvalidationRegistered = true;
+  if (typeof BroadcastChannel !== "undefined") {
+    try {
+      if (!slotInvalidationBroadcast) {
+        slotInvalidationBroadcast = new BroadcastChannel(SLOT_CACHE_BROADCAST_CHANNEL);
+      }
+      slotInvalidationBroadcast.addEventListener("message", (event: MessageEvent) => {
+        if (event?.data?.key !== SLOT_CACHE_VERSION_KEY) return;
+        invalidate("slots|");
+        invalidate("date-prices|");
+      });
+    } catch {
+      // keep storage-event fallback
+    }
+  }
   window.addEventListener("storage", (e: StorageEvent) => {
     if (e.key !== SLOT_CACHE_VERSION_KEY) return;
     invalidate("slots|");

@@ -17,8 +17,9 @@ import {
   OPERATING_END_HOUR,
   shouldUseWakeBoardCharterGrid,
 } from "@/lib/booking/experience-slots";
-import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { sendStaffInternalEmail } from "@/lib/booking/brevo";
 import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { Slot } from "@/lib/booking/types";
@@ -28,6 +29,7 @@ import {
   conservativeOpenSlotStatus,
   getLegacyBookingScanLimit,
 } from "@/lib/booking/legacy-booking-scan-limit";
+import { disableBoatSupplementScanEffective } from "@/lib/booking/booking-runtime-state";
 import {
   addCalendarDaysToDateStr,
   bookingIntervalMsFromSlotFields,
@@ -66,7 +68,8 @@ function blockOverlapsWindowMs(
 }
 
 /**
- * Loads block docs overlapping [start, end]. Uses the composite query when indexed; if that fails
+ * Loads block docs overlapping [start, end]. Uses composite queries by both experienceId and
+ * experienceSlug when indexed; if that fails
  * with a missing-index error, falls back to experienceId-only queries and filters in memory so we
  * still apply blocks without marking the response partial (calendar often looked correct before).
  */
@@ -81,16 +84,24 @@ async function fetchBlocksDocsOverlappingWindow(
   const windowEndMs = end.getTime();
 
   try {
-    const snaps = await Promise.all(
-      expIds.map((expId) =>
+    const snaps = await Promise.all([
+      ...expIds.map((expId) =>
         db
           .collection("blocks")
           .where("experienceId", "==", expId)
           .where("startAt", "<=", Timestamp.fromDate(end))
           .where("endAt", ">=", Timestamp.fromDate(start))
           .get()
-      )
-    );
+      ),
+      ...expIds.map((expId) =>
+        db
+          .collection("blocks")
+          .where("experienceSlug", "==", expId)
+          .where("startAt", "<=", Timestamp.fromDate(end))
+          .where("endAt", ">=", Timestamp.fromDate(start))
+          .get()
+      ),
+    ]);
     const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
     const seen = new Set<string>();
     snaps.forEach((snap) => {
@@ -295,11 +306,13 @@ export async function GET(request: NextRequest) {
       const nonPontoonBoatIds = mergedBoatDocs
         .filter((d) => !["pontoon", "tritoon"].includes(((d.data() as { boatType?: string }).boatType ?? "").toLowerCase().trim()))
         .map((d) => d.id);
-      // Sunset/holiday always use ticketed branch so calendar shows one slot per date; ignore pricingType when slug is in that family.
-      const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
       const useTicketedBranch =
-        expDataFull?.pricingType === "ticketed" ||
-        (expDataFull?.pricingType == null && isTicketedBySlug);
+        resolveExperiencePricingType({
+          pricingType: expDataFull?.pricingType,
+          slug: effectiveSlug,
+          title: expData?.title,
+          name: expData?.name,
+        }) === "ticketed";
 
       if (useTicketedBranch && ratesSnap.empty) {
         console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
@@ -404,6 +417,7 @@ export async function GET(request: NextRequest) {
             tAllExpIds.map(expId =>
               db.collection("bookings")
                 .where("experienceId", "==", expId)
+                .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
                 .where("startDateStr", ">=", ticketedStartDateStrLower)
                 .where("startDateStr", "<=", endDate)
                 .get()
@@ -462,7 +476,7 @@ export async function GET(request: NextRequest) {
           }
         }
         // Align with create-hold: merge bookings missing startDateStr (legacy) whenever fallback is enabled.
-        if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+        if (!tWindowedIndexReady && process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
           try {
             const tLegacyNoStartSnaps = await Promise.all(
               tAllExpIds.map((expId) =>
@@ -842,6 +856,7 @@ export async function GET(request: NextRequest) {
         showSpotsRemaining?: boolean | undefined;
         /** When this grid row is a shorter tier overlapped by a longer booked trip — true duration for UI. */
         bookingDurationHours?: number;
+        unresolvedBoatId?: boolean;
       };
       const existingByBoatAndKey = new Map<string, SlotRow>();
       /** Firestore slot docs may store holdId for server-side hold expiry resolution; never expose to clients (response uses holdId: null). */
@@ -911,6 +926,7 @@ export async function GET(request: NextRequest) {
               updatedAt: null,
               boatId: blockBid,
               experienceId,
+              unresolvedBoatId: true,
             });
           }
           return;
@@ -947,7 +963,7 @@ export async function GET(request: NextRequest) {
         allBookingDocs.push(doc);
       };
 
-      // Windowed query uses the (experienceId, startDateStr) composite index — fast path for all requests.
+      // Windowed query uses the (experienceId, status, startDateStr) composite index — fast path for all requests.
       // Note: `in` + range on a different field is rejected by Firestore; per-ID parallel calls are used.
       let windowedIndexReady = true;
       try {
@@ -955,6 +971,7 @@ export async function GET(request: NextRequest) {
           allExpIds.map(expId =>
             db.collection("bookings")
               .where("experienceId", "==", expId)
+              .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
               .where("startDateStr", ">=", charterBookingStartDateStrLower)
               .where("startDateStr", "<=", charterBookingEndDateStrUpper)
               .limit(WINDOWED_BOOKINGS_MAX_DOCS + 1)
@@ -1031,7 +1048,7 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-      if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+      if (!windowedIndexReady && process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
         try {
           const legacyNoStartCharterSnaps = await Promise.all(
             allExpIds.map((expId) =>
@@ -1073,7 +1090,7 @@ export async function GET(request: NextRequest) {
       const expIdsSetForBoatBookingMerge = new Set(allExpIds);
       const BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT = 500;
       const BOAT_CHARTER_BOOKING_QUERY_CHUNK = 10;
-      const disableBoatSupplementScan = process.env.DISABLE_BOAT_SUPPLEMENT_SCAN === "true";
+      const disableBoatSupplementScan = disableBoatSupplementScanEffective;
       if (!disableBoatSupplementScan && boatIds.length > 0) {
         try {
           for (let off = 0; off < boatIds.length; off += BOAT_CHARTER_BOOKING_QUERY_CHUNK) {
@@ -1141,6 +1158,17 @@ export async function GET(request: NextRequest) {
           count: uniqueUnresolved.length,
           hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids with { applyUpdates: true }).",
         }).catch(() => {});
+        void sendStaffInternalEmail({
+          subject: `[Alert] slots unresolved booking missing boatId (${uniqueUnresolved.length})`,
+          htmlContent: `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:16px;">
+<p><strong>Slots API unresolved booking(s) missing boatId</strong></p>
+<p><strong>Experience:</strong> ${(experienceId ?? "").replace(/</g, "&lt;")}</p>
+<p><strong>Count:</strong> ${String(uniqueUnresolved.length)}</p>
+<p><strong>Booking IDs (up to 25):</strong> ${uniqueUnresolved.slice(0, 25).map((id) => id.replace(/</g, "&lt;")).join(", ")}</p>
+<p>Run the booking boatId backfill until unresolved count reaches zero before multi-boat launch.</p>
+</body></html>`,
+          idempotencyKey: `slots_unresolved_booking_missing_boat_id_${experienceId ?? "unknown"}_${uniqueUnresolved.length}`,
+        }).catch(() => {});
       }
 
       /** Map (boatId:normalizedSlotId) -> booking doc id so slot docs can resolve correct bookingId when they store a different id (e.g. Stripe). */
@@ -1194,7 +1222,8 @@ export async function GET(request: NextRequest) {
             if (!startAtDate || !endAtDate) return; // skip malformed slot doc
             const updatedAt = data.updatedAt as { toDate?: () => Date } | undefined;
             const updatedAtIso = updatedAt?.toDate?.()?.toISOString?.() ?? null;
-            // "booked" on slot docs is not trusted: only bookings collection is source of truth. Stale slot docs show as open.
+            // Consistency model: bookings collection is source-of-truth; slot docs are eventual projections.
+            // Known risk window: shortly after write propagation, stale slot rows can still say "booked".
             const status = data.status === "booked" ? "open" : data.status;
             // Resolve bookingId from bookings collection so admin calendar detail fetch works (slot doc may store non-doc id).
             const resolvedBookingId = bookingIdByBoatAndSlot.get(`${bid}:${slotIdNorm}`) ?? data.bookingId;
@@ -1517,12 +1546,28 @@ export async function GET(request: NextRequest) {
       legacyMaxDuration,
     );
     const legacySlotDocsQueryEnd = legacyWinEnd;
+    const startDateLower = addCalendarDaysToDateStr(
+      startDate!,
+      -bookingLookbackDaysFromMaxDuration(legacyMaxDuration),
+    );
+    const endDateUpper = addCalendarDaysToDateStr(
+      endDate!,
+      bookingLookbackDaysFromMaxDuration(legacyMaxDuration),
+    );
+    const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
+    let legacyQueryHitLimitBoat = false;
 
     const legacyBookingsSnap = await db
       .collection("bookings")
       .where("boatId", "==", boatId)
       .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+      .where("startDateStr", ">=", startDateLower)
+      .where("startDateStr", "<=", endDateUpper)
+      .limit(LEGACY_BOOKING_SCAN_LIMIT)
       .get();
+    if (legacyBookingsSnap.size >= LEGACY_BOOKING_SCAN_LIMIT) {
+      legacyQueryHitLimitBoat = true;
+    }
     const legacyBookedIntervals: { startMs: number; endMs: number; bookingId: string }[] = [];
     legacyBookingsSnap.docs.forEach((d) => {
       const b = d.data() as { slotId?: string; slot_id?: string; status?: string };
@@ -1601,6 +1646,7 @@ export async function GET(request: NextRequest) {
       const endAt = data.endAt as { toDate(): Date };
       const updatedAt = data.updatedAt as { toDate(): Date } | undefined;
       const parsed = parseSlotIdRelaxed(doc.id);
+      // Same eventual-consistency rule: stale slot-doc "booked" is demoted to open.
       let status: string = data.status === "booked" ? "open" : data.status;
       const hidRaw = typeof data.holdId === "string" && data.holdId.trim() ? data.holdId.trim() : null;
       if (status === "held" && hidRaw) legacySlotHoldIdByDocId.set(doc.id, hidRaw);
@@ -1684,10 +1730,10 @@ export async function GET(request: NextRequest) {
     const legacyResponseHeaders: Record<string, string> = {
       ...NO_STORE_HEADERS,
       "X-Slots-Generated-At": generatedAtIso,
-      ...(legacyBlocksIncomplete ? { "X-Slots-Partial-Data": "true" } : {}),
+      ...((legacyBlocksIncomplete || legacyQueryHitLimitBoat) ? { "X-Slots-Partial-Data": "true" } : {}),
     };
     return NextResponse.json(
-      { slots, ...(legacyBlocksIncomplete ? { partialData: true } : {}) },
+      { slots, ...((legacyBlocksIncomplete || legacyQueryHitLimitBoat) ? { partialData: true } : {}) },
       { headers: legacyResponseHeaders },
     );
   } catch (err) {

@@ -42,11 +42,12 @@ import {
   persistFinalBalanceNormalizationIfNeeded,
   resolveFinalBalanceFromBooking,
 } from "@/lib/booking/final-balance-resolver";
+import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 
 const PAGE_SIZE = 100;
-const FINAL_FAILED_AUTO_CANCEL_DAYS = (() => {
-  const n = parseInt(process.env.FINAL_FAILED_AUTO_CANCEL_DAYS ?? "2", 10);
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 30) : 2;
+const FINAL_FAILED_GRACE_HOURS = (() => {
+  const n = parseInt(process.env.FINAL_FAILED_GRACE_HOURS ?? "72", 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 30) : 72;
 })();
 
 async function alertIfPiAmountDiffersFromBookingExpected(
@@ -924,51 +925,68 @@ export async function POST(request: NextRequest) {
 
     // Auto-cancel long-stuck final_failed bookings so slots are eventually released.
     try {
-      const cutoff = new Date(Date.now() - FINAL_FAILED_AUTO_CANCEL_DAYS * 24 * 60 * 60 * 1000);
+      const cutoff = new Date(Date.now() - FINAL_FAILED_GRACE_HOURS * 60 * 60 * 1000);
       const cutoffTs = Timestamp.fromDate(cutoff);
-      const staleFailedSnap = await db
-        .collection("bookings")
-        .where("status", "==", "final_failed")
-        .where("updatedAt", "<=", cutoffTs)
-        .limit(200)
-        .get();
-      for (const doc of staleFailedSnap.docs) {
+      const [staleByFinalChargeAtSnap, staleByUpdatedAtSnap] = await Promise.all([
+        db
+          .collection("bookings")
+          .where("status", "==", "final_failed")
+          .where("finalChargeAt", "<=", cutoffTs)
+          .limit(200)
+          .get(),
+        db
+          .collection("bookings")
+          .where("status", "==", "final_failed")
+          .where("updatedAt", "<=", cutoffTs)
+          .limit(200)
+          .get(),
+      ]);
+      const staleFailedDocs = new Map<string, QueryDocumentSnapshot<DocumentData>>();
+      for (const doc of staleByFinalChargeAtSnap.docs) staleFailedDocs.set(doc.id, doc);
+      for (const doc of staleByUpdatedAtSnap.docs) staleFailedDocs.set(doc.id, doc);
+      for (const doc of staleFailedDocs.values()) {
         const b = doc.data() as Booking;
-        const updates: Record<string, unknown> = {
-          status: "canceled",
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-        await doc.ref.update(updates);
-        const slotRef =
-          b.slotId && b.boatId
-            ? db.collection("boats").doc(b.boatId).collection("slots").doc(b.slotId)
-            : b.slotId && b.experienceId
-              ? db.collection("experiences").doc(b.experienceId).collection("slots").doc(b.slotId)
-              : null;
-        if (slotRef) {
-          try {
-            await slotRef.set(
-              {
-                status: "open",
-                holdId: FieldValue.delete(),
-                bookingId: FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-              },
-              { merge: true }
-            );
-          } catch {
-            // Alert below covers manual remediation.
-          }
+        if (!b.finalChargeAt) {
+          await writeOperationalAlert({
+            type: "final_failed_missing_final_charge_at",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            slotId: b.slotId ?? null,
+            boatId: b.boatId ?? null,
+            experienceId: b.experienceId ?? null,
+            hint: "Booking is final_failed without finalChargeAt; fallback updatedAt auto-cancel path was used.",
+          }).catch(() => {});
         }
-        await writeOperationalAlert({
-          type: "final_failed_auto_canceled",
-          source: "run-final-charges",
-          bookingId: doc.id,
-          autoCancelDays: FINAL_FAILED_AUTO_CANCEL_DAYS,
-          slotId: b.slotId ?? null,
-          boatId: b.boatId ?? null,
-          experienceId: b.experienceId ?? null,
-        });
+        try {
+          await db.runTransaction(async (tx) => {
+            const ref = db.collection("bookings").doc(doc.id);
+            const snap = await tx.get(ref);
+            if (!snap.exists) return;
+            const fresh = snap.data() as Booking;
+            if (fresh.status !== "final_failed") return;
+            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
+            await resetBookingSlotsToOpenInTransaction(db, tx, doc.id, fresh);
+          });
+          await writeOperationalAlert({
+            type: "final_failed_auto_canceled",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            autoCancelGraceHours: FINAL_FAILED_GRACE_HOURS,
+            slotId: b.slotId ?? null,
+            boatId: b.boatId ?? null,
+            experienceId: b.experienceId ?? null,
+          });
+        } catch (bookingAutoCancelErr) {
+          await writeOperationalAlert({
+            type: "final_failed_auto_cancel_booking_error",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            error:
+              bookingAutoCancelErr instanceof Error
+                ? bookingAutoCancelErr.message
+                : String(bookingAutoCancelErr),
+          }).catch(() => {});
+        }
       }
     } catch (finalFailedAutoCancelErr) {
       await writeOperationalAlert({

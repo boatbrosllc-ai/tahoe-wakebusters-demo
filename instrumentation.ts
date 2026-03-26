@@ -11,6 +11,7 @@ export async function register() {
     setBookingReadyForProductionStartup,
     setLegacyFallbackSafeForProductionStartup,
     setLegacyBookingBacklogStateForProductionStartup,
+    setDisableBoatSupplementScanEffectiveForProductionStartup,
   } = await import(
     "@/lib/booking/booking-runtime-state"
   );
@@ -172,6 +173,35 @@ export async function register() {
       );
     }
   }
+
+  // DISABLE_BOAT_SUPPLEMENT_SCAN safety gate: only honor when boatId backfill + startDateStr are complete.
+  if (process.env.DISABLE_BOAT_SUPPLEMENT_SCAN === "true") {
+    try {
+      const { getDb } = await import("@/lib/booking/firebase-admin");
+      const db = getDb();
+      const probe = await db
+        .collection("bookings")
+        .where("startDateStr", "==", null)
+        .limit(1)
+        .get();
+      if (!probe.empty) {
+        console.error(
+          "[instrumentation] CRITICAL: DISABLE_BOAT_SUPPLEMENT_SCAN=true but bookings missing startDateStr still exist. Overriding to false."
+        );
+        setDisableBoatSupplementScanEffectiveForProductionStartup(false);
+      } else {
+        setDisableBoatSupplementScanEffectiveForProductionStartup(true);
+      }
+    } catch (e) {
+      console.warn(
+        "[instrumentation] DISABLE_BOAT_SUPPLEMENT_SCAN probe failed; forcing supplement scan on.",
+        e instanceof Error ? e.message : e
+      );
+      setDisableBoatSupplementScanEffectiveForProductionStartup(false);
+    }
+  } else {
+    setDisableBoatSupplementScanEffectiveForProductionStartup(false);
+  }
   setLegacyFallbackSafeForProductionStartup(legacySafe);
   if (!legacySafe) {
     console.warn(
@@ -185,6 +215,11 @@ export async function register() {
       "[instrumentation] ENABLE_BLOCK_CHECK_FAIL_OPEN=true is not allowed in production (NODE_ENV=production). " +
         "This flag is obsolete: block queries that cannot complete now always fail closed (503). Deploy firestore.indexes.json and unset this flag."
     );
+  }
+
+  const requiredStripePiMetadataKeys = ["payment_stage"];
+  if (!requiredStripePiMetadataKeys.includes("payment_stage")) {
+    throw new Error("[instrumentation] Stripe PaymentIntent metadata validation misconfigured: payment_stage key missing.");
   }
 
   const { assertDisableLegacyBookingFallbackInProductionStartup } = await import("@/lib/booking/legacy-fallback-warn");

@@ -841,6 +841,9 @@ export async function POST(request: NextRequest) {
       };
       if (hold.experienceId) metadata.experienceId = hold.experienceId;
       if (hold.boatId) metadata.boatId = hold.boatId;
+      if (!metadata.payment_stage || (metadata.payment_stage !== "full" && metadata.payment_stage !== "deposit")) {
+        throw new Error("PaymentIntent metadata invariant failed: payment_stage must be set");
+      }
 
       const idempotencyKey = buildPaymentIntentIdempotencyKey({
         holdId: input.holdId,

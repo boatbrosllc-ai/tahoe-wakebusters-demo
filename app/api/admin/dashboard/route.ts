@@ -5,6 +5,7 @@ import type { Booking, Experience } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, bookingRequiresBoatIdForOccupancyAlert } from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { countMissingStartDateStr } from "@/lib/booking/backfill-start-date-str-status";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
     const in7DaysStr = getDateStrInSlotTimezone(in7Days);
 
     const REVENUE_STATUSES = ["paid", "deposit_paid", "final_due", "final_processing", "final_paid"] as const;
-    const [upcomingSnap, experiencesSnap, recentBookingsSnap] = await Promise.all([
+    const [upcomingSnap, experiencesSnap, recentBookingsSnap, missingBookingStartDateStrCount, missingHoldsStartDateStrCount] = await Promise.all([
       db
         .collection("bookings")
         .where("status", "in", REVENUE_STATUSES)
@@ -42,6 +43,8 @@ export async function GET(request: NextRequest) {
         .get(),
       db.collection("experiences").get(),
       db.collection("bookings").orderBy("createdAt", "desc").limit(10).get(),
+      countMissingStartDateStr("bookings"),
+      countMissingStartDateStr("holds"),
     ]);
 
     const experienceNames = new Map<string, string>();
@@ -140,6 +143,22 @@ export async function GET(request: NextRequest) {
     });
 
     const deadLetterSnap = await db.collection("notificationOutbox").where("status", "==", "dead_letter").limit(50).get();
+    const finalFailedReleaseSlaHoursRaw = parseInt(process.env.FINAL_FAILED_RELEASE_SLA_HOURS ?? "6", 10);
+    const finalFailedReleaseSlaHours = Number.isFinite(finalFailedReleaseSlaHoursRaw)
+      ? Math.max(1, finalFailedReleaseSlaHoursRaw)
+      : 6;
+    const finalFailedCutoff = new Date(Date.now() - finalFailedReleaseSlaHours * 60 * 60 * 1000);
+    const finalFailedOldSnap = await db
+      .collection("bookings")
+      .where("status", "==", "final_failed")
+      .limit(500)
+      .get();
+    let finalFailedBeyondGraceCount = 0;
+    finalFailedOldSnap.docs.forEach((d) => {
+      const b = d.data() as Booking & { finalChargeAt?: { toDate?: () => Date; seconds?: number } };
+      const fc = b.finalChargeAt ? toDate(b.finalChargeAt) : null;
+      if (fc && fc <= finalFailedCutoff) finalFailedBeyondGraceCount++;
+    });
     let confirmationDeadLetterCount = 0;
     deadLetterSnap.docs.forEach((d) => {
       const row = d.data() as { type?: string };
@@ -158,6 +177,10 @@ export async function GET(request: NextRequest) {
       confirmationDeadLetterCount,
       /** Among the last 500 bookings (by createdAt): slot-taken rows missing boatId where per-boat occupancy applies (excludes shared ticketed inventory). */
       recentBookingsMissingBoatId,
+      finalFailedBeyondGraceCount,
+      finalFailedReleaseSlaHours,
+      missingBookingStartDateStrCount,
+      missingHoldsStartDateStrCount,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

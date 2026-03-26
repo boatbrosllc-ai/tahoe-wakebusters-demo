@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import type { Booking } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN, type Booking } from "@/lib/booking/types";
+import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 
 export async function POST(
   request: NextRequest,
@@ -17,61 +17,54 @@ export async function POST(
   try {
     const db = getDb();
     const { FieldValue } = getFirestoreExports();
-    const bookingSnap = await db.collection("bookings").doc(bookingId).get();
-    if (!bookingSnap.exists) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
-    const booking = bookingSnap.data() as Booking;
-    const slotId = booking.slotId;
-    const experienceId = booking.experienceId;
-    const boatId = booking.boatId;
-    if (!slotId || !experienceId) {
-      return NextResponse.json({ error: "Booking is missing slot or experience id" }, { status: 400 });
-    }
-
-    const expSnap = await db.collection("experiences").doc(experienceId).get();
-    const expSlug =
-      expSnap.exists && typeof (expSnap.data() as { slug?: unknown })?.slug === "string"
-        ? String((expSnap.data() as { slug: string }).slug).trim()
-        : "";
-    const variants = getExperienceIdVariants(experienceId, expSlug);
-    const boatSnaps = await Promise.all(
-      variants.map((v) =>
-        db
-          .collection("boats")
-          .where("isListingBoat", "==", true)
-          .where("active", "==", true)
-          .where("experienceIds", "array-contains", v)
-          .get()
-      )
-    );
-    const relatedBoatIds = Array.from(new Set(boatSnaps.flatMap((s) => s.docs.map((d) => d.id))));
-    const candidateRefs = [
-      db.collection("experiences").doc(experienceId).collection("slots").doc(slotId),
-      ...relatedBoatIds.map((bid) => db.collection("boats").doc(bid).collection("slots").doc(slotId)),
-      ...(boatId ? [db.collection("boats").doc(boatId).collection("slots").doc(slotId)] : []),
-    ];
-    const snaps = await db.getAll(...candidateRefs);
-    const batch = db.batch();
+    const bookingRef = db.collection("bookings").doc(bookingId);
     let updated = 0;
-    for (const s of snaps) {
-      if (!s.exists) continue;
-      const status = (s.data() as { status?: string }).status;
-      if (status !== "booked" && status !== "held") continue;
-      batch.update(s.ref, {
-        status: "open",
-        holdId: FieldValue.delete(),
-        bookingId: FieldValue.delete(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      updated++;
+    let slotId: string | null = null;
+    let alreadyCanceled = false;
+    let notReleasable = false;
+    await db.runTransaction(async (tx) => {
+      const bookingSnap = await tx.get(bookingRef);
+      if (!bookingSnap.exists) throw new Error("BOOKING_NOT_FOUND");
+      const booking = bookingSnap.data() as Booking;
+      slotId = typeof booking.slotId === "string" ? booking.slotId : null;
+      if (!slotId) throw new Error("BOOKING_MISSING_SLOT");
+      if (booking.status === "canceled") {
+        alreadyCanceled = true;
+        return;
+      }
+      if (!BOOKING_STATUSES_SLOT_TAKEN.has(booking.status)) {
+        notReleasable = true;
+        return;
+      }
+      let expSlug = "";
+      if (typeof booking.experienceId === "string" && booking.experienceId.trim()) {
+        const expSnap = await tx.get(db.collection("experiences").doc(booking.experienceId));
+        expSlug =
+          expSnap.exists && typeof (expSnap.data() as { slug?: unknown })?.slug === "string"
+            ? String((expSnap.data() as { slug: string }).slug).trim()
+            : "";
+      }
+      updated = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug);
+      if (updated > 0) {
+        tx.update(bookingRef, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
+      }
+    });
+    if (alreadyCanceled) return NextResponse.json({ ok: true, bookingId, already: true, slotReleased: false });
+    if (notReleasable) {
+      return NextResponse.json({ error: "Booking status does not require slot release" }, { status: 409 });
     }
-    if (updated > 0) await batch.commit();
     return NextResponse.json({ ok: true, bookingId, slotId, updated });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "BOOKING_NOT_FOUND") return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    if (message === "BOOKING_MISSING_SLOT") {
+      return NextResponse.json({ error: "Booking is missing slot metadata" }, { status: 400 });
+    }
     await writeOperationalAlert({
       type: "admin_release_slot_failed",
       source: "admin-release-slot",
       bookingId,
-      error: err instanceof Error ? err.message.slice(0, 500) : String(err).slice(0, 500),
+      error: message.slice(0, 500),
     }).catch(() => {});
     return NextResponse.json({ error: "Failed to release slot" }, { status: 500 });
   }

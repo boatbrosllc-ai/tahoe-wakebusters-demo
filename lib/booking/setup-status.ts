@@ -16,6 +16,9 @@ export interface SetupStatus {
   appBaseUrlConfigured: boolean;
   /** When false, receipt tokens, manage links, and release tokens are degraded or unavailable. */
   manageBookingSecretConfigured: boolean;
+  disableLegacyBookingFallback: boolean;
+  disableBoatSupplementScan: boolean;
+  finalFailedReleaseSlaHours: number;
   ready: boolean;
 }
 
@@ -57,6 +60,12 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   const brevoConfigured = env("BREVO_API_KEY");
   const appBaseUrlConfigured = env("APP_BASE_URL");
   const manageBookingSecretConfigured = env("MANAGE_BOOKING_SECRET");
+  const disableLegacyBookingFallback = process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true";
+  const disableBoatSupplementScan = process.env.DISABLE_BOAT_SUPPLEMENT_SCAN === "true";
+  const finalFailedReleaseSlaHoursRaw = parseInt(process.env.FINAL_FAILED_RELEASE_SLA_HOURS ?? "6", 10);
+  const finalFailedReleaseSlaHours = Number.isFinite(finalFailedReleaseSlaHoursRaw)
+    ? Math.max(1, finalFailedReleaseSlaHoursRaw)
+    : 6;
 
   const ready =
     firebaseConfigured &&
@@ -76,6 +85,9 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     brevoConfigured,
     appBaseUrlConfigured,
     manageBookingSecretConfigured,
+    disableLegacyBookingFallback,
+    disableBoatSupplementScan,
+    finalFailedReleaseSlaHours,
     ready,
   };
 }

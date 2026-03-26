@@ -5,7 +5,7 @@
  * Supports full payment (legacy) or deposit-only (50/50) via paymentStage.
  */
 
-import type { Firestore, DocumentReference } from "firebase-admin/firestore";
+import type { Firestore, DocumentReference, Query } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { upsertBrevoContact, sendWaiverTemplateMissingAlert } from "@/lib/booking/brevo";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
@@ -47,6 +47,7 @@ import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
 /** Legacy: full payment in one charge. */
 export interface ConvertHoldInputFull {
   paymentStage?: "full";
+  requiresManualReview?: boolean;
   paymentIntentId: string;
   amountTotalCents?: number;
   currency?: string;
@@ -61,6 +62,7 @@ export interface ConvertHoldInputFull {
 /** 50/50: deposit paid; booking created with final_due and finalChargeAt. */
 export interface ConvertHoldInputDeposit {
   paymentStage: "deposit";
+  requiresManualReview?: boolean;
   paymentIntentId: string;
   amountTotalCents?: number;
   currency?: string;
@@ -103,6 +105,13 @@ export async function convertHoldToBooking(
   input: ConvertHoldInput
 ): Promise<ConvertHoldResult> {
   const isDeposit = isConvertHoldInputDeposit(input);
+  if ((input as { requiresManualReview?: boolean }).requiresManualReview === true) {
+    bookingWarn("convert-hold", "manual review required for payment-stage classification; blocking auto-conversion", {
+      holdId,
+      paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
+    });
+    return { amountIntegrityMismatch: true };
+  }
   bookingLog("convert-hold", "convertHoldToBooking started", {
     holdId,
     paymentStage: isDeposit ? "deposit" : "full",
@@ -498,39 +507,11 @@ export async function convertHoldToBooking(
     return { amountIntegrityMismatch: true };
   }
 
-  if (hold.experienceId) {
-    const parsedForBlock = parseSlotIdRelaxed(hold.slotId) ?? parseSlotId(hold.slotId);
-    if (parsedForBlock) {
-      const { start: slotStartBlock, end: slotEndBlock } = getSlotStartEnd(
-        parsedForBlock.dateStr,
-        parsedForBlock.startHour,
-        parsedForBlock.durationHours,
-        parsedForBlock.startMinute ?? 0
-      );
-      const expSlugBlock =
-        experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
-          ? (experienceForPricing as Experience).slug.trim()
-          : "";
-      const expVariantsBlock = getExperienceIdVariants(hold.experienceId, expSlugBlock);
-      const blocked = await hasOverlappingBlock({
-        db,
-        Timestamp,
-        experienceId: hold.experienceId,
-        experienceIdVariants: expVariantsBlock,
-        boatId: hold.boatId,
-        slotStart: slotStartBlock,
-        slotEnd: slotEndBlock,
-      });
-      if (blocked) {
-        throw new Error(BOOKING_BLOCKED_BY_OPERATOR_MESSAGE);
-      }
-    }
-  }
-
   const fullInput = input as ConvertHoldInputFull;
   const customer = (isDeposit ? input.customerOverride : fullInput.customerOverride) ?? hold.customerDraft;
   const specialNotes = fullInput.specialNotesOverride ?? (hold.answers?.comments?.trim() || undefined);
   const bookingId = db.collection("bookings").doc().id;
+  const parsedForBlock = hold.experienceId ? (parseSlotIdRelaxed(hold.slotId) ?? parseSlotId(hold.slotId)) : null;
   const parsedSlot = parseSlotId(hold.slotId);
   const startDateStrFallback = hold.slotId.length >= 10 ? hold.slotId.slice(0, 10) : null;
   if (!parsedSlot) {
@@ -657,6 +638,31 @@ export async function convertHoldToBooking(
     } else {
       throw HOLD_NOT_ACTIVE_SENTINEL;
     }
+    if (hold.experienceId && parsedForBlock) {
+      const { start: slotStartBlock, end: slotEndBlock } = getSlotStartEnd(
+        parsedForBlock.dateStr,
+        parsedForBlock.startHour,
+        parsedForBlock.durationHours,
+        parsedForBlock.startMinute ?? 0
+      );
+      const expSlugBlock =
+        experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
+          ? (experienceForPricing as Experience).slug.trim()
+          : "";
+      const expVariantsBlock = getExperienceIdVariants(hold.experienceId, expSlugBlock);
+      const blocked = await hasOverlappingBlock({
+        db,
+        Timestamp,
+        experienceId: hold.experienceId,
+        experienceIdVariants: expVariantsBlock,
+        experienceSlug: expSlugBlock || undefined,
+        boatId: hold.boatId,
+        slotStart: slotStartBlock,
+        slotEnd: slotEndBlock,
+        get: (q) => tx.get(q as Query),
+      });
+      if (blocked) throw new Error(BOOKING_BLOCKED_BY_OPERATOR_MESSAGE);
+    }
 
     let inventoryRefForShared: ReturnType<typeof getDepartureInventoryRef> | null = null;
     let preReadReservedSeats: number | undefined;
@@ -670,16 +676,28 @@ export async function convertHoldToBooking(
       const expSlugTx =
         typeof (experienceForPricing as Experience).slug === "string" ? (experienceForPricing as Experience).slug.trim() : "";
       const slugVariantsTx = getExperienceIdVariants(hold.experienceId, expSlugTx);
-      const bookSnapsTx = await Promise.all(
-        slugVariantsTx.map((v) =>
-          tx.get(
-            db
-              .collection("bookings")
-              .where("experienceId", "==", v)
-              .where("startDateStr", "==", parsedSlot.dateStr)
+      let txWindowedIndexReady = true;
+      let bookSnapsTx: import("firebase-admin/firestore").QuerySnapshot[] = [];
+      try {
+        bookSnapsTx = await Promise.all(
+          slugVariantsTx.map((v) =>
+            tx.get(
+              db
+                .collection("bookings")
+                .where("experienceId", "==", v)
+                .where("startDateStr", "==", parsedSlot.dateStr)
+            )
           )
-        )
-      );
+        );
+      } catch (windowedTxErr) {
+        const msg = windowedTxErr instanceof Error ? windowedTxErr.message : String(windowedTxErr);
+        if (/FAILED_PRECONDITION.*index/i.test(msg)) {
+          txWindowedIndexReady = false;
+          console.warn("[convert-hold-to-booking] shared booking windowed query index not ready; using legacy fallback");
+        } else {
+          throw windowedTxErr;
+        }
+      }
       const seenTx = new Set<string>();
       let sharedDepartureSold = 0;
       for (const snap of bookSnapsTx) {
@@ -699,7 +717,7 @@ export async function convertHoldToBooking(
         }
       }
       // Legacy bookings missing startDateStr: bounded scan + in-memory date match.
-      if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+      if (!txWindowedIndexReady && process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
         const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
         const legacySnaps = await Promise.all(
           slugVariantsTx.map((v) =>
@@ -776,6 +794,8 @@ export async function convertHoldToBooking(
         }
       }
     }
+    // Atomicity invariant: booking write and slot status transition happen in this same transaction for
+    // charter/listing/direct-checkout paths. Shared ticketed has no slot doc and relies on inventory+booking docs.
     if (!isSharedHold && slotRef) {
       const s = await tx.get(slotRef);
       if (!s.exists) throw new Error("Slot not found");
@@ -841,13 +861,9 @@ export async function convertHoldToBooking(
     const revenueCents = isDeposit ? (input.stripe.depositCents ?? 0) : (finalPricing.totalCents ?? 0);
     if (revenueCents > 0) {
       const summaryRef = db.collection("summaries").doc("revenue");
-      // customerCount: legacy field name — increments once per successful paid conversion (same semantics as
-      // bookingCount / admin cancel decrement), not deduplicated unique emails. Consider a one-time Firestore
-      // backfill: summaries/revenue.customerCount += N where N = net bookings that added revenue without increment.
       tx.set(summaryRef, {
         totalRevenueCents: FieldValue.increment(revenueCents),
         bookingCount: FieldValue.increment(1),
-        customerCount: FieldValue.increment(1),
       }, { merge: true });
       // Revenue recognition: monthly summaries are keyed by payment date (creation date), not trip date.
       // Cancel route uses the same policy (booking.createdAt) for decrements. If trip-date attribution is

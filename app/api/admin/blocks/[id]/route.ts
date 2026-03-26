@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -34,16 +36,46 @@ export async function PATCH(
     }
 
     const db = getDb();
-    const { Timestamp } = getFirestoreExports();
+    const { Timestamp, FieldValue } = getFirestoreExports();
     const ref = db.collection("blocks").doc(id);
     const snap = await ref.get();
     if (!snap.exists) {
       return NextResponse.json({ error: "Block not found" }, { status: 404 });
     }
+    const current = snap.data() as {
+      experienceId?: string;
+      boatId?: string | null;
+    };
+    const experienceId = typeof current.experienceId === "string" ? current.experienceId.trim() : "";
+    if (!experienceId) {
+      return NextResponse.json({ error: "Block is missing experienceId" }, { status: 400 });
+    }
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    const experienceSlug =
+      expSnap.exists && typeof (expSnap.data() as { slug?: string })?.slug === "string"
+        ? (expSnap.data() as { slug: string }).slug.trim()
+        : "";
+    const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
+    const conflicts = await findBlockConflicts({
+      db,
+      variantIds,
+      blockStart: startAt,
+      blockEnd: endAt,
+      boatId: typeof current.boatId === "string" ? current.boatId.trim() || null : null,
+      excludeBlockId: id,
+      now: new Date(),
+    });
+    if (conflicts.length > 0) {
+      return NextResponse.json(
+        { error: "Block overlaps active holds or bookings", conflicts },
+        { status: 409 }
+      );
+    }
     await ref.update({
       startAt: Timestamp.fromDate(startAt),
       endAt: Timestamp.fromDate(endAt),
       note: note ?? null,
+      updatedAt: FieldValue.serverTimestamp(),
     });
     const updated = (await ref.get()).data() as {
       experienceId?: string;

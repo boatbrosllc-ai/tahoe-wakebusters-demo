@@ -18,6 +18,7 @@ import {
 } from "@/lib/booking/convert-hold-to-booking";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
+import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { signManageToken } from "@/lib/booking/manageToken";
@@ -48,6 +49,7 @@ import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempote
 import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
 import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
+import { executeFinalFailedBookingReleaseTransaction } from "@/lib/booking/release-hold-transaction";
 import type { BookingStatus } from "@/lib/booking/types";
 import {
   incrementStripeWebhookRetryCounter,
@@ -1872,6 +1874,13 @@ export async function POST(request: NextRequest) {
             const pr = txResult;
             try {
               if (pr.reason === "final_payment_succeeded_after_booking_canceled_or_refunded") {
+                await db.runTransaction(async (tx) => {
+                  const bs = await tx.get(bookingRef);
+                  if (!bs.exists) return;
+                  const b = bs.data() as Booking;
+                  if (b.status !== "canceled" && b.status !== "refunded") return;
+                  await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b);
+                });
                 bookingLog("stripe-webhook", "payment_intent.succeeded final: terminal booking at tx time — pending refund", { bookingId });
                 await upsertPendingRefundRecord(
                   db,
@@ -2481,6 +2490,18 @@ export async function POST(request: NextRequest) {
               } else {
                 console.log("[stripe-webhook] payment_intent.payment_failed booking updated", { bookingId, newStatus });
                 paymentFailedOutcome = "final_payment_failed_applied";
+                if (!requiresAction) {
+                  try {
+                    // Definitive payment failure: release inventory immediately, do not wait for SLA cron.
+                    await executeFinalFailedBookingReleaseTransaction(db, bookingId);
+                    paymentFailedOutcome = "final_payment_failed_applied_and_released";
+                  } catch (releaseErr) {
+                    console.error("[stripe-webhook] immediate final_failed release failed", {
+                      bookingId,
+                      error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+                    });
+                  }
+                }
                 finalFailureEmailAfterEvent = {
                   bookingId,
                   bookingData: txFail.bookingData,

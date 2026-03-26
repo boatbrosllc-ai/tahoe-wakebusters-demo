@@ -158,6 +158,7 @@ export async function GET(request: NextRequest) {
         .collection("bookings")
         .where("startDateStr", ">=", fromStr)
         .where("startDateStr", "<=", toStr)
+        .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
         .get();
 
       const seenBookingIds = new Set<string>();
@@ -240,6 +241,7 @@ export async function GET(request: NextRequest) {
           .where("experienceId", "==", variantId)
           .where("startDateStr", ">=", fromStr)
           .where("startDateStr", "<=", toStr)
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           .get()
       )
     );

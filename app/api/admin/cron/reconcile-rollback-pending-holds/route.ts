@@ -88,29 +88,60 @@ export async function POST(request: NextRequest) {
         if (!invDoc.id.startsWith(`${expId}_`)) continue;
         const dateStr = invDoc.id.slice(expId.length + 1);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
-        const bookingsSnap = await db
-          .collection("bookings")
-          .where("experienceId", "==", expId)
-          .where("startDateStr", "==", dateStr)
-          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
-          .get();
-        let sold = 0;
-        for (const b of bookingsSnap.docs) {
-          const partySize = (b.data() as { partySize?: number }).partySize;
-          if (typeof partySize === "number" && Number.isFinite(partySize)) sold += partySize;
-        }
-        const reserved = (invDoc.data() as { reservedSeats?: number }).reservedSeats ?? 0;
-        if (sold + reserved > maxCapacity || reserved < 0) {
-          const correctedReserved = Math.max(0, maxCapacity - sold);
-          await invDoc.ref.set(
+        const corrected = await db.runTransaction(async (tx) => {
+          const [invSnapTx, bookingsSnap, holdsSnap] = await Promise.all([
+            tx.get(invDoc.ref),
+            tx.get(
+              db
+                .collection("bookings")
+                .where("experienceId", "==", expId)
+                .where("startDateStr", "==", dateStr)
+                .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            ),
+            tx.get(
+              db
+                .collection("holds")
+                .where("experienceId", "==", expId)
+                .where("startDateStr", "==", dateStr)
+                .where("status", "==", "active")
+            ),
+          ]);
+          let sold = 0;
+          for (const b of bookingsSnap.docs) {
+            const partySize = (b.data() as { partySize?: number }).partySize;
+            if (typeof partySize === "number" && Number.isFinite(partySize)) sold += partySize;
+          }
+          const now = new Date();
+          let activeHeldSeats = 0;
+          for (const h of holdsSnap.docs) {
+            const hold = h.data() as {
+              partySize?: number;
+              expiresAt?: { toDate?: () => Date; seconds?: number };
+            };
+            const exp = hold.expiresAt;
+            const expiresAt =
+              exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+            if (expiresAt <= now) continue;
+            const partySize = hold.partySize;
+            if (typeof partySize === "number" && Number.isFinite(partySize) && partySize > 0) {
+              activeHeldSeats += partySize;
+            }
+          }
+          const currentReservedRaw = (invSnapTx.data() as { reservedSeats?: number } | undefined)?.reservedSeats ?? 0;
+          const currentReserved = Number.isFinite(currentReservedRaw) ? currentReservedRaw : 0;
+          const needsCorrection = sold + currentReserved > maxCapacity || currentReserved !== activeHeldSeats;
+          if (!needsCorrection) return false;
+          tx.set(
+            invDoc.ref,
             {
-              reservedSeats: correctedReserved,
+              reservedSeats: activeHeldSeats,
               updatedAt: FieldValue.serverTimestamp(),
             },
             { merge: true }
           );
-          inventoryReconciled++;
-        }
+          return true;
+        });
+        if (corrected) inventoryReconciled++;
       }
     }
 

@@ -263,6 +263,7 @@ export async function POST(request: NextRequest) {
     let slotRef: import("firebase-admin").firestore.DocumentReference;
     let slotStartForPricing: Date | null = null;
     let experienceForPricing: Experience | null = null;
+    let experienceSlugForAssert: string | undefined;
     let listingBoatForPricing: ListingBoat | null = null;
     let calendarRatesForListingBoat: Record<string, number> | undefined = undefined;
     let slotStartForBlock: Date | null = null;
@@ -306,6 +307,7 @@ export async function POST(request: NextRequest) {
         return "";
       })();
       const effectiveSlug = expSlug || inferredSlugFromTitle;
+      experienceSlugForAssert = effectiveSlug || undefined;
       if (boat.isListingBoat !== true || !boatMatchesExperience(boat, expId, effectiveSlug)) {
         return NextResponse.json({ error: "Boat not available for this experience" }, { status: 400 });
       }
@@ -428,6 +430,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Experience not found" }, { status: 404 });
       }
       const experience = expDoc.data() as Experience;
+      const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
+      const inferredSlugFromTitle = expSlug ? "" : inferSlugFromTitle(experience.title ?? (experience as { name?: string }).name ?? "");
+      const effectiveSlug = expSlug || inferredSlugFromTitle;
+      experienceSlugForAssert = effectiveSlug || undefined;
       if (!experience.active) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
       }
@@ -889,6 +895,16 @@ export async function POST(request: NextRequest) {
             if (isActive && sameExperience && sameSlot && sameMode) {
               const oldPartySize = typeof existingHold.partySize === "number" ? existingHold.partySize : 0;
               const delta = input.partySize - oldPartySize;
+              if (delta !== 0) {
+                console.warn("[create-hold] shared resume hold party-size delta detected", {
+                  holdId: resumeTargetId,
+                  oldPartySize,
+                  newPartySize: input.partySize,
+                  delta,
+                  experienceId: expIdForCapacity,
+                  dateStr,
+                });
+              }
               const oldDiscountCode = (existingHold as { discountCode?: string }).discountCode;
               const oldDiscountDocIdTx = (existingHold as { discountDocId?: string }).discountDocId?.trim();
 
@@ -1341,7 +1357,9 @@ export async function POST(request: NextRequest) {
                     slotEnd: slotEndDate,
                     boatId: input.boatId,
                     useBoatSlots: isListingBoatFlow,
-                    runSameDaySlotScan: false,
+                    runSameDaySlotScan: true,
+                    ignoreSlotDocIds: [input.slotId],
+                    experienceSlug: experienceSlugForAssert,
                   });
                 } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
                   await assertLegacyBoatSlotAvailable({
@@ -1505,6 +1523,7 @@ export async function POST(request: NextRequest) {
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
+            experienceSlug: experienceSlugForAssert,
           });
         } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
           await assertLegacyBoatSlotAvailable({
@@ -1576,6 +1595,7 @@ export async function POST(request: NextRequest) {
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
+            experienceSlug: experienceSlugForAssert,
           });
         }
         await applyCharterDiscountForNewHold();

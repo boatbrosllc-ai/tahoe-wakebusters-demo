@@ -32,6 +32,7 @@ export async function hasOverlappingBlock(opts: {
    * Callers must include all known aliases so block lookups are comprehensive.
    */
   experienceIdVariants?: string[];
+  experienceSlug?: string;
   boatId?: string;
   slotStart: Date;
   slotEnd: Date;
@@ -45,6 +46,10 @@ export async function hasOverlappingBlock(opts: {
 
   const variantList = opts.experienceIdVariants?.length ? opts.experienceIdVariants : [];
   const expIds = Array.from(new Set([experienceId, ...variantList]));
+  const experienceSlug =
+    typeof opts.experienceSlug === "string" && opts.experienceSlug.trim()
+      ? opts.experienceSlug.trim()
+      : null;
 
   const getSnap = get ?? ((q: Query) => q.get());
 
@@ -70,7 +75,8 @@ export async function hasOverlappingBlock(opts: {
     const query = db
       .collection("blocks")
       .where("experienceId", "==", expIdForQuery)
-      .where("startAt", "<=", Timestamp.fromDate(slotEnd));
+      .where("startAt", "<=", Timestamp.fromDate(slotEnd))
+      .where("endAt", ">=", Timestamp.fromDate(slotStart));
 
     try {
       const snap = await getSnap(query);
@@ -92,8 +98,35 @@ export async function hasOverlappingBlock(opts: {
     }
   };
 
+  const runSlugQuery = async (slugForQuery: string): Promise<boolean> => {
+    const query = db
+      .collection("blocks")
+      .where("experienceSlug", "==", slugForQuery)
+      .where("startAt", "<=", Timestamp.fromDate(slotEnd))
+      .where("endAt", ">=", Timestamp.fromDate(slotStart));
+    try {
+      const snap = await getSnap(query);
+      return checkSnap(snap);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      const message = err instanceof Error ? err.message : String(err);
+      const indexRelated = code === "failed-precondition" || /index/i.test(message);
+      if (indexRelated) {
+        bookingWarn("slot-availability", "blocks slug query failed; cannot verify admin blocks — returning 503 to callers", {
+          experienceSlug: slugForQuery,
+          firestoreCode: code ?? null,
+          message: message.slice(0, 800),
+          hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
+        });
+        throw new BlockCheckUnavailableError();
+      }
+      throw err;
+    }
+  };
+
   for (const expIdForQuery of expIds) {
     if (await runQuery(expIdForQuery)) return true;
   }
+  if (experienceSlug && (await runSlugQuery(experienceSlug))) return true;
   return false;
 }

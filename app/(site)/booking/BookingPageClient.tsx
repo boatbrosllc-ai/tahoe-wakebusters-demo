@@ -79,6 +79,13 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const slotsAutoRetryCountRef = useRef(0);
   const slotsLoadingRef = useRef(slotsLoading);
   const [chicagoDateTick, setChicagoDateTick] = useState(0);
+  const refreshDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleSlotsRefresh = () => {
+    if (refreshDebounceTimerRef.current) clearTimeout(refreshDebounceTimerRef.current);
+    refreshDebounceTimerRef.current = setTimeout(() => {
+      setSlotsRetryTrigger((t) => t + 1);
+    }, 500);
+  };
 
   useEffect(() => {
     slotsLoadingRef.current = slotsLoading;
@@ -90,13 +97,19 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (refreshDebounceTimerRef.current) clearTimeout(refreshDebounceTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     let tid: ReturnType<typeof setTimeout>;
     const schedule = () => {
       const ms = getMsUntilNextChicagoMidnight();
       tid = setTimeout(() => {
         if (cancelled) return;
-        setSlotsRetryTrigger((x) => x + 1);
+        scheduleSlotsRefresh();
         setChicagoDateTick((t) => t + 1);
         schedule();
       }, ms + 50);
@@ -111,7 +124,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== "bb_slot_cache_version") return;
-      setSlotsRetryTrigger((t) => t + 1);
+      scheduleSlotsRefresh();
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -275,13 +288,16 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible" && selectedExperience) {
         if (slotsLoadingRef.current) return;
+        const { start: startDate, end: endDate } = getMonthRangeWithAdjacent(displayMonth.year, displayMonth.month);
+        const lastFetchedAt = bookingCache.getSlotsCacheFetchedAt(selectedExperience.id, startDate, endDate);
+        if (lastFetchedAt != null && Date.now() - lastFetchedAt <= 30_000) return;
         bookingCache.invalidate(`slots|${selectedExperience.id}|`);
-        setSlotsRetryTrigger((t) => t + 1);
+        scheduleSlotsRefresh();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [selectedExperience]);
+  }, [selectedExperience, displayMonth.year, displayMonth.month]);
 
   // Derive available dates in-memory from the cached slot dataset.
   // Switching boats re-derives this set without any API call.

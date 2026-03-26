@@ -22,9 +22,10 @@ import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/prici
 import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
 import { getDateStrInSlotTimezone, isSeasonalAllowed, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
-import { getExperienceIdVariants, inferSlugFromTitle, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getExperienceIdVariants, inferSlugFromTitle, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
 import {
   LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
@@ -33,6 +34,7 @@ import {
 
 /** Abort legacy hold pagination early so ticketed calendar can render if Firestore is slow (see `partialData`). Prefer `DISABLE_LEGACY_HOLDS_FALLBACK=true` after holds `startDateStr` backfill to remove this timeout risk. */
 const LEGACY_HOLDS_FETCH_BUDGET_MS = 8_000;
+const TICKETED_BOOKINGS_SCAN_LIMIT = 2000;
 
 /** YYYY-MM-DD in America/Chicago for consistent calendar and checkout pricing. */
 function toDateStrCentral(d: Date): string {
@@ -61,28 +63,10 @@ export async function GET(request: NextRequest) {
     const boatIdParam = request.nextUrl.searchParams.get("boatId")?.trim() || null;
 
     const db = getDb();
-    const [expSnap, ratesSnap, listingBoatsSnap] = await Promise.all([
+    const [expSnap, ratesSnap] = await Promise.all([
       db.collection("experiences").doc(experienceId).get(),
       db.collection("experiences").doc(experienceId).collection("rates").where("active", "==", true).get(),
-      db
-        .collection("boats")
-        .where("isListingBoat", "==", true)
-        .where("active", "==", true)
-        .where("experienceIds", "array-contains", experienceId)
-        .get(),
     ]);
-    const boatTypesForCalendar = Array.from(
-      new Set(
-        listingBoatsSnap.docs
-          .map((d) => (d.data() as ListingBoat).boatType)
-          .filter((t): t is string => typeof t === "string" && t.trim() !== "")
-          .map((t) => t.trim())
-      )
-    );
-    const mergedCalendarRates =
-      boatTypesForCalendar.length > 0
-        ? await fetchMergedPricingCalendarRatesForBoatTypes(db, boatTypesForCalendar)
-        : undefined;
 
     if (!expSnap.exists) {
       return NextResponse.json({ error: "Experience not found" }, { status: 404 });
@@ -95,11 +79,39 @@ export async function GET(request: NextRequest) {
     const experienceSlug = (typeof exp?.slug === "string" ? exp.slug.trim() : "").toLowerCase();
     const inferredSlugFromTitle = inferSlugFromTitle(exp?.title ?? exp?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
-    // Match experience-detail and slots: sunset/holiday family are ticketed unless explicitly charter
-    const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
+    const experienceIdVariants = getExperienceIdVariants(experienceId, effectiveSlug);
+    const listingBoatSnaps = await Promise.all(
+      experienceIdVariants.map((variantId) =>
+        db
+          .collection("boats")
+          .where("isListingBoat", "==", true)
+          .where("active", "==", true)
+          .where("experienceIds", "array-contains", variantId)
+          .get()
+      )
+    );
+    const listingBoatById = new Map<string, import("firebase-admin").firestore.QueryDocumentSnapshot>();
+    for (const snap of listingBoatSnaps) {
+      for (const d of snap.docs) {
+        if (!listingBoatById.has(d.id)) listingBoatById.set(d.id, d);
+      }
+    }
+    const listingBoatDocs = Array.from(listingBoatById.values());
+    const allBoatTypesForCalendar = Array.from(
+      new Set(
+        listingBoatDocs
+          .map((d) => (d.data() as ListingBoat).boatType)
+          .filter((t): t is string => typeof t === "string" && t.trim() !== "")
+          .map((t) => t.trim())
+      )
+    );
     const isTicketed =
-      exp.pricingType === "ticketed" ||
-      (exp.pricingType == null && isTicketedBySlug);
+      resolveExperiencePricingType({
+        pricingType: exp.pricingType,
+        slug: effectiveSlug,
+        title: exp.title,
+        name: exp.name,
+      }) === "ticketed";
     const holidayDates = exp.holidayDates;
     const weekendDays = exp.weekendDays;
     const friSunDays = exp.friSunDays;
@@ -146,15 +158,32 @@ export async function GET(request: NextRequest) {
     const prices: Record<string, number> = {};
     const holidayDateStrings: string[] = [];
     const dateStrs: string[] = [];
+    const selectedBoatTypeForCalendar = (() => {
+      if (!boatIdParam) return "";
+      const fromSnap = listingBoatDocs.find((d) => d.id === boatIdParam);
+      if (fromSnap) {
+        const bt = (fromSnap.data() as ListingBoat).boatType;
+        return typeof bt === "string" ? bt.trim() : "";
+      }
+      return "";
+    })();
+    const boatTypesForCalendar =
+      selectedBoatTypeForCalendar !== ""
+        ? [selectedBoatTypeForCalendar]
+        : allBoatTypesForCalendar;
+    const mergedCalendarRates =
+      boatTypesForCalendar.length > 0
+        ? await fetchMergedPricingCalendarRatesForBoatTypes(db, boatTypesForCalendar)
+        : undefined;
     const useListingBoatCalendar = boatTypesForCalendar.length > 0;
     /** Per-boat date-range price overrides (charter listing boats). */
     let priceOverridesForCalendar: BoatPriceOverride[] | undefined;
     if (useListingBoatCalendar) {
-      if (listingBoatsSnap.docs.length === 1) {
-        const lb = listingBoatsSnap.docs[0].data() as ListingBoat;
+      if (listingBoatDocs.length === 1) {
+        const lb = listingBoatDocs[0].data() as ListingBoat;
         priceOverridesForCalendar = Array.isArray(lb.priceOverrides) ? lb.priceOverrides : undefined;
       } else if (boatIdParam) {
-        const fromSnap = listingBoatsSnap.docs.find((d) => d.id === boatIdParam);
+        const fromSnap = listingBoatDocs.find((d) => d.id === boatIdParam);
         if (fromSnap) {
           const lb = fromSnap.data() as ListingBoat;
           priceOverridesForCalendar = Array.isArray(lb.priceOverrides) ? lb.priceOverrides : undefined;
@@ -169,21 +198,7 @@ export async function GET(request: NextRequest) {
       // Multi-boat listing experience with no boatId: calendar uses merged type-level rates only; per-boat
       // priceOverrides are applied after the customer selects a boat (see create-hold / effective-price).
     }
-    /** When a specific boat is selected, use that boat's boatType calendar only — not merged across all listing boats. */
-    let calendarRatesForDayLoop: Record<string, number> | undefined = mergedCalendarRates;
-    if (useListingBoatCalendar && boatIdParam) {
-      let lb: ListingBoat | null = null;
-      const fromSnap = listingBoatsSnap.docs.find((d) => d.id === boatIdParam);
-      if (fromSnap) lb = fromSnap.data() as ListingBoat;
-      else {
-        const boatSnap = await db.collection("boats").doc(boatIdParam).get();
-        if (boatSnap.exists) lb = boatSnap.data() as ListingBoat;
-      }
-      const bt = typeof lb?.boatType === "string" ? lb.boatType.trim() : "";
-      if (bt) {
-        calendarRatesForDayLoop = await fetchMergedPricingCalendarRatesForBoatTypes(db, [bt]);
-      }
-    }
+    const calendarRatesForDayLoop: Record<string, number> | undefined = mergedCalendarRates;
     const seasonalForPricing = exp.seasonal;
     for (let i = 0; i < days; i++) {
       const d = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
@@ -219,8 +234,15 @@ export async function GET(request: NextRequest) {
     // For ticketed experiences: batch-query ticket counts so the calendar can show sold-out dates
     let ticketsAvailableByDate: Record<string, number> | undefined;
     let legacyTimedOut = false;
+    let legacyBookingsCapped = false;
     if (isTicketed) {
-      const total = exp.maxCapacity ?? exp.maxGuests ?? 36;
+      const total = getMaxGuestsForExperience({
+        pricingType: "ticketed",
+        maxCapacity: exp.maxCapacity,
+        maxGuests: exp.maxGuests,
+        slug: exp.slug,
+        title: exp.title ?? exp.name,
+      });
       const dateSet = new Set(dateStrs);
 
       const startStr = dateStrs[0];
@@ -236,11 +258,16 @@ export async function GET(request: NextRequest) {
         allExpIds.map((expId) =>
           db.collection("bookings")
             .where("experienceId", "==", expId)
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
             .where("startDateStr", ">=", ticketedBookingRangeStart)
             .where("startDateStr", "<=", endStr)
+            .limit(TICKETED_BOOKINGS_SCAN_LIMIT)
             .get()
         )
       );
+      if (bookingsSnaps.some((s) => s.size >= TICKETED_BOOKINGS_SCAN_LIMIT)) {
+        legacyBookingsCapped = true;
+      }
       const holdsWindowedSnaps = await Promise.all(
         allExpIds.map((expId) =>
           db.collection("holds")
@@ -368,7 +395,7 @@ export async function GET(request: NextRequest) {
               warning: "Selected trip length changed. Calendar is showing current prices for an available trip length.",
             }
           : {}),
-        ...(legacyTimedOut
+        ...((legacyTimedOut || legacyBookingsCapped)
           ? {
               partialData: true,
               conservativeEstimate: true as const,

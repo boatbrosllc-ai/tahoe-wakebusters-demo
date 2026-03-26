@@ -119,6 +119,27 @@ export function isTicketedExperienceForBooking(exp: {
   return false;
 }
 
+export function resolveExperiencePricingType(exp: {
+  pricingType?: "charter" | "ticketed";
+  slug?: string;
+  title?: string;
+  name?: string;
+}): "ticketed" | "charter" {
+  if (exp.pricingType === "ticketed") return "ticketed";
+  if (exp.pricingType === "charter") return "charter";
+  const slug = (exp.slug ?? "").toLowerCase().trim();
+  if (isTicketedExperienceSlug(slug)) return "ticketed";
+  const title = (exp.title ?? exp.name ?? "").toLowerCase().trim();
+  if (/sunset|cruise|holiday|festive/.test(title)) {
+    console.warn("[experience-aliases] resolveExperiencePricingType title/name fallback used", {
+      slug,
+      title: title.slice(0, 120),
+    });
+    return "ticketed";
+  }
+  return "charter";
+}
+
 /**
  * Returns true if requestedSlug matches docSlug (equal or same family).
  * Use when resolving experience from list so "sunset" matches an experience with slug "sunset-cruise".

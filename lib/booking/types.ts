@@ -403,7 +403,8 @@ export type BookingStatus =
  *
  * Operational note:
  * - `final_failed` continues to occupy inventory until remediation runs.
- * - This requires either automated cancellation/release (cron) or manual admin cancellation to free the slot.
+ * - `POST /api/admin/cron/reconcile-final-failed-bookings` enforces SLA-based release
+ *   (default 6h via `FINAL_FAILED_RELEASE_SLA_HOURS`), else emits an ops alert for manual review.
  */
 export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
   "paid",

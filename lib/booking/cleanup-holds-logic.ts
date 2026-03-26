@@ -18,8 +18,8 @@ import type Stripe from "stripe";
 export { getCleanupHoldSlotAction };
 
 export function getRollbackPendingAutoReleaseMs(): number {
-  const n = parseInt(process.env.ROLLBACK_PENDING_AUTO_RELEASE_MS ?? "1800000", 10);
-  return Number.isFinite(n) && n >= 60_000 ? Math.min(n, 7 * 86400000) : 1800000;
+  const n = parseInt(process.env.ROLLBACK_PENDING_AUTO_RELEASE_MS ?? "600000", 10);
+  return Number.isFinite(n) && n >= 60_000 ? Math.min(n, 7 * 86400000) : 600000;
 }
 
 /** True when hold is past the auto-reconcile window (matches `runRollbackPendingAutoResolveTransaction` pre-check). */
@@ -105,10 +105,10 @@ async function expireHoldAndReleaseSlotInTransaction(
       const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
       await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
     }
-  } else if (isSharedHold && experienceId && dateStr) {
-    const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-    await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
   }
+  // Correctness proof for shared capacity with action === "expire_only":
+  // this hold no longer owns the slot and was replaced by another active hold in create-hold resume/new-hold paths.
+  // The replacement path already wrote the net reservedSeats state, so releasing again here would double-decrement.
 
   tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete(), rollbackPendingExpiresAt: FieldValue.delete() });
   await applyDiscountDecrement(discountRef);
@@ -143,12 +143,15 @@ export async function runExpiredHoldReleaseTransaction(
       const expiresAtRaw = (hold as { expiresAt?: { toDate?: () => Date } }).expiresAt;
       const expiresAtDate = expiresAtRaw?.toDate?.();
       if (hasPaymentIntentRecorded && expiresAtDate && expiresAtDate.getTime() < Date.now()) {
+        // Sequence: hold expires -> cron marks rollbackPending -> rollbackPendingExpiresAt reached
+        // -> Stripe PI checked by auto-resolve path -> slot released when no succeeded PI is observed.
         const alreadyFlagged = (hold as { rollbackPending?: boolean }).rollbackPending === true;
         const hasRpe = (hold as { rollbackPendingExpiresAt?: unknown }).rollbackPendingExpiresAt != null;
         const deadlineMs = Date.now() + getRollbackPendingAutoReleaseMs();
         if (!alreadyFlagged) {
           tx.update(holdRef, {
             rollbackPending: true,
+            expiresAt: Timestamp.now(),
             rollbackPendingExpiresAt: Timestamp.fromMillis(deadlineMs),
             updatedAt: FieldValue.serverTimestamp(),
           });

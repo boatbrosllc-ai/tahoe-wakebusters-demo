@@ -7,7 +7,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
-import { isWatersportsSlug } from "@/lib/booking/experience-aliases";
+import { isWatersportsSlug, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
 import { shouldUseWakeBoardCharterGrid } from "@/lib/booking/experience-slots";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
@@ -63,6 +63,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsLoadError, setSlotsLoadError] = useState<string | null>(null);
   const [slotsRetryKey, setSlotsRetryKey] = useState(0);
+  const [slotsPartialData, setSlotsPartialData] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => initialChicagoCalendarMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -162,7 +163,13 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
   const filteredSlots = useMemo(() => {
     const watersportsCharter =
-      selectedExperience?.pricingType === "charter" && isWatersportsSlug(selectedExperience?.slug ?? "");
+      selectedExperience != null &&
+      resolveExperiencePricingType({
+        pricingType: selectedExperience.pricingType as "charter" | "ticketed" | undefined,
+        slug: selectedExperience.slug,
+        title: selectedExperience.title,
+      }) === "charter" &&
+      isWatersportsSlug(selectedExperience?.slug ?? "");
     if (!watersportsCharter || wakeBoatIds == null || wakeBoatIds.size === 0) return slots;
     return slots.filter((s) => {
       const bid = (s.boatId ?? "").trim();
@@ -194,11 +201,13 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
       bookingCache.fetchSlots(selectedExperience.id, dateRange.start, dateRange.end, controller.signal)
         .then((data) => {
           setSlots((data?.slots ?? []) as SlotDto[]);
+          setSlotsPartialData(Boolean(data?.partialData));
           setSlotsLoadError(null);
         })
         .catch((err: unknown) => {
           if ((err as { name?: string })?.name === "AbortError") return;
           setSlots([]);
+          setSlotsPartialData(false);
           const apiBody = (err as { apiBody?: { error?: string; hint?: string } })?.apiBody;
           const msg = apiBody?.error ?? (err instanceof Error ? err.message : "Failed to load availability");
           const hint = apiBody?.hint;
@@ -209,6 +218,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     }
     setSlotsLoading(true);
     setSlots([]);
+    setSlotsPartialData(false);
     bookingCache.fetchExperienceBySlug(selectedExperience.slug, controller.signal)
       .then((data) => {
         if (data?.id) {
@@ -291,7 +301,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     map.forEach((arr) =>
       arr.sort((a, b) => (parseSlotId(a.id)?.durationHours ?? 0) - (parseSlotId(b.id)?.durationHours ?? 0))
     );
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(map.entries()).sort(([, groupA], [, groupB]) => {
+      const aSortKey = Math.min(...groupA.map((s) => new Date(s.startAt).getTime()));
+      const bSortKey = Math.min(...groupB.map((s) => new Date(s.startAt).getTime()));
+      return aSortKey - bSortKey;
+    });
   }, [selectedDateOpenSlots]);
 
   const selectedDateLabel = selectedDate
@@ -399,6 +413,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
               </button>
             </div>
           )}
+          {slotsPartialData && (
+            <div className="mb-3 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+              Availability counts may be delayed. Times will be confirmed during checkout.
+            </div>
+          )}
 
           {/* Scroll wrapper: flex+grid alone is unreliable for min-height 0 / overflow on mobile WebKit */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
@@ -425,14 +444,16 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                       !cell.isCurrentMonth && "text-brand-muted/40",
                       cell.isCurrentMonth && cell.isPast && "text-brand-muted/50 bg-brand-dark/5",
                       cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted hover:bg-brand-dark/15 cursor-pointer",
-                      isAvailable && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
+                      isAvailable && !slotsPartialData && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
+                      isAvailable && slotsPartialData && "bg-amber-50 text-amber-900 ring-1 ring-amber-400/60 border border-dashed border-amber-400/60 hover:bg-amber-100 cursor-pointer",
                       isClickable && "cursor-pointer",
                       isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1",
                       isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/15"
                     )}
                   >
                     <span className={cn("font-bold", isToday && cell.isCurrentMonth && "text-brand-primary")}>{cell.day}</span>
-                    {isAvailable && !isToday && <span className="w-1 h-1 rounded-full bg-emerald-500 mt-0.5" aria-hidden />}
+                    {isAvailable && !isToday && !slotsPartialData && <span className="w-1 h-1 rounded-full bg-emerald-500 mt-0.5" aria-hidden />}
+                    {isAvailable && !isToday && slotsPartialData && <span className="w-1.5 h-1.5 rounded-full border border-amber-600 mt-0.5" aria-hidden />}
                   </button>
                 );
               })
@@ -441,7 +462,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
           </div>
 
           <p className="mt-3 shrink-0 text-xs text-brand-muted text-center">
-            Green = available. Tap a date to pick a time and go to checkout.
+            {slotsPartialData
+              ? "Amber = availability pending verification. Tap a date to pick a time and confirm at checkout."
+              : "Green = available. Tap a date to pick a time and go to checkout."}
           </p>
         </div>
       </Dialog>

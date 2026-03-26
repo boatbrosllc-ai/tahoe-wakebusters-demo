@@ -8,11 +8,6 @@ import type { DocumentSnapshot } from "firebase-admin/firestore";
 
 const COLLECTION = "pricingCalendar";
 
-/** Short-lived cache to cut duplicate Firestore reads during date-prices + create-hold (serverless-safe). */
-const PRICING_CALENDAR_CACHE_TTL_MS = 60_000;
-type CalendarCacheEntry = { merged: Record<string, number> | undefined; expiresAt: number };
-const pricingCalendarMergedCache = new Map<string, CalendarCacheEntry>();
-
 /** Merge `rates` from multiple pricingCalendar docs; later snapshots overwrite same date keys. */
 export function mergePricingCalendarRates(snapshots: DocumentSnapshot[]): Record<string, number> | undefined {
   const merged: Record<string, number> = {};
@@ -42,14 +37,6 @@ export async function fetchMergedPricingCalendarRatesForBoatTypes(
 ): Promise<Record<string, number> | undefined> {
   const uniqueSorted = Array.from(new Set(boatTypes.map((t) => t.trim()).filter(Boolean))).sort();
   if (uniqueSorted.length === 0) return undefined;
-  const cacheKey = uniqueSorted.join("\0");
-  const now = Date.now();
-  const hit = pricingCalendarMergedCache.get(cacheKey);
-  if (hit && hit.expiresAt > now) {
-    return hit.merged;
-  }
   const snaps = await fetchPricingCalendarSnapsForBoatTypes(db, uniqueSorted);
-  const merged = mergePricingCalendarRates(snaps);
-  pricingCalendarMergedCache.set(cacheKey, { merged, expiresAt: now + PRICING_CALENDAR_CACHE_TTL_MS });
-  return merged;
+  return mergePricingCalendarRates(snaps);
 }

@@ -57,6 +57,8 @@ export interface SlotDto {
    * this is the booking's true duration (from the booking's slot id). Prefer over parsing `id` for labels.
    */
   bookingDurationHours?: number;
+  /** True when a missing booking.boatId forced conservative cross-boat blocking for this slot row. */
+  unresolvedBoatId?: boolean;
 }
 
 export interface RateOption {
