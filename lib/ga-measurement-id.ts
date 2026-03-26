@@ -66,3 +66,9 @@ export function getGaMeasurementId(): string | null {
 
   return DEV_FALLBACK_GA4_MEASUREMENT_ID;
 }
+
+/** `NEXT_PUBLIC_GA_DEBUG=1` (or `true` / `yes`) → gtag `debug_mode` for GA4 Admin → DebugView. */
+export function isGaClientDebugEnabled(): boolean {
+  const v = process.env.NEXT_PUBLIC_GA_DEBUG?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}

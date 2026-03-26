@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
-import { getGaMeasurementId } from "@/lib/ga-measurement-id";
+import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
 import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
@@ -47,6 +47,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const gaMeasurementId = getGaMeasurementId();
+  const gaDebugMode = isGaClientDebugEnabled();
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   if (!gaMeasurementId && !didLogGaSkip) {
@@ -84,7 +85,7 @@ export default async function RootLayout({
               nonce={nonce}
             />
             <Script id="ga-inline-config" strategy="beforeInteractive" nonce={nonce}>
-              {getGtagInlineBootstrapJs(gaMeasurementId)}
+              {getGtagInlineBootstrapJs(gaMeasurementId, { debugMode: gaDebugMode })}
             </Script>
           </>
         ) : null}

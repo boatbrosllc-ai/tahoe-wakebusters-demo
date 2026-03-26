@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getGaMeasurementId } from "@/lib/ga-measurement-id";
+import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
 import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 
 /**
@@ -18,7 +18,7 @@ export async function GET() {
     });
   }
 
-  const body = `${getGtagInlineBootstrapJs(id)}\n`;
+  const body = `${getGtagInlineBootstrapJs(id, { debugMode: isGaClientDebugEnabled() })}\n`;
 
   return new NextResponse(body, {
     status: 200,

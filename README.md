@@ -140,6 +140,16 @@ Page views are tracked on App Router navigation by `components/providers/GaPageV
 
 Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA is loaded, and also pushes the same payload to `window.dataLayer` for inspection/debugging.
 
+### If GA4 Realtime shows zero (but you are on the site)
+
+The integration can be correct and you still see **no users** in Realtime. Check these in order:
+
+1. **Same property as your stream** — In GA4, open **Admin → Data streams** and confirm the **Measurement ID** (e.g. `G-…`) matches **exactly** what Netlify has for `NEXT_PUBLIC_GA_MEASUREMENT_ID` (including the property you are viewing in Reports).
+2. **Ad blockers and strict browsers** — uBlock, Privacy Badger, Brave Shields, Firefox Strict ETP, and some VPNs block `googletagmanager.com` / `google-analytics.com`. Test in a **fresh Chrome incognito** window with extensions disabled, or another device.
+3. **Internal traffic filter** — **Admin → Data settings → Data filters**: an active “Internal traffic” filter can remove your office/home IP from reports (including Realtime).
+4. **Network proof** — DevTools → **Network**, filter `collect` or `google-analytics`. Successful sends usually show `204` or `200` on `google-analytics.com` / `analytics.google.com`. If there are **no** requests, the tag is not firing or is blocked. If requests succeed but Realtime is empty, you are almost certainly in the **wrong GA4 property** or **filtered**.
+5. **DebugView** — Set `NEXT_PUBLIC_GA_DEBUG=1` in Netlify (rebuild), then in GA4 open **Admin → DebugView** while you browse. Debug hits appear there even when Realtime is slow or confusing. Remove the var after testing.
+
 ### Verification checklist
 
 Production
