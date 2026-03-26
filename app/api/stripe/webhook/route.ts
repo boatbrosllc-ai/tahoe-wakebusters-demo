@@ -597,10 +597,7 @@ export async function POST(request: NextRequest) {
             : `${outcomePrefix}_payment_intent_mismatch_hold`
         );
         if (!customerPatchedOk) {
-          return NextResponse.json(
-            { error: "Customer email placeholder patch incomplete; Stripe will retry" },
-            { status: 500 }
-          );
+          return false;
         }
         return true;
       }
@@ -1015,10 +1012,7 @@ export async function POST(request: NextRequest) {
               "async_checkout_stale_checkout_session_id"
             );
             if (!customerPatchedOk) {
-              return NextResponse.json(
-                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
-                { status: 500 }
-              );
+              return false;
             }
             return true;
           }
@@ -1102,10 +1096,7 @@ export async function POST(request: NextRequest) {
                 : "async_payment_succeeded_payment_intent_mismatch_hold"
             );
             if (!customerPatchedOk) {
-              return NextResponse.json(
-                { error: "Customer email placeholder patch incomplete; Stripe will retry" },
-                { status: 500 }
-              );
+              return false;
             }
             return true;
           }

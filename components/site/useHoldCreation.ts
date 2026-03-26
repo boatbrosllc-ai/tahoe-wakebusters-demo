@@ -166,6 +166,8 @@ export type ModalHoldRecoveryPayloadV1 = {
   viewMonthMonth?: number;
   selectedBoatId?: string | null;
   isTicketed?: boolean;
+  /** Non-ticketed: deposit vs full payment when resuming after refresh (default true if omitted). */
+  payFullAmount?: boolean;
 };
 
 function persistModalHoldRecoveryPayload(payload: ModalHoldRecoveryPayloadV1): void {
@@ -715,6 +717,8 @@ export function useHoldCreation(
           holdExpiresAt: holdExpires,
           experienceId: opts.selectedExperience.id,
           experienceSlug: opts.selectedExperience.slug,
+          isTicketed: opts.isTicketed,
+          payFullAmount: typeof pi.payFullAmount === "boolean" ? pi.payFullAmount : payFull,
         });
       }
     })();

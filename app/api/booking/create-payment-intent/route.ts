@@ -789,6 +789,7 @@ export async function POST(request: NextRequest) {
                     );
                   }
                   if (mergeReuse.otherIdToCancel) {
+                    const { FieldValue } = getFirestoreExports();
                     await holdRef.update({
                       pendingCancelPaymentIntentIds: FieldValue.arrayUnion(mergeReuse.otherIdToCancel),
                       updatedAt: FieldValue.serverTimestamp(),

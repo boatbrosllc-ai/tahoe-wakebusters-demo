@@ -24,6 +24,12 @@ export const WH_RETRY_CHECKOUT_CONVERTED_MISSING_HOLD_ID = "whRetry_asyncCheckou
 export const WH_RETRY_CHECKOUT_CONVERTED_NO_PI = "whRetry_asyncConvertedHoldNoPi";
 export const WH_RETRY_CHECKOUT_CONVERTED_CONVERT_ERR = "whRetry_asyncCheckoutConvertErr";
 
+/** Back-compat aliases (same field strings) for imports from the Stripe webhook route. */
+export const WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND = WH_RETRY_CHECKOUT_CONVERTED_HOLD_NOT_FOUND;
+export const WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID = WH_RETRY_CHECKOUT_CONVERTED_MISSING_HOLD_ID;
+export const WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI = WH_RETRY_CHECKOUT_CONVERTED_NO_PI;
+export const WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR = WH_RETRY_CHECKOUT_CONVERTED_CONVERT_ERR;
+
 export const WH_RETRY_CHECKOUT_COMPLETED_HOLD_NOT_FOUND = "checkoutCompletedHoldNotFoundRetryCount";
 export const WH_RETRY_CHECKOUT_COMPLETED_NO_PI = "whRetry_checkoutCompletedNoPi";
 export const WH_RETRY_ASYNC_PAYMENT_NOT_PAID = "whRetry_asyncPaymentNotPaidStatus";
