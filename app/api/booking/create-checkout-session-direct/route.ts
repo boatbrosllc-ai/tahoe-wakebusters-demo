@@ -130,6 +130,8 @@ function parseBody(body: unknown): {
 export async function POST(request: NextRequest) {
   let rollbackHoldId: string | undefined;
   let rollbackHoldPayload: Record<string, unknown> | undefined;
+  let claimRefReserve: import("firebase-admin").firestore.DocumentReference | undefined;
+  let claimTransactionCommitted = false;
   try {
     const rl = await checkRateLimitSensitiveMutation(getClientKey(request));
     if (!rl.allowed) {
@@ -364,7 +366,7 @@ export async function POST(request: NextRequest) {
     });
     const holdRequestId = `d${holdRequestFingerprint}`;
 
-    const claimRefReserve = db.collection(HOLD_REQUEST_CLAIMS_COLLECTION).doc(holdRequestId);
+    claimRefReserve = db.collection(HOLD_REQUEST_CLAIMS_COLLECTION).doc(holdRequestId);
     let claimReserved = false;
     try {
       await claimRefReserve.create({
@@ -654,6 +656,7 @@ export async function POST(request: NextRequest) {
           );
         }
       });
+      claimTransactionCommitted = true;
     } catch (e) {
       if (e instanceof DirectCheckoutResumeHold) {
         const stripeResume = getStripe();
@@ -676,7 +679,7 @@ export async function POST(request: NextRequest) {
         );
       }
       if (claimReserved) {
-        await claimRefReserve.delete().catch(() => {});
+        await claimRefReserve?.delete().catch(() => {});
       }
       throw e;
     }
@@ -1134,6 +1137,9 @@ export async function POST(request: NextRequest) {
         }
       } catch (rollbackErr) {
         console.error("[create-checkout-session-direct] rollback after error failed", rollbackErr);
+      }
+      if (claimTransactionCommitted) {
+        await claimRefReserve?.delete().catch(() => {});
       }
     } else if (rollbackHoldId != null || rollbackHoldPayload != null) {
       void writeOperationalAlert({

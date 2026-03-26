@@ -40,7 +40,11 @@ export class LegacyScanLimitReachedError extends Error {
 export type AssertSlotAvailableOpts = {
   db: Firestore;
   Timestamp: typeof import("firebase-admin/firestore").Timestamp;
-  get: (q: import("firebase-admin/firestore").Query) => Promise<import("firebase-admin/firestore").QuerySnapshot>;
+  get: (
+    refOrQuery: import("firebase-admin/firestore").Query | import("firebase-admin/firestore").DocumentReference
+  ) => Promise<
+    import("firebase-admin/firestore").QuerySnapshot | import("firebase-admin/firestore").DocumentSnapshot
+  >;
   experienceId: string;
   experienceIdVariants: string[];
   parsed: { dateStr: string; startHour: number; durationHours: number; startMinute?: number };
@@ -76,38 +80,43 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
   const { dayStart, dayEnd } = getCentralCalendarDayBounds(parsed.dateStr);
 
   if (runSameDaySlotScan) {
+    const slotConflicts = async (docs: import("firebase-admin/firestore").QueryDocumentSnapshot[]) => {
+      for (const doc of docs) {
+        const data = doc.data() as Slot;
+        if (data.status === "open") continue;
+        if (data.status === "held" && data.holdId) {
+          const holdSnap = (await get(db.collection("holds").doc(data.holdId))) as import("firebase-admin/firestore").DocumentSnapshot;
+          if (!holdSnap.exists) continue;
+          const hold = holdSnap.data() as { status?: string; expiresAt?: { toDate?: () => Date; seconds?: number } };
+          if (hold.status !== "active") continue;
+          const exp = hold.expiresAt;
+          const expiresAt =
+            exp?.toDate?.() ?? (typeof exp?.seconds === "number" ? new Date(exp.seconds * 1000) : new Date(0));
+          if (expiresAt <= new Date()) continue;
+        }
+        const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
+        const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
+        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+          throw new SlotConflictError("Slot no longer available");
+        }
+      }
+    };
     if (useBoatSlots && boatId) {
       const boatSlotsRef = db.collection("boats").doc(boatId).collection("slots");
-      const sameDaySnap = await get(
+      const sameDaySnap = (await get(
         boatSlotsRef
           .where("startAt", ">=", Timestamp.fromDate(dayStart))
           .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-      );
-      for (const doc of sameDaySnap.docs) {
-        const data = doc.data() as Slot;
-        if (data.status === "open") continue;
-        const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-        const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-          throw new SlotConflictError("Slot no longer available");
-        }
-      }
+      )) as import("firebase-admin/firestore").QuerySnapshot;
+      await slotConflicts(sameDaySnap.docs);
     } else {
       const expSlotsRef = db.collection("experiences").doc(experienceId).collection("slots");
-      const sameDaySnap = await get(
+      const sameDaySnap = (await get(
         expSlotsRef
           .where("startAt", ">=", Timestamp.fromDate(dayStart))
           .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-      );
-      for (const doc of sameDaySnap.docs) {
-        const data = doc.data() as Slot;
-        if (data.status === "open") continue;
-        const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-        const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-          throw new SlotConflictError("Slot no longer available");
-        }
-      }
+      )) as import("firebase-admin/firestore").QuerySnapshot;
+      await slotConflicts(sameDaySnap.docs);
     }
   }
 

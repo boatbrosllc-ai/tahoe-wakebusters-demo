@@ -284,6 +284,9 @@ export async function GET(request: NextRequest) {
         seasonal?: { enabled?: boolean; startMonth?: number; endMonth?: number; startDate?: string; endDate?: string };
       };
       const expDataFull = expData as ExpDataFull | undefined;
+      const nonPontoonBoatIds = mergedBoatDocs
+        .filter((d) => !["pontoon", "tritoon"].includes(((d.data() as { boatType?: string }).boatType ?? "").toLowerCase().trim()))
+        .map((d) => d.id);
       // Sunset/holiday always use ticketed branch so calendar shows one slot per date; ignore pricingType when slug is in that family.
       const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
       const useTicketedBranch = expDataFull?.pricingType === "ticketed" || isTicketedBySlug;
@@ -347,6 +350,14 @@ export async function GET(request: NextRequest) {
             const doc = mergedBoatDocs.find((d) => d.id === id);
             return shouldUseWakeBoardCharterGrid((doc?.data() as { boatType?: string })?.boatType, true);
           });
+          // If legacy boatType metadata is missing, strict wake-only filtering can hide every slot.
+          // Fall back to all non-pontoon assigned listing boats so watersports times still appear.
+          if (tBoatIds.length === 0 && nonPontoonBoatIds.length > 0) {
+            console.warn("[slots] watersports ticketed boatType filter returned zero boats; using non-pontoon fallback", {
+              experienceId,
+            });
+            tBoatIds = [...nonPontoonBoatIds];
+          }
         }
 
         // Relaxed slot-id parser (shared from experience-slots)
@@ -487,10 +498,8 @@ export async function GET(request: NextRequest) {
             bookingMode?: string;
             status?: string;
             expiresAt?: { toDate(): Date };
-            rollbackPending?: boolean;
           };
           if (h.status !== "active") return;
-          if (h.rollbackPending === true) return;
           if (h.expiresAt && h.expiresAt.toDate().getTime() < tHoldsNow) return;
           const slotIdRaw = h.slotId ?? h.slot_id;
           if (!slotIdRaw) return;
@@ -738,6 +747,13 @@ export async function GET(request: NextRequest) {
         .map((d) => d.id);
       if (isWatersportsSlug(slugEffective)) {
         boatIds = boatIds.filter((id) => shouldUseWakeBoardCharterGrid(boatDocDataById.get(id)?.boatType, true));
+        // Guard against legacy/missing boatType values causing an empty watersports calendar.
+        if (boatIds.length === 0 && nonPontoonBoatIds.length > 0) {
+          console.warn("[slots] watersports charter boatType filter returned zero boats; using non-pontoon fallback", {
+            experienceId,
+          });
+          boatIds = [...nonPontoonBoatIds];
+        }
       }
       const allExpIds = experienceIdVariants;
       if (boatIdParam) {

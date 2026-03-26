@@ -807,6 +807,17 @@ export async function POST(request: NextRequest) {
               )
             )
           );
+          const legacyLimitHit = legacyBookingSnaps.some((snap) => snap.docs.length >= LEGACY_BOOKING_SCAN_LIMIT);
+          if (legacyLimitHit) {
+            await writeOperationalAlert({
+              type: "legacy_booking_fallback_limit_breach",
+              experienceId: expIdForCapacity,
+              limit: LEGACY_BOOKING_SCAN_LIMIT,
+              source: "create-hold-shared-ticketed",
+              hint: "Run backfill-start-date-str and set DISABLE_LEGACY_BOOKING_FALLBACK=true; legacy scan may miss bookings beyond this cap.",
+            });
+            throw new LegacyScanLimitReachedError();
+          }
           for (const snap of legacyBookingSnaps) {
             for (const doc of snap.docs) {
               if (seenBIds.has(doc.id)) continue;
@@ -1098,21 +1109,7 @@ export async function POST(request: NextRequest) {
           )
         : [];
 
-    // Operator-block contract: create-hold preflight must match convert-hold-to-booking enforcement.
-    // We check here (before the main charter/legacy transaction) so blocked dates never enter payment.
-    if (isExperienceOnly && input.experienceId && slotStartForBlock && slotEndForBlock) {
-      const blockedPreflight = await hasOverlappingBlock({
-        db,
-        Timestamp,
-        experienceId: input.experienceId,
-        experienceIdVariants: experienceIdVariantsForAssert,
-        slotStart: slotStartForBlock,
-        slotEnd: slotEndForBlock,
-      });
-      if (blockedPreflight) {
-        throw new SlotConflictError("This slot is blocked");
-      }
-    }
+    // Operator-block checks run authoritatively inside Firestore transactions for all flow types.
 
     if (isSharedTicketed) {
       throw new Error("Unexpected: charter transaction reached for shared ticketed flow");

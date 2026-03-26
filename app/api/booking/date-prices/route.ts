@@ -105,25 +105,20 @@ export async function GET(request: NextRequest) {
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ExperienceRate & { id: string }));
     // Default to first rate by duration (smallest) so calendar prices are deterministic when no rateId is passed.
     const sortedRates = [...rates].sort((a, b) => (a.durationHours ?? 0) - (b.durationHours ?? 0));
-    const noStoreHeadersEarly: Record<string, string> = {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
-    };
     let chosenRate: ExperienceRate & { id: string };
+    let rateIdMismatch = false;
+    let requestedRateId: string | null = null;
     if (rateIdParam) {
       const found = rates.find((r) => r.id === rateIdParam);
       if (!found) {
-        return NextResponse.json(
-          {
-            error: "The selected rate is no longer available. Please refresh and choose a trip length again.",
-            rateIdMismatch: true as const,
-          },
-          { status: 400, headers: noStoreHeadersEarly }
-        );
+        // Calendar pricing should stay resilient to stale client-side rate selections.
+        // Checkout/create-hold endpoints still enforce strict active-rate validation.
+        rateIdMismatch = true;
+        requestedRateId = rateIdParam;
+        chosenRate = sortedRates[0];
+      } else {
+        chosenRate = found;
       }
-      chosenRate = found;
     } else {
       chosenRate = sortedRates[0];
     }
@@ -363,6 +358,14 @@ export async function GET(request: NextRequest) {
         holidayDateStrings,
         pricingType: isTicketed ? "ticketed" : (exp.pricingType ?? "charter"),
         ticketsAvailableByDate,
+        ...(rateIdMismatch
+          ? {
+              rateIdMismatch: true as const,
+              requestedRateId,
+              effectiveRateId: chosenRate.id,
+              warning: "Selected trip length changed. Calendar is showing current prices for an available trip length.",
+            }
+          : {}),
         ...(legacyTimedOut
           ? {
               partialData: true,

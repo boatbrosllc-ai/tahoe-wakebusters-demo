@@ -1,3 +1,5 @@
+import { fromZonedTime } from "date-fns-tz";
+
 /**
  * Experience slot grid: all dates are available until booked or blocked.
  * Slot id format: YYYY-MM-DD-startHour-durationHours (e.g. 2025-02-10-13-3) for :00 starts,
@@ -206,32 +208,23 @@ export function isMonthInSeasonalRange(
   return month1Based >= startMonth || month1Based <= endMonth;
 }
 
-/** Cached DST boundaries (2nd Sunday March, 1st Sunday November) keyed by year. */
-const dstBoundaryCache = new Map<number, { marchDay: number; novDay: number }>();
-
-function getDstBoundary(year: number): { marchDay: number; novDay: number } {
-  const cached = dstBoundaryCache.get(year);
-  if (cached) return cached;
-  const marchDay = 8 + (7 - new Date(year, 2, 8).getDay()) % 7;
-  const novDay = 1 + (7 - new Date(year, 10, 1).getDay()) % 7;
-  const boundary = { marchDay, novDay };
-  dstBoundaryCache.set(year, boundary);
-  return boundary;
+function formatDatePartsInChicago(date: Date): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SLOT_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const readPart = (type: string): number => parseInt(parts.find((p) => p.type === type)?.value ?? "", 10);
+  return { year: readPart("year"), month: readPart("month"), day: readPart("day") };
 }
 
 /**
- * Offset in hours for America/Chicago vs UTC on the given calendar date (DST-aware).
- * Central Standard Time = -6, Central Daylight Time = -5.
+ * Build the UTC instant for midnight in America/Chicago on `dateStr`.
+ * Uses date-fns-tz conversion so DST transition days map correctly.
  */
-function getCentralOffsetHoursForDate(dateStr: string): number {
-  const [y, m, day] = dateStr.split("-").map(Number);
-  if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(day)) return -6;
-  // US DST: 2nd Sunday March (2am) through 1st Sunday November (2am)
-  const { marchDay: secondSundayMarch, novDay: firstSundayNov } = getDstBoundary(y);
-  const onOrAfterMarchDST = m > 3 || (m === 3 && day >= secondSundayMarch);
-  const beforeNovemberDSTEnd = m < 11 || (m === 11 && day < firstSundayNov);
-  const inDST = onOrAfterMarchDST && beforeNovemberDSTEnd;
-  return inDST ? -5 : -6;
+function getChicagoMidnightUtcInstant(dateStr: string): Date {
+  return fromZonedTime(`${dateStr}T00:00:00`, SLOT_TIMEZONE);
 }
 
 /**
@@ -242,11 +235,10 @@ function getCentralOffsetHoursForDate(dateStr: string): number {
  * rolls to the correct UTC day instead of invalid strings like `T24:00:00.000Z`.
  */
 export function getSlotStartEnd(dateStr: string, startHour: number, durationHours: number, startMinute: number = 0): { start: Date; end: Date } {
-  const offsetHours = getCentralOffsetHoursForDate(dateStr);
-  const utcHour = startHour - offsetHours;
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const startMs = Date.UTC(y, m - 1, d, utcHour, startMinute, 0, 0);
-  const start = new Date(startMs);
+  const hh = String(startHour).padStart(2, "0");
+  const mm = String(startMinute).padStart(2, "0");
+  const start = fromZonedTime(`${dateStr}T${hh}:${mm}:00`, SLOT_TIMEZONE);
+  const startMs = start.getTime();
   const end = new Date(startMs + durationHours * 60 * 60 * 1000);
   return { start, end };
 }
@@ -256,8 +248,11 @@ export function getSlotStartEnd(dateStr: string, startHour: number, durationHour
  * Use for same-day Firestore queries instead of `new Date(dateStr + "T00:00:00")` (ambiguous vs UTC servers).
  */
 export function getCentralCalendarDayBounds(dateStr: string): { dayStart: Date; dayEnd: Date } {
-  const { start: dayStart } = getSlotStartEnd(dateStr, 0, 0, 0);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const dayStart = getChicagoMidnightUtcInstant(dateStr);
+  const nextNoonUtc = new Date(dayStart.getTime() + 36 * 60 * 60 * 1000);
+  const nextDateStr = getDateStrInSlotTimezone(nextNoonUtc);
+  const nextDayStart = getChicagoMidnightUtcInstant(nextDateStr);
+  const dayEnd = new Date(nextDayStart.getTime() - 1);
   return { dayStart, dayEnd };
 }
 
@@ -444,11 +439,12 @@ export const WAKEBOARD_SATURDAY_START_TIMES: { hour: number; minute: number }[] 
 
 /** True if dateStr (YYYY-MM-DD) is a Saturday in America/Chicago. */
 export function isSaturdayInSlotTimezone(dateStr: string): boolean {
-  const offsetHours = getCentralOffsetHoursForDate(dateStr);
-  const utcHour = 12 - offsetHours;
-  const iso = dateStr + "T" + String(utcHour).padStart(2, "0") + ":00:00.000Z";
-  const d = new Date(iso);
-  return d.getUTCDay() === 6;
+  const noonUtc = new Date(`${dateStr}T12:00:00.000Z`);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: SLOT_TIMEZONE,
+    weekday: "short",
+  }).format(noonUtc);
+  return weekday.toLowerCase() === "sat";
 }
 
 /**

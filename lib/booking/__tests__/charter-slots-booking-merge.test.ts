@@ -29,4 +29,13 @@ describe("charter booking merge — 8h interval and request window", () => {
     assert.ok(longStart.getTime() < shortEnd.getTime());
     assert.ok(longEnd.getTime() > shortStart.getTime());
   });
+
+  it("8h trip ending at 3pm does not block a 3pm start", () => {
+    const dateStr = "2026-03-30";
+    const { start: bookedStart, end: bookedEnd } = getSlotStartEnd(dateStr, 7, 8, 0);
+    const { start: threePmStart, end: threePmEnd } = getSlotStartEnd(dateStr, 15, 3, 0);
+    assert.strictEqual(bookedEnd.getTime(), threePmStart.getTime(), "booking should end exactly at 3pm start");
+    const overlaps = bookedStart.getTime() < threePmEnd.getTime() && bookedEnd.getTime() > threePmStart.getTime();
+    assert.strictEqual(overlaps, false, "adjacent intervals must not be treated as overlapping");
+  });
 });
