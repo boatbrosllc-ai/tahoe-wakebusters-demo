@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
-import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
+import { getGtagFullBootstrapJs } from "@/lib/ga-gtag-inline";
 
 /**
  * Legacy same-origin GA4 bootstrap (prefer inline in `app/layout.tsx`).
- * Must not overwrite `window.gtag` if `gtag/js` already ran — see `getGtagInlineBootstrapJs`.
+ * Serves the same one-file loader as the root layout (dataLayer + inject `gtag/js`).
  */
 export async function GET() {
   const id = getGaMeasurementId();
@@ -18,7 +18,7 @@ export async function GET() {
     });
   }
 
-  const body = `${getGtagInlineBootstrapJs(id, { debugMode: isGaClientDebugEnabled() })}\n`;
+  const body = `${getGtagFullBootstrapJs(id, { debugMode: isGaClientDebugEnabled() })}\n`;
 
   return new NextResponse(body, {
     status: 200,

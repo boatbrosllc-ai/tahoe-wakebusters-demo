@@ -141,6 +141,10 @@ Page views are tracked on App Router navigation by `components/providers/GaPageV
 
 Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA is loaded, and also pushes the same payload to `window.dataLayer` for inspection/debugging.
 
+### If GA4 says “Data collection isn’t active” / “No data received”
+
+That banner is GA’s way of saying it has **not seen hits on this stream yet** (or not in 48+ hours). Your stream details (**Measurement ID** `G-…`) must match `GET /api/health` → `ga4.measurementId`. After deploy, use **Chrome with extensions off** (or Tag Assistant) and confirm **Network** requests to `google-analytics.com` / `googletagmanager.com` (e.g. `collect` / `g/collect`) return **200/204**. In **Admin → Data streams → your web stream → Configure tag settings**, ensure nothing is pausing the tag. Internal-traffic **data filters** can hide you from Realtime even when data arrives.
+
 ### If GA4 Realtime shows zero (but you are on the site)
 
 The integration can be correct and you still see **no users** in Realtime. Check these in order:
