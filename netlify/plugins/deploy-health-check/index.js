@@ -10,6 +10,8 @@
  */
 
 import { chromium } from "playwright";
+import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 
 function isNetlifyProductionContext() {
   return process.env.CONTEXT === "production";
@@ -18,8 +20,40 @@ function isNetlifyProductionContext() {
 const ANALYTICS_REQUEST_RE = /(google-analytics\.com|analytics\.google\.com)\/.*(?:collect|g\/collect|j\/collect)/i;
 const GA_LOADER_RE = /googletagmanager\.com\/gtag\/js\?id=/i;
 
+function isMissingPlaywrightBrowserError(error) {
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  return msg.includes("Executable doesn't exist") || msg.includes("Please run the following command to download new browsers");
+}
+
+function tryInstallPlaywrightChromium() {
+  console.warn("[deploy-health-check] Playwright Chromium executable missing. Attempting install: npx playwright install chromium");
+  execSync("npx playwright install chromium", {
+    stdio: "inherit",
+    env: process.env,
+  });
+}
+
+async function launchChromiumForSmoke() {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (error) {
+    if (!isMissingPlaywrightBrowserError(error)) {
+      throw error;
+    }
+    tryInstallPlaywrightChromium();
+    const executable = chromium.executablePath();
+    if (!executable || !existsSync(executable)) {
+      throw new Error(
+        "[deploy-health-check] Playwright browser install did not provide a Chromium executable. " +
+          "Ensure production build command runs `npx playwright install chromium` before deploy checks."
+      );
+    }
+    return chromium.launch({ headless: true });
+  }
+}
+
 async function runAnalyticsSmoke(baseUrl) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromiumForSmoke();
   const context = await browser.newContext();
   const page = await context.newPage();
   let phase = "initial";

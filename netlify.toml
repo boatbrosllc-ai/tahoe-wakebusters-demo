@@ -25,7 +25,7 @@
 
 # Production: GA-only pre-build check (NEXT_PUBLIC_GA_MEASUREMENT_ID). Full env audit: NODE_ENV=production node scripts/check-production-env.js
 [context.production]
-  command = "NODE_ENV=production node scripts/check-production-env.js --ga-only && npm run build"
+  command = "NODE_ENV=production node scripts/check-production-env.js --ga-only && npx playwright install chromium && npm run build"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
