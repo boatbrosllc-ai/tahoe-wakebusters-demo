@@ -57,6 +57,7 @@ function hasValue(name) {
 
 const fs = require("fs");
 const path = require("path");
+const { parseGoogleTagId } = require("../lib/ga-tag-id");
 
 function fileExists(resolvedPath) {
   try {
@@ -131,41 +132,27 @@ async function assertSlotTakenBookingsHaveStartDateStrWhenLegacyDisabled() {
   }
 }
 
-/** Same as stripSurroundingQuotes in lib/ga-measurement-id.ts — host env values may include wrapping quotes. */
-function stripSurroundingQuotesGaId(s) {
-  let t = String(s).trim();
-  for (let i = 0; i < 3; i++) {
-    const len = t.length;
-    if (len < 2) break;
-    const a = t[0];
-    const b = t[len - 1];
-    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
-      t = t.slice(1, -1).trim();
-    } else {
-      break;
-    }
-  }
-  return t;
-}
-
-/** GA4 rules aligned with lib/ga-measurement-id.ts (production must set a valid G-XXXXXXXXXX). */
+/** GA tag rules aligned with lib/ga-measurement-id.ts (production must set a valid Google tag ID). */
 function collectProductionGa4Missing() {
   const missing = [];
-  const gaRaw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
-  if (gaRaw === undefined) {
+  const parsed = parseGoogleTagId(process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID);
+  if (parsed.kind === "unset") {
     missing.push(
-      "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to your active GA4 web stream ID (format G-XXXXXXXXXX). " +
+      "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to your active Google tag ID (for GA4 typically G-...). " +
         "Production requires this variable explicitly; there is no built-in fallback measurement ID."
     );
   } else {
-    const trimmed = stripSurroundingQuotesGaId(gaRaw);
-    const isOff = trimmed.toLowerCase() === "off" || trimmed === "0";
-    const isEmpty = trimmed === "";
-    const isMalformed = !/^G-[A-Za-z0-9]{10}$/.test(trimmed);
-    if (isEmpty || isOff || isMalformed) {
+    if (parsed.kind !== "valid") {
+      const state =
+        parsed.kind === "empty"
+          ? "empty"
+          : parsed.kind === "disabled"
+            ? "disabled (off/0)"
+            : "malformed";
       missing.push(
-        `GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to a valid GA4 measurement ID (format G-XXXXXXXXXX) in production. ` +
-          `Current value is ${isEmpty ? "empty" : isOff ? "disabled (off/0)" : "malformed"}.`
+        "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to a valid Google tag ID in production " +
+          "(accepted families: G-, GT-, AW-, DC-). " +
+          `Current value is ${state}.`
       );
     }
   }
@@ -278,7 +265,13 @@ async function main() {
   console.log("Production env check passed (required vars present).");
 }
 
-main().catch((err) => {
-  console.error("[check-production-env]", err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("[check-production-env]", err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  collectProductionGa4Missing,
+};

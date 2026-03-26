@@ -123,12 +123,12 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
 
 - `app/layout.tsx` injects GA4 using Google’s two-tag pattern: native `<script async src="…gtag/js?id=…">` plus a nonce’d inline `dataLayer` / `gtag('config')` (works cleanly with CSP `strict-dynamic`).
 - `lib/ga-measurement-id.ts` reads `NEXT_PUBLIC_GA_MEASUREMENT_ID`:
-  - **Production** (`NODE_ENV=production`): the variable must be set to a valid GA4 measurement ID (`G-XXXXXXXXXX`). There is no hardcoded fallback; unset, empty, `off`/`0`, or malformed values disable GA and fail deploy checks.
-  - **Do not quote the value** in Netlify or other hosts (use `G-XXXXXXXXXX`, not `"G-XXXXXXXXXX"`). A single layer of accidental surrounding `'` or `"` is stripped before validation so a valid ID is not disabled by mistake.
-  - **Local development**: when unset, a dev fallback ID is used so you can verify Realtime/DebugView without editing env; set a specific `G-XXXXXXXXXX` to target another stream.
+  - **Production** (`NODE_ENV=production`): the variable must be set to a valid Google tag ID. Accepted families are `G-`, `GT-`, `AW-`, `DC-` with alphanumeric suffix. There is no hardcoded fallback; unset, empty, `off`/`0`, or malformed values disable GA and fail deploy checks.
+  - **Do not quote the value** in Netlify or other hosts (use `G-...`, not `"G-..."`). Accidental surrounding `'` or `"` layers are stripped before validation so a valid ID is not disabled by host UI quoting mistakes.
+  - **Local development**: when unset, a dev fallback `G-...` ID is used so you can verify Realtime/DebugView without editing env; set a specific tag ID to target another stream.
   - Set to `off` or `0` (or empty): disables GA injection (intended for local use).
   - Malformed values: logged and treated as disabled.
-- Production guard: Netlify production builds run `scripts/check-production-env.js --ga-only` before `next build` (GA4 ID only; see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`. Run the full script without `--ga-only` locally or in CI for a complete env audit.
+- Production guard: Netlify production builds run `scripts/check-production-env.js --ga-only` before `next build` (GA ID only; see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`, and runs a browser synthetic smoke test that requires: GA loader present, one successful analytics request on initial load, and one successful request after client-side navigation. Run the full script without `--ga-only` locally or in CI for a complete env audit.
 
 Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it de-dupes the automatic first `page_view` from `gtag('config', ...)`, and retries client navigations until `window.gtag` is available so early navigations are not dropped).
 
@@ -166,6 +166,7 @@ The integration can be correct and you still see **no users** in Realtime. Check
 Production
 - Run `NODE_ENV=production node scripts/check-production-env.js` (full audit) before releases; Netlify runs `--ga-only` at build plus the post-deploy health check.
 - Set `NEXT_PUBLIC_GA_MEASUREMENT_ID` to your live GA4 web stream ID on the host; do not rely on an implicit default.
+- Netlify production deploys block promotion if browser synthetic smoke cannot observe successful analytics requests on initial load and SPA navigation.
 - Confirm GA injection is not being skipped in server logs and `/api/health` shows `ga4.enabled: true`.
 - Navigate between routes and confirm GA4 `page_view` updates on client-side transitions.
 - Click-to-call and booking CTAs should emit `call_click` / `book_cta_click` events with the expected `source` and `page`.

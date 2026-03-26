@@ -1,10 +1,12 @@
+import { isValidGoogleTagId } from "@/lib/ga-tag-id";
+
 export type GtagInlineBootstrapOptions = {
   /** When true, GA4 labels hits as debug (see GA4 Admin → DebugView). Set via NEXT_PUBLIC_GA_DEBUG=1 while testing. */
   debugMode?: boolean;
 };
 
 function assertMeasurementId(measurementId: string): void {
-  if (!/^G-[A-Za-z0-9]{10}$/.test(measurementId)) {
+  if (!isValidGoogleTagId(measurementId)) {
     throw new Error("[ga-gtag-inline] Invalid measurement ID");
   }
 }

@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
 
   /** Non-sensitive: clarifies that health does not observe browser tag delivery. */
   const diagnosticsHint =
-    "This endpoint validates server-side configuration only; it does not confirm client-side GA request delivery (e.g. gtag/js or collect).";
+    "This endpoint validates server-side configuration only; it does not confirm client-side GA request delivery (e.g. gtag/js or collect). Netlify production deploys run a browser smoke test for loader + collect requests.";
   checks.diagnosticsHint = diagnosticsHint;
 
   const rateLimitReady = isRateLimitReadyForProduction();
