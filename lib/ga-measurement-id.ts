@@ -9,8 +9,25 @@
 const DEV_FALLBACK_GA4_MEASUREMENT_ID = "G-1QM1E4C1BB";
 const GA4_MEASUREMENT_ID_REGEX = /^G-[A-Za-z0-9]{10}$/;
 
+/** Strip accidental outer single/double quotes (e.g. from host env UI pasting `"G-…"`). */
+function stripSurroundingQuotes(s: string): string {
+  let t = s.trim();
+  for (let i = 0; i < 3; i++) {
+    const len = t.length;
+    if (len < 2) break;
+    const a = t[0];
+    const b = t[len - 1];
+    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
+      t = t.slice(1, -1).trim();
+    } else {
+      break;
+    }
+  }
+  return t;
+}
+
 function normalizeMeasurementId(raw: string): string | null {
-  const trimmed = raw.trim();
+  const trimmed = stripSurroundingQuotes(raw);
   if (trimmed === "") return null;
   if (trimmed.toLowerCase() === "off" || trimmed === "0") return null;
 

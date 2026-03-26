@@ -23,8 +23,11 @@ export function GaPageViewTracker() {
   const didInitialRender = useRef(false);
   const pagePathRef = useRef(pagePath);
   pagePathRef.current = pagePath;
+  const pathnameRef = useRef(pathname ?? "/");
+  pathnameRef.current = pathname ?? "/";
 
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gtagExhaustWarnedRef = useRef(false);
 
   useEffect(() => {
     // De-dupe: `gtag('config', ...)` sends the initial `page_view` automatically on first load.
@@ -72,6 +75,13 @@ export function GaPageViewTracker() {
         if (flushIntervalRef.current) {
           clearInterval(flushIntervalRef.current);
           flushIntervalRef.current = null;
+        }
+        if (!gtagExhaustWarnedRef.current) {
+          gtagExhaustWarnedRef.current = true;
+          console.warn(
+            "[GaPageViewTracker] gtag did not become available after max retry attempts; page_view tracking may be missing.",
+            { pagePath: pagePathRef.current, pathname: pathnameRef.current }
+          );
         }
       }
     }, GTAG_FLUSH_INTERVAL_MS);

@@ -124,6 +124,7 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
 - `app/layout.tsx` injects the GA4 `gtag/js` script and inline bootstrap when `getGaMeasurementId()` returns a valid ID.
 - `lib/ga-measurement-id.ts` reads `NEXT_PUBLIC_GA_MEASUREMENT_ID`:
   - **Production** (`NODE_ENV=production`): the variable must be set to a valid GA4 measurement ID (`G-XXXXXXXXXX`). There is no hardcoded fallback; unset, empty, `off`/`0`, or malformed values disable GA and fail deploy checks.
+  - **Do not quote the value** in Netlify or other hosts (use `G-XXXXXXXXXX`, not `"G-XXXXXXXXXX"`). A single layer of accidental surrounding `'` or `"` is stripped before validation so a valid ID is not disabled by mistake.
   - **Local development**: when unset, a dev fallback ID is used so you can verify Realtime/DebugView without editing env; set a specific `G-XXXXXXXXXX` to target another stream.
   - Set to `off` or `0` (or empty): disables GA injection (intended for local use).
   - Malformed values: logged and treated as disabled.
@@ -144,11 +145,17 @@ Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA 
 
 The integration can be correct and you still see **no users** in Realtime. Check these in order:
 
-1. **Same property as your stream** — In GA4, open **Admin → Data streams** and confirm the **Measurement ID** (e.g. `G-…`) matches **exactly** what Netlify has for `NEXT_PUBLIC_GA_MEASUREMENT_ID` (including the property you are viewing in Reports).
+1. **Same property as your stream** — Open `https://YOUR-DOMAIN/api/health` and read `ga4.measurementId`. In GA4, **Admin → Data streams → your Web stream** must show that **exact** Measurement ID. If you are in a different GA4 property (or an old Universal Analytics view), Realtime will stay empty even though the site is firing tags.
 2. **Ad blockers and strict browsers** — uBlock, Privacy Badger, Brave Shields, Firefox Strict ETP, and some VPNs block `googletagmanager.com` / `google-analytics.com`. Test in a **fresh Chrome incognito** window with extensions disabled, or another device.
 3. **Internal traffic filter** — **Admin → Data settings → Data filters**: an active “Internal traffic” filter can remove your office/home IP from reports (including Realtime).
 4. **Network proof** — DevTools → **Network**, filter `collect` or `google-analytics`. Successful sends usually show `204` or `200` on `google-analytics.com` / `analytics.google.com`. If there are **no** requests, the tag is not firing or is blocked. If requests succeed but Realtime is empty, you are almost certainly in the **wrong GA4 property** or **filtered**.
 5. **DebugView** — Set `NEXT_PUBLIC_GA_DEBUG=1` in Netlify (rebuild), then in GA4 open **Admin → DebugView** while you browse. Debug hits appear there even when Realtime is slow or confusing. Remove the var after testing.
+
+**Operator workflow (no hits / unclear if GA is working):**
+
+1. **`/api/health`** — Confirm `ga4.enabled` is `true` and `ga4.measurementId` matches the stream you expect. This reflects server-side env and build config only; it does not prove the browser sent hits.
+2. **Network** — In DevTools, confirm `gtag/js` (or `gtm.js` if applicable) loads without errors, then filter for `collect` or `google-analytics` and verify requests on load and on client navigations.
+3. **GA4 property and filters** — In **Admin → Data streams**, match the measurement ID to your property; check **Data settings → Data filters** (e.g. internal traffic) so you are not excluding the traffic you are testing.
 
 ### Verification checklist
 

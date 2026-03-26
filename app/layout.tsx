@@ -78,13 +78,17 @@ export default async function RootLayout({
               GA4: async gtag/js first, then inline (Google’s order). Inline runs before gtag.js finishes,
               queues config on dataLayer; gtag.js then processes. No React hydration required.
             */}
+            {/*
+              afterInteractive: runs with a normal <script nonce> in the document (reliable with CSP).
+              beforeInteractive used Next's __next_s queue; embedded quotes could break the inline config on some hosts.
+            */}
             <Script
               id="ga-gtag-lib"
               src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
-              strategy="beforeInteractive"
+              strategy="afterInteractive"
               nonce={nonce}
             />
-            <Script id="ga-inline-config" strategy="beforeInteractive" nonce={nonce}>
+            <Script id="ga-inline-config" strategy="afterInteractive" nonce={nonce}>
               {getGtagInlineBootstrapJs(gaMeasurementId, { debugMode: gaDebugMode })}
             </Script>
           </>

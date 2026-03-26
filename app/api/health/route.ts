@@ -110,6 +110,11 @@ export async function GET(request: NextRequest) {
     measurementId: gaMeasurementId,
   };
 
+  /** Non-sensitive: clarifies that health does not observe browser tag delivery. */
+  const diagnosticsHint =
+    "This endpoint validates server-side configuration only; it does not confirm client-side GA request delivery (e.g. gtag/js or collect).";
+  checks.diagnosticsHint = diagnosticsHint;
+
   const rateLimitReady = isRateLimitReadyForProduction();
   checks.rateLimitReady = rateLimitReady;
   checks.rateLimit = rateLimitReady ? "ok" : "degraded";
@@ -154,6 +159,7 @@ export async function GET(request: NextRequest) {
         firebase: checks.firebase,
         stripe: checks.stripe,
         ga4: checks.ga4,
+        diagnosticsHint: checks.diagnosticsHint,
       };
   const statusCode = ok ? 200 : 503;
   return NextResponse.json(body, { status: statusCode });

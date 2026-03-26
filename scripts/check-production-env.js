@@ -131,6 +131,23 @@ async function assertSlotTakenBookingsHaveStartDateStrWhenLegacyDisabled() {
   }
 }
 
+/** Same as stripSurroundingQuotes in lib/ga-measurement-id.ts — host env values may include wrapping quotes. */
+function stripSurroundingQuotesGaId(s) {
+  let t = String(s).trim();
+  for (let i = 0; i < 3; i++) {
+    const len = t.length;
+    if (len < 2) break;
+    const a = t[0];
+    const b = t[len - 1];
+    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
+      t = t.slice(1, -1).trim();
+    } else {
+      break;
+    }
+  }
+  return t;
+}
+
 /** GA4 rules aligned with lib/ga-measurement-id.ts (production must set a valid G-XXXXXXXXXX). */
 function collectProductionGa4Missing() {
   const missing = [];
@@ -141,7 +158,7 @@ function collectProductionGa4Missing() {
         "Production requires this variable explicitly; there is no built-in fallback measurement ID."
     );
   } else {
-    const trimmed = String(gaRaw).trim();
+    const trimmed = stripSurroundingQuotesGaId(gaRaw);
     const isOff = trimmed.toLowerCase() === "off" || trimmed === "0";
     const isEmpty = trimmed === "";
     const isMalformed = !/^G-[A-Za-z0-9]{10}$/.test(trimmed);

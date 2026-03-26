@@ -10,15 +10,19 @@ export type GtagInlineBootstrapOptions = {
  * `gtag/js` if load order shifts (e.g. cache). Only install the dataLayer shim when `gtag` is missing.
  */
 export function getGtagInlineBootstrapJs(measurementId: string, options?: GtagInlineBootstrapOptions): string {
-  const idJson = JSON.stringify(measurementId);
+  // Single-quoted ID only (no JSON.stringify): avoids `\"` inside Next.js `__next_s` script serialization
+  // breaking `gtag('config', ...)` in production HTML.
+  if (!/^G-[A-Za-z0-9]{10}$/.test(measurementId)) {
+    throw new Error("[ga-gtag-inline] Invalid measurement ID");
+  }
   const configExtra =
-    options?.debugMode === true ? `,${JSON.stringify({ debug_mode: true, send_page_view: true })}` : "";
+    options?.debugMode === true ? ",{debug_mode:true,send_page_view:true}" : "";
   return (
     "window.dataLayer=window.dataLayer||[];" +
     "if(typeof window.gtag!=='function'){" +
     "window.gtag=function(){window.dataLayer.push(arguments);};" +
     "}" +
     "window.gtag('js',new Date());" +
-    `window.gtag('config',${idJson}${configExtra});`
+    `window.gtag('config','${measurementId}'${configExtra});`
   );
 }
