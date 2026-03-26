@@ -30,15 +30,14 @@ function releaseTokenFieldForResponse(holdId: string, effectiveExpiresAt: Date):
   return t ? { releaseToken: t } : {};
 }
 
-function parseBody(body: unknown): { holdId: string; payFullAmount: boolean; release_token?: string } | null {
+function parseBody(body: unknown): { holdId: string; release_token?: string; clientPayFullAmount: boolean } | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   const holdId = typeof o.holdId === "string" ? o.holdId : null;
   if (!holdId) return null;
-  // Default to deposit (false): only charge full when client explicitly sends payFullAmount: true
-  const payFullAmount = o.payFullAmount === true;
   const release_token = typeof o.release_token === "string" ? o.release_token.trim() : undefined;
-  return { holdId, payFullAmount, ...(release_token ? { release_token } : {}) };
+  const payFullAmount = o.payFullAmount === true;
+  return { holdId, clientPayFullAmount: payFullAmount, ...(release_token ? { release_token } : {}) };
 }
 
 /** Ensure Stripe Customer exists; use stripeCustomerIndex by email (no Stripe list by email).
@@ -354,7 +353,10 @@ export async function POST(request: NextRequest) {
       bookingLog("create-payment-intent", "invalid body: holdId required");
       return NextResponse.json({ error: "holdId required" }, { status: 400 });
     }
-    bookingLog("create-payment-intent", "parsed input", { holdId: input.holdId, payFullAmount: input.payFullAmount });
+    bookingLog("create-payment-intent", "parsed input", {
+      holdId: input.holdId,
+      clientPayFullAmount: input.clientPayFullAmount,
+    });
     if (!hasReleaseTokenSecret()) {
       bookingError("create-payment-intent", "RELEASE_TOKEN_SECRET is not set; refusing payment intent creation in production", null, {
         holdId: input.holdId,
@@ -429,7 +431,7 @@ export async function POST(request: NextRequest) {
     let payFullAmount: boolean;
     if ((hold as { bookingMode?: string }).bookingMode === "shared") {
       payFullAmount = true;
-    } else if (hold.experienceId && input.payFullAmount === false) {
+    } else if (hold.experienceId) {
       try {
         const expSnap = await db.collection("experiences").doc(hold.experienceId).get();
         const experience = expSnap.exists ? (expSnap.data() as Experience) : null;
@@ -453,9 +455,9 @@ export async function POST(request: NextRequest) {
             { status: 503 }
           );
         }
-        // Charter requires explicit allowDeposit === true in Firestore (match experience-detail API)
+        // Charter: allowDeposit gates whether deposit is offered; when true, honor client payFullAmount (default deposit).
         if (experience.allowDeposit === true) {
-          payFullAmount = false;
+          payFullAmount = input.clientPayFullAmount;
         } else {
           payFullAmount = true;
           bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", {
@@ -486,9 +488,7 @@ export async function POST(request: NextRequest) {
     } else {
       // Legacy boat holds have no experience allowDeposit — deposits are not allowed.
       payFullAmount = true;
-      if (input.payFullAmount === false) {
-        bookingWarn("create-payment-intent", "deposit coerced to full: legacy hold without experience allowDeposit", { holdId: input.holdId });
-      }
+      bookingWarn("create-payment-intent", "deposit coerced to full: legacy hold without experience allowDeposit", { holdId: input.holdId });
     }
     const isOneTimeTicketed = (hold as { bookingMode?: string }).bookingMode === "shared" && payFullAmount === true;
     bookingLog("create-payment-intent", "pricing", {
@@ -610,13 +610,30 @@ export async function POST(request: NextRequest) {
       try {
         const otherPi = await stripe.paymentIntents.retrieve(otherId);
         if (otherPi.status !== "succeeded" && otherPi.status !== "canceled") {
-          await stripe.paymentIntents.cancel(otherId).catch(() => {});
+          try {
+            await stripe.paymentIntents.cancel(otherId);
+          } catch (cancelErr) {
+            await writeOperationalAlert({
+              type: "cancel_opposite_stripe_intent_failed",
+              source: "create-payment-intent",
+              holdId: input.holdId,
+              otherPaymentIntentId: otherId,
+              lastError: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
+            });
+          }
         }
         bookingLog("create-payment-intent", "canceled opposite preconversion PI (field cleared in hold transaction)", {
           holdId: input.holdId,
           payFullAmount,
         });
       } catch (oppErr) {
+        await writeOperationalAlert({
+          type: "cancel_opposite_stripe_intent_retrieve_failed",
+          source: "create-payment-intent",
+          holdId: input.holdId,
+          otherPaymentIntentId: otherId,
+          lastError: oppErr instanceof Error ? oppErr.message : String(oppErr),
+        });
         bookingWarn("create-payment-intent", "failed to cancel opposite preconversion PI (continuing)", {
           holdId: input.holdId,
           err: oppErr,
@@ -678,6 +695,9 @@ export async function POST(request: NextRequest) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg === "RATE_NOT_FOUND") return NextResponse.json({ error: "Rate not found" }, { status: 404 });
         if (msg === "BOAT_NOT_FOUND") return NextResponse.json({ error: "Boat not found" }, { status: 404 });
+        if (msg === "HOLD_PRICING_REQUIRED_FOR_PAYMENT_INTENT") {
+          return NextResponse.json({ error: "Hold pricing snapshot missing. Please create a new hold." }, { status: 409 });
+        }
         throw e;
       }
       const tipCents = (holdForCharge as { tipCents?: number }).tipCents ?? 0;
@@ -767,6 +787,12 @@ export async function POST(request: NextRequest) {
                       { error: mergeReuse.code === "expired" ? "Hold expired" : "Hold expired or already used" },
                       { status: 400 }
                     );
+                  }
+                  if (mergeReuse.otherIdToCancel) {
+                    await holdRef.update({
+                      pendingCancelPaymentIntentIds: FieldValue.arrayUnion(mergeReuse.otherIdToCancel),
+                      updatedAt: FieldValue.serverTimestamp(),
+                    });
                   }
                   await cancelOppositeStripeIntent(mergeReuse.otherIdToCancel);
                   if (mergeReuse.holdExtendedForPayment) {
@@ -898,6 +924,12 @@ export async function POST(request: NextRequest) {
           { error: mergeNew.code === "expired" ? "Hold expired" : "Hold expired or already used" },
           { status: 400 }
         );
+      }
+      if (mergeNew.otherIdToCancel) {
+        await holdRef.update({
+          pendingCancelPaymentIntentIds: FieldValue.arrayUnion(mergeNew.otherIdToCancel),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
       }
       await cancelOppositeStripeIntent(mergeNew.otherIdToCancel);
       if (mergeNew.holdExtendedForPayment) {

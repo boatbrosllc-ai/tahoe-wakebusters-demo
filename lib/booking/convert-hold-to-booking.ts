@@ -14,7 +14,13 @@ import {
   createWaiverRequestAndTokenInTransaction,
   createGroupTokenInTransaction,
 } from "@/lib/waiver/firestore";
-import { buildAddonSelectionsForPricing, computePricing, getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents } from "@/lib/booking/pricing";
+import {
+  buildAddonSelectionsForPricing,
+  computePricing,
+  getEffectiveBoatRatePriceCents,
+  getEffectiveRatePriceCents,
+} from "@/lib/booking/pricing";
+import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import { bookingEnv } from "@/lib/booking/env";
 import { getSlotStartEnd, parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
@@ -35,7 +41,8 @@ import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
+import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
+import { sendAmountIntegrityMismatchCustomerEmail, sendAmountIntegrityMismatchOpsEmail } from "@/lib/booking/brevo";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import { HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS } from "@/lib/booking/hold-expiry";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
@@ -43,6 +50,8 @@ import { getStripe } from "@/lib/booking/stripe-client";
 import { computeFinalChargeAtUtc } from "@/lib/booking/final-charge-at";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
+import { isCanonicalExperienceId } from "@/lib/booking/experience-id";
+import { paymentIntentMatchesHoldForConversion } from "@/lib/booking/stripe-payment-intent-convert";
 
 /** Legacy: full payment in one charge. */
 export interface ConvertHoldInputFull {
@@ -106,10 +115,71 @@ export async function convertHoldToBooking(
 ): Promise<ConvertHoldResult> {
   const isDeposit = isConvertHoldInputDeposit(input);
   if ((input as { requiresManualReview?: boolean }).requiresManualReview === true) {
+    const firestoreExportsBlocked = getFirestoreExports();
     bookingWarn("convert-hold", "manual review required for payment-stage classification; blocking auto-conversion", {
       holdId,
       paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
     });
+    // Conversion is permanently blocked in this case, so create an ops-visible pending refund record.
+    await upsertPendingRefundRecord(
+      db,
+      {
+        reason: "requires_manual_review_conversion_blocked",
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+      },
+      {
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+        requiresReview: true,
+      }
+    );
+    const holdRefBlocked = db.collection("holds").doc(holdId);
+    const holdSnapBlocked = await holdRefBlocked.get();
+    if (holdSnapBlocked.exists) {
+      const hb = holdSnapBlocked.data() as Hold & {
+        discountCode?: string;
+        discountDocId?: string;
+        bookingMode?: string;
+      };
+      await rollbackCheckoutSession(
+        db,
+        holdId,
+        {
+          slotId: hb.slotId,
+          boatId: hb.boatId ?? null,
+          experienceId: hb.experienceId ?? null,
+          partySize: hb.partySize ?? null,
+          bookingMode: hb.bookingMode,
+          discountCode: hb.discountCode ?? null,
+          discountDocId: hb.discountDocId ?? null,
+        },
+        firestoreExportsBlocked
+      );
+    }
+    try {
+      await sendAmountIntegrityMismatchOpsEmail({
+        holdId,
+        paymentIntentId: input.paymentIntentId,
+        source: "convert-hold-to-booking",
+      });
+    } catch (e) {
+      bookingError("convert-hold", "sendAmountIntegrityMismatchOpsEmail failed", e, { holdId });
+    }
+    const custEmailBlocked = holdSnapBlocked.exists
+      ? (holdSnapBlocked.data() as Hold).customerDraft?.email?.trim()
+      : undefined;
+    if (custEmailBlocked) {
+      try {
+        await sendAmountIntegrityMismatchCustomerEmail({
+          to: custEmailBlocked,
+          customerName: (holdSnapBlocked.data() as Hold).customerDraft?.name?.trim() ?? "Guest",
+          holdId,
+        });
+      } catch (e) {
+        bookingError("convert-hold", "sendAmountIntegrityMismatchCustomerEmail failed", e, { holdId });
+      }
+    }
     return { amountIntegrityMismatch: true };
   }
   bookingLog("convert-hold", "convertHoldToBooking started", {
@@ -125,7 +195,20 @@ export async function convertHoldToBooking(
     throw new Error("Hold not found");
   }
   const hold = holdSnap.data() as Hold;
+  if (hold.experienceId) {
+    if (!isCanonicalExperienceId(hold.experienceId)) {
+      await writeOperationalAlert({
+        type: "hold_non_canonical_experience_id_at_conversion",
+        holdId,
+        experienceId: hold.experienceId,
+        source: "convert-hold-to-booking",
+      });
+    }
+  }
   const expiresAtDate = (hold.expiresAt as { toDate(): Date }).toDate();
+  const piForTransactionalMatch = await getStripe().paymentIntents.retrieve(input.paymentIntentId, {
+    expand: ["payment_method"],
+  });
 
   let graceVerifiedForConversion = false;
   const piIdForGrace = typeof input.paymentIntentId === "string" ? input.paymentIntentId.trim() : "";
@@ -405,7 +488,7 @@ export async function convertHoldToBooking(
   if (hold.pricing) {
     pricing = hold.pricing;
   } else {
-    console.warn("[convert-hold-to-booking] hold.pricing missing, recomputing", holdId);
+    bookingWarn("convert-hold", "hold.pricing missing, recomputing from live rate and addons", { holdId });
     let rateForPricing: Rate | ExperienceRate | BoatRate = rate;
     if (hasExperience && experienceForPricing && slot?.startAt && "priceCents" in rate) {
       const slotStart = (slot.startAt as { toDate(): Date }).toDate();
@@ -441,7 +524,6 @@ export async function convertHoldToBooking(
         };
       }
     }
-    // Ticketed (shared) experiences: price is per ticket, so multiply by partySize.
     const ticketQty = isSharedHold && (experienceForPricing as Experience)?.pricingType === "ticketed"
       ? Math.max(1, Math.floor(Number(hold.partySize ?? 1)))
       : 1;
@@ -459,16 +541,16 @@ export async function convertHoldToBooking(
     authoritativeHoldTotalCents != null
       ? computeFinalChargeTotalCentsFromHoldPricing(hold.pricing as BookingPricing, holdTipCents, holdDiscountCents)
       : finalPricing.totalCents;
-  const recomputedPricingForLegacyHold = hold.pricing ? null : pricing;
   /** Must match create-payment-intent deposit math (`DEPOSIT_FRACTION` in lib/booking/constants). */
   const expectedChargeCents = isDeposit
     ? Math.round(authoritativeExpectedTotalCents * DEPOSIT_FRACTION)
     : authoritativeExpectedTotalCents;
+  const AMOUNT_INTEGRITY_TOLERANCE_CENTS = 2;
   const chargedFromInput =
     typeof input.amountTotalCents === "number" && Number.isFinite(input.amountTotalCents)
       ? Math.round(input.amountTotalCents)
       : null;
-  if (chargedFromInput != null && Math.abs(chargedFromInput - expectedChargeCents) > 1) {
+  if (chargedFromInput != null && Math.abs(chargedFromInput - expectedChargeCents) > AMOUNT_INTEGRITY_TOLERANCE_CENTS) {
     bookingWarn("convert-hold", "amount integrity mismatch vs hold pricing — blocking conversion", {
       holdId,
       expectedChargeCents,
@@ -500,6 +582,7 @@ export async function convertHoldToBooking(
         expectedChargeCents,
         chargedFromInput,
         source: "convert-hold-to-booking",
+        severity: "critical",
       });
     } catch (e) {
       bookingError("convert-hold", "failed to record pending refund for amount mismatch", e, { holdId });
@@ -605,6 +688,8 @@ export async function convertHoldToBooking(
 
   /** Sentinel thrown when transactional re-read shows hold no longer active (idempotency gate). */
   const HOLD_NOT_ACTIVE_SENTINEL = new Error("HOLD_NOT_ACTIVE");
+  /** Sentinel thrown when transactional hold PI ids/version no longer match this conversion PI. */
+  const HOLD_PI_MATCH_FAILED_SENTINEL = new Error("HOLD_PI_MATCH_FAILED");
 
   const waiverTemplates = await listTemplates();
   const activeWaiverTemplate = waiverTemplates.find((t) => t.isActive);
@@ -623,7 +708,7 @@ export async function convertHoldToBooking(
   const revenueAttributionDate = new Date();
   bookingLog("convert-hold", "starting transaction (slot update + booking doc + hold status)", { holdId, bookingId });
   try {
-  await db.runTransaction(async (tx) => {
+    await db.runTransaction(async (tx) => {
     const freshSnap = await tx.get(holdRef);
     if (!freshSnap.exists) throw HOLD_NOT_ACTIVE_SENTINEL;
     const freshHold = freshSnap.data() as Hold;
@@ -638,6 +723,21 @@ export async function convertHoldToBooking(
     } else {
       throw HOLD_NOT_ACTIVE_SENTINEL;
     }
+    const freshHoldForPricing = {
+      pricing: freshHold.pricing,
+      tipCents: (freshHold as { tipCents?: number }).tipCents,
+      discountCents: (freshHold as { discountCents?: number }).discountCents,
+    };
+    const transactionalPiMatch = paymentIntentMatchesHoldForConversion(
+      piForTransactionalMatch,
+      {
+        depositPaymentIntentId: freshHold.depositPaymentIntentId,
+        fullPaymentIntentId: freshHold.fullPaymentIntentId,
+        paymentAttemptVersion: (freshHold as { paymentAttemptVersion?: number }).paymentAttemptVersion,
+      },
+      freshHoldForPricing
+    );
+    if (!transactionalPiMatch.ok) throw HOLD_PI_MATCH_FAILED_SENTINEL;
     if (hold.experienceId && parsedForBlock) {
       const { start: slotStartBlock, end: slotEndBlock } = getSlotStartEnd(
         parsedForBlock.dateStr,
@@ -649,6 +749,7 @@ export async function convertHoldToBooking(
         experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
           ? (experienceForPricing as Experience).slug.trim()
           : "";
+      // Transitional compatibility shim; remove after legacy slug-based records are fully backfilled.
       const expVariantsBlock = getExperienceIdVariants(hold.experienceId, expSlugBlock);
       const blocked = await hasOverlappingBlock({
         db,
@@ -844,14 +945,15 @@ export async function convertHoldToBooking(
         enqueueWaiverInviteOutbox = true;
       }
     }
+    if (hold.marketingOptIn) {
+      bookingDoc = {
+        ...bookingDoc,
+        brevoSubscribedAt: Timestamp.now() as unknown as FirestoreTimestamp,
+      };
+    }
     tx.set(db.collection("bookings").doc(bookingId), bookingDoc);
     await addConfirmationOutboxInTransaction(tx, db, bookingId);
     const holdUpdate: Record<string, unknown> = { status: "converted", bookingId };
-    if (recomputedPricingForLegacyHold) {
-      holdUpdate.pricing = finalPricing;
-      holdUpdate.tipCents = holdTipCents;
-      holdUpdate.discountCents = holdDiscountCents;
-    }
     if (isDeposit) {
       holdUpdate.depositPaymentIntentId = input.paymentIntentId;
     } else {
@@ -872,10 +974,16 @@ export async function convertHoldToBooking(
         revenueAttributionDate.getMonth() + 1
       ).padStart(2, "0")}`;
       const monthRef = db.collection("summaries").doc(monthKey);
-      tx.set(monthRef, {
-        revenueCents: FieldValue.increment(revenueCents),
-        bookingCount: FieldValue.increment(1),
-      }, { merge: true });
+      // Revenue summary increments live inside the same transaction as the booking write, so the
+      // `alreadyConverted` idempotency path never double-applies counters on recovery or stale replays.
+      tx.set(
+        monthRef,
+        {
+          revenueCents: FieldValue.increment(revenueCents),
+          bookingCount: FieldValue.increment(1),
+        },
+        { merge: true }
+      );
     }
   });
   } catch (err) {
@@ -896,6 +1004,9 @@ export async function convertHoldToBooking(
       }
       bookingError("convert-hold", "unexpected hold status after transaction conflict", null, { holdId, status: afterHold.status });
       throw new Error(`Unexpected hold status after transaction conflict: ${afterHold.status}`);
+    }
+    if (err === HOLD_PI_MATCH_FAILED_SENTINEL) {
+      throw new Error("Payment intent does not match hold");
     }
     throw err;
   }
@@ -938,7 +1049,6 @@ export async function convertHoldToBooking(
     try {
       await upsertBrevoContact(customer.email, customer.name, customer.phone, listId ?? undefined);
       await db.collection("bookings").doc(bookingId).update({
-        brevoSubscribedAt: Timestamp.now(),
         updatedAt: FieldValue.serverTimestamp(),
       });
     } catch (listErr) {

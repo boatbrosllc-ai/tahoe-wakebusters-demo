@@ -21,7 +21,6 @@ import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-dis
 import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import {
   assertSlotAvailable,
-  assertLegacyBoatSlotAvailable,
   SlotConflictError,
   LegacyScanLimitReachedError,
   assertNoOverlappingActiveSameDaySlots,
@@ -29,7 +28,7 @@ import {
 } from "@/lib/booking/slot-availability";
 import { departureTimesMatch } from "@/lib/booking/departure-match";
 import type { CreateHoldInput, CreateHoldResponse, Discount } from "@/lib/booking/types";
-import type { Boat, Rate, Addon, Slot, Hold } from "@/lib/booking/types";
+import type { Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
 import { signReleaseToken } from "@/lib/booking/releaseToken";
 import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
@@ -47,8 +46,13 @@ import {
 import { HOLD_EXPIRY_MINUTES, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-boat-resolution";
+import { assertCanonicalExperienceId } from "@/lib/booking/experience-id";
 import { assertProductionReleaseTokenSecret } from "@/lib/booking/env";
-import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
+import {
+  bookingNotReadyResponse,
+  legacyFallbackUnsafeResponse,
+  startDateStrBackfillReadinessResponse,
+} from "@/lib/booking/booking-readiness-response";
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 import { applyDiscountCounterSwapInTransaction } from "@/lib/booking/discount-counter-swap";
 
@@ -151,6 +155,8 @@ export async function POST(request: NextRequest) {
     if (notReady) return notReady;
     const legacyUnsafe = legacyFallbackUnsafeResponse();
     if (legacyUnsafe) return legacyUnsafe;
+    const startDateStrReady = await startDateStrBackfillReadinessResponse();
+    if (startDateStrReady) return startDateStrReady;
     try {
       assertReceiptTokenSecretConfigured();
     } catch (e) {
@@ -244,6 +250,9 @@ export async function POST(request: NextRequest) {
     }
     const resolvedInput = { ...parsedInput, boatId: resolvedBoatId };
     const input = resolvedInput;
+    if (input.experienceId) {
+      assertCanonicalExperienceId(input.experienceId);
+    }
     const hasBoatResolved = !!input.boatId;
     const isListingBoatFlow = hasExperience && hasBoatResolved; // experience slots + boat rates
     const isExperienceOnly = hasExperience && !hasBoatResolved;
@@ -296,17 +305,7 @@ export async function POST(request: NextRequest) {
       }
       const boat = boatDoc.data() as ListingBoat & { active?: boolean };
       const expSlug = typeof experience.slug === "string" ? experience.slug.trim() : "";
-      // When Firestore slug is missing, infer from title so boatMatchesExperience uses same variants as experience-detail/slots (boat may have experienceIds: ["watersports"] not doc id).
-      const inferredSlugFromTitle = ((): string => {
-        if (expSlug) return "";
-        const t = (experience.title ?? (experience as { name?: string }).name ?? "").toLowerCase();
-        if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
-        if (/pontoon|tritoon|party/.test(t)) return "pontoon";
-        if (/sunset|cruise/.test(t)) return "sunset";
-        if (/holiday|festive/.test(t)) return "holiday";
-        return "";
-      })();
-      const effectiveSlug = expSlug || inferredSlugFromTitle;
+      const effectiveSlug = expSlug;
       experienceSlugForAssert = effectiveSlug || undefined;
       if (boat.isListingBoat !== true || !boatMatchesExperience(boat, expId, effectiveSlug)) {
         return NextResponse.json({ error: "Boat not available for this experience" }, { status: 400 });
@@ -523,42 +522,7 @@ export async function POST(request: NextRequest) {
       addonsById = new Map();
       addonsSnapPre.docs.forEach((d) => addonsById.set(d.id, d.data() as ExperienceAddon));
     } else {
-      // Legacy boat flow: fetch boat, rate, and addons in parallel
-      const boatId = input.boatId!;
-      const [boatDoc, rateDoc, addonsSnap] = await Promise.all([
-        db.collection("boats").doc(boatId).get(),
-        db.collection("boats").doc(boatId).collection("rates").doc(input.rateId).get(),
-        db.collection("boats").doc(boatId).collection("addons").get(),
-      ]);
-      if (!boatDoc.exists) {
-        return NextResponse.json({ error: "Boat not found" }, { status: 404 });
-      }
-      const boat = boatDoc.data() as Boat;
-      if (!boat.active) {
-        return NextResponse.json({ error: "Boat not available" }, { status: 400 });
-      }
-      capacityMax = boat.capacityMax;
-      if (input.partySize > capacityMax) {
-        return NextResponse.json({ error: "Party size exceeds capacity" }, { status: 400 });
-      }
-      if (!rateDoc.exists) {
-        return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-      }
-      rate = rateDoc.data() as Rate;
-      if (!rate.active) {
-        return NextResponse.json({ error: "Rate not available" }, { status: 400 });
-      }
-      const parsedSlotLegacy = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-      if (!parsedSlotLegacy) {
-        return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-      }
-      if (!isAllowedSlotTime(parsedSlotLegacy.startHour, parsedSlotLegacy.startMinute, parsedSlotLegacy.durationHours, undefined)) {
-        return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
-      }
-      addonsById = new Map<string, Addon>();
-      addonsSnap.docs.forEach((d) => addonsById.set(d.id, d.data() as Addon));
-      slotsRef = db.collection("boats").doc(boatId).collection("slots");
-      slotRef = slotsRef.doc(input.slotId);
+      return NextResponse.json({ error: "experienceId is required" }, { status: 400 });
     }
 
     for (const s of input.addonSelections) {
@@ -1361,16 +1325,6 @@ export async function POST(request: NextRequest) {
                     ignoreSlotDocIds: [input.slotId],
                     experienceSlug: experienceSlugForAssert,
                   });
-                } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
-                  await assertLegacyBoatSlotAvailable({
-                    db,
-                    Timestamp,
-                    get: (q) => tx.get(q),
-                    boatId: input.boatId,
-                    parsed: parsedSlotForHold,
-                    slotStart: slotStartDate,
-                    slotEnd: slotEndDate,
-                  });
                 }
                 const existingHoldForCharter = existingHoldSnap.data() as Hold & { discountCode?: string; discountDocId?: string };
                 const oldDiscountCodeCharter = existingHoldForCharter.discountCode;
@@ -1524,16 +1478,6 @@ export async function POST(request: NextRequest) {
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
             experienceSlug: experienceSlugForAssert,
-          });
-        } else if (isLegacyBoat && input.boatId && parsedSlotForHold) {
-          await assertLegacyBoatSlotAvailable({
-            db,
-            Timestamp,
-            get: (q) => tx.get(q),
-            boatId: input.boatId,
-            parsed: parsedSlotForHold,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
           });
         }
         await applyCharterDiscountForNewHold();
@@ -1704,6 +1648,9 @@ export async function POST(request: NextRequest) {
         },
         { status: 409 }
       );
+    }
+    if (message === "Invalid experienceId: expected canonical Firestore document id") {
+      return NextResponse.json({ error: message, code: "invalid_experience_id" }, { status: 400 });
     }
     if (
       err instanceof SlotConflictError ||
