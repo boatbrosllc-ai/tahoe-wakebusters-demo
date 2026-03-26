@@ -127,7 +127,7 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
   - **Local development**: when unset, a dev fallback ID is used so you can verify Realtime/DebugView without editing env; set a specific `G-XXXXXXXXXX` to target another stream.
   - Set to `off` or `0` (or empty): disables GA injection (intended for local use).
   - Malformed values: logged and treated as disabled.
-- Production guard: Netlify production builds run `scripts/check-production-env.js` before `next build` (see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`.
+- Production guard: Netlify production builds run `scripts/check-production-env.js --ga-only` before `next build` (GA4 ID only; see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`. Run the full script without `--ga-only` locally or in CI for a complete env audit.
 
 Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it de-dupes the automatic first `page_view` from `gtag('config', ...)`, and retries client navigations until `window.gtag` is available so early navigations are not dropped).
 
@@ -143,7 +143,7 @@ Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA 
 ### Verification checklist
 
 Production
-- Run `NODE_ENV=production node scripts/check-production-env.js` (or rely on Netlify production build) and confirm it passes.
+- Run `NODE_ENV=production node scripts/check-production-env.js` (full audit) before releases; Netlify runs `--ga-only` at build plus the post-deploy health check.
 - Set `NEXT_PUBLIC_GA_MEASUREMENT_ID` to your live GA4 web stream ID on the host; do not rely on an implicit default.
 - Confirm GA injection is not being skipped in server logs and `/api/health` shows `ga4.enabled: true`.
 - Navigate between routes and confirm GA4 `page_view` updates on client-side transitions.

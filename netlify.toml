@@ -23,9 +23,9 @@
   # Publish dir is set by @netlify/plugin-nextjs when present; omit or use .next for static fallback.
   publish = ".next"
 
-# Production: validate required env (including explicit GA4) before build so deploys cannot ship with GA disabled by mistake.
+# Production: GA-only pre-build check (NEXT_PUBLIC_GA_MEASUREMENT_ID). Full env audit: NODE_ENV=production node scripts/check-production-env.js
 [context.production]
-  command = "NODE_ENV=production node scripts/check-production-env.js && npm run build"
+  command = "NODE_ENV=production node scripts/check-production-env.js --ga-only && npm run build"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

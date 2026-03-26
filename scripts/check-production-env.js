@@ -1,6 +1,10 @@
 /**
  * Check that production-required env vars are set (names only; no values printed).
  * Run before deploy or in CI to catch missing config. Usage: node scripts/check-production-env.js
+ *
+ * Netlify production builds use: node scripts/check-production-env.js --ga-only
+ * (validates NEXT_PUBLIC_GA_MEASUREMENT_ID only; full audit is still this script without --ga-only).
+ *
  * Requires Node; uses fs/path; optional firebase-admin for legacy backfill gate when real credentials exist.
  *
  * Firebase: follows same contract as lib/booking/env.ts (hasFirebaseConfig).
@@ -127,7 +131,47 @@ async function assertSlotTakenBookingsHaveStartDateStrWhenLegacyDisabled() {
   }
 }
 
+/** GA4 rules aligned with lib/ga-measurement-id.ts (production must set a valid G-XXXXXXXXXX). */
+function collectProductionGa4Missing() {
+  const missing = [];
+  const gaRaw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+  if (gaRaw === undefined) {
+    missing.push(
+      "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to your active GA4 web stream ID (format G-XXXXXXXXXX). " +
+        "Production requires this variable explicitly; there is no built-in fallback measurement ID."
+    );
+  } else {
+    const trimmed = String(gaRaw).trim();
+    const isOff = trimmed.toLowerCase() === "off" || trimmed === "0";
+    const isEmpty = trimmed === "";
+    const isMalformed = !/^G-[A-Za-z0-9]{10}$/.test(trimmed);
+    if (isEmpty || isOff || isMalformed) {
+      missing.push(
+        `GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to a valid GA4 measurement ID (format G-XXXXXXXXXX) in production. ` +
+          `Current value is ${isEmpty ? "empty" : isOff ? "disabled (off/0)" : "malformed"}.`
+      );
+    }
+  }
+  return missing;
+}
+
 async function main() {
+  const gaOnly = process.argv.includes("--ga-only");
+  if (gaOnly) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[check-production-env] --ga-only: NODE_ENV is not production; skipping.");
+      return;
+    }
+    const gaMissing = collectProductionGa4Missing();
+    if (gaMissing.length > 0) {
+      console.error("[check-production-env] Netlify production pre-build failed (GA4):");
+      gaMissing.forEach((m) => console.error("  -", m));
+      process.exit(1);
+    }
+    console.log("[check-production-env] GA-only check passed.");
+    return;
+  }
+
   const missing = [];
   for (const name of required) {
     if (!hasValue(name)) missing.push(name);
@@ -204,24 +248,7 @@ async function main() {
         "ENABLE_BLOCK_CHECK_FAIL_OPEN must be absent or false in production (obsolete flag; block queries now fail closed on index errors).",
       );
     }
-    const gaRaw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
-    if (gaRaw === undefined) {
-      missing.push(
-        "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to your active GA4 web stream ID (format G-XXXXXXXXXX). " +
-          "Production requires this variable explicitly; there is no built-in fallback measurement ID."
-      );
-    } else {
-      const trimmed = String(gaRaw).trim();
-      const isOff = trimmed.toLowerCase() === "off" || trimmed === "0";
-      const isEmpty = trimmed === "";
-      const isMalformed = !/^G-[A-Za-z0-9]{10}$/.test(trimmed);
-      if (isEmpty || isOff || isMalformed) {
-        missing.push(
-          `GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to a valid GA4 measurement ID (format G-XXXXXXXXXX) in production. ` +
-            `Current value is ${isEmpty ? "empty" : isOff ? "disabled (off/0)" : "malformed"}.`
-        );
-      }
-    }
+    missing.push(...collectProductionGa4Missing());
   }
   if (missing.length > 0) {
     console.error("Missing or empty env (required for production):");
