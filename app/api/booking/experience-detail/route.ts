@@ -25,6 +25,7 @@ export interface ExperienceDetailBoat {
   id: string;
   name: string;
   slug?: string;
+  boatType?: string;
   description?: string;
   photos: string[];
   fromPriceCents: number | null;
@@ -180,6 +181,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           id: doc.id,
           name: boat.name,
           slug: boat.slug,
+          boatType: boat.boatType,
           description: boat.description,
           photos: boat.photos ?? [],
           fromPriceCents,

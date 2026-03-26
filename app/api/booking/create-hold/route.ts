@@ -42,6 +42,7 @@ import { isTransientFirestoreFailure } from "@/lib/booking/firestore-transient";
 import {
   computeHoldRequestFingerprint,
   HOLD_REQUEST_CLAIMS_COLLECTION,
+  HOLD_REQUEST_CLAIM_TTL_MS,
 } from "@/lib/booking/hold-request-idempotency";
 import { HOLD_EXPIRY_MINUTES, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
@@ -1017,7 +1018,7 @@ export async function POST(request: NextRequest) {
                       : {}),
                     holdId: effectiveHoldId,
                     updatedAt: FieldValue.serverTimestamp(),
-                    expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+                    expireAt: Timestamp.fromDate(new Date(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS)),
                   },
                   { merge: true }
                 );
@@ -1080,7 +1081,7 @@ export async function POST(request: NextRequest) {
                 : {}),
               holdId,
               updatedAt: FieldValue.serverTimestamp(),
-              expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+              expireAt: Timestamp.fromDate(new Date(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS)),
             },
             { merge: true }
           );
@@ -1456,7 +1457,7 @@ export async function POST(request: NextRequest) {
                         : {}),
                       holdId: slot.holdId,
                       updatedAt: FieldValue.serverTimestamp(),
-                      expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+                      expireAt: Timestamp.fromDate(new Date(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS)),
                     },
                     { merge: true }
                   );
@@ -1603,7 +1604,7 @@ export async function POST(request: NextRequest) {
               : {}),
             holdId,
             updatedAt: FieldValue.serverTimestamp(),
-            expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+            expireAt: Timestamp.fromDate(new Date(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS)),
           },
           { merge: true }
         );

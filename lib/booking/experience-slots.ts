@@ -287,15 +287,12 @@ export function isAllowedSlotTime(
 }
 
 /**
- * Intentional legacy escape hatch: when set, watersports charter may treat blank/unknown boatType like a wake grid boat.
+ * Client+server shared escape hatch: when set, watersports charter may treat blank/unknown boatType like a wake grid boat.
  * Keeps GET /api/booking/slots, {@link allowBoatTypeForSlug}, and this helper aligned.
  */
 function watersportsUntypedBoatAllowedForCharter(): boolean {
   if (typeof process === "undefined") return false;
-  return (
-    process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" ||
-    process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true"
-  );
+  return process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true";
 }
 
 /** True when listing boat `boatType` is the wake/wakesurf grid family (case-insensitive). */

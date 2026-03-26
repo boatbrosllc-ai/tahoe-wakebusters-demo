@@ -19,6 +19,7 @@ import {
   type ConvertHoldInputDeposit,
 } from "@/lib/booking/convert-hold-to-booking";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
 import {
   buildConvertHoldInputFromSucceededPaymentIntent,
   paymentIntentMatchesHoldForConversion,
@@ -789,7 +790,7 @@ export async function POST(request: NextRequest) {
       console.error("[booking:complete-after-payment] stack:", stack);
     }
 
-    if (err instanceof BlockCheckUnavailableError) {
+    if (err instanceof BlockCheckUnavailableError || err instanceof LegacyScanLimitReachedError) {
       return NextResponse.json(
         { error: "Unable to verify availability. Please try again shortly." },
         { status: 503 }

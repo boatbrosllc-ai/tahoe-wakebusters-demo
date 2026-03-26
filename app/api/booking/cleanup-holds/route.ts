@@ -11,20 +11,17 @@ import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firesto
 import { FieldPath } from "firebase-admin/firestore";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
-import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { releaseCleanupHoldsRunLock, tryAcquireCleanupHoldsRunLock } from "@/lib/booking/cleanup-holds-lock";
+import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 
 const PAGE_SIZE = 100;
 const BATCH_SIZE = 10;
 
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get("authorization") ?? "";
-    const cronSecret = process.env.CRON_SECRET;
-    if (!cronSecret || !timingSafeStringEqual(authHeader, `Bearer ${cronSecret}`)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const authErr = await assertCronPostAuthorized(request);
+    if (authErr) return authErr;
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
     const lock = await tryAcquireCleanupHoldsRunLock(db, FieldValue, Timestamp);

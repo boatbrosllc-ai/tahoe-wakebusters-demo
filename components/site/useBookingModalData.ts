@@ -411,6 +411,22 @@ export function useBookingModalData(
             unresolvedBookingCount: ur,
           });
         }
+        const serverError = (data as { error?: string })?.error;
+        if (
+          slots.length === 0 &&
+          (typeof ur !== "number" || ur === 0) &&
+          !serverError &&
+          !isTicketedExperienceForBooking(exp)
+        ) {
+          const misconfiguredMessage =
+            "No availability was returned for this charter experience. Please contact support if this persists.";
+          bookingError("client", "charter slots empty without unresolved bookings", null, {
+            experienceId: exp.id,
+            startDate: viewMonthStartStr,
+            endDate: viewMonthEndStr,
+          });
+          setSlotsLoadError(misconfiguredMessage);
+        }
         const nextSlots = [...slots];
         if (slots.length > 100) {
           setTimeout(() => {

@@ -207,10 +207,8 @@ describe("isWakeListingBoatType", () => {
 
 describe("shouldUseWakeBoardCharterGrid", () => {
   it("watersports: blank boatType does not imply wake grid unless env fallback", () => {
-    const prevU = process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
     const prevPub = process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
     try {
-      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       assert.strictEqual(shouldUseWakeBoardCharterGrid(undefined, true), false);
       assert.strictEqual(shouldUseWakeBoardCharterGrid("", true), false);
@@ -219,11 +217,13 @@ describe("shouldUseWakeBoardCharterGrid", () => {
       assert.strictEqual(shouldUseWakeBoardCharterGrid("", false), false);
 
       process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
+      assert.strictEqual(shouldUseWakeBoardCharterGrid(undefined, true), false);
+      assert.strictEqual(shouldUseWakeBoardCharterGrid("", true), false);
+      process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
       assert.strictEqual(shouldUseWakeBoardCharterGrid(undefined, true), true);
       assert.strictEqual(shouldUseWakeBoardCharterGrid("", true), true);
     } finally {
-      if (prevU === undefined) delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      else process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevU;
+      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       if (prevPub === undefined) delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       else process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevPub;
     }
@@ -255,16 +255,19 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
     const boat = {
       allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }],
     };
-    const prevU = process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+    const prevPub = process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
     try {
-      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), false);
       process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
+      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), false);
+      process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
       assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), true);
       assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, false), false);
     } finally {
-      if (prevU === undefined) delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      else process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevU;
+      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      if (prevPub === undefined) delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
+      else process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevPub;
     }
   });
 

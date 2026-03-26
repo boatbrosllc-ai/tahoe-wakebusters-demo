@@ -47,7 +47,11 @@ import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, Slot, ListingBoat, Hold } from "@/lib/booking/types";
-import { HOLD_REQUEST_CLAIMS_COLLECTION, computeDirectCheckoutHoldRequestFingerprint } from "@/lib/booking/hold-request-idempotency";
+import {
+  HOLD_REQUEST_CLAIMS_COLLECTION,
+  HOLD_REQUEST_CLAIM_TTL_MS,
+  computeDirectCheckoutHoldRequestFingerprint,
+} from "@/lib/booking/hold-request-idempotency";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { DIRECT_CHECKOUT_HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
 import { buildCheckoutSessionIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
@@ -125,6 +129,32 @@ function parseBody(body: unknown): {
     discountCode: discountCode || undefined,
     ...(customerEmail ? { customerEmail } : {}),
   };
+}
+
+async function cleanupClaimWithRetryAndAlert(
+  claimRef: import("firebase-admin").firestore.DocumentReference | undefined,
+  holdId: string
+): Promise<void> {
+  if (!claimRef) return;
+  const attempts = 3;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await claimRef.delete();
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+      }
+    }
+  }
+  await writeOperationalAlert({
+    type: "checkout_direct_claim_cleanup_failed",
+    holdId,
+    source: "create-checkout-session-direct",
+    error: lastErr instanceof Error ? lastErr.message : String(lastErr),
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -372,7 +402,7 @@ export async function POST(request: NextRequest) {
       await claimRefReserve.create({
         requestFingerprint: holdRequestFingerprint,
         createdAt: FieldValue.serverTimestamp(),
-        expireAt: Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        expireAt: Timestamp.fromMillis(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS),
       });
       claimReserved = true;
     } catch (e: unknown) {
@@ -650,7 +680,7 @@ export async function POST(request: NextRequest) {
               requestFingerprint: holdRequestFingerprint,
               holdId,
               updatedAt: FieldValue.serverTimestamp(),
-              expireAt: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
+              expireAt: Timestamp.fromDate(new Date(Date.now() + HOLD_REQUEST_CLAIM_TTL_MS)),
             },
             { merge: true }
           );
@@ -678,9 +708,7 @@ export async function POST(request: NextRequest) {
           { status: 409 }
         );
       }
-      if (claimReserved) {
-        await claimRefReserve?.delete().catch(() => {});
-      }
+      if (claimReserved) await cleanupClaimWithRetryAndAlert(claimRefReserve, holdId);
       throw e;
     }
 
@@ -1138,8 +1166,8 @@ export async function POST(request: NextRequest) {
       } catch (rollbackErr) {
         console.error("[create-checkout-session-direct] rollback after error failed", rollbackErr);
       }
-      if (claimTransactionCommitted) {
-        await claimRefReserve?.delete().catch(() => {});
+      if (claimTransactionCommitted && rollbackHoldId) {
+        await cleanupClaimWithRetryAndAlert(claimRefReserve, rollbackHoldId);
       }
     } else if (rollbackHoldId != null || rollbackHoldPayload != null) {
       void writeOperationalAlert({

@@ -763,7 +763,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
     return ids;
   }, [boats]);
-  // One row per start time (multiple boats can have same slot); use first slot per time for selection. Sorted chronologically by time of day.
+  // Step 2 intentionally renders one button per start time even when multiple boats are open.
+  // We keep the carried slot deterministic (time + lexical boatId tie-break) so the boat context
+  // passed into step 3 is stable; step 3 availability is still re-validated against the chosen boat.
   const openSlotsByTime = useMemo(() => {
     const durationHours = rateForCalendar?.durationHours;
     let filtered =
@@ -777,11 +779,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     const expSlug = (selectedExperience?.slug ?? "").toLowerCase().trim();
     const watersportsCharter = !isTicketed && selectedExperience != null && isWatersportsSlug(expSlug);
     if (watersportsCharter && wakeCharterBoatIdsForStep2 != null) {
-      if (wakeCharterBoatIdsForStep2.size === 0) {
-        filtered = [];
-      } else {
-        const scope =
-          selectedBoat != null ? new Set<string>([selectedBoat.id]) : wakeCharterBoatIdsForStep2;
+      if (wakeCharterBoatIdsForStep2.size > 0) {
+        const selectedBoatInWakeSet =
+          selectedBoat != null && wakeCharterBoatIdsForStep2.has(selectedBoat.id);
+        const scope = selectedBoatInWakeSet
+          ? new Set<string>([selectedBoat!.id])
+          : wakeCharterBoatIdsForStep2;
         filtered = filtered.filter((s) => {
           const bid = typeof s.boatId === "string" ? s.boatId.trim() : "";
           if (!bid) return false;
@@ -790,9 +793,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     }
 
-    const sorted = [...filtered].sort(
-      (a, b) => slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id)
-    );
+    const sorted = [...filtered].sort((a, b) => {
+      const byTime = slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id);
+      if (byTime !== 0) return byTime;
+      const aBoat = (a.boatId ?? "").trim();
+      const bBoat = (b.boatId ?? "").trim();
+      return aBoat.localeCompare(bBoat);
+    });
     const withLabel = sorted.map((s) => ({ ...s, timeLabel: formatTime(s.startAt) }));
     const seen = new Set<string>();
     return withLabel.filter((s) => {
@@ -2847,8 +2854,25 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 key={slot.id}
                                 type="button"
                                 onClick={() => {
-                                  const full = monthSlots.find((s) => s.id === slot.id);
-                                  if (full) setSelectedSlot(full);
+                                  const expSlug = (selectedExperience?.slug ?? "").toLowerCase().trim();
+                                  const watersportsCharter = !isTicketed && selectedExperience != null && isWatersportsSlug(expSlug);
+                                  const scope =
+                                    watersportsCharter && wakeCharterBoatIdsForStep2 != null
+                                      ? (selectedBoat != null && wakeCharterBoatIdsForStep2.has(selectedBoat.id)
+                                          ? new Set<string>([selectedBoat.id])
+                                          : wakeCharterBoatIdsForStep2.size > 0
+                                            ? wakeCharterBoatIdsForStep2
+                                            : null)
+                                      : null;
+                                  const candidates = monthSlots
+                                    .filter((s) => {
+                                      if (s.id !== slot.id || s.status !== "open") return false;
+                                      if (scope == null) return true;
+                                      const bid = (s.boatId ?? "").trim();
+                                      return bid.length > 0 && scope.has(bid);
+                                    })
+                                    .sort((a, b) => (a.boatId ?? "").localeCompare(b.boatId ?? ""));
+                                  if (candidates[0]) setSelectedSlot(candidates[0]);
                                 }}
                                 className={cn(
                                   "rounded-lg border sm:border-2 px-2.5 py-2 text-xs sm:text-sm font-medium transition-all min-h-[40px] sm:min-h-[44px] touch-manipulation sm:px-3 sm:py-2.5 md:px-4 md:py-2.5",

@@ -7,6 +7,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { isWatersportsSlug } from "@/lib/booking/experience-aliases";
+import { shouldUseWakeBoardCharterGrid } from "@/lib/booking/experience-slots";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +19,7 @@ interface SlotDto {
   startAt: string;
   endAt: string;
   status: SlotStatus;
+  boatId?: string;
 }
 
 interface ExperienceOption {
@@ -31,6 +34,7 @@ function formatTime(iso: string) {
 }
 
 type RateOption = { id: string; durationHours: number; displayName: string; priceCents: number };
+type ExperienceDetailBoat = { id: string; boatType?: string };
 
 function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
@@ -62,6 +66,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [calendarMonth, setCalendarMonth] = useState(() => initialChicagoCalendarMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
+  const [detailBoats, setDetailBoats] = useState<ExperienceDetailBoat[]>([]);
 
   // Range for currently visible month + adjacent months (refetched when calendarMonth changes).
   const dateRange = useMemo(
@@ -125,6 +130,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   useEffect(() => {
     if (!experienceId) {
       setRates([]);
+      setDetailBoats([]);
       return;
     }
     const controller = new AbortController();
@@ -135,8 +141,34 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name !== "AbortError") setRates([]);
       });
+    bookingCache.fetchExperienceDetail(experienceId, controller.signal)
+      .then((data) => {
+        setDetailBoats(Array.isArray(data?.boats) ? (data.boats as ExperienceDetailBoat[]) : []);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name !== "AbortError") setDetailBoats([]);
+      });
     return () => controller.abort();
   }, [experienceId]);
+
+  const wakeBoatIds = useMemo(() => {
+    if (detailBoats.length === 0) return null;
+    const ids = new Set<string>();
+    for (const b of detailBoats) {
+      if (shouldUseWakeBoardCharterGrid(b.boatType, true)) ids.add(b.id);
+    }
+    return ids;
+  }, [detailBoats]);
+
+  const filteredSlots = useMemo(() => {
+    const watersportsCharter =
+      selectedExperience?.pricingType === "charter" && isWatersportsSlug(selectedExperience?.slug ?? "");
+    if (!watersportsCharter || wakeBoatIds == null || wakeBoatIds.size === 0) return slots;
+    return slots.filter((s) => {
+      const bid = (s.boatId ?? "").trim();
+      return bid.length > 0 && wakeBoatIds.has(bid);
+    });
+  }, [slots, selectedExperience?.pricingType, selectedExperience?.slug, wakeBoatIds]);
 
   /** Chicago calendar year/month (0-indexed month) for nav guards — must match `calendarMonth` semantics. */
   const [chicagoNavYear, chicagoNavMonth0] = useMemo(() => {
@@ -193,17 +225,17 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
   const slotsByDate = useMemo(() => {
     const map = new Map<string, { open: number }>();
-    for (const s of slots) {
+    for (const s of filteredSlots) {
       const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, { open: 0 });
       if (s.status === "open") map.get(day)!.open++;
     }
     return map;
-  }, [slots]);
+  }, [filteredSlots]);
 
   const openSlotsByDate = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
-    for (const s of slots) {
+    for (const s of filteredSlots) {
       if (s.status !== "open") continue;
       const day = isoToChicagoDateStr(s.startAt);
       if (!map.has(day)) map.set(day, []);
@@ -211,7 +243,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     }
     map.forEach((arr) => arr.sort((a, b) => a.startAt.localeCompare(b.startAt)));
     return map;
-  }, [slots]);
+  }, [filteredSlots]);
 
   const isAtCurrentMonth =
     calendarMonth.getFullYear() === chicagoNavYear && calendarMonth.getMonth() === chicagoNavMonth0;
@@ -456,6 +488,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                               experienceSlug: experienceSlug.trim(),
                               date: selectedDate!,
                               slotId: slot.id,
+                              ...(slot.boatId ? { boatId: slot.boatId } : {}),
                               pricingType: (selectedExperience?.pricingType as 'charter' | 'ticketed' | undefined),
                             });
                             setSlotModalOpen(false);

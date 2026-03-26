@@ -178,6 +178,14 @@ async function getHoldSnapshotsOrdered(
 export async function GET(request: NextRequest) {
   try {
     const generatedAtIso = new Date().toISOString();
+    if (
+      process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" &&
+      process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT !== "true"
+    ) {
+      console.warn(
+        "[slots] BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT is set without NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT; client/server wake filtering can diverge"
+      );
+    }
     const rl = await checkRateLimitPublicRead(getClientKey(request));
     if (!rl.allowed) {
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
@@ -755,6 +763,22 @@ export async function GET(request: NextRequest) {
           boatIds = [...nonPontoonBoatIds];
         }
       }
+      if (isWatersportsSlug(slugEffective) && boatIds.length === 0) {
+        void writeOperationalAlert({
+          type: "slots_watersports_no_eligible_boats",
+          source: "app/api/booking/slots",
+          experienceId,
+          hint: "No eligible wake boats linked. Ensure isListingBoat=true, boatType=wake, and experienceIds contains this experience id/alias.",
+        }).catch(() => {});
+        return NextResponse.json(
+          {
+            slots: [],
+            error: "No eligible wake boats linked to this experience.",
+            hint: "Check that boats have isListingBoat: true, boatType: wake, and the experience id in experienceIds.",
+          },
+          { status: 404, headers: NO_STORE_HEADERS }
+        );
+      }
       const allExpIds = experienceIdVariants;
       if (boatIdParam) {
         if (!boatIds.includes(boatIdParam)) {
@@ -1047,7 +1071,8 @@ export async function GET(request: NextRequest) {
       const expIdsSetForBoatBookingMerge = new Set(allExpIds);
       const BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT = 500;
       const BOAT_CHARTER_BOOKING_QUERY_CHUNK = 10;
-      if (boatIds.length > 0) {
+      const disableBoatSupplementScan = process.env.DISABLE_BOAT_SUPPLEMENT_SCAN === "true";
+      if (!disableBoatSupplementScan && boatIds.length > 0) {
         try {
           for (let off = 0; off < boatIds.length; off += BOAT_CHARTER_BOOKING_QUERY_CHUNK) {
             const chunk = boatIds.slice(off, off + BOAT_CHARTER_BOOKING_QUERY_CHUNK);
@@ -1057,6 +1082,7 @@ export async function GET(request: NextRequest) {
                   .collection("bookings")
                   .where("boatId", "==", bid)
                   .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                  .where("startDateStr", ">=", charterBookingStartDateStrLower)
                   .limit(BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT)
                   .get()
               )
@@ -1067,6 +1093,13 @@ export async function GET(request: NextRequest) {
                 console.warn("[slots] charter boat-scoped booking supplement hit limit; overlapping trips may be incomplete", {
                   experienceId,
                 });
+                void writeOperationalAlert({
+                  type: "slots_charter_boat_supplement_limit_hit",
+                  source: "app/api/booking/slots",
+                  experienceId,
+                  limit: BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT,
+                  hint: "Boat supplement scan hit cap and partial data mode is active; complete booking startDateStr/boatId backfill and set DISABLE_BOAT_SUPPLEMENT_SCAN=true.",
+                }).catch(() => {});
               }
               for (const doc of snap.docs) {
                 if (seenBookingIds.has(doc.id)) continue;

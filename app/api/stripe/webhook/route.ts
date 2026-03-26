@@ -17,6 +17,7 @@ import {
   type ConvertHoldInput,
 } from "@/lib/booking/convert-hold-to-booking";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { signManageToken } from "@/lib/booking/manageToken";
@@ -613,7 +614,7 @@ export async function POST(request: NextRequest) {
         return true;
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
-        if (convertErr instanceof BlockCheckUnavailableError) {
+        if (convertErr instanceof BlockCheckUnavailableError || convertErr instanceof LegacyScanLimitReachedError) {
           await writeEventResult(evId, {
             status: "failed_retryable",
             processedAt: Timestamp.now(),
@@ -1062,7 +1063,7 @@ export async function POST(request: NextRequest) {
             return true;
           } catch (convertErr) {
             const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
-            if (convertErr instanceof BlockCheckUnavailableError) {
+            if (convertErr instanceof BlockCheckUnavailableError || convertErr instanceof LegacyScanLimitReachedError) {
               await writeEventResult(evId, {
                 status: "failed_retryable",
                 processedAt: Timestamp.now(),
@@ -2212,7 +2213,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: true });
       } catch (convertErr) {
         const errMsg = convertErr instanceof Error ? convertErr.message : String(convertErr);
-        if (convertErr instanceof BlockCheckUnavailableError) {
+        if (convertErr instanceof BlockCheckUnavailableError || convertErr instanceof LegacyScanLimitReachedError) {
           await writeEventResult(eventId, {
             status: "failed_retryable",
             processedAt: Timestamp.now(),

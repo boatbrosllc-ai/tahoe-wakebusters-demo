@@ -42,6 +42,7 @@ import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-
 import { getStripe } from "@/lib/booking/stripe-client";
 import { computeFinalChargeAtUtc } from "@/lib/booking/final-charge-at";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
+import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
 
 /** Legacy: full payment in one charge. */
 export interface ConvertHoldInputFull {
@@ -711,6 +712,17 @@ export async function convertHoldToBooking(
             )
           )
         );
+        const legacyLimitHit = legacySnaps.some((snap) => snap.docs.length >= LEGACY_BOOKING_SCAN_LIMIT);
+        if (legacyLimitHit) {
+          await writeOperationalAlert({
+            type: "legacy_booking_fallback_limit_breach",
+            experienceId: hold.experienceId,
+            limit: LEGACY_BOOKING_SCAN_LIMIT,
+            source: "convert-hold-to-booking",
+            hint: "Run backfill-start-date-str and set DISABLE_LEGACY_BOOKING_FALLBACK=true before finalizing shared bookings.",
+          });
+          throw new LegacyScanLimitReachedError();
+        }
         for (const snap of legacySnaps) {
           for (const doc of snap.docs) {
             if (seenTx.has(doc.id)) continue;

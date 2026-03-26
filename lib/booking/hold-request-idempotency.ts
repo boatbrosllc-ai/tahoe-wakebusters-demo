@@ -3,6 +3,8 @@ import type { CreateHoldInput } from "@/lib/booking/types";
 
 /** Top-level collection; `expireAt` is set on writes (create-hold) for Firestore TTL — see firestore.indexes.json. */
 export const HOLD_REQUEST_CLAIMS_COLLECTION = "holdRequestClaims";
+/** Keep claim locks only slightly longer than hold lifetime to avoid long-lived orphaned claims. */
+export const HOLD_REQUEST_CLAIM_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** Stable hash of booking-defining fields; used to detect holdRequestId reuse with a different payload. */
 export function computeHoldRequestFingerprint(input: CreateHoldInput): string {

@@ -13,10 +13,7 @@ import { isWakeListingBoatType } from "./experience-slots";
 
 function watersportsAllowUntypedBoatInInventory(): boolean {
   if (typeof process === "undefined") return false;
-  return (
-    process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" ||
-    process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true"
-  );
+  return process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true";
 }
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
