@@ -77,13 +77,22 @@ describe("paymentIntentMatchesHoldForConversion", () => {
     assert.equal(r.ok, false);
   });
 
-  it("rejects PI when payment attempt version metadata does not match hold", () => {
+  it("allows PI when metadata holdPaymentAttemptVersion lags hold but PI id is the one on the hold", () => {
     const r = paymentIntentMatchesHoldForConversion(
       { id: "pi_x", metadata: { payment_stage: "full", ...v(1) }, amount: 10_000 },
       { fullPaymentIntentId: "pi_x", paymentAttemptVersion: 2 },
       pricing
     );
-    assert.equal(r.ok, false);
+    assert.equal(r.ok, true);
+  });
+
+  it("allows PI when holdPaymentAttemptVersion metadata is missing but PI id matches hold", () => {
+    const r = paymentIntentMatchesHoldForConversion(
+      { id: "pi_new", metadata: { payment_stage: "full" }, amount: 10_000 },
+      { fullPaymentIntentId: "pi_new", paymentAttemptVersion: 1 },
+      pricing
+    );
+    assert.equal(r.ok, true);
   });
 });
 

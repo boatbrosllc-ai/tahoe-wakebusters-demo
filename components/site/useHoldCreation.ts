@@ -16,6 +16,8 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import { TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import { readModalSessionReleaseTokenForHold } from "@/lib/booking/modal-hold-session";
+import { BOOKING_MODAL_SESSION_SUCCESS_KEY } from "@/lib/booking/booking-modal-session-keys";
+import type { BookingModalPaymentPhase } from "@/lib/booking/booking-modal-state";
 import type { PriceSummary } from "@/components/site/usePriceSummary";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
@@ -73,22 +75,12 @@ export type HoldCreationFormValues = {
 export type HoldCreationPaymentCallbacks = {
   holdId: string | null;
   releaseToken: string | null;
-  paymentPhase: string;
+  paymentPhase: BookingModalPaymentPhase;
   setHoldId: (v: string | null) => void;
   setReleaseToken: (v: string | null) => void;
   setHoldExpiresAt: (v: string | null) => void;
   setPaymentError: (v: string | null) => void;
-  setPaymentPhase: (
-    v:
-      | "form"
-      | "loading"
-      | "stripe"
-      | "completing"
-      | "completeAfterPaymentRetry"
-      | "success"
-      | "successWithWarning"
-      | "successRecoveryFailed"
-  ) => void;
+  setPaymentPhase: (v: BookingModalPaymentPhase) => void;
   setClientSecret: (v: string | null) => void;
   setReceiptClaimToken: (v: string | null) => void;
   setPaymentIntentId: (v: string | null) => void;
@@ -124,7 +116,7 @@ export type HoldCreationInfrastructureRefs = {
   releaseOnCloseDoneRef: React.MutableRefObject<boolean>;
   holdIdRef: React.MutableRefObject<string | null>;
   releaseTokenRef: React.MutableRefObject<string | null>;
-  paymentPhaseRef: React.MutableRefObject<string>;
+  paymentPhaseRef: React.MutableRefObject<BookingModalPaymentPhase | string>;
   stepRef: React.MutableRefObject<1 | 2 | 3 | 4>;
   setHoldReleaseWarning?: (message: string | null) => void;
   successRecoveryPaymentCapturedRef?: React.MutableRefObject<boolean>;
@@ -148,13 +140,14 @@ export const SESSION_HOLD_ID_KEY = "booking_holdId_modal";
 export type ModalHoldRecoveryPayloadV1 = {
   v: 1;
   holdId: string;
-  clientSecret: string;
+  /** Proves possession for hold-summary and release-hold; never store Stripe client secrets. */
+  releaseToken?: string | null;
   holdExpiresAt: string | null;
   /** Minimal experience identity for recovery before refetching fresh details. */
   experienceId?: string;
   experienceSlug?: string;
-  /** @deprecated legacy recovery fields; server hold-summary now rehydrates these. */
-  releaseToken?: string | null;
+  /** @deprecated XSS hazard — removed from persist; ignore if present in legacy session JSON. */
+  clientSecret?: string;
   receiptClaimToken?: string | null;
   paymentIntentId?: string | null;
   experienceSnapshot?: ExperienceItem;
@@ -183,6 +176,21 @@ function persistModalHoldRecoveryPayload(payload: ModalHoldRecoveryPayloadV1): v
 export function clearModalHoldRecoverySession(): void {
   try {
     if (typeof window !== "undefined") sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** After Stripe Elements mounts, drop any legacy `clientSecret` from session JSON while keeping holdId/releaseToken. */
+export function stripModalHoldRecoveryClientSecret(): void {
+  try {
+    if (typeof window === "undefined") return;
+    const raw = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    if (!o || typeof o !== "object" || !("clientSecret" in o)) return;
+    delete o.clientSecret;
+    sessionStorage.setItem(SESSION_HOLD_ID_KEY, JSON.stringify(o));
   } catch {
     /* ignore */
   }
@@ -321,7 +329,7 @@ export function useHoldCreation(
     if (opts.paymentPhase === "success") {
       try {
         if (typeof window !== "undefined") {
-          window.sessionStorage.removeItem("bb_booking_success");
+          window.sessionStorage.removeItem(BOOKING_MODAL_SESSION_SUCCESS_KEY);
           window.sessionStorage.removeItem(SESSION_HOLD_ID_KEY);
         }
       } catch (_) {}
@@ -709,11 +717,17 @@ export function useHoldCreation(
         opts.holdExpiresAt ||
         null;
       // Persist only minimal recovery fields needed to remount Stripe Elements after refresh.
-      if (opts.selectedExperience && opts.selectedSlot && pi.holdId && pi.clientSecret) {
+      const tokenToStore =
+        typeof pi.releaseToken === "string" && pi.releaseToken.trim()
+          ? pi.releaseToken.trim()
+          : typeof opts.releaseToken === "string" && opts.releaseToken.trim()
+            ? opts.releaseToken.trim()
+            : readModalSessionReleaseTokenForHold(pi.holdId) ?? null;
+      if (opts.selectedExperience && opts.selectedSlot && pi.holdId && tokenToStore) {
         persistModalHoldRecoveryPayload({
           v: 1,
           holdId: pi.holdId,
-          clientSecret: pi.clientSecret,
+          releaseToken: tokenToStore,
           holdExpiresAt: holdExpires,
           experienceId: opts.selectedExperience.id,
           experienceSlug: opts.selectedExperience.slug,

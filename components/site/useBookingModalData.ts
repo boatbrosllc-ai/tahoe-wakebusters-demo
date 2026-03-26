@@ -7,7 +7,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { getMonthRange } from "@/lib/booking/booking-date-range";
 import { resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
-import { bookingError } from "@/lib/booking/debug";
+import { bookingError, bookingWarn } from "@/lib/booking/debug";
 import type {
   ExperienceItem,
   BoatOption,
@@ -170,12 +170,51 @@ export function useBookingModalData(
     return () => controller.abort();
   }, [open, selectionKey]);
 
+  // Rates-only fetch (Phase A): parallel with experience-detail so duration + date-prices are not blocked on detail.
+  useEffect(() => {
+    if (
+      paymentPhase === "stripe" ||
+      paymentPhase === "loading" ||
+      paymentPhase === "completing" ||
+      paymentPhase === "reconciliationPending"
+    ) {
+      return;
+    }
+    const exp = selection?.selectedExperience;
+    if (!exp?.id) {
+      return;
+    }
+    const controller = new AbortController();
+    bookingCache
+      .fetchExperienceRates(exp.id, controller.signal)
+      .then((data) => {
+        if (
+          paymentPhaseRef.current === "stripe" ||
+          paymentPhaseRef.current === "loading" ||
+          paymentPhaseRef.current === "completing" ||
+          paymentPhaseRef.current === "reconciliationPending"
+        ) {
+          return;
+        }
+        setRatesSummary(data.rates ?? []);
+        setRatesLoadError(null);
+      })
+      .catch((err: unknown) => {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        setRatesSummary(null);
+        const apiBody = (err as { apiBody?: { error?: string } })?.apiBody;
+        setRatesLoadError(apiBody?.error ?? (err instanceof Error ? err.message : "Could not load trip lengths."));
+      });
+    return () => controller.abort();
+  }, [selection?.selectedExperience?.id, paymentPhase]);
+
   // Experience detail (boats, rates, addons)
   useEffect(() => {
     if (
       paymentPhase === "stripe" ||
       paymentPhase === "loading" ||
-      paymentPhase === "completing"
+      paymentPhase === "completing" ||
+      paymentPhase === "reconciliationPending"
     ) {
       return;
     }
@@ -222,7 +261,8 @@ export function useBookingModalData(
         if (
           paymentPhaseRef.current === "stripe" ||
           paymentPhaseRef.current === "loading" ||
-          paymentPhaseRef.current === "completing"
+          paymentPhaseRef.current === "completing" ||
+          paymentPhaseRef.current === "reconciliationPending"
         ) {
           return;
         }
@@ -419,14 +459,11 @@ export function useBookingModalData(
           !serverError &&
           resolveExperiencePricingType(exp) !== "ticketed"
         ) {
-          const misconfiguredMessage =
-            "No availability was returned for this charter experience. Please contact support if this persists.";
-          bookingError("client", "charter slots empty without unresolved bookings", null, {
+          bookingWarn("client", "charter month has zero slots (normal no-availability month or empty range)", {
             experienceId: exp.id,
             startDate: viewMonthStartStr,
             endDate: viewMonthEndStr,
           });
-          setSlotsLoadError(misconfiguredMessage);
         }
         const nextSlots = [...slots];
         if (slots.length > 100) {

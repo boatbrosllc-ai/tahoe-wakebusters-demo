@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { siteConfig } from "@/config/site";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
@@ -64,6 +64,7 @@ export function BookingSuccessPanel({
   priceSummary,
   discountLimitExceeded = false,
 }: BookingSuccessPanelProps) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const hasLoggedPriceDriftRef = useRef(false);
   useEffect(() => {
     if (
@@ -90,10 +91,7 @@ export function BookingSuccessPanel({
 
   if (paymentPhase === "successRecoveryFailed") {
     if (successRecoveryPaymentCaptured) {
-      const telHref =
-        recoveryFailedPiId != null && recoveryFailedPiId.length > 0
-          ? `tel:${siteConfig.phoneTel}?text=${encodeURIComponent(`Payment ref: ${recoveryFailedPiId}`)}`
-          : `tel:${siteConfig.phoneTel}`;
+      const telHref = `tel:${siteConfig.phoneTel}`;
       return (
         <div className="py-6 sm:py-8 flex flex-col items-center gap-4 text-center">
           <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0" aria-hidden>
@@ -114,14 +112,36 @@ export function BookingSuccessPanel({
               </a>
               .
             </p>
-            {recoveryFailedPiId && (
-              <details className="mt-4 text-left max-w-[320px] mx-auto">
-                <summary className="text-xs text-brand-muted cursor-pointer">Reference (optional)</summary>
-                <p className="text-xs font-mono text-brand-dark bg-brand-bg/80 border border-brand-dark/10 px-2 py-1.5 rounded-lg mt-1 break-all">
-                  {recoveryFailedPiId}
+            {recoveryFailedPiId ? (
+              <div className="mt-4 text-left max-w-[320px] mx-auto space-y-2">
+                <p className="text-sm text-brand-muted">
+                  Please share this reference when you call:{" "}
+                  <code className="font-mono text-sm font-semibold text-brand-dark bg-brand-bg/90 border border-brand-dark/15 px-2 py-1 rounded-md break-all block mt-1">
+                    {recoveryFailedPiId}
+                  </code>
                 </p>
-              </details>
-            )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = recoveryFailedPiId.trim();
+                    if (!id || typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+                      setCopyState("error");
+                      return;
+                    }
+                    void navigator.clipboard.writeText(id).then(
+                      () => {
+                        setCopyState("copied");
+                        window.setTimeout(() => setCopyState("idle"), 2000);
+                      },
+                      () => setCopyState("error")
+                    );
+                  }}
+                  className="text-sm font-semibold text-brand-primary underline underline-offset-2 hover:no-underline"
+                >
+                  {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed — select text above" : "Copy reference"}
+                </button>
+              </div>
+            ) : null}
           </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary shrink-0">
             Close

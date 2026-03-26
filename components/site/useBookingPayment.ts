@@ -15,6 +15,7 @@ export {
   SESSION_HOLD_ID_KEY,
   type ModalHoldRecoveryPayloadV1,
   clearModalHoldRecoverySession,
+  stripModalHoldRecoveryClientSecret,
 } from "./useHoldCreation";
 export { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 export { releaseHoldFromModalSessionStorage } from "@/lib/booking/release-hold-client";

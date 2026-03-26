@@ -62,6 +62,10 @@ export interface ExperienceDetailSeasonal {
 }
 
 export interface ExperienceDetailResponse {
+  /** Doc id (same as request param) — lets clients build full listing state after recovery fetches. */
+  experienceId: string;
+  slug: string;
+  title: string;
   boats: ExperienceDetailBoat[];
   rates: ExperienceDetailRate[];
   addons: ExperienceDetailAddon[];
@@ -206,6 +210,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       .filter((a) => a.type !== "tip");
 
     const payload: ExperienceDetailResponse = {
+      experienceId,
+      slug: effectiveSlug,
+      title: typeof expData?.title === "string" && expData.title.trim()
+        ? expData.title.trim()
+        : typeof expData?.name === "string" && expData.name.trim()
+          ? expData.name.trim()
+          : "",
       boats,
       rates,
       addons,

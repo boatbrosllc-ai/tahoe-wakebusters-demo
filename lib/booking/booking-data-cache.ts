@@ -380,6 +380,17 @@ export interface DatePricesResult {
 }
 
 export interface ExperienceDetailResult {
+  experienceId?: string;
+  slug?: string;
+  title?: string;
+  pricingType?: "charter" | "ticketed";
+  maxGuests?: number;
+  maxCapacity?: number;
+  departureHour?: number;
+  departureMinute?: number;
+  allowDeposit?: boolean;
+  allowTipNow?: boolean;
+  allowTipLater?: boolean;
   boats: unknown[];
   rates: unknown[];
   addons: unknown[];

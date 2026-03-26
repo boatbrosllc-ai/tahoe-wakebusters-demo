@@ -1,13 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Hold, Experience, Slot } from "@/lib/booking/types";
+import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
+import { verifyReleaseToken } from "@/lib/booking/releaseToken";
+import { verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
+import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
 
 export async function GET(request: NextRequest) {
   try {
+    const rl = await checkRateLimitPublicRead(getClientKey(request));
+    if (!rl.allowed) {
+      const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } },
+      );
+    }
+
     const holdId = request.nextUrl.searchParams.get("holdId")?.trim();
     if (!holdId) {
       return NextResponse.json({ error: "holdId is required" }, { status: 400 });
     }
+
+    const releaseToken = request.nextUrl.searchParams.get("release_token")?.trim() ?? "";
+    const receiptClaimToken = request.nextUrl.searchParams.get("receipt_claim_token")?.trim() ?? "";
+
+    const isAdmin = await verifyAdminSessionCookie(request.headers.get("cookie"));
+    let authorized = isAdmin;
+    if (!authorized && releaseToken) {
+      const rel = verifyReleaseToken(releaseToken);
+      if (rel?.holdId === holdId) authorized = true;
+    }
+    if (!authorized && receiptClaimToken) {
+      const claim = verifyReceiptClaimToken(receiptClaimToken);
+      if (claim?.holdId === holdId) authorized = true;
+    }
+    if (!authorized) {
+      return NextResponse.json(
+        { error: "Unauthorized", hint: "Pass release_token, receipt_claim_token, or use an admin session." },
+        { status: 401 },
+      );
+    }
+
     const db = getDb();
     const holdSnap = await db.collection("holds").doc(holdId).get();
     if (!holdSnap.exists) {
@@ -56,16 +90,14 @@ export async function GET(request: NextRequest) {
           }
         : null,
       bookingMode: hold.bookingMode ?? "charter",
-      selectedDate: ((hold as { startDateStr?: string }).startDateStr ?? null),
+      selectedDate: (hold as { startDateStr?: string }).startDateStr ?? null,
       selectedSlot: slotSummary,
       selectedRateId: hold.rateId,
       selectedBoatId: hold.boatId ?? null,
       partySize: hold.partySize ?? 1,
-      pricing: hold.pricing ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to read hold summary";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

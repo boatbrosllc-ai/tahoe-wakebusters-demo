@@ -32,9 +32,8 @@ describe("ModalHoldRecoveryPayloadV1 (refresh recovery)", () => {
     const payload: ModalHoldRecoveryPayloadV1 = {
       v: 1,
       holdId: "hold_recovery_test",
-      releaseToken: null,
+      releaseToken: "rel.test.token",
       receiptClaimToken: null,
-      clientSecret: "cs_test",
       paymentIntentId: "pi_recovery_test",
       holdExpiresAt: new Date().toISOString(),
       experienceSnapshot,

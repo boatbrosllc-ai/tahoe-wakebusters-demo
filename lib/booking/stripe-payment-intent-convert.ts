@@ -210,6 +210,21 @@ export function paymentIntentMatchesHoldForConversion(
 
   if (holdVer >= 1) {
     if (!Number.isFinite(piVer) || piVer !== holdVer) {
+      /**
+       * Hold documents authoritatively record the PI id for this attempt. Metadata `holdPaymentAttemptVersion`
+       * can be missing (older Stripe tooling), lost on some flows, or briefly stale vs Firestore after a bump
+       * while the same PI id remains on the hold — blocking here caused paid customers to stuck in
+       * conversion_failed / reconciliation with no booking.
+       */
+      const piIdMatchesHoldRecord = dep === pi.id || full === pi.id;
+      if (piIdMatchesHoldRecord) {
+        bookingWarn("stripe-payment-intent-convert", "PI holdPaymentAttemptVersion metadata vs hold mismatch; PI id matches hold — allowing conversion", {
+          paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+          holdVer,
+          piMetaVer: Number.isFinite(piVer) ? piVer : null,
+        });
+        return { ok: true };
+      }
       return { ok: false };
     }
   } else {
