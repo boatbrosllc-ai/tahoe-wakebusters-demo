@@ -191,7 +191,7 @@ export function BookingStripeReturnHandler({
             <p className="text-brand-dark font-medium mb-2">Confirming your booking</p>
             <p>{error}</p>
             <p className="mt-4 text-sm text-amber-900">
-              Do not close this tab — we are still reconciling your payment with your reservation.
+              Please keep this tab open — we&apos;re finishing your confirmation. You&apos;ll get a confirmation email when it&apos;s ready.
             </p>
           </div>
         </div>

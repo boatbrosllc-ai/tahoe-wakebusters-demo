@@ -40,6 +40,7 @@ import {
 } from "@/lib/booking/brevo";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import { recordReconcilingPayment } from "@/lib/booking/reconciling-payments";
+import { isTransientFirestoreFailure } from "@/lib/booking/firestore-transient";
 
 const PI_MISMATCH_DELAY_MS = 80;
 
@@ -661,6 +662,14 @@ export async function POST(request: NextRequest) {
         ) {
           continue;
         }
+        if (isTransientFirestoreFailure(convertErr) && lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1) {
+          bookingWarn("complete-after-payment", "transient failure during conversion; retrying", {
+            holdId,
+            attempt: lagAttempt,
+            err: convertErr instanceof Error ? convertErr.message : String(convertErr),
+          });
+          continue;
+        }
         throw convertErr;
       }
     }
@@ -865,6 +874,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (isTransientFirestoreFailure(err) && holdIdForAlert && paymentIntentIdForAlert) {
+      bookingWarn("complete-after-payment", "transient failure after conversion retries; client should poll", {
+        holdId: holdIdForAlert,
+        message,
+      });
+      return NextResponse.json(
+        {
+          processing: true,
+          message: "Payment is being confirmed. Your booking will be finalized shortly.",
+          pollHardTimeoutMs: 45_000,
+        },
+        { status: 202 }
+      );
+    }
+
     if (message === "Hold has expired") {
       bookingWarn("complete-after-payment", "hold expired", { holdId: (err as { holdId?: string }).holdId });
       try {
@@ -933,7 +957,7 @@ export async function POST(request: NextRequest) {
     }
     if (holdIdForAlert && paymentIntentIdForAlert) {
       const reconMessage =
-        "We received your payment. Our team is reconciling your booking and will contact you shortly. If you do not hear from us within one business day, please reach out with your confirmation email.";
+        "We received your payment and are confirming your reservation. You should get a confirmation email shortly. If you do not see it within 15 minutes, check spam or contact us with the email you used to book.";
       try {
         const dbRecon = getDb();
         let customerEmail: string | undefined;

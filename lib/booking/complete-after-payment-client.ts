@@ -359,7 +359,7 @@ export async function completeAfterPaymentWithPolling(options: {
           kind: "reconciliation_pending",
           message:
             (typeof pollJson.message === "string" && pollJson.message) ||
-            "Your payment is being reconciled. Please wait for email confirmation or contact us.",
+            "Your payment went through — we're finishing your confirmation. Watch for your confirmation email shortly.",
           experienceId: expId,
         };
       }

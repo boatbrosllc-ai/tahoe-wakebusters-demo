@@ -1232,7 +1232,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         if (expIdForCache) bookingCache.invalidateBookingCaches(expIdForCache);
         setPaymentError(
           outcome.message ||
-            "Your payment is being reconciled. Please wait for email confirmation or contact us.",
+            "Your payment went through — we're finishing your confirmation. Watch for your confirmation email shortly.",
         );
         setPaymentPhase("reconciliationPending");
         break;
@@ -3884,7 +3884,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <p className="text-sm font-medium text-brand-dark">Confirming your booking</p>
                   <p className="text-xs text-brand-muted max-w-[300px]">{paymentError}</p>
                   <p className="text-xs text-amber-900">
-                    Do not leave this page — your payment is still being reconciled. You will see the receipt when ready.
+                    Please keep this page open until we finish confirming — you&apos;ll see your receipt here or in your email.
                   </p>
                 </div>
               )}
