@@ -218,7 +218,7 @@ export function paymentIntentMatchesHoldForConversion(
        */
       const piIdMatchesHoldRecord = dep === pi.id || full === pi.id;
       if (piIdMatchesHoldRecord) {
-        bookingWarn("stripe-payment-intent-convert", "PI holdPaymentAttemptVersion metadata vs hold mismatch; PI id matches hold — allowing conversion", {
+        bookingWarn("convert-hold", "PI holdPaymentAttemptVersion metadata vs hold mismatch; PI id matches hold — allowing conversion", {
           paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
           holdVer,
           piMetaVer: Number.isFinite(piVer) ? piVer : null,
