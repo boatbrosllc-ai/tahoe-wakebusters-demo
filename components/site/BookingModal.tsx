@@ -2718,10 +2718,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
                             hasBookingsUrgency && !isFullyBooked && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
                             isHoliday && !isPast && !hasBookingsUrgency && "ring-1 sm:ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
-                            isAvailable && !slotsPartialData && !isHoliday && !hasBookingsUrgency &&
+                            isAvailable && !isHoliday && !hasBookingsUrgency &&
                               "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                            isAvailable && slotsPartialData && !isHoliday && !hasBookingsUrgency &&
-                              "bg-amber-50/90 text-amber-950 border-amber-400/50 border-dashed hover:bg-amber-100/90 active:scale-[0.98]",
                             isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
                             isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-1 sm:ring-2 ring-brand-primary/40",
                             isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5",
