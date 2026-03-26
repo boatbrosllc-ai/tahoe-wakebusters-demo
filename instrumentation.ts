@@ -7,7 +7,11 @@
 export async function register() {
   if (process.env.NODE_ENV !== "production") return;
 
-  const { setBookingReadyForProductionStartup, setLegacyFallbackSafeForProductionStartup } = await import(
+  const {
+    setBookingReadyForProductionStartup,
+    setLegacyFallbackSafeForProductionStartup,
+    setLegacyBookingBacklogStateForProductionStartup,
+  } = await import(
     "@/lib/booking/booking-runtime-state"
   );
   const {
@@ -77,6 +81,40 @@ export async function register() {
         probeErr instanceof Error ? probeErr.message : probeErr
       );
     }
+  }
+
+  // Startup guard before legacy fallback is disabled: if legacy backlog is too high,
+  // fail closed so booking routes don't rely on degraded legacy scans under load.
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+    const thresholdRaw = parseInt(process.env.LEGACY_BOOKING_BLOCK_THRESHOLD ?? "5000", 10);
+    const threshold = Number.isFinite(thresholdRaw) && thresholdRaw >= 0 ? thresholdRaw : 5000;
+    try {
+      const { getDb } = await import("@/lib/booking/firebase-admin");
+      const db = getDb();
+      const overThresholdProbe = await db
+        .collection("bookings")
+        .where("startDateStr", "==", null)
+        .limit(threshold + 1)
+        .get();
+      const legacyCount = overThresholdProbe.size;
+      const exceeded = legacyCount > threshold;
+      setLegacyBookingBacklogStateForProductionStartup(legacyCount, exceeded);
+      if (exceeded) {
+        console.error(
+          "[instrumentation] CRITICAL: legacy bookings missing startDateStr exceeded LEGACY_BOOKING_BLOCK_THRESHOLD while DISABLE_LEGACY_BOOKING_FALLBACK is false. " +
+            "Booking routes will return 503 until backlog is reduced or fallback is fully disabled after backfill.",
+          { threshold, observedAtLeast: legacyCount }
+        );
+        setBookingReadyForProductionStartup(false);
+      }
+    } catch (probeErr) {
+      console.warn(
+        "[instrumentation] Legacy backlog threshold probe failed; leaving bookingReady unchanged.",
+        probeErr instanceof Error ? probeErr.message : probeErr
+      );
+    }
+  } else {
+    setLegacyBookingBacklogStateForProductionStartup(0, false);
   }
 
   // Best-effort validation: warn when blocks reference an unknown experience id/slug.

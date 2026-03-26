@@ -411,6 +411,18 @@ export async function POST(
           "[admin/cancel] best-effort slot cleanup failed",
           cleanupErr instanceof Error ? cleanupErr.message : cleanupErr
         );
+        void writeOperationalAlert({
+          type: "admin_cancel_slot_cleanup_failed",
+          source: "admin-cancel",
+          bookingId,
+          slotId,
+          boatId: boatId ?? null,
+          experienceId: experienceId ?? null,
+          error:
+            cleanupErr instanceof Error
+              ? cleanupErr.message.slice(0, 500)
+              : String(cleanupErr).slice(0, 500),
+        }).catch(() => {});
       }
     }
 

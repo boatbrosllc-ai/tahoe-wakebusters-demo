@@ -6,8 +6,20 @@
 
 import type { Firestore, DocumentReference, Transaction } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 
 const COLLECTION = "departureInventory";
+
+function alertNegativeReservedSeats(inventoryRef: DocumentReference, observedValue: number, context: string): void {
+  if (observedValue >= 0) return;
+  void writeOperationalAlert({
+    type: "departure_inventory_reserved_negative",
+    source: "shared-departure-inventory",
+    context,
+    inventoryDocPath: inventoryRef.path,
+    observedReservedSeats: observedValue,
+  }).catch(() => {});
+}
 
 /** Document ID: one per experience per date. */
 export function getDepartureInventoryRef(db: Firestore, experienceId: string, dateStr: string): DocumentReference {
@@ -61,6 +73,7 @@ export async function releaseCapacity(
   const { FieldValue } = getFirestoreExports();
   const snap = await tx.get(inventoryRef);
   const current = snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
+  alertNegativeReservedSeats(inventoryRef, current, "releaseCapacity_pre_read");
   const next = Math.max(0, current - partySize);
   tx.set(inventoryRef, {
     reservedSeats: next,
@@ -83,6 +96,7 @@ export function applyNetCapacityChange(
   delta: number
 ): void {
   const { FieldValue } = getFirestoreExports();
+  alertNegativeReservedSeats(inventoryRef, currentReserved, "applyNetCapacityChange_pre_read");
   const newReserved = Math.max(0, currentReserved + delta);
   if (delta > 0 && sold + newReserved > capacity) {
     const available = Math.max(0, capacity - sold - currentReserved);
@@ -134,6 +148,7 @@ export async function checkCapacityAndRelease(
     const snap = await tx.get(inventoryRef);
     reservedSeats = snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
   }
+  alertNegativeReservedSeats(inventoryRef, reservedSeats, "checkCapacityAndRelease_pre_read");
   if (reservedSeats < holdPartySize) {
     throw new Error("Shared departure capacity state inconsistent");
   }

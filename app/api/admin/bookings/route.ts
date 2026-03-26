@@ -8,6 +8,11 @@ import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd, getCentralCalendarDay
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
+import {
+  addCalendarDaysToDateStr,
+  bookingLookbackDaysFromMaxDuration,
+  intervalsOverlapMs,
+} from "@/lib/booking/booking-interval";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
@@ -561,9 +566,18 @@ export async function POST(request: NextRequest) {
       }
 
       const slugVariantsForOverlap = getExperienceIdVariants(experienceId, exp.slug ?? "");
+      const lookbackDays = bookingLookbackDaysFromMaxDuration(durationHours);
+      const startDateLower = addCalendarDaysToDateStr(tripDate, -lookbackDays);
+      const startDateUpper = addCalendarDaysToDateStr(tripDate, lookbackDays);
       const paidBookingSnaps = await Promise.all(
         slugVariantsForOverlap.map((v) =>
-          tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", tripDate))
+          tx.get(
+            db
+              .collection("bookings")
+              .where("experienceId", "==", v)
+              .where("startDateStr", ">=", startDateLower)
+              .where("startDateStr", "<=", startDateUpper)
+          )
         )
       );
       const seenBookingIds = new Set<string>();
@@ -577,7 +591,7 @@ export async function POST(request: NextRequest) {
           const p = b.slotId ? parseSlotId(b.slotId) : null;
           if (!p) continue;
           const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-          if (slotStartMs < exEnd.getTime() && slotEndMs > exStart.getTime()) {
+          if (intervalsOverlapMs(slotStartMs, slotEndMs, exStart.getTime(), exEnd.getTime())) {
             throw Object.assign(new Error("This time slot overlaps an existing booking"), { code: "SLOT_CONFLICT" });
           }
         }

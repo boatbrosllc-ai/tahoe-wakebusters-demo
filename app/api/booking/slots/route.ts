@@ -297,7 +297,9 @@ export async function GET(request: NextRequest) {
         .map((d) => d.id);
       // Sunset/holiday always use ticketed branch so calendar shows one slot per date; ignore pricingType when slug is in that family.
       const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
-      const useTicketedBranch = expDataFull?.pricingType === "ticketed" || isTicketedBySlug;
+      const useTicketedBranch =
+        expDataFull?.pricingType === "ticketed" ||
+        (expDataFull?.pricingType == null && isTicketedBySlug);
 
       if (useTicketedBranch && ratesSnap.empty) {
         console.warn(`[slots] ticketed experience ${experienceId} has no active rates`);
@@ -1468,7 +1470,7 @@ export async function GET(request: NextRequest) {
         legacyQueryHitLimitCharter ||
         charterBlocksQueryFailed ||
         charterHoldsResolutionFailed ||
-        !windowedIndexReady ||
+        // Missing windowed index alone is not partial if legacy fallback returns full data.
         windowedBookingsTruncated;
       const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
       responseHeaders["X-Slots-Generated-At"] = generatedAtIso;

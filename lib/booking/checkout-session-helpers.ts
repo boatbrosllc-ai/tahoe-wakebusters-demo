@@ -159,6 +159,13 @@ export async function rollbackCheckoutSession(
     }
   }
   console.error("[rollbackCheckoutSession] rollback failed after retries", { holdId, err: lastErr });
+  await writeOperationalAlert({
+    type: "rollback_checkout_capacity_unrecovered",
+    source: "rollbackCheckoutSession",
+    holdId,
+    message: "Rollback failed after 3 retries; slot/capacity may remain reserved until reconciliation.",
+    lastError: lastErr instanceof Error ? lastErr.message : String(lastErr),
+  }).catch(() => {});
   try {
     await holdRef.update({
       rollbackPending: true,

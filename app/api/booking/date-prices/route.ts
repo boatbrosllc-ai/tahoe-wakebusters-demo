@@ -96,8 +96,10 @@ export async function GET(request: NextRequest) {
     const inferredSlugFromTitle = inferSlugFromTitle(exp?.title ?? exp?.name);
     const effectiveSlug = experienceSlug || inferredSlugFromTitle;
     // Match experience-detail and slots: sunset/holiday family are ticketed unless explicitly charter
-    const isTicketedInferred = isTicketedExperienceSlug(effectiveSlug) && exp.pricingType !== "charter";
-    const isTicketed = exp.pricingType === "ticketed" || isTicketedInferred;
+    const isTicketedBySlug = isTicketedExperienceSlug(effectiveSlug);
+    const isTicketed =
+      exp.pricingType === "ticketed" ||
+      (exp.pricingType == null && isTicketedBySlug);
     const holidayDates = exp.holidayDates;
     const weekendDays = exp.weekendDays;
     const friSunDays = exp.friSunDays;

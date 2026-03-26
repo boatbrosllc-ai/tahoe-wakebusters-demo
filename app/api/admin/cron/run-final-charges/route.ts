@@ -44,6 +44,10 @@ import {
 } from "@/lib/booking/final-balance-resolver";
 
 const PAGE_SIZE = 100;
+const FINAL_FAILED_AUTO_CANCEL_DAYS = (() => {
+  const n = parseInt(process.env.FINAL_FAILED_AUTO_CANCEL_DAYS ?? "2", 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 30) : 2;
+})();
 
 async function alertIfPiAmountDiffersFromBookingExpected(
   bookingId: string,
@@ -916,6 +920,65 @@ export async function POST(request: NextRequest) {
       }
     } catch (orphanErr) {
       console.error("[run-final-charges] orphaned pendingRefunds scan failed", orphanErr);
+    }
+
+    // Auto-cancel long-stuck final_failed bookings so slots are eventually released.
+    try {
+      const cutoff = new Date(Date.now() - FINAL_FAILED_AUTO_CANCEL_DAYS * 24 * 60 * 60 * 1000);
+      const cutoffTs = Timestamp.fromDate(cutoff);
+      const staleFailedSnap = await db
+        .collection("bookings")
+        .where("status", "==", "final_failed")
+        .where("updatedAt", "<=", cutoffTs)
+        .limit(200)
+        .get();
+      for (const doc of staleFailedSnap.docs) {
+        const b = doc.data() as Booking;
+        const updates: Record<string, unknown> = {
+          status: "canceled",
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        await doc.ref.update(updates);
+        const slotRef =
+          b.slotId && b.boatId
+            ? db.collection("boats").doc(b.boatId).collection("slots").doc(b.slotId)
+            : b.slotId && b.experienceId
+              ? db.collection("experiences").doc(b.experienceId).collection("slots").doc(b.slotId)
+              : null;
+        if (slotRef) {
+          try {
+            await slotRef.set(
+              {
+                status: "open",
+                holdId: FieldValue.delete(),
+                bookingId: FieldValue.delete(),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch {
+            // Alert below covers manual remediation.
+          }
+        }
+        await writeOperationalAlert({
+          type: "final_failed_auto_canceled",
+          source: "run-final-charges",
+          bookingId: doc.id,
+          autoCancelDays: FINAL_FAILED_AUTO_CANCEL_DAYS,
+          slotId: b.slotId ?? null,
+          boatId: b.boatId ?? null,
+          experienceId: b.experienceId ?? null,
+        });
+      }
+    } catch (finalFailedAutoCancelErr) {
+      await writeOperationalAlert({
+        type: "final_failed_auto_cancel_error",
+        source: "run-final-charges",
+        error:
+          finalFailedAutoCancelErr instanceof Error
+            ? finalFailedAutoCancelErr.message
+            : String(finalFailedAutoCancelErr),
+      }).catch(() => {});
     }
 
     return NextResponse.json({ ok: true, matched, processed, attempted, successCount, skipped, failed, errors });

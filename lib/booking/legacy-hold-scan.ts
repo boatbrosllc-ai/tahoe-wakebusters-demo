@@ -5,7 +5,6 @@
 
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
 import type { DocumentSnapshot, Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
-import { parseSlotId } from "@/lib/booking/experience-slots";
 
 export const DEFAULT_LEGACY_HOLDS_PAGE_SIZE = 100;
 
@@ -105,22 +104,16 @@ export async function scanLegacyActiveHoldsForExperience(
 
 /**
  * Merge legacy hold docs into `holdDocMap` by id; skip docs that already have `startDateStr` on the legacy doc
- * (already window-indexed). Fire-and-forget backfill of `startDateStr` from `slotId` when parseable.
+ * (already window-indexed). Backfill writes are intentionally NOT performed in hot request paths.
  */
 export function mergeLegacyHoldDocsWithOptionalBackfill(
   holdDocMap: Map<string, QueryDocumentSnapshot>,
   legacyDocs: QueryDocumentSnapshot[],
 ): void {
-  const writes: Promise<unknown>[] = [];
   for (const doc of legacyDocs) {
     if (holdDocMap.has(doc.id)) continue;
     const legacyData = doc.data() as { startDateStr?: string; slotId?: string };
     if (legacyData.startDateStr) continue;
     holdDocMap.set(doc.id, doc);
-    const legacyParsed = legacyData.slotId ? parseSlotId(legacyData.slotId) : null;
-    if (legacyParsed) {
-      writes.push(doc.ref.set({ startDateStr: legacyParsed.dateStr }, { merge: true }).catch(() => {}));
-    }
   }
-  if (writes.length > 0) void Promise.all(writes).catch(() => {});
 }

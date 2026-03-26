@@ -14,6 +14,7 @@ import {
 } from "@/lib/booking/cleanup-holds-logic";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { getStripe } from "@/lib/booking/stripe-client";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
 const PAGE_SIZE = 50;
 const BATCH_SIZE = 5;
@@ -73,7 +74,47 @@ export async function POST(request: NextRequest) {
       cursor = snap.docs[snap.docs.length - 1];
     }
 
-    return NextResponse.json({ ok: true, matched, released, skipped, failed });
+    // Reconcile ticketed departure inventory counters against canonical bookings.
+    let inventoryReconciled = 0;
+    const ticketedExpSnap = await db.collection("experiences").where("pricingType", "==", "ticketed").get();
+    for (const expDoc of ticketedExpSnap.docs) {
+      const expId = expDoc.id;
+      const exp = expDoc.data() as { maxCapacity?: number };
+      const maxCapacity = typeof exp.maxCapacity === "number" && Number.isFinite(exp.maxCapacity) ? exp.maxCapacity : 0;
+      if (maxCapacity <= 0) continue;
+
+      const invSnap = await db.collection("departureInventory").where(FieldPath.documentId(), ">=", `${expId}_`).get();
+      for (const invDoc of invSnap.docs) {
+        if (!invDoc.id.startsWith(`${expId}_`)) continue;
+        const dateStr = invDoc.id.slice(expId.length + 1);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
+        const bookingsSnap = await db
+          .collection("bookings")
+          .where("experienceId", "==", expId)
+          .where("startDateStr", "==", dateStr)
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+          .get();
+        let sold = 0;
+        for (const b of bookingsSnap.docs) {
+          const partySize = (b.data() as { partySize?: number }).partySize;
+          if (typeof partySize === "number" && Number.isFinite(partySize)) sold += partySize;
+        }
+        const reserved = (invDoc.data() as { reservedSeats?: number }).reservedSeats ?? 0;
+        if (sold + reserved > maxCapacity || reserved < 0) {
+          const correctedReserved = Math.max(0, maxCapacity - sold);
+          await invDoc.ref.set(
+            {
+              reservedSeats: correctedReserved,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          inventoryReconciled++;
+        }
+      }
+    }
+
+    return NextResponse.json({ ok: true, matched, released, skipped, failed, inventoryReconciled });
   } catch (err) {
     console.error("[admin/cron/reconcile-rollback-pending-holds]", err);
     return NextResponse.json({ error: "Reconcile failed" }, { status: 500 });

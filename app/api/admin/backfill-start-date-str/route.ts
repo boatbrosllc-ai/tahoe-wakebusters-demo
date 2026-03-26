@@ -28,7 +28,8 @@ async function runBackfill(
   dryRun: boolean,
   collectionId: CollectionId,
   request?: NextRequest,
-  cursorDocId?: string | null
+  cursorDocId?: string | null,
+  options?: { runUntilDone?: boolean; maxPages?: number }
 ) {
   const db = getDb();
 
@@ -81,6 +82,68 @@ async function runBackfill(
   const lastDoc = snap.docs[snap.docs.length - 1];
   const nextCursor = lastDoc?.id ?? null;
 
+  if (!dryRun && options?.runUntilDone === true) {
+    let totalScanned = snap.size;
+    let totalUpdated = updatedIds.length;
+    let totalMissing = missing.length;
+    let next = nextCursor;
+    let pages = 1;
+    const maxPages = Math.max(1, options.maxPages ?? 50);
+    while (next && pages < maxPages) {
+      pages++;
+      let q =
+        collectionId === "bookings"
+          ? col.where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN)).orderBy("createdAt", "asc").limit(PAGE_SIZE)
+          : col.where("status", "==", "active").orderBy("createdAt", "asc").limit(PAGE_SIZE);
+      const cSnap = await col.doc(next).get();
+      if (cSnap.exists) q = q.startAfter(cSnap);
+      const p = await q.get();
+      totalScanned += p.size;
+      const pageMissing: { id: string; slotId?: string; startDateStr?: string }[] = [];
+      for (const doc of p.docs) {
+        const d = doc.data() as { slotId?: string; slot_id?: string; startDateStr?: string };
+        const startDateStr = typeof d.startDateStr === "string" ? d.startDateStr.trim() : undefined;
+        if (startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) continue;
+        const slotId = d.slotId ?? d.slot_id;
+        if (typeof slotId !== "string" || !slotId.trim()) continue;
+        const parsed = parseSlotId(slotId.trim());
+        const inferred = parsed?.dateStr ?? (slotId.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(slotId) ? slotId.slice(0, 10) : undefined);
+        if (!inferred) continue;
+        pageMissing.push({ id: doc.id, slotId: slotId.trim(), startDateStr: inferred });
+      }
+      totalMissing += pageMissing.length;
+      if (pageMissing.length > 0) {
+        const b = db.batch();
+        for (const m of pageMissing) {
+          if (m.startDateStr) b.update(col.doc(m.id), { startDateStr: m.startDateStr });
+        }
+        await b.commit();
+        totalUpdated += pageMissing.length;
+      }
+      if (p.size < PAGE_SIZE) {
+        next = null;
+      } else {
+        next = p.docs[p.docs.length - 1]?.id ?? null;
+      }
+    }
+    return NextResponse.json({
+      dryRun,
+      collection: collectionId,
+      pageSize: PAGE_SIZE,
+      scanned: totalScanned,
+      missingCount: totalMissing,
+      updatedCount: totalUpdated,
+      nextCursor: next,
+      runUntilDone: true,
+      pagesProcessed: pages,
+      fullyCompleted: next == null,
+      hint:
+        next == null
+          ? "Backfill pass completed to end of collection."
+          : "Stopped at maxPages; rerun with runUntilDone=true to continue.",
+    });
+  }
+
   return NextResponse.json({
     dryRun,
     collection: collectionId,
@@ -115,7 +178,13 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
-  const body = await request.json().catch(() => ({})) as { applyUpdates?: boolean; collection?: string; cursor?: string };
+  const body = await request.json().catch(() => ({})) as {
+    applyUpdates?: boolean;
+    collection?: string;
+    cursor?: string;
+    runUntilDone?: boolean;
+    maxPages?: number;
+  };
   const applyUpdates = body.applyUpdates === true;
   const collection = (body.collection === "holds" ? "holds" : "bookings") as CollectionId;
   const cursor = body.cursor ?? null;
@@ -125,5 +194,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  return runBackfill(false, collection, request, cursor);
+  return runBackfill(false, collection, request, cursor, {
+    runUntilDone: body.runUntilDone === true,
+    maxPages: body.maxPages,
+  });
 }

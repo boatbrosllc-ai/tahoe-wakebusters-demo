@@ -397,7 +397,14 @@ export type BookingStatus =
   | "final_requires_action"
   | "final_failed";
 
-/** Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct). At runtime only paid, final_due, final_processing, final_paid, final_requires_action, final_failed are assigned; deposit_paid is not used. */
+/**
+ * Statuses that mean the slot is taken (used by slots API, create-hold, create-checkout-session-direct).
+ * At runtime only paid, final_due, final_processing, final_paid, final_requires_action, final_failed are assigned; deposit_paid is not used.
+ *
+ * Operational note:
+ * - `final_failed` continues to occupy inventory until remediation runs.
+ * - This requires either automated cancellation/release (cron) or manual admin cancellation to free the slot.
+ */
 export const BOOKING_STATUSES_SLOT_TAKEN: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
   "paid",
   "final_due",

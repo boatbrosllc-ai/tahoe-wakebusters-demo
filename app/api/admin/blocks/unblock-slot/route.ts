@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { parseSlotId } from "@/lib/booking/experience-slots";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 
@@ -36,19 +37,33 @@ export async function POST(request: NextRequest) {
     }
     const db = getDb();
 
+    const expSnap = await db.collection("experiences").doc(experienceId).get();
+    const experienceSlug =
+      expSnap.exists && typeof (expSnap.data() as { slug?: unknown })?.slug === "string"
+        ? String((expSnap.data() as { slug: string }).slug).trim()
+        : "";
+    const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
     const blocksRef = db.collection("blocks");
-    const snap = boatId
-      ? await blocksRef.where("experienceId", "==", experienceId).where("slotId", "==", slotId).where("boatId", "==", boatId).get()
-      : await blocksRef.where("experienceId", "==", experienceId).where("slotId", "==", slotId).get();
-    if (snap.empty) {
+    const snaps = await Promise.all(
+      variantIds.map((variantId) =>
+        boatId
+          ? blocksRef.where("experienceId", "==", variantId).where("slotId", "==", slotId).where("boatId", "==", boatId).get()
+          : blocksRef.where("experienceId", "==", variantId).where("slotId", "==", slotId).get()
+      )
+    );
+    const docsById = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
+    for (const snap of snaps) {
+      for (const doc of snap.docs) docsById.set(doc.id, doc);
+    }
+    if (docsById.size === 0) {
       return NextResponse.json({ ok: true, message: "No block found for this slot" });
     }
     const batch = db.batch();
-    for (const doc of snap.docs) {
+    for (const doc of docsById.values()) {
       batch.delete(doc.ref);
     }
     await batch.commit();
-    return NextResponse.json({ ok: true, slotId, boatId, blocksDeleted: snap.docs.length });
+    return NextResponse.json({ ok: true, slotId, boatId, blocksDeleted: docsById.size });
   } catch (err) {
     console.error("[admin/blocks/unblock-slot]", err);
     return NextResponse.json({ error: "Failed to unblock slot" }, { status: 500 });

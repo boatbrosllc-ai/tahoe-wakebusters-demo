@@ -54,24 +54,20 @@ export async function GET(request: NextRequest) {
       const db = getDb();
       await db.collection("experiences").limit(1).get();
       checks.firebase = "ok";
+      const legacyBacklogProbe = await db.collection("bookings").where("startDateStr", "==", null).limit(5001).get();
+      const legacyMissingCountCapped = legacyBacklogProbe.size;
+      checks.legacyBookingMissingStartDateStrCount = legacyMissingCountCapped;
 
       if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
-        try {
-          const legacyBackfillSnap = await db.collection("bookings").where("startDateStr", "==", null).limit(1).get();
-          if (!legacyBackfillSnap.empty) {
-            console.error(
-              "[health] DISABLE_LEGACY_BOOKING_FALLBACK=true but at least one booking has startDateStr==null. " +
-                "Run the startDateStr backfill to completion before relying on assertSlotAvailability without legacy scans; " +
-                "see docs/BOOKING_AVAILABILITY.md."
-            );
-            if (privileged) {
-              checks.legacyBookingStartDateStrBackfill = "incomplete";
-            }
-          } else if (privileged) {
-            checks.legacyBookingStartDateStrBackfill = "ok";
-          }
-        } catch (backfillErr) {
-          console.error("[health] legacy booking backfill probe failed", backfillErr);
+        if (legacyMissingCountCapped > 0) {
+          console.error(
+            "[health] DISABLE_LEGACY_BOOKING_FALLBACK=true but bookings with startDateStr==null still exist. " +
+              "Run startDateStr backfill to completion before relying on fallback-disabled overlap checks."
+          );
+          checks.legacyBookingStartDateStrBackfill = "incomplete";
+          ok = false;
+        } else {
+          checks.legacyBookingStartDateStrBackfill = "ok";
         }
       } else if (privileged) {
         checks.legacyBookingStartDateStrBackfill = "not_required";

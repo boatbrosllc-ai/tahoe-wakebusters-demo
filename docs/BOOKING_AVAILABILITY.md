@@ -59,6 +59,7 @@ That would make "calendars read from bookings (and holds/blocks) and put each on
   These are updated on hold/create, convert-to-booking, cancel, and cleanup-holds. For **display**, the slots API uses them for:
   - **held** / **blocked** / **open** (and for grid/times); **booked** on a slot doc is ignored and treated as **open** unless a matching booking exists.
   So calendars and boats reflect true availability: only slots with an actual (non-canceled) booking show as booked.
+  Any direct Firestore consumer that reads slot docs must cross-check `bookings` before treating `status: "booked"` as authoritative.
 
 - **Slot id format**: `YYYY-MM-DD-startHour-durationHours` (e.g. `2026-02-27-11-6` = Feb 27, 11:00, 6h).
 

@@ -145,6 +145,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
         db
           .collection("bookings")
           .where("experienceId", "==", v)
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
           .where("startDateStr", ">=", startDateLower)
           .where("startDateStr", "<=", startDateUpper)
       ) as Promise<import("firebase-admin/firestore").QuerySnapshot>
@@ -157,7 +158,6 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
       seenIds.add(doc.id);
       const b = doc.data() as { slotId?: string; slot_id?: string; boatId?: string; status?: string };
       if (useBoatSlots && boatId && b.boatId !== boatId) continue;
-      if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
       const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
       if (!iv) continue;
       if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {
@@ -284,6 +284,7 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     db
       .collection("bookings")
       .where("boatId", "==", bid)
+      .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
       .where("startDateStr", ">=", lowerLegacy)
       .where("startDateStr", "<=", upperLegacy)
   );
@@ -292,7 +293,6 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     if (seenIds.has(doc.id)) continue;
     seenIds.add(doc.id);
     const b = doc.data() as { slotId?: string; slot_id?: string; status?: string };
-    if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
     const iv = bookingIntervalMsFromSlotFields(b.slotId, b.slot_id);
     if (!iv) continue;
     if (intervalsOverlapMs(slotStartMs, slotEndMs, iv.startMs, iv.endMs)) {

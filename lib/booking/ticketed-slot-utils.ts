@@ -87,7 +87,7 @@ export function getTicketedDepartureAndDuration(
       ? rawDeptHour
       : experience.pricingType === "ticketed"
         ? 19
-        : isTicketedBySlug
+        : experience.pricingType == null && isTicketedBySlug
           ? 19
           : 10;
   const deptMinute =

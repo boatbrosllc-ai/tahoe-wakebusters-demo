@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { bookingReady, isLegacyFallbackSafe } from "@/lib/booking/booking-runtime-state";
+import {
+  bookingReady,
+  isLegacyFallbackSafe,
+  legacyBookingBacklogCount,
+  legacyBookingBacklogThresholdExceeded,
+} from "@/lib/booking/booking-runtime-state";
 
 /**
  * `isLegacyFallbackSafe` is set in production from `instrumentation.ts` (env flags and optional greenfield
@@ -9,6 +14,21 @@ import { bookingReady, isLegacyFallbackSafe } from "@/lib/booking/booking-runtim
 /** Returns a 503 JSON response when booking secrets failed startup validation. */
 export function bookingNotReadyResponse(): NextResponse | null {
   if (bookingReady) return null;
+  if (legacyBookingBacklogThresholdExceeded) {
+    return NextResponse.json(
+      {
+        error:
+          "Booking is temporarily unavailable while legacy booking migration catches up. Operators: reduce bookings with missing startDateStr below LEGACY_BOOKING_BLOCK_THRESHOLD or complete fallback disable rollout.",
+      },
+      {
+        status: 503,
+        headers: {
+          "X-Booking-Ready": "0",
+          "X-Legacy-Backlog-Count": String(legacyBookingBacklogCount),
+        },
+      }
+    );
+  }
   return NextResponse.json(
     { error: "Booking is temporarily unavailable. Please try again shortly." },
     {
