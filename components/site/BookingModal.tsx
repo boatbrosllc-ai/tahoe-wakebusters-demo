@@ -2598,7 +2598,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       if the problem persists.
                     </p>
                   )}
-                  {slotsPartialData && (
+                  {slotsPartialData && selectedDate != null && !selectedSlotVerifiedOpen && (
                     <div
                       className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
                       role="status"

@@ -560,7 +560,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                     <ChevronRight className="h-5 w-5" aria-hidden />
                   </button>
                 </div>
-                {slotsPartialData && (
+                {slotsPartialData && selectedDate != null && !selectedDateVerifiedInPartial && (
                   <div
                     className="text-sm text-amber-950 py-2 px-2 mb-2 rounded bg-amber-50 border border-amber-200/80"
                     role="status"
