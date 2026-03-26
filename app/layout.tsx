@@ -3,7 +3,7 @@ import Script from "next/script";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
-import { getGtagFullBootstrapJs } from "@/lib/ga-gtag-inline";
+import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
 import "./globals.css";
@@ -73,9 +73,24 @@ export default async function RootLayout({
           <Script id="stripe-js" src={STRIPE_JS_SRC} strategy="beforeInteractive" nonce={nonce} />
         ) : null}
         {gaMeasurementId ? (
-          <Script id="ga4-bootstrap" strategy="beforeInteractive" nonce={nonce}>
-            {getGtagFullBootstrapJs(gaMeasurementId, { debugMode: gaDebugMode })}
-          </Script>
+          <>
+            {/*
+              Native <script> tags (nonce + async) match Google’s snippet and avoid relying on
+              createElement-injected gtag/js under CSP strict-dynamic (some environments are picky).
+            */}
+            <script
+              async
+              src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
+              nonce={nonce}
+            />
+            <script
+              nonce={nonce}
+              suppressHydrationWarning
+              dangerouslySetInnerHTML={{
+                __html: getGtagInlineBootstrapJs(gaMeasurementId, { debugMode: gaDebugMode }),
+              }}
+            />
+          </>
         ) : null}
         <GaPageViewTracker />
         {children}

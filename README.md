@@ -121,7 +121,7 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
 
 ### GA4 bootstrap (page views + stream selection)
 
-- `app/layout.tsx` injects the GA4 `gtag/js` script and inline bootstrap when `getGaMeasurementId()` returns a valid ID.
+- `app/layout.tsx` injects GA4 using Google’s two-tag pattern: native `<script async src="…gtag/js?id=…">` plus a nonce’d inline `dataLayer` / `gtag('config')` (works cleanly with CSP `strict-dynamic`).
 - `lib/ga-measurement-id.ts` reads `NEXT_PUBLIC_GA_MEASUREMENT_ID`:
   - **Production** (`NODE_ENV=production`): the variable must be set to a valid GA4 measurement ID (`G-XXXXXXXXXX`). There is no hardcoded fallback; unset, empty, `off`/`0`, or malformed values disable GA and fail deploy checks.
   - **Do not quote the value** in Netlify or other hosts (use `G-XXXXXXXXXX`, not `"G-XXXXXXXXXX"`). A single layer of accidental surrounding `'` or `"` is stripped before validation so a valid ID is not disabled by mistake.
