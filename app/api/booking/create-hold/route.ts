@@ -44,6 +44,7 @@ import {
   HOLD_REQUEST_CLAIMS_COLLECTION,
 } from "@/lib/booking/hold-request-idempotency";
 import { HOLD_EXPIRY_MINUTES, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-boat-resolution";
 import { assertProductionReleaseTokenSecret } from "@/lib/booking/env";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
@@ -726,6 +727,7 @@ export async function POST(request: NextRequest) {
       let effectiveHoldId = holdId;
       let effectiveExpiresAt!: Date;
       const sharedDiscountOut = { cents: discountCents };
+      const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
       await db.runTransaction(async (tx) => {
         const now = new Date();
         const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
@@ -1677,7 +1679,9 @@ export async function POST(request: NextRequest) {
         err instanceof SlotConflictError
           ? err.message === "This slot is blocked"
             ? "slot_blocked"
-            : "slot_unavailable"
+            : err.message === "Shared tickets have already been sold for this departure"
+              ? "shared_tickets_sold"
+              : "slot_unavailable"
           : message === "Slot not found"
             ? "slot_not_found"
             : message === "Slot no longer available"
