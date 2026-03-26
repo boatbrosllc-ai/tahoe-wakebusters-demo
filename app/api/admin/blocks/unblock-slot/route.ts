@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, message: "No block found for this slot" });
     }
     const batch = db.batch();
-    for (const doc of docsById.values()) {
+    for (const doc of Array.from(docsById.values())) {
       batch.delete(doc.ref);
     }
     await batch.commit();

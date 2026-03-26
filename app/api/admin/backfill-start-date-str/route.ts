@@ -86,7 +86,7 @@ async function runBackfill(
     let totalScanned = snap.size;
     let totalUpdated = updatedIds.length;
     let totalMissing = missing.length;
-    let next = nextCursor;
+    let next: string | null = nextCursor;
     let pages = 1;
     const maxPages = Math.max(1, options.maxPages ?? 50);
     while (next && pages < maxPages) {
