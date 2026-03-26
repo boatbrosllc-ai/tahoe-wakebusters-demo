@@ -1,3 +1,5 @@
+import { sendGaFallbackEvent } from "@/lib/ga-fallback-client";
+
 /**
  * Client-side analytics: GA4 when `gtag.js` is loaded (see `app/layout.tsx` + `lib/ga-measurement-id.ts`),
  * plus GTM `dataLayer` and Plausible if present.
@@ -23,8 +25,11 @@ function logEvent(event: AnalyticsEvent): void {
     dataLayer?: unknown[];
   };
   const payload = { ...event.payload, event_category: "booking" };
-  if (typeof w.gtag === "function") {
+  const hasGtag = typeof w.gtag === "function";
+  if (hasGtag) {
     w.gtag("event", event.name, payload);
+  } else {
+    void sendGaFallbackEvent(event.name, payload);
   }
   w.dataLayer = w.dataLayer ?? [];
   w.dataLayer.push({ event: event.name, ...payload });

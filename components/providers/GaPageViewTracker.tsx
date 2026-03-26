@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { sendGaFallbackEvent } from "@/lib/ga-fallback-client";
 
 function buildPagePath(pathname: string, searchParams: URLSearchParams | ReturnType<typeof useSearchParams>) {
   const search = searchParams.toString();
@@ -42,16 +43,21 @@ export function GaPageViewTracker() {
       gtag?: (...args: unknown[]) => void;
     };
 
-    const sendPageView = (path: string) => {
-      w.gtag!("event", "page_view", {
+    const sendPageView = async (path: string) => {
+      const payload = {
         page_path: path,
         page_location: window.location.href,
         page_title: document.title,
-      });
+      };
+      if (typeof w.gtag === "function") {
+        w.gtag("event", "page_view", payload);
+        return;
+      }
+      await sendGaFallbackEvent("page_view", payload);
     };
 
     if (typeof w.gtag === "function") {
-      sendPageView(pagePath);
+      void sendPageView(pagePath);
       return;
     }
 
@@ -64,7 +70,7 @@ export function GaPageViewTracker() {
     flushIntervalRef.current = setInterval(() => {
       attempts += 1;
       if (typeof w.gtag === "function") {
-        sendPageView(pagePathRef.current);
+        void sendPageView(pagePathRef.current);
         if (flushIntervalRef.current) {
           clearInterval(flushIntervalRef.current);
           flushIntervalRef.current = null;
@@ -78,6 +84,12 @@ export function GaPageViewTracker() {
         }
         if (!gtagExhaustWarnedRef.current) {
           gtagExhaustWarnedRef.current = true;
+          void sendGaFallbackEvent("page_view", {
+            page_path: pagePathRef.current,
+            page_location: window.location.href,
+            page_title: document.title,
+            transport: "fallback_after_gtag_timeout",
+          });
           console.warn(
             "[GaPageViewTracker] gtag did not become available after max retry attempts; page_view tracking may be missing.",
             { pagePath: pagePathRef.current, pathname: pathnameRef.current }

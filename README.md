@@ -129,6 +129,7 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
   - Set to `off` or `0` (or empty): disables GA injection (intended for local use).
   - Malformed values: logged and treated as disabled.
 - Production guard: Netlify production builds run `scripts/check-production-env.js --ga-only` before `next build` (GA ID only; see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`, and runs a browser synthetic smoke test that requires: GA loader present, one successful analytics request on initial load, and one successful request after client-side navigation. Run the full script without `--ga-only` locally or in CI for a complete env audit.
+- Optional hard fallback (recommended when some clients block `gtag/js`): set `GA4_MEASUREMENT_PROTOCOL_API_SECRET` in host env. Then client events/page views that cannot use `window.gtag` are forwarded through `/api/analytics/collect` to GA4 Measurement Protocol.
 
 Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it de-dupes the automatic first `page_view` from `gtag('config', ...)`, and retries client navigations until `window.gtag` is available so early navigations are not dropped).
 
