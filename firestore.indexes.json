@@ -7,6 +7,7 @@
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "expiresAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "expiresAt", "order": "ASCENDING" }] },
+    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
 
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "ASCENDING" }] },
@@ -28,6 +29,7 @@
 
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "ASCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "ASCENDING" }] },
+    { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "startDateStr", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },

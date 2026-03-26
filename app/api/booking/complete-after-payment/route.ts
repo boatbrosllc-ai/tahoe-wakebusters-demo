@@ -211,9 +211,84 @@ async function resolveBookingIdAfterConversion(
   return resolveBookingIdFromPaymentSignals(db, paymentIntentId, pi);
 }
 
+/**
+ * When the PaymentIntent succeeded but convertHoldToBooking failed (race with webhook, PI/hold lag, transient txn),
+ * return the same success shape as idempotent recovery if a booking row already exists for this PI.
+ */
+async function trySuccessResponseIfBookingExistsForSucceededPi(
+  db: Firestore,
+  paymentIntentId: string,
+  pi: Stripe.PaymentIntent,
+  holdId: string,
+  holdExperienceId: string | undefined,
+  logTag: string
+): Promise<NextResponse | null> {
+  let recoveredBookingId: string | null = null;
+  try {
+    recoveredBookingId = await resolveBookingIdFromPaymentSignals(db, paymentIntentId, pi);
+  } catch (lookupErr) {
+    bookingWarn("complete-after-payment", `${logTag}: resolveBookingIdFromPaymentSignals failed`, {
+      holdId,
+      err: lookupErr,
+    });
+  }
+  if (!recoveredBookingId) return null;
+
+  bookingLog("complete-after-payment", logTag, {
+    holdId,
+    recoveredBookingId,
+    paymentIntentIdPrefix: paymentIntentId.slice(0, 12),
+  });
+
+  const ciRecover = await buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
+  const useDepRecover = isConvertHoldInputDeposit(ciRecover);
+  const amtRecover = pi.amount ?? 0;
+  const totRecover = useDepRecover
+    ? (ciRecover as ConvertHoldInputDeposit).stripe.totalCents
+    : (() => {
+        const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
+        return fromMeta > 0 ? fromMeta : amtRecover;
+      })();
+  const paymentSummaryRecovered = {
+    isDeposit: useDepRecover,
+    depositCents: useDepRecover ? amtRecover : totRecover,
+    totalCents: totRecover,
+    finalCents: useDepRecover ? Math.max(0, totRecover - amtRecover) : 0,
+  };
+
+  const bSnapRec = await db.collection("bookings").doc(recoveredBookingId).get();
+  const recoveredExp =
+    bSnapRec.exists && typeof (bSnapRec.data() as Booking).experienceId === "string"
+      ? (bSnapRec.data() as Booking).experienceId
+      : undefined;
+
+  const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
+  if (!receiptClaimToken) {
+    bookingWarn("complete-after-payment", `${logTag}: receipt claim token unavailable`, {
+      holdId,
+      recoveredBookingId,
+    });
+  }
+
+  return NextResponse.json(
+    await appendReceiptSuccessExtras(db, recoveredBookingId, {
+      success: true,
+      alreadyConverted: true,
+      bookingId: recoveredBookingId,
+      ...(receiptClaimToken ? { receiptClaimToken } : {}),
+      paymentSummary: paymentSummaryRecovered,
+      ...(recoveredExp ? { experienceId: recoveredExp } : {}),
+      ...(holdExperienceId && !recoveredExp ? { experienceId: holdExperienceId } : {}),
+    })
+  );
+}
+
 export async function POST(request: NextRequest) {
   let holdIdForAlert: string | null = null;
   let paymentIntentIdForAlert: string | null = null;
+  /** Set when starting conversion so catch can recover if booking already exists for this PI. */
+  let recoveryHoldId: string | null = null;
+  let recoveryHoldExperienceId: string | undefined = undefined;
   try {
     const notReady = bookingNotReadyResponse();
     if (notReady) return notReady;
@@ -642,7 +717,10 @@ export async function POST(request: NextRequest) {
     });
     holdIdForAlert = holdId;
     paymentIntentIdForAlert = input.paymentIntentId;
+    recoveryHoldId = holdId;
+    recoveryHoldExperienceId = holdExperienceId;
     let conversion: Awaited<ReturnType<typeof resolveAndConvertPayment>> | null = null;
+    let exhaustedRecoverableConversionError: unknown = null;
     for (let lagAttempt = 0; lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS && conversion == null; lagAttempt++) {
       if (lagAttempt > 0) {
         await propagationLagDelayMs(lagAttempt - 1);
@@ -655,25 +733,52 @@ export async function POST(request: NextRequest) {
           paymentIntent: pi,
         });
       } catch (convertErr) {
-        if (
+        const canRetryPi =
           convertErr instanceof ResolveAndConvertPaymentError &&
           convertErr.kind === "PI_MATCH_FAILED" &&
-          lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1
-        ) {
+          lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1;
+        const canRetryTransient =
+          isTransientFirestoreFailure(convertErr) && lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1;
+        if (canRetryPi || canRetryTransient) {
+          if (canRetryTransient) {
+            bookingWarn("complete-after-payment", "transient failure during conversion; retrying", {
+              holdId,
+              attempt: lagAttempt,
+              err: convertErr instanceof Error ? convertErr.message : String(convertErr),
+            });
+          }
           continue;
         }
-        if (isTransientFirestoreFailure(convertErr) && lagAttempt < PROPAGATION_LAG_RETRY_ATTEMPTS - 1) {
-          bookingWarn("complete-after-payment", "transient failure during conversion; retrying", {
-            holdId,
-            attempt: lagAttempt,
-            err: convertErr instanceof Error ? convertErr.message : String(convertErr),
-          });
-          continue;
+        const exhaustedPi =
+          convertErr instanceof ResolveAndConvertPaymentError && convertErr.kind === "PI_MATCH_FAILED";
+        const exhaustedTransient = isTransientFirestoreFailure(convertErr);
+        if (exhaustedPi || exhaustedTransient) {
+          exhaustedRecoverableConversionError = convertErr;
+          break;
         }
         throw convertErr;
       }
     }
     if (!conversion) {
+      const recoveredResponse = await trySuccessResponseIfBookingExistsForSucceededPi(
+        db,
+        input.paymentIntentId,
+        pi,
+        holdId,
+        holdExperienceId,
+        exhaustedRecoverableConversionError != null
+          ? "recovered_success_after_exhausted_conversion_retries"
+          : "recovered_success_when_conversion_returned_null"
+      );
+      if (recoveredResponse) {
+        holdIdForAlert = null;
+        paymentIntentIdForAlert = null;
+        recoveryHoldId = null;
+        return recoveredResponse;
+      }
+      if (exhaustedRecoverableConversionError != null) {
+        throw exhaustedRecoverableConversionError;
+      }
       throw new ResolveAndConvertPaymentError("PI_MATCH_FAILED", "Payment intent does not match hold");
     }
     const result = conversion.result;
@@ -811,6 +916,30 @@ export async function POST(request: NextRequest) {
     bookingError("complete-after-payment", "complete after payment failed", err, { message, stack: stack ? stack.slice(0, 500) : undefined });
     if (process.env.NODE_ENV === "development" && stack) {
       console.error("[booking:complete-after-payment] stack:", stack);
+    }
+
+    if (holdIdForAlert && paymentIntentIdForAlert && recoveryHoldId) {
+      try {
+        const stripeRec = getStripe();
+        const piRec = await stripeRec.paymentIntents.retrieve(paymentIntentIdForAlert, { expand: ["payment_method"] });
+        if (piRec.status === "succeeded") {
+          const recoveredCatch = await trySuccessResponseIfBookingExistsForSucceededPi(
+            getDb(),
+            paymentIntentIdForAlert,
+            piRec,
+            recoveryHoldId,
+            recoveryHoldExperienceId,
+            "catch_recovered_booking_pi_still_succeeded"
+          );
+          if (recoveredCatch) {
+            holdIdForAlert = null;
+            paymentIntentIdForAlert = null;
+            return recoveredCatch;
+          }
+        }
+      } catch (recErr) {
+        bookingWarn("complete-after-payment", "catch: booking-by-PI recovery failed", { err: recErr });
+      }
     }
 
     if (err instanceof BlockCheckUnavailableError || err instanceof LegacyScanLimitReachedError) {

@@ -195,9 +195,17 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    const needsFirestoreIndex =
+      /FAILED_PRECONDITION/i.test(message) && /requires an index|indexes\?create_composite/i.test(message);
+    const hint = isFirebaseConfig
+      ? FIREBASE_SETUP_HINT
+      : needsFirestoreIndex
+        ? "Firestore composite index missing or still building. Use the create_composite URL in the error, or deploy firestore.indexes.json (firebase deploy --only firestore:indexes). Indexes often take a few minutes after deploy."
+        : undefined;
     return NextResponse.json(
-      { error: message, hint: FIREBASE_SETUP_HINT },
-      { status: 503 }
+      { error: message, ...(hint && { hint }) },
+      { status: isFirebaseConfig || needsFirestoreIndex ? 503 : 500 }
     );
   }
 }
