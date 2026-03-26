@@ -569,7 +569,7 @@ export async function convertHoldToBooking(
         depositAmountCents: input.stripe.depositCents,
         finalAmountCents: input.stripe.finalCents,
         totalAmountCents: finalPricing.totalCents,
-        depositPaidAt: FieldValue.serverTimestamp(),
+        depositPaidAt: FieldValue.serverTimestamp() as unknown as FirestoreTimestamp,
         ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
         ...(input.currency && { currency: input.currency }),
       }

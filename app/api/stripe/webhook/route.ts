@@ -811,7 +811,6 @@ export async function POST(request: NextRequest) {
           paymentIntentId,
           amountTotal,
           currency,
-          attempt,
         });
         return true;
       }
