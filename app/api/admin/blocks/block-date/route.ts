@@ -106,19 +106,25 @@ export async function POST(request: NextRequest) {
 
     let created = 0;
     const batch = db.batch();
-    for (const boatId of boatIds) {
-      const blockRef = db.collection("blocks").doc();
-      batch.set(blockRef, {
-        experienceId,
-        boatId,
-        startAt: Timestamp.fromDate(dayStart),
-        endAt: Timestamp.fromDate(dayEnd),
-        note: null,
-        slotId: null,
-        createdAt: FieldValue.serverTimestamp(),
-        createdBy: null,
-      });
-      created++;
+    // Create one block per (experienceId variant, boat) so lookups by slug/doc-id both work.
+    // This avoids relying on every caller passing the correct experienceIdVariants set.
+    for (const expIdVariant of experienceIdVariants) {
+      for (const boatId of boatIds) {
+        const blockRef = db.collection("blocks").doc();
+        batch.set(blockRef, {
+          experienceId: expIdVariant,
+          experienceCanonicalId: experienceId,
+          experienceSlug: experienceSlug || null,
+          boatId,
+          startAt: Timestamp.fromDate(dayStart),
+          endAt: Timestamp.fromDate(dayEnd),
+          note: null,
+          slotId: null,
+          createdAt: FieldValue.serverTimestamp(),
+          createdBy: null,
+        });
+        created++;
+      }
     }
     await batch.commit();
     return NextResponse.json({ ok: true, date: dateStr, blocksCreated: created });

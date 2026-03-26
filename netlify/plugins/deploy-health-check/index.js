@@ -1,8 +1,13 @@
 /**
  * Post-deploy: GET /api/health should show core integrations ready (Firebase, Stripe, booking runtime).
+ * Production deploys fail when GA4 is disabled (`ga4.enabled === false`).
  * Does not fail the deploy for optional / follow-up config: Redis rate-limit, release/receipt signing secrets
  * (those can be added without blocking publishes — see /api/health and Netlify env).
  */
+
+function isNetlifyProductionContext() {
+  return process.env.CONTEXT === "production";
+}
 
 export const onSuccess = async () => {
   const base =
@@ -21,6 +26,12 @@ export const onSuccess = async () => {
     json = JSON.parse(text);
   } catch {
     throw new Error(`[deploy-health-check] Non-JSON from ${url}: ${text.slice(0, 200)}`);
+  }
+
+  if (isNetlifyProductionContext() && json.ga4?.enabled !== true) {
+    throw new Error(
+      `[deploy-health-check] GA4 must be enabled in production (health ga4.enabled is not true). Set NEXT_PUBLIC_GA_MEASUREMENT_ID on Netlify. Body: ${text.slice(0, 500)}`
+    );
   }
 
   const criticalDegraded =

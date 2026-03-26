@@ -15,6 +15,7 @@ import {
 } from "./tokens";
 import type {
   WaiverTemplate,
+  WaiverTemplateSnapshot,
   WaiverRequest,
   WaiverRequestStatus,
   WaiverSigningToken,
@@ -24,6 +25,7 @@ import type {
   WaiverRequiredFields,
   WaiverClause,
   WaiverSignatureConfig,
+  WaiverManualReview,
   FirestoreTimestamp,
   BookingWaiverPointer,
   BookingWaiverPointerStatus,
@@ -181,6 +183,7 @@ export interface CreateWaiverRequestInput {
   bookingId: string;
   templateId: string;
   templateVersion: number;
+  templateSnapshot: WaiverTemplateSnapshot;
   signerEmail?: string;
 }
 
@@ -202,9 +205,11 @@ export async function createRequest(
     bookingId: input.bookingId,
     templateId: input.templateId,
     templateVersion: input.templateVersion,
+    templateSnapshot: input.templateSnapshot,
     status: "pending",
     signingTokenId: tokenId,
     signingUrl,
+    ...(input.signerEmail ? { signerEmail: input.signerEmail.trim() } : {}),
     sent: {
       initialSentAt: null,
       lastSentAt: null,
@@ -248,9 +253,11 @@ export function createWaiverRequestAndTokenInTransaction(
     bookingId: input.bookingId,
     templateId: input.templateId,
     templateVersion: input.templateVersion,
+    templateSnapshot: input.templateSnapshot,
     status: "pending",
     signingTokenId: tokenId,
     signingUrl,
+    ...(input.signerEmail ? { signerEmail: input.signerEmail.trim() } : {}),
     sent: {
       initialSentAt: null,
       lastSentAt: null,
@@ -278,6 +285,7 @@ export function createGroupTokenInTransaction(
   bookingId: string,
   templateId: string,
   templateVersion: number,
+  templateSnapshot: WaiverTemplateSnapshot,
   partySize: number,
   primaryWaiverRequestId: string
 ): { groupSigningUrl: string } {
@@ -293,6 +301,7 @@ export function createGroupTokenInTransaction(
     bookingId,
     templateId,
     templateVersion,
+    templateSnapshot,
     partySize,
     createdAt: Timestamp.now(),
     expiresAt: Timestamp.fromDate(expiresAt),
@@ -310,6 +319,7 @@ export interface WaiverGroupTokenDoc {
   bookingId: string;
   templateId: string;
   templateVersion: number;
+  templateSnapshot?: WaiverTemplateSnapshot;
   partySize: number;
   createdAt: FirestoreTimestamp;
   expiresAt: FirestoreTimestamp;
@@ -319,6 +329,7 @@ export async function createGroupToken(
   bookingId: string,
   templateId: string,
   templateVersion: number,
+  templateSnapshot: WaiverTemplateSnapshot,
   partySize: number
 ): Promise<{ groupToken: string; groupSigningUrl: string }> {
   const db = getDb();
@@ -332,6 +343,7 @@ export async function createGroupToken(
     bookingId,
     templateId,
     templateVersion,
+    templateSnapshot,
     partySize,
     createdAt: Timestamp.now(),
     expiresAt: Timestamp.fromDate(expiresAt),
@@ -357,7 +369,8 @@ export async function getGroupTokenById(
 export async function createRequestForGroupSigner(
   bookingId: string,
   templateId: string,
-  templateVersion: number
+  templateVersion: number,
+  templateSnapshot: WaiverTemplateSnapshot
 ): Promise<string> {
   const db = getDb();
   const { Timestamp } = getFirestoreExports();
@@ -368,6 +381,7 @@ export async function createRequestForGroupSigner(
     bookingId,
     templateId,
     templateVersion,
+    templateSnapshot,
     status: "pending",
     signingTokenId: "",
     signingUrl: "",
@@ -429,6 +443,7 @@ export async function allocateGroupSignerSlot(groupToken: string): Promise<{
       bookingId: groupData.bookingId,
       templateId: groupData.templateId,
       templateVersion: groupData.templateVersion,
+      templateSnapshot: groupData.templateSnapshot,
       status: "pending",
       signingTokenId: "",
       signingUrl: "",
@@ -492,6 +507,7 @@ export async function updateRequest(
     status?: WaiverRequestStatus;
     sent?: Partial<WaiverSent>;
     signed?: WaiverSigned;
+    requiresManualReview?: WaiverManualReview;
     signerName?: string;
     signerEmail?: string;
     signerPhone?: string;
@@ -512,6 +528,17 @@ export async function updateRequest(
     updateData.signed = updates.signed;
   }
   await ref.update(updateData);
+}
+
+export async function flagWaiverRequestForManualReview(
+  requestId: string,
+  review: Omit<WaiverManualReview, "at">
+): Promise<void> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  await db.collection(COLL.requests).doc(requestId).update({
+    requiresManualReview: { ...review, at: Timestamp.now() } satisfies WaiverManualReview,
+  });
 }
 
 export async function updateRequestSigned(
@@ -661,6 +688,7 @@ function waiverSignedFieldsForRequestUpdate(signed: WaiverSigned): Record<string
   return {
     status: "signed" as const,
     signed: { ...rest, signedPayload: payloadForFirestore },
+    ...(signed.requiresManualReview ? { requiresManualReview: signed.requiresManualReview } : {}),
     signerName: signed.signedPayload.signerName,
     signerEmail: signed.signedPayload.signerEmail,
     signerPhone: signed.signedPayload.signerPhone,
@@ -674,7 +702,8 @@ function waiverSignedFieldsForRequestUpdate(signed: WaiverSigned): Record<string
  */
 export async function commitSingleUseTokenWaiverSign(
   tokenId: string,
-  signed: WaiverSigned
+  signed: WaiverSigned,
+  templateSnapshot?: WaiverTemplateSnapshot
 ): Promise<(WaiverRequest & { id: string }) | null> {
   const db = getDb();
   const { Timestamp } = getFirestoreExports();
@@ -697,8 +726,11 @@ export async function commitSingleUseTokenWaiverSign(
     const requestData = requestSnap.data() as WaiverRequest;
     if (requestData.status !== "pending") return;
     tx.update(tokenRef, { usedAt: Timestamp.now() });
-    tx.update(requestRef, signedFields);
-    out = { id: requestId, ...requestData, ...signedFields } as WaiverRequest & { id: string };
+    tx.update(requestRef, {
+      ...signedFields,
+      ...(templateSnapshot ? { templateSnapshot } : {}),
+    });
+    out = { id: requestId, ...requestData, ...signedFields, ...(templateSnapshot ? { templateSnapshot } : {}) } as WaiverRequest & { id: string };
   });
   return out;
 }
@@ -710,7 +742,8 @@ export async function commitSingleUseTokenWaiverSign(
 export async function commitGroupTokenNewSignedRequest(
   groupToken: string,
   requestId: string,
-  signed: WaiverSigned
+  signed: WaiverSigned,
+  templateSnapshot?: WaiverTemplateSnapshot
 ): Promise<(WaiverRequest & { id: string }) | null> {
   const db = getDb();
   const { Timestamp } = getFirestoreExports();
@@ -750,6 +783,7 @@ export async function commitGroupTokenNewSignedRequest(
       bookingId: groupData.bookingId,
       templateId: groupData.templateId,
       templateVersion: groupData.templateVersion,
+      templateSnapshot: templateSnapshot ?? groupData.templateSnapshot,
       signingTokenId: "",
       signingUrl: "",
       sent: { initialSentAt: null, lastSentAt: null, reminder1SentAt: null },

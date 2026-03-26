@@ -10,6 +10,7 @@ import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import {
   LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
   mergeLegacyHoldDocsWithOptionalBackfill,
@@ -151,6 +152,46 @@ export async function GET(request: NextRequest) {
           continue;
         }
         sold += b.partySize;
+      }
+    }
+
+    // Legacy bookings missing startDateStr: bounded scan + in-memory date match.
+    if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+      const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
+      const legacyBookingSnaps = await Promise.all(
+        allExpIds.map((id) =>
+          db
+            .collection("bookings")
+            .where("experienceId", "==", id)
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            .limit(LEGACY_BOOKING_SCAN_LIMIT)
+            .get()
+        )
+      );
+      for (const snap of legacyBookingSnaps) {
+        for (const doc of snap.docs) {
+          if (seenBookingIds.has(doc.id)) continue;
+          const b = doc.data() as {
+            slotId?: string;
+            slot_id?: string;
+            partySize?: number;
+            status?: string;
+            bookingMode?: string;
+            startDateStr?: string;
+          };
+          if (b.startDateStr) continue;
+          const slotRawB = b.slotId ?? b.slot_id;
+          if (!slotRawB || typeof b.partySize !== "number") continue;
+          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+          const parsed = parseSlotIdRelaxed(slotRawB);
+          if (!parsed || parsed.dateStr !== date) continue;
+          seenBookingIds.add(doc.id);
+          if (b.bookingMode === "charter") {
+            charterLockedForDate = true;
+            continue;
+          }
+          sold += b.partySize;
+        }
       }
     }
 

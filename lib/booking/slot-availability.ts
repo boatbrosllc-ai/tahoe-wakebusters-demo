@@ -153,6 +153,25 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     }
   }
 
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
+    // Fail closed if the startDateStr backfill is incomplete: legacy rows without startDateStr
+    // could still overlap the slot but would not be included in the windowed query above.
+    const legacyNullSnaps = await Promise.all(
+      experienceIdVariants.map((v) =>
+        get(
+          db
+            .collection("bookings")
+            .where("experienceId", "==", v)
+            .where("startDateStr", "==", null)
+            .limit(1)
+        )
+      )
+    );
+    if (legacyNullSnaps.some((s) => !s.empty)) {
+      throw new LegacyScanLimitReachedError();
+    }
+  }
+
   if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
     warnIfLegacyBookingFallbackEnabled();
     const LEGACY_BOOKING_LIMIT = getLegacyBookingScanLimit();
@@ -269,6 +288,12 @@ export async function assertLegacyBoatSlotAvailable(opts: {
   }
 
   if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
+    const legacyNullSnap = await get(
+      db.collection("bookings").where("boatId", "==", bid).where("startDateStr", "==", null).limit(1)
+    );
+    if (!legacyNullSnap.empty) {
+      throw new LegacyScanLimitReachedError();
+    }
     return;
   }
   warnIfLegacyBookingFallbackEnabled();

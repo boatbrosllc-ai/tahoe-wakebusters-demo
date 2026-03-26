@@ -177,6 +177,7 @@ async function getHoldSnapshotsOrdered(
 /** Returns true if the slot date is within the experience's seasonal window (specific dates or month range). Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used. */
 export async function GET(request: NextRequest) {
   try {
+    const generatedAtIso = new Date().toISOString();
     const rl = await checkRateLimitPublicRead(getClientKey(request));
     if (!rl.allowed) {
       const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;
@@ -706,6 +707,7 @@ export async function GET(request: NextRequest) {
         }
         const ticketedHeaders = {
           ...NO_STORE_HEADERS,
+          "X-Slots-Generated-At": generatedAtIso,
           ...(ticketedPartial ? { "X-Slots-Partial-Data": "true" } : {}),
         };
         return NextResponse.json(
@@ -890,6 +892,12 @@ export async function GET(request: NextRequest) {
       const seenBookingIds = new Set<string>();
       let charterHoldsResolutionFailed = false;
       const LEGACY_BOOKING_SCAN_LIMIT_CH = getLegacyBookingScanLimit();
+      const WINDOWED_BOOKINGS_MAX_DOCS = (() => {
+        const raw = process.env.SLOTS_WINDOWED_BOOKINGS_MAX_DOCS ?? "";
+        const n = parseInt(String(raw), 10);
+        return Number.isFinite(n) && n >= 500 ? Math.min(n, 50_000) : 5_000;
+      })();
+      let windowedBookingsTruncated = false;
 
       const addBookingDoc = (doc: { id: string; data: () => Record<string, unknown> }) => {
         if (seenBookingIds.has(doc.id)) return;
@@ -907,15 +915,36 @@ export async function GET(request: NextRequest) {
               .where("experienceId", "==", expId)
               .where("startDateStr", ">=", charterBookingStartDateStrLower)
               .where("startDateStr", "<=", charterBookingEndDateStrUpper)
+              .limit(WINDOWED_BOOKINGS_MAX_DOCS + 1)
               .get()
           )
         );
-        windowedSnaps.forEach(snap =>
-          snap.docs.forEach(doc => {
+        windowedSnaps.forEach((snap, idx) => {
+          const truncatedThis = snap.size > WINDOWED_BOOKINGS_MAX_DOCS;
+          if (truncatedThis) {
+            windowedBookingsTruncated = true;
+            console.warn("[slots] windowed bookings query exceeded cap; truncating to avoid memory exhaustion", {
+              experienceId,
+              variant: allExpIds[idx],
+              cap: WINDOWED_BOOKINGS_MAX_DOCS,
+              rawCount: snap.size,
+            });
+            void writeOperationalAlert({
+              type: "slots_windowed_bookings_truncated",
+              source: "app/api/booking/slots",
+              experienceId,
+              variant: allExpIds[idx],
+              cap: WINDOWED_BOOKINGS_MAX_DOCS,
+              rawCount: snap.size,
+              hint: "Windowed bookings query returned too many docs; response is partial and open slots are marked conservatively.",
+            }).catch(() => {});
+          }
+          const docs = truncatedThis ? snap.docs.slice(0, WINDOWED_BOOKINGS_MAX_DOCS) : snap.docs;
+          docs.forEach((doc) => {
             if (!BOOKING_STATUSES_SLOT_TAKEN.has((doc.data() as { status?: BookingStatus }).status as BookingStatus)) return;
             addBookingDoc(doc);
-          })
-        );
+          });
+        });
       } catch (windowedErr) {
         const wmsg = windowedErr instanceof Error ? windowedErr.message : String(windowedErr);
         if (/FAILED_PRECONDITION.*index/i.test(wmsg)) {
@@ -1388,8 +1417,10 @@ export async function GET(request: NextRequest) {
         legacyQueryHitLimitCharter ||
         charterBlocksQueryFailed ||
         charterHoldsResolutionFailed ||
-        !windowedIndexReady;
+        !windowedIndexReady ||
+        windowedBookingsTruncated;
       const responseHeaders: Record<string, string> = { ...NO_STORE_HEADERS };
+      responseHeaders["X-Slots-Generated-At"] = generatedAtIso;
       if (unresolvedBookingIds.length > 0) {
         responseHeaders["X-Unresolved-Booking-Count"] = String(Array.from(new Set(unresolvedBookingIds)).length);
       }
@@ -1451,7 +1482,7 @@ export async function GET(request: NextRequest) {
     const legacyHeldIntervals: { startMs: number; endMs: number }[] = [];
     const legacyHoldsNow = Date.now();
     try {
-      const legacyHoldsSnap = await db.collection("holds").where("boatId", "==", boatId).get();
+      const legacyHoldsSnap = await db.collection("holds").where("boatId", "==", boatId).where("status", "==", "active").get();
       legacyHoldsSnap.docs.forEach((doc) => {
         const h = doc.data() as {
           status?: string;
@@ -1599,6 +1630,7 @@ export async function GET(request: NextRequest) {
 
     const legacyResponseHeaders: Record<string, string> = {
       ...NO_STORE_HEADERS,
+      "X-Slots-Generated-At": generatedAtIso,
       ...(legacyBlocksIncomplete ? { "X-Slots-Partial-Data": "true" } : {}),
     };
     return NextResponse.json(

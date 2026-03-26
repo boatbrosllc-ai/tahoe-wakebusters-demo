@@ -206,8 +206,9 @@ async function main() {
     }
     const gaRaw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
     if (gaRaw === undefined) {
-      console.warn(
-        "[check-production-env] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset — using default GA4 ID from lib/ga-measurement-id.ts. Set this var only to override the stream.",
+      missing.push(
+        "GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID to your active GA4 web stream ID (format G-XXXXXXXXXX). " +
+          "Production requires this variable explicitly; there is no built-in fallback measurement ID."
       );
     } else {
       const trimmed = String(gaRaw).trim();

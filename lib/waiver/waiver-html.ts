@@ -58,6 +58,8 @@ export function buildWaiverHtml(input: BuildWaiverHtmlInput): string {
     <p><strong>Name:</strong> ${escapeHtml(payload.signerName)}</p>
     <p><strong>Email:</strong> ${escapeHtml(payload.signerEmail)}</p>
     ${payload.signerPhone?.trim() ? `<p><strong>Phone:</strong> ${escapeHtml(payload.signerPhone.trim())}</p>` : ""}
+    ${payload.signerAddress?.trim() ? `<p><strong>Address:</strong> ${escapeHtml(payload.signerAddress.trim())}</p>` : ""}
+    ${payload.bookingDate?.trim() ? `<p><strong>Booking date:</strong> ${escapeHtml(payload.bookingDate.trim())}</p>` : ""}
     ${payload.signerDob ? `<p><strong>Date of birth:</strong> ${escapeHtml(payload.signerDob)}</p>` : ""}
     <p><strong>Signed at:</strong> ${escapeHtml(signedAtIso)}</p>
   </section>`;

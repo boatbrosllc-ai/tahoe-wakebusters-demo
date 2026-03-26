@@ -17,6 +17,7 @@ import type { DocumentSnapshot, Firestore } from "firebase-admin/firestore";
 import { pendingRefundDocumentId } from "@/lib/booking/pending-refund-idempotent";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { buildAdminCancelRefundIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import {
   classifyStripeRefundStatus,
   PENDING_STRIPE_REFUND_POLL_MS,
@@ -339,6 +340,58 @@ export async function POST(
 
     if (!isResume && concurrentCanceled) {
       return NextResponse.json({ ok: true, already: true, slotReleased: false });
+    }
+
+    // Best-effort slot cleanup for legacy bookings missing boatId/experienceId.
+    if (!slotReleased && !slotRef && slotId && experienceId) {
+      try {
+        const expSlug =
+          expSnapForName?.exists && typeof (expSnapForName.data() as { slug?: unknown })?.slug === "string"
+            ? String((expSnapForName.data() as { slug: string }).slug).trim()
+            : "";
+        const variants = getExperienceIdVariants(experienceId, expSlug);
+        const boatSnaps = await Promise.all(
+          variants.map((v) =>
+            db
+              .collection("boats")
+              .where("isListingBoat", "==", true)
+              .where("active", "==", true)
+              .where("experienceIds", "array-contains", v)
+              .get()
+          )
+        );
+        const boatIds = Array.from(
+          new Set(boatSnaps.flatMap((s) => s.docs.map((d) => d.id)))
+        );
+        const candidateRefs = [
+          db.collection("experiences").doc(experienceId).collection("slots").doc(slotId),
+          ...boatIds.map((bid) => db.collection("boats").doc(bid).collection("slots").doc(slotId)),
+        ];
+        const snaps = await db.getAll(...candidateRefs);
+        const batch = db.batch();
+        let anyUpdated = false;
+        for (const s of snaps) {
+          if (!s.exists) continue;
+          const d = s.data() as { status?: string };
+          if (d?.status !== "booked") continue;
+          batch.update(s.ref, {
+            status: "open",
+            holdId: FieldValue.delete(),
+            bookingId: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          anyUpdated = true;
+        }
+        if (anyUpdated) {
+          await batch.commit();
+          slotReleased = true;
+        }
+      } catch (cleanupErr) {
+        console.warn(
+          "[admin/cancel] best-effort slot cleanup failed",
+          cleanupErr instanceof Error ? cleanupErr.message : cleanupErr
+        );
+      }
     }
 
     let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; amount?: number; error?: string }> = [];

@@ -482,6 +482,21 @@ export function useBookingModalData(
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [selection?.selectedExperience?.id]);
 
+  // On mount/open: if last slots fetch is old, force refresh even if visibilitychange doesn't fire.
+  useEffect(() => {
+    if (!open) return;
+    const expId = selection?.selectedExperience?.id;
+    if (!expId || !viewMonthStartStr || !viewMonthEndStr) return;
+    const raw = process.env.NEXT_PUBLIC_SLOTS_REFETCH_ON_MOUNT_MS ?? "";
+    const n = parseInt(String(raw), 10);
+    const thresholdMs = Number.isFinite(n) && n >= 1_000 ? Math.min(n, 10 * 60_000) : 30_000;
+    const last = bookingCache.getSlotsCacheFetchedAt(expId, viewMonthStartStr, viewMonthEndStr);
+    if (last != null && Date.now() - last > thresholdMs) {
+      bookingCache.invalidate(`slots|${expId}|`);
+      setSlotsRetryTrigger((t) => t + 1);
+    }
+  }, [open, selection?.selectedExperience?.id, viewMonthStartStr, viewMonthEndStr]);
+
   // Ticket counts (ticketed only) — one automatic retry after 3s; on failure leave ticketCounts null and show error (no synthetic capacity).
   useEffect(() => {
     const exp = selection?.selectedExperience;

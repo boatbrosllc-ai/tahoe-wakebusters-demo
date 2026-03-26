@@ -1,5 +1,5 @@
 # Before launch: set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or RATE_LIMIT_*)
-# For GA4 boatbrosatx.com stream: set NEXT_PUBLIC_GA_MEASUREMENT_ID=G-1QM1E4C1BB in Netlify env.
+# GA4: set NEXT_PUBLIC_GA_MEASUREMENT_ID=G-... (your stream) in Netlify production env — required; no fallback in production builds.
 # so rate limiting is active in production (see lib/booking/rate-limit.ts and GET /api/health).
 # Verify GET /api/health returns HTTP 200 with rateLimit: 'ok' after deployment.
 # Set RATE_LIMIT_FAIL_CLOSED=1 so that if Redis becomes unavailable, endpoints can return 503 instead of failing open.
@@ -22,6 +22,10 @@
   command = "npm run build"
   # Publish dir is set by @netlify/plugin-nextjs when present; omit or use .next for static fallback.
   publish = ".next"
+
+# Production: validate required env (including explicit GA4) before build so deploys cannot ship with GA disabled by mistake.
+[context.production]
+  command = "NODE_ENV=production node scripts/check-production-env.js && npm run build"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

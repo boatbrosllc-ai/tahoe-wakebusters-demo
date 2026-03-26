@@ -41,6 +41,7 @@ import { HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS } from "@/lib/booking/hold-expiry";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { computeFinalChargeAtUtc } from "@/lib/booking/final-charge-at";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 
 /** Legacy: full payment in one charge. */
 export interface ConvertHoldInputFull {
@@ -685,6 +686,42 @@ export async function convertHoldToBooking(
           sharedDepartureSold += b.partySize;
         }
       }
+      // Legacy bookings missing startDateStr: bounded scan + in-memory date match.
+      if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+        const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
+        const legacySnaps = await Promise.all(
+          slugVariantsTx.map((v) =>
+            tx.get(
+              db
+                .collection("bookings")
+                .where("experienceId", "==", v)
+                .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                .limit(LEGACY_BOOKING_SCAN_LIMIT)
+            )
+          )
+        );
+        for (const snap of legacySnaps) {
+          for (const doc of snap.docs) {
+            if (seenTx.has(doc.id)) continue;
+            const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string; startDateStr?: string; slotId?: string; slot_id?: string };
+            if (b.startDateStr) continue;
+            if (typeof b.partySize !== "number") continue;
+            if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+            const slotRaw = b.slotId ?? b.slot_id;
+            if (!slotRaw) continue;
+            const parsedLegacy = parseSlotIdRelaxed(slotRaw);
+            if (!parsedLegacy || parsedLegacy.dateStr !== parsedSlot.dateStr) continue;
+            seenTx.add(doc.id);
+            if (b.bookingMode === "charter") {
+              if (departureTimesMatch(slotRaw, parsedSlot)) {
+                throw new Error("This departure is reserved as a private charter");
+              }
+              continue;
+            }
+            sharedDepartureSold += b.partySize;
+          }
+        }
+      }
       const capacity =
         (experienceForPricing as Experience).maxCapacity ?? getMaxGuestsForExperience(experienceForPricing);
       await checkCapacityAndRelease(tx, inventoryRefForShared, capacity, sharedDepartureSold, hold.partySize, {
@@ -730,10 +767,12 @@ export async function convertHoldToBooking(
     }
     let bookingDoc: typeof booking = booking;
     if (activeWaiverTemplate) {
+      const { createdAt: _createdAt, updatedAt: _updatedAt, ...templateSnapshot } = activeWaiverTemplate;
       const { requestId } = createWaiverRequestAndTokenInTransaction(tx, db, {
         bookingId,
         templateId: activeWaiverTemplate.id,
         templateVersion: activeWaiverTemplate.version,
+        templateSnapshot,
         signerEmail: customer.email.trim(),
       });
       if ((hold.partySize ?? 1) > 1) {
@@ -743,6 +782,7 @@ export async function convertHoldToBooking(
           bookingId,
           activeWaiverTemplate.id,
           activeWaiverTemplate.version,
+          templateSnapshot,
           hold.partySize,
           requestId
         );

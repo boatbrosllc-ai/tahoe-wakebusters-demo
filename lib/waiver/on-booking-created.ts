@@ -72,10 +72,13 @@ export async function createWaiverForBooking(
       return null;
     }
 
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...templateSnapshot } = active;
+
     const { requestId, signingUrl } = await createRequest({
       bookingId: input.bookingId,
       templateId: active.id,
       templateVersion: active.version,
+      templateSnapshot,
       signerEmail: input.customerEmail.trim(),
     });
 
@@ -125,7 +128,7 @@ export async function createWaiverForBooking(
     let groupSigningUrl: string | undefined;
     const partyCount = partySize ?? 1;
     if (partyCount > 1) {
-      const group = await createGroupToken(input.bookingId, active.id, active.version, partyCount);
+      const group = await createGroupToken(input.bookingId, active.id, active.version, templateSnapshot, partyCount);
       groupSigningUrl = group.groupSigningUrl;
       await updateRequest(requestId, { groupSigningUrl });
     }

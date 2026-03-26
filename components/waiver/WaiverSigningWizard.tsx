@@ -15,6 +15,15 @@ const STEPS: StepperStep[] = [
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", enc);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 interface WaiverSigningWizardProps {
   data: WaiverValidateResponse;
   token?: string;
@@ -28,15 +37,19 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     email: "",
     phone: "",
     dob: "",
+    address: "",
+    bookingDate: "",
   });
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsAcceptedAtIso, setTermsAcceptedAtIso] = useState<string | null>(null);
+  const [termsContentHash, setTermsContentHash] = useState<string | null>(null);
   const [initials, setInitials] = useState<Record<string, string>>({});
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [typedName, setTypedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Field-level errors for step 0 (info) */
-  const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string; phone?: string; dob?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string; phone?: string; dob?: string; address?: string }>({});
   /** Step 1: terms validation (scroll + agree) */
   const [step1TermsError, setStep1TermsError] = useState<string | null>(null);
   /** Step 1: initials validation */
@@ -48,13 +61,40 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
   const emailRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
   const dobRef = useRef<HTMLInputElement>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
   const firstInitialRef = useRef<HTMLInputElement>(null);
   const stepContentRef = useRef<HTMLDivElement>(null);
 
   const { template, bookingSummary } = data;
+
+  useEffect(() => {
+    setSigner((s) => ({ ...s, bookingDate: bookingSummary.tripDate ?? "" }));
+  }, [bookingSummary.tripDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    sha256Hex(template.termsHtml)
+      .then((h) => {
+        if (cancelled) return;
+        setTermsContentHash(h);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTermsContentHash(null);
+      });
+    // When the terms change, clear any previously captured acceptance timestamp/hash.
+    setTermsAccepted(false);
+    setTermsAcceptedAtIso(null);
+    return () => {
+      cancelled = true;
+    };
+  }, [template.termsHtml]);
+
   const clausesWithInitials = template.clauses.filter((c) => c.requiresInitials);
   const requirePhone = template.requiredFields.phone;
   const requireDob = template.requiredFields.dob;
+  const requireAddress = template.requiredFields.address;
+  const requireBookingDate = template.requiredFields.bookingDate;
   const sigMode = template.signature.mode;
   const requireTypedSig = template.signature.requireTypedName;
   /** Typed-name field shown for type-only, draw+typed, or both (optional typed when not required). */
@@ -66,9 +106,12 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     signer.email.trim().length > 0 &&
     EMAIL_REGEX.test(signer.email.trim()) &&
     (!requirePhone || signer.phone.trim().length > 0) &&
-    (!requireDob || signer.dob.trim().length > 0);
+    (!requireDob || signer.dob.trim().length > 0) &&
+    (!requireAddress || signer.address.trim().length > 0) &&
+    (!requireBookingDate || signer.bookingDate.trim().length > 0);
   const canProceedFromTerms =
     termsAccepted &&
+    termsContentHash != null &&
     (clausesWithInitials.length === 0 ||
       clausesWithInitials.every((c) => (initials[c.id] ?? "").trim().length > 0));
   const canProceedFromSign =
@@ -91,11 +134,13 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     else if (!EMAIL_REGEX.test(signer.email.trim())) err.email = "Please enter a valid email address.";
     if (requirePhone && !signer.phone.trim()) err.phone = "Phone number is required.";
     if (requireDob && !signer.dob.trim()) err.dob = "Date of birth is required.";
+    if (requireAddress && !signer.address.trim()) err.address = "Address is required.";
     setFieldErrors(err);
     if (err.name) return "name";
     if (err.email) return "email";
     if (err.phone) return "phone";
     if (err.dob) return "dob";
+    if (err.address) return "address";
     return null;
   }
 
@@ -108,7 +153,7 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     if (step === 0) {
       const first = validateStep0();
       if (first) {
-        const refMap = { name: nameRef, email: emailRef, phone: phoneRef, dob: dobRef } as const;
+      const refMap = { name: nameRef, email: emailRef, phone: phoneRef, dob: dobRef, address: addressRef } as const;
         refMap[first].current?.focus();
         stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
@@ -160,21 +205,33 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
       try {
         const token = tokenProp ?? "";
         const groupToken = data.isGroupSigning && data.groupToken ? data.groupToken : undefined;
+        if (!termsAcceptedAtIso || !termsContentHash) {
+          setError("Missing terms acceptance metadata. Please accept the terms again.");
+          setSubmitting(false);
+          return;
+        }
         const submitSigner: {
           name: string;
           email: string;
           phone?: string;
           dob?: string;
+          address?: string;
+          bookingDate?: string;
         } = {
           name: signer.name.trim(),
           email: signer.email.trim(),
           ...(signer.phone.trim() ? { phone: signer.phone.trim() } : {}),
           ...(signer.dob.trim() ? { dob: signer.dob.trim() } : {}),
+          ...(signer.address.trim() ? { address: signer.address.trim() } : {}),
+          ...(signer.bookingDate.trim() ? { bookingDate: signer.bookingDate.trim() } : {}),
         };
         const submitBody: Record<string, unknown> = {
           ...(groupToken ? { groupToken } : { token }),
           signer: submitSigner,
           initials,
+          termsAccepted,
+          termsAcceptedAtIso,
+          termsContentHash,
         };
         if (sigMode !== "type" && signatureDataUrl) {
           submitBody.signatureDataUrl = signatureDataUrl;
@@ -222,6 +279,10 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     onSuccess,
     requirePhone,
     requireDob,
+    requireAddress,
+    requireBookingDate,
+    termsAcceptedAtIso,
+    termsContentHash,
   ]);
 
   const handleBack = useCallback(() => {
@@ -275,7 +336,6 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                   onBlur={() => { if (!signer.name.trim()) setFieldErrors((prev) => ({ ...prev, name: "Full name is required." })); }}
                   className={cn(inputClass, fieldErrors.name && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                   placeholder="Your full name"
-                  aria-invalid={fieldErrors.name ? "true" : "false"}
                   aria-describedby={fieldErrors.name ? "waiver-name-error" : undefined}
                 />
                 {fieldErrors.name && <p id="waiver-name-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.name}</p>}
@@ -295,7 +355,6 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                   }}
                   className={cn(inputClass, fieldErrors.email && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                   placeholder="you@example.com"
-                  aria-invalid={fieldErrors.email ? "true" : "false"}
                   aria-describedby={fieldErrors.email ? "waiver-email-error" : undefined}
                 />
                 {fieldErrors.email && <p id="waiver-email-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.email}</p>}
@@ -315,7 +374,6 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                     onBlur={() => { if (!signer.phone.trim()) setFieldErrors((prev) => ({ ...prev, phone: "Phone number is required." })); }}
                     className={cn(inputClass, fieldErrors.phone && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                     placeholder="(555) 123-4567"
-                    aria-invalid={fieldErrors.phone ? "true" : "false"}
                     aria-describedby={fieldErrors.phone ? "waiver-phone-error" : undefined}
                   />
                   {fieldErrors.phone && <p id="waiver-phone-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.phone}</p>}
@@ -335,10 +393,38 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                     onBlur={() => { if (!signer.dob.trim()) setFieldErrors((prev) => ({ ...prev, dob: "Date of birth is required." })); }}
                     className={cn(inputClass, "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border", fieldErrors.dob && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
                     aria-label="Date of birth"
-                    aria-invalid={fieldErrors.dob ? "true" : "false"}
                     aria-describedby={fieldErrors.dob ? "waiver-dob-error" : undefined}
                   />
                   {fieldErrors.dob && <p id="waiver-dob-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">{fieldErrors.dob}</p>}
+                </div>
+              )}
+              {requireAddress && (
+                <div>
+                  <label htmlFor="waiver-address" className={labelClass}>
+                    Address <span className="text-red-600" aria-hidden>*</span>
+                  </label>
+                  <input
+                    ref={addressRef}
+                    id="waiver-address"
+                    type="text"
+                    autoComplete="street-address"
+                    value={signer.address}
+                    onChange={(e) => {
+                      setSigner((s) => ({ ...s, address: e.target.value }));
+                      setFieldErrors((prev) => (prev.address ? { ...prev, address: undefined } : prev));
+                    }}
+                    onBlur={() => {
+                      if (!signer.address.trim()) setFieldErrors((prev) => ({ ...prev, address: "Address is required." }));
+                    }}
+                    className={cn(inputClass, fieldErrors.address && "border-red-500 focus:border-red-500 focus:ring-red-500/20")}
+                    placeholder="Street address, City, State"
+                    aria-describedby={fieldErrors.address ? "waiver-address-error" : undefined}
+                  />
+                  {fieldErrors.address && (
+                    <p id="waiver-address-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">
+                      {fieldErrors.address}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -355,7 +441,16 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
             )}
             <TermsAccept
               termsHtml={template.termsHtml}
-              onAcceptChange={(accepted) => { setTermsAccepted(accepted); if (accepted) setStep1TermsError(null); }}
+              onAcceptChange={(accepted) => {
+                setTermsAccepted(accepted);
+                if (accepted) {
+                  setTermsAcceptedAtIso(new Date().toISOString());
+                  if (termsContentHash == null) setTermsContentHash(null);
+                  setStep1TermsError(null);
+                } else {
+                  setTermsAcceptedAtIso(null);
+                }
+              }}
               requiredScrollToBottom
               error={step1TermsError}
               className="terms-step"
@@ -381,7 +476,6 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                       )}
                       placeholder="XX"
                       maxLength={4}
-                      aria-invalid={step1InitialsError && !(initials[c.id] ?? "").trim() ? "true" : "false"}
                     />
                   </div>
                 ))}

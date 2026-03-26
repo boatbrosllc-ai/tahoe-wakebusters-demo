@@ -6,6 +6,9 @@ import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import {
   submitWaiverSigningSchema,
   validateSignerRequiredFieldsForTemplate,
+  validateTermsAcceptanceForTemplate,
+  validateRequiredClauseInitialsForTemplate,
+  validateDobPolicyForTemplate,
   validateSubmitSignatureForTemplate,
 } from "@/lib/waiver/schema";
 import {
@@ -16,13 +19,13 @@ import {
   getGroupTokenById,
   getTokenById,
   isTokenValid,
+  flagWaiverRequestForManualReview,
   commitSingleUseTokenWaiverSign,
   commitGroupTokenNewSignedRequest,
-  appendWaiverSignedStoragePaths,
 } from "@/lib/waiver/firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
-import type { WaiverSignedPayload, WaiverSigned } from "@/lib/waiver/types";
+import type { WaiverSignedPayload, WaiverSigned, WaiverTemplateSnapshot } from "@/lib/waiver/types";
 
 const MAX_SIGNATURE_PAYLOAD_LENGTH = 500_000; // ~500KB for data URL
 
@@ -35,6 +38,8 @@ export async function POST(request: NextRequest) {
       { status: 429, headers: { "Retry-After": String(retryAfter) } }
     );
   }
+
+  const signerIdentityStrictMode = process.env.WAIVER_SIGNER_IDENTITY_STRICT?.trim().toLowerCase() !== "false";
 
   let body: unknown;
   try {
@@ -50,12 +55,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 400 });
   }
 
-  const { token, groupToken, signer, initials, signatureDataUrl, typedName } = parsed.data;
+  const {
+    token,
+    groupToken,
+    signer,
+    initials,
+    signatureDataUrl,
+    typedName,
+    termsAccepted,
+    termsAcceptedAtIso,
+    termsContentHash,
+  } = parsed.data;
 
   try {
     let bookingId: string;
     let templateId: string;
     let templateVersion: number;
+    let templateSnapshot: WaiverTemplateSnapshot | undefined;
+    let expectedSignerEmail: string | undefined;
+    let manualReviewCandidate:
+      | {
+          reasonCode: string;
+          reason: string;
+          metadata?: Record<string, unknown>;
+        }
+      | undefined;
+    let normalizedDob: string | null | undefined;
     let requestIdForStorage: string;
     let isGroupSign: boolean;
 
@@ -73,6 +98,7 @@ export async function POST(request: NextRequest) {
       bookingId = gt.bookingId;
       templateId = gt.templateId;
       templateVersion = gt.templateVersion;
+        templateSnapshot = gt.templateSnapshot;
       const db = getDb();
       requestIdForStorage = db.collection("waiverRequests").doc().id;
       isGroupSign = true;
@@ -88,15 +114,81 @@ export async function POST(request: NextRequest) {
       bookingId = reqPreview.bookingId;
       templateId = reqPreview.templateId;
       templateVersion = reqPreview.templateVersion;
+        templateSnapshot = reqPreview.templateSnapshot;
+        expectedSignerEmail = tok?.signerEmail ?? reqPreview.signerEmail;
       requestIdForStorage = reqPreview.id;
       isGroupSign = false;
     } else {
       return NextResponse.json({ error: "Token or group link is required" }, { status: 400 });
     }
 
-    const template = await getTemplateById(templateId);
-    if (!template) {
-      return NextResponse.json({ error: "Template not found" }, { status: 500 });
+      const template =
+        templateSnapshot ??
+        (await (async () => {
+          const resolved = await getTemplateById(templateId);
+          if (!resolved) return null;
+          // Hard mismatch check for legacy requests that did not persist a pinned template snapshot.
+          if (resolved.version !== templateVersion) return null;
+          return resolved;
+        })());
+
+      if (!template) {
+        const requestIdToFlag = isGroupSign ? null : requestIdForStorage;
+        if (requestIdToFlag) {
+          await flagWaiverRequestForManualReview(requestIdToFlag, {
+            reasonCode: "waiver_template_version_mismatch",
+            reason: "Pinned template snapshot missing or mismatched against request.templateVersion; signing rejected for manual legal review.",
+          });
+        }
+        return NextResponse.json({ error: "Waiver template version mismatch; please contact support." }, { status: 409 });
+      }
+
+      // If we had a pinned snapshot but its version disagrees, reject hard.
+      if (templateSnapshot && templateSnapshot.version !== templateVersion) {
+        if (!isGroupSign) {
+          await flagWaiverRequestForManualReview(requestIdForStorage, {
+            reasonCode: "waiver_template_version_mismatch",
+            reason: `Pinned template snapshot version (${templateSnapshot.version}) differs from request.templateVersion (${templateVersion}).`,
+          });
+        }
+        return NextResponse.json({ error: "Waiver template version mismatch; please contact support." }, { status: 409 });
+      }
+
+      if (!isGroupSign && expectedSignerEmail) {
+        const submitted = signer.email.trim().toLowerCase();
+        const expected = expectedSignerEmail.trim().toLowerCase();
+        if (submitted !== expected) {
+          if (signerIdentityStrictMode) {
+            return NextResponse.json({ error: "Signer identity does not match the signing token." }, { status: 403 });
+          }
+          manualReviewCandidate = {
+            reasonCode: "waiver_signer_identity_mismatch",
+            reason: "Submitted signer identity does not match the signing token; manual review required.",
+            metadata: { expectedSignerEmail: expected, submittedSignerEmail: submitted },
+          };
+          await writeOperationalAlert({
+            type: "waiver_signer_identity_mismatch_manual_review",
+            bookingId,
+            requestId: requestIdForStorage,
+            source: "waiver-submit",
+            expectedSignerEmail: expected,
+            submittedSignerEmail: submitted,
+          });
+        }
+      }
+
+    const termsOk = validateTermsAcceptanceForTemplate(template, {
+      termsAccepted,
+      termsAcceptedAtIso,
+      termsContentHash,
+    });
+    if (!termsOk.ok) {
+      return NextResponse.json({ error: termsOk.message }, { status: 400 });
+    }
+
+    const initialsOk = validateRequiredClauseInitialsForTemplate(template, initials);
+    if (!initialsOk.ok) {
+      return NextResponse.json({ error: initialsOk.message }, { status: 400 });
     }
 
     const signerFields = validateSignerRequiredFieldsForTemplate(template, signer);
@@ -121,6 +213,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const dobPolicy = validateDobPolicyForTemplate(template, { dob: signer.dob });
+    if (!dobPolicy.ok) {
+      return NextResponse.json({ error: dobPolicy.message }, { status: 400 });
+    }
+
+    normalizedDob = dobPolicy.normalizedDob;
+    if (dobPolicy.manualReview) {
+      if (!manualReviewCandidate) {
+        manualReviewCandidate = dobPolicy.manualReview;
+      } else {
+        // Combine multiple independent manual-review triggers into a single request flag.
+        manualReviewCandidate = {
+          reasonCode: "waiver_multiple_manual_review_reasons",
+          reason: `${manualReviewCandidate.reason}; ${dobPolicy.manualReview.reason}`,
+          metadata: { ...(manualReviewCandidate.metadata ?? {}), ...(dobPolicy.manualReview.metadata ?? {}) },
+        };
+      }
+    }
+
     const { Timestamp } = getFirestoreExports();
     const now = Timestamp.now();
     const nowIso = new Date().toISOString();
@@ -129,8 +240,12 @@ export async function POST(request: NextRequest) {
       signerName: signer.name,
       signerEmail: signer.email,
       signerPhone: signer.phone?.trim() ?? "",
-      signerDob: signer.dob && signer.dob.trim() ? signer.dob.trim() : null,
+      signerAddress: signer.address?.trim() || null,
+      bookingDate: signer.bookingDate?.trim() || null,
+      signerDob: normalizedDob ?? null,
       initials: initials ?? {},
+      termsAcceptedAtIso,
+      termsContentHash,
       ...(signatureDataUrl ? { signatureDataUrl } : {}),
       typedName: typedName ?? undefined,
     };
@@ -152,29 +267,6 @@ export async function POST(request: NextRequest) {
 
     const signedPayloadForFirestore: WaiverSignedPayload = { ...signedPayload };
     delete signedPayloadForFirestore.signatureDataUrl;
-
-    const signed: WaiverSigned = {
-      signedAt: now,
-      ip,
-      userAgent,
-      contentHash,
-      signedPayload: signedPayloadForFirestore,
-    };
-
-    const committed = isGroupSign
-      ? await commitGroupTokenNewSignedRequest(groupToken!, requestIdForStorage, signed)
-      : await commitSingleUseTokenWaiverSign(token!, signed);
-
-    if (!committed) {
-      return NextResponse.json(
-        {
-          error: isGroupSign
-            ? "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached."
-            : "This signing link has expired or already been used",
-        },
-        { status: 400 }
-      );
-    }
 
     const bucket = getStorageBucket();
     let pdfStoragePath: string | null = null;
@@ -225,11 +317,42 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (pdfStoragePath != null || htmlStoragePath != null) {
-      await appendWaiverSignedStoragePaths(requestIdForStorage, {
-        pdfStoragePath,
-        htmlStoragePath,
-      });
+    if (pdfStoragePath == null && htmlStoragePath == null) {
+      return NextResponse.json(
+        { error: "Waiver document storage failed. Please retry." },
+        { status: 503 }
+      );
+    }
+
+    const templateSnapshotToPersist: WaiverTemplateSnapshot = ((t: unknown) => {
+      const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = t as Record<string, unknown>;
+      return rest as WaiverTemplateSnapshot;
+    })(template);
+
+    const signed: WaiverSigned = {
+      signedAt: now,
+      ip,
+      userAgent,
+      contentHash,
+      pdfStoragePath,
+      htmlStoragePath,
+      signedPayload: signedPayloadForFirestore,
+      ...(manualReviewCandidate ? { requiresManualReview: { ...manualReviewCandidate, at: now } } : {}),
+    };
+
+    const committed = isGroupSign
+      ? await commitGroupTokenNewSignedRequest(groupToken!, requestIdForStorage, signed, templateSnapshotToPersist)
+      : await commitSingleUseTokenWaiverSign(token!, signed, templateSnapshotToPersist);
+
+    if (!committed) {
+      return NextResponse.json(
+        {
+          error: isGroupSign
+            ? "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached."
+            : "This signing link has expired or already been used",
+        },
+        { status: 400 }
+      );
     }
 
     try {

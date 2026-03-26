@@ -135,8 +135,7 @@ export function SignaturePad({
           <div className={cn("border-2 rounded-xl overflow-hidden bg-white touch-none", signatureError ? "border-red-500" : "border-brand-dark/20")}>
             <canvas
               ref={canvasRef}
-              className="w-full block touch-none"
-              style={{ width: "100%", height: "clamp(10rem, 40vw, 12rem)", minHeight: "160px" }}
+              className="w-full block touch-none h-[clamp(10rem,40vw,12rem)] min-h-[160px]"
               onMouseDown={start}
               onMouseMove={move}
               onMouseUp={end}
@@ -145,7 +144,6 @@ export function SignaturePad({
               onTouchMove={move}
               onTouchEnd={end}
               aria-label="Sign here with your finger or mouse"
-              aria-invalid={signatureError ? "true" : undefined}
             />
           </div>
           {signatureError && (
@@ -178,7 +176,6 @@ export function SignaturePad({
             )}
             placeholder="Type your full name"
             autoComplete="name"
-            aria-invalid={typedNameError ? "true" : undefined}
             aria-describedby={typedNameError ? "typed-name-error" : undefined}
           />
           {typedNameError && (

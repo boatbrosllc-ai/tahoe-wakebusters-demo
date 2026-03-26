@@ -140,6 +140,8 @@ const MAX_CACHE_SIZE = 120;
 interface CacheEntry<T> {
   data: T;
   fetchedAt: number;
+  /** Server timestamp (ms) when the response was generated, if provided. */
+  serverGeneratedAt?: number;
 }
 
 const dataCache = new Map<string, CacheEntry<unknown>>();
@@ -172,7 +174,11 @@ function fetchCached<T>(
   if (signal?.aborted) return Promise.reject(new DOMException("", "AbortError"));
 
   const cached = dataCache.get(key);
-  if (cached && Date.now() - cached.fetchedAt < staleMs) {
+  if (
+    cached &&
+    Date.now() - cached.fetchedAt < staleMs &&
+    (cached.serverGeneratedAt == null || Date.now() - cached.serverGeneratedAt < STALE_MS_SLOTS)
+  ) {
     return Promise.resolve(cached.data as T);
   }
 
@@ -194,6 +200,7 @@ function fetchCached<T>(
       // aborts early. Per-caller abort is handled by the wrapper below.
       const startMs = Date.now();
       const rawFetchPromise = fetch(fullUrl, fetchOpts);
+      let serverGeneratedAtMs: number | null = null;
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       let p!: Promise<T>;
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -226,6 +233,12 @@ function fetchCached<T>(
           const data = (await res.json()) as T;
           const partialHeader = res.headers.get("X-Slots-Partial-Data") === "true";
           const unresolvedHeader = res.headers.get("X-Unresolved-Booking-Count");
+          const generatedAtHeader = res.headers.get("X-Slots-Generated-At");
+          serverGeneratedAtMs = (() => {
+            if (!generatedAtHeader) return null;
+            const ms = new Date(generatedAtHeader).getTime();
+            return Number.isFinite(ms) ? ms : null;
+          })();
           const partialBody =
             data &&
             typeof data === "object" &&
@@ -242,7 +255,11 @@ function fetchCached<T>(
         })
         .then((data) => {
           dataCache.delete(key); // remove then re-insert to update insertion order (LRU)
-          dataCache.set(key, { data, fetchedAt: Date.now() });
+          dataCache.set(key, {
+            data,
+            fetchedAt: Date.now(),
+            ...(typeof serverGeneratedAtMs === "number" ? { serverGeneratedAt: serverGeneratedAtMs } : {}),
+          });
           evictOldestIfNeeded();
           if (inFlight.get(key) === p) inFlight.delete(key);
           return data;

@@ -26,7 +26,10 @@ export async function hasOverlappingBlock(opts: {
   /** Used for Firestore `startAt`/`endAt` bounds on the blocks query. */
   Timestamp: TimestampConstructor;
   experienceId: string;
-  /** Same experience under slug vs doc id, etc. — blocks may be stored under any variant. */
+  /**
+   * Same experience under slug vs doc id, etc. — blocks may be stored under any variant.
+   * Callers must include all known aliases so block lookups are comprehensive.
+   */
   experienceIdVariants?: string[];
   boatId?: string;
   slotStart: Date;
@@ -54,6 +57,9 @@ export async function hasOverlappingBlock(opts: {
       const startAt = b.startAt?.toDate?.();
       const endAt = b.endAt?.toDate?.();
       if (!startAt || !endAt) continue;
+      const startAtMs = startAt.getTime();
+      const endAtMs = endAt.getTime();
+      if (!(startAtMs < slotEndMs && endAtMs > slotStartMs)) continue;
       return true;
     }
     return false;

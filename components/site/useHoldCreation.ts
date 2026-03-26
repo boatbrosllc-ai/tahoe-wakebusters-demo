@@ -14,6 +14,8 @@ import { runCreateHold, runCreatePaymentIntentForHold } from "@/lib/booking/run-
 import { bookingError, bookingWarn } from "@/lib/booking/debug";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
+import { TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
+import type { PriceSummary } from "@/components/site/usePriceSummary";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
 
@@ -58,7 +60,7 @@ export type HoldCreationFormValues = {
   tipChoice: "now" | "later" | null;
   cancellationAck: boolean;
   addonSelections: Record<string, number>;
-  priceSummary: { tipCents: number; priceIsEstimate: boolean };
+  priceSummary: PriceSummary;
   appliedDiscount: { discountCents: number; code: string } | null;
   discountCode: string;
   marketingOptIn: boolean;
@@ -489,6 +491,20 @@ export function useHoldCreation(
       .filter(([, qty]) => qty > 0)
       .map(([addonId, qty]) => ({ addonId, qty }));
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
+    if (tipCentsToSend > 0) {
+      const subtotalBeforeTaxCents = priceSummary.subtotalBeforeTaxCents ?? 0;
+      const salesTaxCents = priceSummary.salesTaxCents ?? 0;
+      const discountCents = priceSummary.discountCents ?? 0;
+      const postDiscountBase = Math.max(0, subtotalBeforeTaxCents + salesTaxCents - discountCents);
+      const maxTipCentsClient = Math.round(postDiscountBase * (TIP_MAX_PERCENT_SERVER / 100));
+      if (tipCentsToSend > maxTipCentsClient) {
+        opts.setPaymentPhase("form");
+        opts.setPaymentError(
+          `Tip cannot exceed ${TIP_MAX_PERCENT_SERVER}% of the booking total after discounts. Please reduce your tip and try again.`
+        );
+        return;
+      }
+    }
     try {
       const holdResult = await runCreateHold(
         {

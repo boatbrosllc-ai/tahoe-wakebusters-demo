@@ -787,6 +787,37 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Legacy bookings missing startDateStr: bounded scan + in-memory date match.
+        if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+          const legacyBookingSnaps = await Promise.all(
+            slugVariantsList.map((v) =>
+              tx.get(
+                db
+                  .collection("bookings")
+                  .where("experienceId", "==", v)
+                  .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+                  .limit(LEGACY_BOOKING_SCAN_LIMIT)
+              )
+            )
+          );
+          for (const snap of legacyBookingSnaps) {
+            for (const doc of snap.docs) {
+              if (seenBIds.has(doc.id)) continue;
+              const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string; startDateStr?: string; slotId?: string; slot_id?: string };
+              if (b.startDateStr) continue;
+              if (typeof b.partySize !== "number") continue;
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              const slotRaw = b.slotId ?? b.slot_id;
+              if (!slotRaw) continue;
+              const parsedLegacy = parseSlotIdRelaxed(slotRaw);
+              if (!parsedLegacy || parsedLegacy.dateStr !== dateStr) continue;
+              seenBIds.add(doc.id);
+              if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
+              sold += b.partySize;
+            }
+          }
+        }
+
         const oppositeModeHoldSnaps = await Promise.all(
           slugVariantsList.map((v) =>
             tx.get(db.collection("holds").where("experienceId", "==", v).where("startDateStr", "==", dateStr))
@@ -1195,6 +1226,37 @@ export async function POST(request: NextRequest) {
           );
           for (const s of oppSnaps) {
             await scanOppositeSharedHolds(s.docs);
+          }
+        }
+
+        // Also block charter-ticketed holds when any shared-ticket booking already exists for this departure.
+        // This mirrors convertHoldToBooking (shared vs private exclusivity) and prevents payment capture without booking creation.
+        if (input.experienceId) {
+          const bookingSnaps = await Promise.all(
+            experienceIdVariantsForAssert.map((v) =>
+              tx.get(
+                db
+                  .collection("bookings")
+                  .where("experienceId", "==", v)
+                  .where("startDateStr", "==", parsedSlotForHold.dateStr)
+              )
+            )
+          );
+          for (const snap of bookingSnaps) {
+            for (const doc of snap.docs) {
+              const b = doc.data() as {
+                status?: string;
+                bookingMode?: string;
+                slotId?: string;
+                slot_id?: string;
+              };
+              if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+              if (b.bookingMode !== "shared") continue;
+              const slotRaw = b.slotId ?? b.slot_id;
+              if (departureTimesMatch(slotRaw, parsedSlotForHold)) {
+                throw new SlotConflictError("Shared tickets have already been sold for this departure");
+              }
+            }
           }
         }
       }

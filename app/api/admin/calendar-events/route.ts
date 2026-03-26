@@ -150,6 +150,7 @@ export async function GET(request: NextRequest) {
 
     const db = getDb();
     const { Timestamp } = getFirestoreExports();
+    const startThreshold = new Date(new Date(fromStr + "T12:00:00.000Z").getTime() - 14 * 24 * 60 * 60 * 1000);
 
     /** All experiences: bookings in [from, to] on startDateStr (admin Bookings calendar). Blocks omitted. */
     if (!experienceId) {
@@ -170,7 +171,12 @@ export async function GET(request: NextRequest) {
       let legacyTruncated = false;
       const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
       if (legacyFallbackEnabled) {
-        const legacySnap = await db.collection("bookings").orderBy("createdAt", "desc").limit(legacyScanLimit).get();
+        const legacySnap = await db
+          .collection("bookings")
+          .where("createdAt", ">=", Timestamp.fromDate(startThreshold))
+          .orderBy("createdAt", "desc")
+          .limit(legacyScanLimit)
+          .get();
         if (legacySnap.size >= legacyScanLimit) legacyTruncated = true;
         for (const doc of legacySnap.docs) {
           if (seenBookingIds.has(doc.id)) continue;
@@ -256,6 +262,8 @@ export async function GET(request: NextRequest) {
           db
             .collection("bookings")
             .where("experienceId", "==", variantId)
+            .where("createdAt", ">=", Timestamp.fromDate(startThreshold))
+            .orderBy("createdAt", "desc")
             .limit(legacyScanLimitExp)
             .get()
         )

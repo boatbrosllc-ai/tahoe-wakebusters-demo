@@ -63,6 +63,9 @@ export interface WaiverTemplate {
   sendWaiverReminder?: boolean;
 }
 
+/** Immutable template content captured when creating a waiver request. */
+export type WaiverTemplateSnapshot = Omit<WaiverTemplate, "createdAt" | "updatedAt">;
+
 // ---------------------------------------------------------------------------
 // Waiver request
 // ---------------------------------------------------------------------------
@@ -79,8 +82,14 @@ export interface WaiverSignedPayload {
   signerName: string;
   signerEmail: string;
   signerPhone: string;
+  signerAddress?: string | null;
   signerDob: string | null;
+  /** Trip/booking date associated with the waiver (YYYY-MM-DD). */
+  bookingDate?: string | null;
   initials: Record<string, string>;
+  /** Explicit acknowledgement metadata (required by server). */
+  termsAcceptedAtIso: string;
+  termsContentHash: string;
   /** Optional; omitted when persisting to Firestore to avoid document size limit (PDF + contentHash suffice). */
   signatureDataUrl?: string;
   typedName?: string;
@@ -96,17 +105,30 @@ export interface WaiverSigned {
   htmlStoragePath?: string | null;
   contentHash: string;
   signedPayload: WaiverSignedPayload;
+  /** Optional operator-required manual review metadata. */
+  requiresManualReview?: WaiverManualReview;
+}
+
+export interface WaiverManualReview {
+  reasonCode: string;
+  reason: string;
+  at: FirestoreTimestamp;
+  metadata?: Record<string, unknown>;
 }
 
 export interface WaiverRequest {
   bookingId: string;
   templateId: string;
   templateVersion: number;
+  /** Immutable template snapshot captured when request was created (prevents admin edits from drifting legal terms). */
+  templateSnapshot?: WaiverTemplateSnapshot;
   status: WaiverRequestStatus;
   signerName?: string;
   signerEmail?: string;
   signerPhone?: string;
   signerDob?: string;
+  /** When present, operators must review before the waiver is relied on legally. */
+  requiresManualReview?: WaiverManualReview;
   signingTokenId: string;
   signingUrl: string;
   /** Share link for additional party members; same token doc as {@link WaiverGroupTokenDoc}. */

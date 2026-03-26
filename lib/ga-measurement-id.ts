@@ -1,12 +1,12 @@
 /**
  * GA4 web stream measurement ID (public, visible in every page view).
- * Use NEXT_PUBLIC_GA_MEASUREMENT_ID to override (e.g. staging or a new stream).
- * Set NEXT_PUBLIC_GA_MEASUREMENT_ID to empty or "off" to disable gtag (e.g. local without polluting GA).
+ * Production: `NEXT_PUBLIC_GA_MEASUREMENT_ID` must be set to a valid `G-XXXXXXXXXX` ID (no implicit default).
+ * Local development: when unset, a dev default stream ID is used so Realtime/DebugView can be verified without env.
+ * Set NEXT_PUBLIC_GA_MEASUREMENT_ID to empty or "off" / "0" to disable gtag (e.g. local without polluting GA).
  *
- * Next.js inlines NEXT_PUBLIC_* at build time. Default is always used when unset so production
- * never ships without a measurement ID; dev loads the same default so Realtime/DebugView can be verified locally.
+ * Next.js inlines NEXT_PUBLIC_* at build time.
  */
-const DEFAULT_GA4_MEASUREMENT_ID = "G-1QM1E4C1BB";
+const DEV_FALLBACK_GA4_MEASUREMENT_ID = "G-1QM1E4C1BB";
 const GA4_MEASUREMENT_ID_REGEX = /^G-[A-Za-z0-9]{10}$/;
 
 function normalizeMeasurementId(raw: string): string | null {
@@ -23,6 +23,8 @@ function normalizeMeasurementId(raw: string): string | null {
 
 export function getGaMeasurementId(): string | null {
   const raw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+  const isProduction = process.env.NODE_ENV === "production";
+
   if (raw !== undefined) {
     const trimmed = raw.trim();
 
@@ -32,9 +34,15 @@ export function getGaMeasurementId(): string | null {
     }
 
     if (trimmed.toLowerCase() === "off" || trimmed === "0") {
-      console.warn(
-        "[ga-measurement-id] NEXT_PUBLIC_GA_MEASUREMENT_ID disables GA via off/0. This should only be used for local dev."
-      );
+      if (isProduction) {
+        console.error(
+          "[ga-measurement-id] NEXT_PUBLIC_GA_MEASUREMENT_ID disables GA via off/0; this is not allowed in production builds."
+        );
+      } else {
+        console.warn(
+          "[ga-measurement-id] NEXT_PUBLIC_GA_MEASUREMENT_ID disables GA via off/0. Use only for local or non-production."
+        );
+      }
       return null;
     }
 
@@ -48,5 +56,13 @@ export function getGaMeasurementId(): string | null {
 
     return normalized;
   }
-  return DEFAULT_GA4_MEASUREMENT_ID;
+
+  if (isProduction) {
+    console.error(
+      "[ga-measurement-id] NEXT_PUBLIC_GA_MEASUREMENT_ID is unset in production; GA is disabled. Set it to your active GA4 stream ID."
+    );
+    return null;
+  }
+
+  return DEV_FALLBACK_GA4_MEASUREMENT_ID;
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
-import { getTokenById, getRequestById, getTemplateById, getGroupTokenById, isTokenValid } from "@/lib/waiver/firestore";
+import { flagWaiverRequestForManualReview, getTokenById, getRequestById, getTemplateById, getGroupTokenById, isTokenValid } from "@/lib/waiver/firestore";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
 import { toValidateTemplatePayload } from "@/lib/waiver/to-validate-template-payload";
 
@@ -47,18 +47,45 @@ export async function GET(request: NextRequest) {
       if (!groupDoc) {
         return NextResponse.json({ valid: false, error: "This group link is invalid or has expired." }, { status: 404 });
       }
-      const template = await getTemplateById(groupDoc.templateId);
-      if (!template) {
-        return NextResponse.json({ valid: false, error: "Template not found" }, { status: 404 });
-      }
+          const snapshot = groupDoc.templateSnapshot;
+          let template: Awaited<ReturnType<typeof getTemplateById>> | typeof snapshot | null = null;
+          if (snapshot) {
+            if (snapshot.version !== groupDoc.templateVersion) {
+              return NextResponse.json({ valid: false, error: "Waiver template version mismatch; please contact support." }, { status: 409 });
+            }
+            template = snapshot;
+          } else {
+            const resolved = await getTemplateById(groupDoc.templateId);
+            if (!resolved || resolved.version !== groupDoc.templateVersion) {
+              return NextResponse.json({ valid: false, error: "Waiver template version mismatch; please contact support." }, { status: 409 });
+            }
+            template = resolved;
+          }
       const bookingSummary = await buildBookingSummary(groupDoc.bookingId);
+          let templatePayload: WaiverValidateResponse["template"];
+          try {
+            templatePayload = toValidateTemplatePayload(template);
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            await getDb()
+              .collection("waiverTemplates")
+              .doc(groupDoc.templateId)
+              .set(
+                {
+                  adminReviewRequired: true,
+                  adminReviewError: message,
+                },
+                { merge: true }
+              );
+            return NextResponse.json({ valid: false, error: message }, { status: 400 });
+          }
       const response: WaiverValidateResponse = {
         valid: true,
         waiverRequestId: "",
         isGroupSigning: true,
         groupToken: group,
         bookingSummary: { ...bookingSummary, partySize: bookingSummary.partySize ?? groupDoc.partySize },
-        template: toValidateTemplatePayload(template),
+            template: templatePayload,
       };
       return NextResponse.json(response);
     } catch (e) {
@@ -85,12 +112,49 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ valid: false, error: "Waiver request not found or no longer pending" }, { status: 404 });
     }
 
-    const template = await getTemplateById(req.templateId);
+    const templateFromSnapshot = req.templateSnapshot;
+    if (templateFromSnapshot?.version != null && templateFromSnapshot.version !== req.templateVersion) {
+      await flagWaiverRequestForManualReview(req.id, {
+        reasonCode: "waiver_template_version_mismatch",
+        reason: `Pinned template snapshot version (${templateFromSnapshot.version}) does not match request.templateVersion (${req.templateVersion}).`,
+      });
+      return NextResponse.json({ valid: false, error: "Waiver template version mismatch; please contact support." }, { status: 409 });
+    }
+    const template =
+      templateFromSnapshot ??
+      (await (async () => {
+        const resolved = await getTemplateById(req.templateId);
+        if (!resolved) return null;
+        if (resolved.version !== req.templateVersion) return null;
+        return resolved;
+      })());
     if (!template) {
-      return NextResponse.json({ valid: false, error: "Template not found" }, { status: 404 });
+      await flagWaiverRequestForManualReview(req.id, {
+        reasonCode: "waiver_template_version_drift_or_missing_snapshot",
+        reason: "Could not resolve a pinned waiver template version for this request (template drift suspected).",
+      });
+      return NextResponse.json({ valid: false, error: "Waiver template version mismatch; please contact support." }, { status: 409 });
     }
 
     const bookingSummary = await buildBookingSummary(req.bookingId);
+
+    let templatePayload: WaiverValidateResponse["template"];
+    try {
+      templatePayload = toValidateTemplatePayload(template);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await getDb()
+        .collection("waiverTemplates")
+        .doc(req.templateId)
+        .set(
+          {
+            adminReviewRequired: true,
+            adminReviewError: message,
+          },
+          { merge: true }
+        );
+      return NextResponse.json({ valid: false, error: message }, { status: 400 });
+    }
 
     const response: WaiverValidateResponse = {
       valid: true,
@@ -99,7 +163,7 @@ export async function GET(request: NextRequest) {
         ...bookingSummary,
         partySize: bookingSummary.partySize,
       },
-      template: toValidateTemplatePayload(template),
+      template: templatePayload,
     };
     return NextResponse.json(response);
   } catch (e) {

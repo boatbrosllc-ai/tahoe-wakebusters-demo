@@ -60,17 +60,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const docRef = await db.collection("blocks").add({
-      experienceId,
-      boatId: boatId ?? null,
-      startAt: Timestamp.fromDate(start),
-      endAt: Timestamp.fromDate(end),
-      note: null,
-      slotId,
-      createdAt: FieldValue.serverTimestamp(),
-      createdBy: null,
-    });
-    return NextResponse.json({ ok: true, blockId: docRef.id, slotId, boatId });
+    // Create one block per (experienceId variant) so lookups by slug/doc-id both work.
+    const writeRefs = experienceIdVariants.map((expIdVariant) =>
+      db.collection("blocks").add({
+        experienceId: expIdVariant,
+        experienceCanonicalId: experienceId,
+        experienceSlug: experienceSlug || null,
+        boatId: boatId ?? null,
+        startAt: Timestamp.fromDate(start),
+        endAt: Timestamp.fromDate(end),
+        note: null,
+        slotId,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: null,
+      })
+    );
+    const [firstRef] = await Promise.all(writeRefs);
+    return NextResponse.json({ ok: true, blockId: firstRef.id, slotId, boatId });
   } catch (err) {
     console.error("[admin/blocks/block-slot]", err);
     return NextResponse.json({ error: "Failed to block slot" }, { status: 500 });

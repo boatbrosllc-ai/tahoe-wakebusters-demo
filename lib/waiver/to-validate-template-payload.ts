@@ -4,61 +4,39 @@
  * (the signing UI re-sanitizes in TermsAccept before dangerouslySetInnerHTML).
  */
 
-import type {
-  WaiverClause,
-  WaiverRequiredFields,
-  WaiverSignatureConfig,
-  WaiverSignatureMode,
-  WaiverTemplate,
-  WaiverValidateResponse,
-} from "./types";
+import { z } from "zod";
+import { waiverClauseSchema, waiverRequiredFieldsSchema, waiverSignatureConfigSchema } from "./schema";
+import type { WaiverTemplate, WaiverTemplateSnapshot, WaiverValidateResponse } from "./types";
 
-const DEFAULT_REQUIRED: WaiverRequiredFields = {
-  dob: true,
-  phone: true,
-  address: false,
-  bookingDate: true,
-};
-
-function normalizeSignatureMode(m: unknown): WaiverSignatureMode {
-  return m === "draw" || m === "type" || m === "both" ? m : "both";
-}
-
-function normalizeClauses(raw: unknown): WaiverClause[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((c) => {
-    const o = c as Record<string, unknown>;
-    return {
-      id: typeof o.id === "string" ? o.id : String(o.id ?? ""),
-      label: typeof o.label === "string" ? o.label : String(o.label ?? ""),
-      requiresInitials: !!o.requiresInitials,
-    };
-  });
-}
+const waiverTemplateForValidatePayloadSchema = z.object({
+  title: z.string().min(1),
+  termsHtml: z.string(),
+  requiredFields: waiverRequiredFieldsSchema,
+  clauses: z.array(waiverClauseSchema),
+  signature: waiverSignatureConfigSchema,
+  version: z.number().finite(),
+});
 
 export function toValidateTemplatePayload(
-  template: WaiverTemplate
+  template: WaiverTemplate | WaiverTemplateSnapshot
 ): WaiverValidateResponse["template"] {
-  const rf = template.requiredFields;
-  const requiredFields: WaiverRequiredFields = {
-    dob: rf?.dob ?? DEFAULT_REQUIRED.dob,
-    phone: rf?.phone ?? DEFAULT_REQUIRED.phone,
-    address: rf?.address ?? DEFAULT_REQUIRED.address,
-    bookingDate: rf?.bookingDate ?? DEFAULT_REQUIRED.bookingDate,
-  };
-  const sig = template.signature;
-  const signature: WaiverSignatureConfig = {
-    mode: normalizeSignatureMode(sig?.mode),
-    requireTypedName: !!sig?.requireTypedName,
-  };
-  const version = typeof template.version === "number" && Number.isFinite(template.version) ? template.version : 1;
+  const parsed = waiverTemplateForValidatePayloadSchema.safeParse(template);
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .map((i) => {
+        const path = i.path.length > 0 ? i.path.join(".") : "(root)";
+        return `${path}: ${i.message}`;
+      })
+      .join("; ");
+    throw new Error(`Invalid waiver template record: ${details}`);
+  }
 
   return {
-    title: typeof template.title === "string" ? template.title : String(template.title ?? ""),
-    termsHtml: typeof template.termsHtml === "string" ? template.termsHtml : "",
-    requiredFields,
-    clauses: normalizeClauses(template.clauses),
-    signature,
-    version,
+    title: parsed.data.title,
+    termsHtml: parsed.data.termsHtml,
+    requiredFields: parsed.data.requiredFields,
+    clauses: parsed.data.clauses,
+    signature: parsed.data.signature,
+    version: parsed.data.version,
   };
 }

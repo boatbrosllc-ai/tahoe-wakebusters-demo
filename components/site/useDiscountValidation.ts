@@ -94,8 +94,7 @@ export function useDiscountValidation(
         setAppliedDiscountError(data.error ?? "Invalid or expired code");
       }
     } catch {
-      setAppliedDiscount(null);
-      setAppliedDiscountError("Could not validate code");
+      setAppliedDiscountError("Could not re-verify this code (network error). Please retry, or proceed without changes.");
     } finally {
       setAppliedDiscountLoading(false);
     }

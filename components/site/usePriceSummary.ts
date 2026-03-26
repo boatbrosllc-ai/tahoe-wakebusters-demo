@@ -69,9 +69,10 @@ export function usePriceSummary({
     const subtotalBeforeTax = rateCents + addonsTotalCents;
     const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
     const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
-    const pct = Math.min(TIP_MAX_PERCENT_SERVER, Math.max(20, tipPercent));
-    const tipCents = tipChoice === "now" ? Math.round(subtotalBeforeTax * (pct / 100)) : 0;
     const discountCents = appliedDiscount?.discountCents ?? 0;
+    const postDiscountBase = Math.max(0, subtotalBeforeTax + salesTaxCents - discountCents);
+    const pct = Math.min(TIP_MAX_PERCENT_SERVER, Math.max(20, tipPercent));
+    const tipCents = tipChoice === "now" ? Math.round(postDiscountBase * (pct / 100)) : 0;
     const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
     const baseLabel = selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental");
     const rateLabel = isTicketed

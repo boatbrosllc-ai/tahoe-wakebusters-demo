@@ -53,10 +53,14 @@ export default async function RootLayout({
     didLogGaSkip = true;
     const raw = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
     const trimmed = raw == null ? "(unset)" : raw.trim();
+    const prodHint =
+      process.env.NODE_ENV === "production"
+        ? " Production requires an explicit valid NEXT_PUBLIC_GA_MEASUREMENT_ID (no fallback)."
+        : "";
     console.warn(
       `[ga] Skipping GA injection in app/layout.tsx. NEXT_PUBLIC_GA_MEASUREMENT_ID is empty/disabled/malformed (value: ${JSON.stringify(
         trimmed
-      )}).`
+      )}).${prodHint}`
     );
   }
 

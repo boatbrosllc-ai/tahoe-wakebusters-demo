@@ -57,6 +57,59 @@ export async function register() {
     );
   }
 
+  // Guard: when legacy booking fallback is disabled, fail closed until all bookings have startDateStr.
+  // Otherwise we risk missing overlap conflicts from legacy rows (double-booking).
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true") {
+    try {
+      const { getDb } = await import("@/lib/booking/firebase-admin");
+      const db = getDb();
+      const legacyProbe = await db.collection("bookings").where("startDateStr", "==", null).limit(1).get();
+      if (!legacyProbe.empty) {
+        console.error(
+          "[instrumentation] CRITICAL: DISABLE_LEGACY_BOOKING_FALLBACK=true but bookings backfill is incomplete (found startDateStr == null). " +
+            "Booking routes will return 503 until backfill completes."
+        );
+        setBookingReadyForProductionStartup(false);
+      }
+    } catch (probeErr) {
+      console.warn(
+        "[instrumentation] Legacy startDateStr backfill probe failed; leaving bookingReady unchanged.",
+        probeErr instanceof Error ? probeErr.message : probeErr
+      );
+    }
+  }
+
+  // Best-effort validation: warn when blocks reference an unknown experience id/slug.
+  // (Blocks are written under both canonical id + slug variants; older data may not.)
+  try {
+    const { getDb } = await import("@/lib/booking/firebase-admin");
+    const db = getDb();
+    const blocksSnap = await db.collection("blocks").limit(500).get();
+    const expIds = Array.from(
+      new Set(
+        blocksSnap.docs
+          .map((d) => (d.data() as { experienceId?: unknown }).experienceId)
+          .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+          .map((s) => s.trim())
+      )
+    );
+    for (const expId of expIds) {
+      const docSnap = await db.collection("experiences").doc(expId).get();
+      if (docSnap.exists) continue;
+      const slugSnap = await db.collection("experiences").where("slug", "==", expId).limit(1).get();
+      if (!slugSnap.empty) continue;
+      console.warn(
+        "[instrumentation] WARNING: block references unknown experienceId (no matching experiences doc id or slug).",
+        { experienceId: expId }
+      );
+    }
+  } catch (blockValidateErr) {
+    console.warn(
+      "[instrumentation] Blocks experienceId validation skipped (probe failed).",
+      blockValidateErr instanceof Error ? blockValidateErr.message : blockValidateErr
+    );
+  }
+
   const legacyBooking = process.env.DISABLE_LEGACY_BOOKING_FALLBACK === "true";
   const legacyHolds = process.env.DISABLE_LEGACY_HOLDS_FALLBACK === "true";
   let legacySafe = legacyBooking && legacyHolds;

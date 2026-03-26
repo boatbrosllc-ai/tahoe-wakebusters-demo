@@ -123,13 +123,13 @@ Then open `/experiences/pontoon`, `/experiences/watersports`, `/experiences/suns
 
 - `app/layout.tsx` injects the GA4 `gtag/js` script and inline bootstrap when `getGaMeasurementId()` returns a valid ID.
 - `lib/ga-measurement-id.ts` reads `NEXT_PUBLIC_GA_MEASUREMENT_ID`:
-  - Unset: uses the default GA4 measurement ID (in both local dev and production).
-  - Set to a valid GA4 measurement ID (`G-XXXXXXXXXX`): overrides the stream.
-  - Set to `off` or `0` (or empty): disables GA injection (so analytics won’t fire).
-  - Malformed values: are logged and treated as disabled.
-- Production guard: `scripts/check-production-env.js` fails the check in production when `NEXT_PUBLIC_GA_MEASUREMENT_ID` is empty/disabled/malformed.
+  - **Production** (`NODE_ENV=production`): the variable must be set to a valid GA4 measurement ID (`G-XXXXXXXXXX`). There is no hardcoded fallback; unset, empty, `off`/`0`, or malformed values disable GA and fail deploy checks.
+  - **Local development**: when unset, a dev fallback ID is used so you can verify Realtime/DebugView without editing env; set a specific `G-XXXXXXXXXX` to target another stream.
+  - Set to `off` or `0` (or empty): disables GA injection (intended for local use).
+  - Malformed values: logged and treated as disabled.
+- Production guard: Netlify production builds run `scripts/check-production-env.js` before `next build` (see `netlify.toml`). The deploy health plugin fails production deploys when `/api/health` reports `ga4.enabled !== true`.
 
-Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it sends `page_view` updates only when `window.gtag` is available, and de-dupes the initial render).
+Page views are tracked on App Router navigation by `components/providers/GaPageViewTracker.tsx` (it de-dupes the automatic first `page_view` from `gtag('config', ...)`, and retries client navigations until `window.gtag` is available so early navigations are not dropped).
 
 ### Conversion events
 
@@ -143,13 +143,14 @@ Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA 
 ### Verification checklist
 
 Production
-- Run `node scripts/check-production-env.js` and confirm it passes.
-- Confirm GA injection is not being skipped in server logs.
+- Run `NODE_ENV=production node scripts/check-production-env.js` (or rely on Netlify production build) and confirm it passes.
+- Set `NEXT_PUBLIC_GA_MEASUREMENT_ID` to your live GA4 web stream ID on the host; do not rely on an implicit default.
+- Confirm GA injection is not being skipped in server logs and `/api/health` shows `ga4.enabled: true`.
 - Navigate between routes and confirm GA4 `page_view` updates on client-side transitions.
 - Click-to-call and booking CTAs should emit `call_click` / `book_cta_click` events with the expected `source` and `page`.
 
 Local
-- For GA testing: leave `NEXT_PUBLIC_GA_MEASUREMENT_ID` unset (uses the default) or set it to another valid `G-XXXXXXXXXX` ID.
+- For GA testing without setting env: leave `NEXT_PUBLIC_GA_MEASUREMENT_ID` unset (uses the dev fallback stream) or set another valid `G-XXXXXXXXXX` ID.
 - To avoid polluting GA: set `NEXT_PUBLIC_GA_MEASUREMENT_ID=off` (or `0`).
 - Confirm `page_view` fires when navigating between routes.
 

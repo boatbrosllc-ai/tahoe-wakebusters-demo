@@ -286,14 +286,38 @@ export async function GET(request: NextRequest) {
       const now = Date.now();
       const soldByDate: Record<string, number> = {};
       const heldByDate: Record<string, number> = {};
+      const charterLockedDates = new Set<string>();
       for (const snap of bookingsSnaps) {
         for (const doc of snap.docs) {
-          const b = doc.data() as { slotId?: string; slot_id?: string; partySize?: number; status?: string };
+          const b = doc.data() as {
+            slotId?: string;
+            slot_id?: string;
+            partySize?: number;
+            status?: string;
+            bookingMode?: string;
+          };
           const slotRaw = b.slotId ?? b.slot_id;
           if (!slotRaw || typeof b.partySize !== "number") continue;
           if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
           const parsed = parseSlotIdRelaxed(slotRaw);
           if (!parsed || !dateSet.has(parsed.dateStr)) continue;
+          // Charter bookings lock the full ticketed departure for that date when they match the experience's departure time.
+          if (b.bookingMode === "charter") {
+            const expDepHour = (exp as { departureHour?: number }).departureHour;
+            const expDepMinute = (exp as { departureMinute?: number }).departureMinute;
+            const expHasDeparture =
+              typeof expDepHour === "number" &&
+              Number.isFinite(expDepHour) &&
+              typeof expDepMinute === "number" &&
+              Number.isFinite(expDepMinute);
+            const matchesDeparture = expHasDeparture
+              ? parsed.startHour === expDepHour && (parsed.startMinute ?? 0) === expDepMinute
+              : true;
+            if (matchesDeparture) {
+              charterLockedDates.add(parsed.dateStr);
+              continue;
+            }
+          }
           soldByDate[parsed.dateStr] = (soldByDate[parsed.dateStr] ?? 0) + b.partySize;
         }
       }
@@ -323,7 +347,7 @@ export async function GET(request: NextRequest) {
         }
         const sold = soldByDate[dateStr] ?? 0;
         const held = heldByDate[dateStr] ?? 0;
-        ticketsAvailableByDate[dateStr] = Math.max(0, total - sold - held);
+        ticketsAvailableByDate[dateStr] = charterLockedDates.has(dateStr) ? 0 : Math.max(0, total - sold - held);
       }
     }
 
