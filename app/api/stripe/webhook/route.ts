@@ -53,6 +53,7 @@ import {
   webhookTransientFailureShouldRetry,
   WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR,
   WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND,
+  WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID,
   WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI,
   WH_RETRY_ASYNC_PAYMENT_NOT_PAID,
   WH_RETRY_CHECKOUT_ACTIVE_HOLD_CONVERT_ERR,
@@ -788,14 +789,29 @@ export async function POST(request: NextRequest) {
       const currency = session.currency ?? undefined;
       const holdId = session.metadata?.holdId;
       if (!holdId) {
+        const attempt = await recordWebhookRetryAttempt(WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID);
+        if (webhookTransientFailureShouldRetry(attempt)) {
+          await writeEventResult(evId, {
+            status: "failed_retryable",
+            processedAt: Timestamp.now(),
+            error: "Missing holdId in session metadata",
+            sessionId,
+            paymentIntentId,
+            amountTotal,
+            currency,
+          });
+          return false;
+        }
         await writeEventResult(evId, {
           status: "failed_permanent",
           processedAt: Timestamp.now(),
+          outcome: "async_checkout_missing_hold_id_dead_letter",
           error: "Missing holdId in session metadata",
           sessionId,
           paymentIntentId,
           amountTotal,
           currency,
+          attempt,
         });
         return true;
       }

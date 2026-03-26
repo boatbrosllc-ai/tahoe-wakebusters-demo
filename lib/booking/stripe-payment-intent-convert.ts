@@ -8,6 +8,7 @@ import type Stripe from "stripe";
 import type { ConvertHoldInput, ConvertHoldInputDeposit } from "@/lib/booking/convert-hold-to-booking";
 import type { BookingCardDisplay } from "@/lib/booking/types";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { bookingWarn } from "@/lib/booking/debug";
 import type { BookingPricing } from "@/lib/booking/types";
@@ -19,6 +20,7 @@ export type HoldPricingFallback = {
 } | null;
 
 const PLACEHOLDER_EMAIL_DOMAIN = "@pending.internal";
+const DEPOSIT_RATIO_EPSILON = 0.02;
 
 export function isPlaceholderCheckoutEmail(email: string | undefined | null): boolean {
   if (!email || typeof email !== "string") return false;
@@ -108,6 +110,28 @@ export function resolveUsesDepositInputFromPaymentIntent(
       amountCharged,
     });
     return false;
+  }
+
+  const ratio = totalCents > 0 ? amountCharged / totalCents : 0;
+  const ratioLooksLikeDeposit = Math.abs(ratio - DEPOSIT_FRACTION) <= DEPOSIT_RATIO_EPSILON;
+  if (ratioLooksLikeDeposit) {
+    void import("@/lib/booking/operational-alerts")
+      .then(({ writeOperationalAlert }) =>
+        writeOperationalAlert({
+          type: "deposit_vs_full_missing_payment_stage_metadata_manual_review",
+          severity: "critical",
+          requiresManualReview: true,
+          paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+          totalCents,
+          amountCharged,
+          ratio,
+          source: "resolveUsesDepositInputFromPaymentIntent",
+          message:
+            "payment_stage metadata missing; amount ratio matched deposit fraction and was classified as deposit. Manual verification required.",
+        })
+      )
+      .catch(() => {});
+    return true;
   }
 
   void import("@/lib/booking/operational-alerts")

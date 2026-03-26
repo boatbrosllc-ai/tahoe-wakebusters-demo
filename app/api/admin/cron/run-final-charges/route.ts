@@ -32,11 +32,12 @@ import {
   clearFinalFailureNotificationLease,
 } from "@/lib/booking/final-failure-dedupe";
 import type { Booking } from "@/lib/booking/types";
-import { bookingLog, bookingError } from "@/lib/booking/debug";
+import { bookingLog, bookingError, bookingWarn } from "@/lib/booking/debug";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
 import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import {
   persistFinalBalanceNormalizationIfNeeded,
   resolveFinalBalanceFromBooking,
@@ -165,7 +166,7 @@ export async function POST(request: NextRequest) {
               }
               tx.update(ref, {
                 status: "final_paid",
-                "stripe.finalChargedAt": Timestamp.now(),
+                "stripe.finalChargedAt": FieldValue.serverTimestamp(),
                 ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
                   ? { "stripe.finalRevenueSummaryApplied": true }
                   : {}),
@@ -354,7 +355,7 @@ export async function POST(request: NextRequest) {
           skipped++;
           continue;
         }
-        const customerId = booking.stripe?.customerId;
+        let customerId = booking.stripe?.customerId;
         const paymentMethodId = booking.stripe?.paymentMethodId;
         const existingFinalPiId = booking.stripe?.finalPaymentIntentId;
         if (existingFinalPiId) {
@@ -401,7 +402,7 @@ export async function POST(request: NextRequest) {
                 }
                 tx.update(bookingRef, {
                   status: "final_paid",
-                  "stripe.finalChargedAt": Timestamp.now(),
+                  "stripe.finalChargedAt": FieldValue.serverTimestamp(),
                   updatedAt: Timestamp.now(),
                   ...(isDepositFlow && finalRev > 0 && !alreadySummarized
                     ? { "stripe.finalRevenueSummaryApplied": true }
@@ -462,14 +463,43 @@ export async function POST(request: NextRequest) {
               skipped++;
               continue;
             }
-            try {
-              await stripe.paymentIntents.cancel(existingFinalPiId);
-            } catch (cancelErr) {
-              console.warn("[run-final-charges] cancel stale final PI failed (non-fatal)", {
+            let canClearStaleIntent =
+              existingPi.status === "canceled" || existingPi.status === "requires_payment_method";
+            if (!canClearStaleIntent) {
+              try {
+                const cancelResult = await stripe.paymentIntents.cancel(existingFinalPiId);
+                canClearStaleIntent =
+                  cancelResult.status === "canceled" ||
+                  cancelResult.status === "requires_payment_method";
+              } catch (cancelErr) {
+                const msg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+                bookingWarn("run-final-charges", "cancel stale final PI failed; booking skipped for this run", {
+                  bookingId,
+                  existingFinalPiId,
+                  piStatus: existingPi.status,
+                  error: msg,
+                });
+                await writeOperationalAlert({
+                  type: "final_charge_stale_pi_not_cancelable",
+                  bookingId,
+                  paymentIntentId: existingFinalPiId,
+                  source: "run-final-charges",
+                  phase: "final_due_loop",
+                  piStatus: existingPi.status,
+                  error: msg,
+                });
+                skipped++;
+                continue;
+              }
+            }
+            if (!canClearStaleIntent) {
+              bookingWarn("run-final-charges", "stale final PI not cancelable; booking skipped for this run", {
                 bookingId,
                 existingFinalPiId,
-                error: cancelErr instanceof Error ? cancelErr.message : cancelErr,
+                piStatus: existingPi.status,
               });
+              skipped++;
+              continue;
             }
             await db.runTransaction(async (tx) => {
               const ref = db.collection("bookings").doc(bookingId);
@@ -535,6 +565,48 @@ export async function POST(request: NextRequest) {
           bookingId,
           source: "run-final-charges",
         });
+        if (!customerId && booking.customer?.email) {
+          const emailKey = booking.customer.email.trim().toLowerCase();
+          if (emailKey) {
+            try {
+              const idxRef = db.collection("stripeCustomerIndex").doc(emailKey);
+              const idxSnap = await idxRef.get();
+              const indexedId = idxSnap.exists ? (idxSnap.data() as { customerId?: string | null })?.customerId : undefined;
+              if (typeof indexedId === "string" && indexedId.trim()) {
+                const verified = await verifyIndexedStripeCustomerOrClear(
+                  stripe,
+                  idxRef,
+                  emailKey,
+                  indexedId,
+                  "run-final-charges"
+                );
+                if (verified) {
+                  customerId = verified;
+                  await db.collection("bookings").doc(bookingId).update({
+                    "stripe.customerId": verified,
+                    updatedAt: FieldValue.serverTimestamp(),
+                  });
+                }
+              }
+              if (!customerId) {
+                const list = await stripe.customers.list({ email: emailKey, limit: 1 });
+                const listedId = list.data[0]?.id;
+                if (listedId) {
+                  customerId = listedId;
+                  await db.collection("bookings").doc(bookingId).update({
+                    "stripe.customerId": listedId,
+                    updatedAt: FieldValue.serverTimestamp(),
+                  });
+                }
+              }
+            } catch (recoverErr) {
+              bookingWarn("run-final-charges", "stripe customer recovery lookup failed", {
+                bookingId,
+                error: recoverErr instanceof Error ? recoverErr.message : String(recoverErr),
+              });
+            }
+          }
+        }
         if (!customerId || !paymentMethodId || authoritativeFinalCents <= 0) {
           console.warn("[run-final-charges] booking missing customerId/pm or zero final balance", { bookingId });
           const missingFields: string[] = [];
@@ -706,7 +778,7 @@ export async function POST(request: NextRequest) {
               }
               tx.update(bookingRef, {
                 "stripe.finalPaymentIntentId": pi.id,
-                "stripe.finalChargedAt": Timestamp.now(),
+                "stripe.finalChargedAt": FieldValue.serverTimestamp(),
                 status: "final_paid",
                 ...(isDepositFlow && finalRev > 0 && sb?.finalRevenueSummaryApplied !== true
                   ? { "stripe.finalRevenueSummaryApplied": true }
@@ -787,6 +859,29 @@ export async function POST(request: NextRequest) {
         count: unsignedNearTrip.length,
         source: "run-final-charges",
       });
+    }
+    try {
+      const finalDuePastDueSnap = await db
+        .collection("bookings")
+        .where("status", "==", "final_due")
+        .where("finalChargeAt", "<=", nowTs)
+        .limit(400)
+        .get();
+      let missingStripeCustomerCount = 0;
+      for (const d of finalDuePastDueSnap.docs) {
+        const b = d.data() as Booking;
+        if (!b.stripe?.customerId) missingStripeCustomerCount++;
+      }
+      if (missingStripeCustomerCount > 0) {
+        await writeOperationalAlert({
+          type: "final_charge_missing_stripe_data_summary",
+          source: "run-final-charges",
+          missingStripeCustomerCount,
+          scannedFinalDuePastDueCount: finalDuePastDueSnap.size,
+        });
+      }
+    } catch (summaryErr) {
+      bookingWarn("run-final-charges", "missing-stripe-data summary query failed", { err: summaryErr });
     }
 
     try {

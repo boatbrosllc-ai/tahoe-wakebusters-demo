@@ -83,4 +83,10 @@ describe("stripe webhook route (source contracts)", () => {
     );
     assert.ok(webhookSrc.includes("await convertHoldToBooking(db, holdId, convertInput)"));
   });
+
+  it("async_payment_succeeded missing holdId retries first before permanent dead-letter", () => {
+    assert.match(webhookSrc, /WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID/);
+    assert.match(webhookSrc, /status:\s*"failed_retryable"/);
+    assert.match(webhookSrc, /Missing holdId in session metadata/);
+  });
 });

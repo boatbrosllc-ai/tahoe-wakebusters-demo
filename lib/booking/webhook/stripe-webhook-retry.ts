@@ -20,6 +20,7 @@ export const WH_RETRY_CHECKOUT_ACTIVE_HOLD_NO_PI = "whRetry_checkoutActiveHoldNo
 export const WH_RETRY_CHECKOUT_ACTIVE_HOLD_CONVERT_ERR = "whRetry_checkoutActiveHoldConvertErr";
 
 export const WH_RETRY_ASYNC_CHECKOUT_HOLD_NOT_FOUND = "whRetry_asyncCheckoutHoldNotFound";
+export const WH_RETRY_ASYNC_CHECKOUT_MISSING_HOLD_ID = "whRetry_asyncCheckoutMissingHoldId";
 export const WH_RETRY_ASYNC_CONVERTED_HOLD_NO_PI = "whRetry_asyncConvertedHoldNoPi";
 export const WH_RETRY_ASYNC_CHECKOUT_CONVERT_ERR = "whRetry_asyncCheckoutConvertErr";
 

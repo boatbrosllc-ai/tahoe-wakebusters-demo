@@ -443,8 +443,17 @@ export async function convertHoldToBooking(
     ...pricing,
     totalCents: computeFinalChargeTotalCentsFromHoldPricing(pricing, holdTipCents, holdDiscountCents),
   };
+  const authoritativeHoldTotalCents =
+    hold.pricing && typeof hold.pricing.totalCents === "number" ? hold.pricing.totalCents : null;
+  const authoritativeExpectedTotalCents =
+    authoritativeHoldTotalCents != null
+      ? computeFinalChargeTotalCentsFromHoldPricing(hold.pricing as BookingPricing, holdTipCents, holdDiscountCents)
+      : finalPricing.totalCents;
+  const recomputedPricingForLegacyHold = hold.pricing ? null : pricing;
   /** Must match create-payment-intent deposit math (`DEPOSIT_FRACTION` in lib/booking/constants). */
-  const expectedChargeCents = isDeposit ? Math.round(finalPricing.totalCents * DEPOSIT_FRACTION) : finalPricing.totalCents;
+  const expectedChargeCents = isDeposit
+    ? Math.round(authoritativeExpectedTotalCents * DEPOSIT_FRACTION)
+    : authoritativeExpectedTotalCents;
   const chargedFromInput =
     typeof input.amountTotalCents === "number" && Number.isFinite(input.amountTotalCents)
       ? Math.round(input.amountTotalCents)
@@ -560,7 +569,7 @@ export async function convertHoldToBooking(
         depositAmountCents: input.stripe.depositCents,
         finalAmountCents: input.stripe.finalCents,
         totalAmountCents: finalPricing.totalCents,
-        depositPaidAt: Timestamp.now(),
+        depositPaidAt: FieldValue.serverTimestamp(),
         ...(input.amountTotalCents != null && { amountTotalCents: input.amountTotalCents }),
         ...(input.currency && { currency: input.currency }),
       }
@@ -628,6 +637,8 @@ export async function convertHoldToBooking(
 
   let enqueueWaiverInviteOutbox = false;
 
+  // Revenue attribution uses payment-conversion time (not trip date), so capture once right before the write transaction.
+  const revenueAttributionDate = new Date();
   bookingLog("convert-hold", "starting transaction (slot update + booking doc + hold status)", { holdId, bookingId });
   try {
   await db.runTransaction(async (tx) => {
@@ -804,6 +815,11 @@ export async function convertHoldToBooking(
     tx.set(db.collection("bookings").doc(bookingId), bookingDoc);
     addConfirmationOutboxInTransaction(tx, db, bookingId);
     const holdUpdate: Record<string, unknown> = { status: "converted", bookingId };
+    if (recomputedPricingForLegacyHold) {
+      holdUpdate.pricing = finalPricing;
+      holdUpdate.tipCents = holdTipCents;
+      holdUpdate.discountCents = holdDiscountCents;
+    }
     if (isDeposit) {
       holdUpdate.depositPaymentIntentId = input.paymentIntentId;
     } else {
@@ -824,8 +840,9 @@ export async function convertHoldToBooking(
       // Revenue recognition: monthly summaries are keyed by payment date (creation date), not trip date.
       // Cancel route uses the same policy (booking.createdAt) for decrements. If trip-date attribution is
       // required, use parsedSlot.dateStr for monthKey and update cancel/route.ts to use startDateStr consistently.
-      const now = new Date();
-      const monthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const monthKey = `revenue_${revenueAttributionDate.getFullYear()}_${String(
+        revenueAttributionDate.getMonth() + 1
+      ).padStart(2, "0")}`;
       const monthRef = db.collection("summaries").doc(monthKey);
       tx.set(monthRef, {
         revenueCents: FieldValue.increment(revenueCents),

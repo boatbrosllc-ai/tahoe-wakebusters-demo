@@ -186,6 +186,95 @@ describe(
       assert.strictEqual(stored!.getTime(), expectedFinal.getTime());
     });
 
+    it("missing payment_stage metadata + 50% PI amount resolves to deposit (complete-after-payment conversion path)", async () => {
+      const { buildConvertHoldInputFromSucceededPaymentIntent } = await import(
+        "../lib/booking/stripe-payment-intent-convert"
+      );
+      const { convertHoldToBooking } = await import("../lib/booking/convert-hold-to-booking");
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `dep_path_${uid}`;
+      const holdId = `dep_path_hold_${uid}`;
+      const totalCents = 21600;
+      const depositCents = Math.round(totalCents * 0.5);
+
+      await db
+        .collection("experiences")
+        .doc(expId)
+        .set({
+          slug: "dep-path",
+          title: "Deposit path",
+          subtitle: "",
+          descriptionLong: "",
+          heroMedia: { type: "image", url: "https://example.com/x.jpg" },
+          gallery: [],
+          location: { title: "Lake Austin", addressText: "Lake Austin, TX" },
+          maxGuests: 14,
+          petsMax: 0,
+          included: [],
+          whatToBring: [],
+          rules: [],
+          cancellationPolicy: { freeCancelDays: 2, partialRefundDaysStart: 1, partialRefundDaysEnd: 0, noRefundWithinDays: 0, fullText: "" },
+          faqs: [],
+          seasonal: { enabled: false },
+          active: true,
+          pricingType: "ticketed",
+          maxCapacity: 10,
+          departureHour: 10,
+          departureMinute: 0,
+          tripDurationHours: 3,
+          defaultRateId: "rate1",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      await db.collection("experiences").doc(expId).collection("rates").doc("rate1").set({
+        durationHours: 3,
+        displayName: "3h",
+        priceCents: 10000,
+        active: true,
+      });
+      await db.collection("holds").doc(holdId).set({
+        experienceId: expId,
+        slotId: "2031-08-18-10-3",
+        startDateStr: "2031-08-18",
+        rateId: "rate1",
+        partySize: 2,
+        bookingMode: "shared",
+        pricingType: "ticketed",
+        status: "active",
+        expiresAt: Timestamp.fromDate(new Date(Date.now() + 120_000)),
+        createdAt: FieldValue.serverTimestamp(),
+        customerDraft: { name: "Path", email: "path@example.com", phone: "+15125550011" },
+        addonSelections: [],
+        answers: {},
+        marketingOptIn: false,
+        pricing: { subtotalCents: 20000, totalCents, taxCents: 1600, currency: "usd" },
+        tipCents: 0,
+        discountCents: 0,
+      });
+
+      const pi = {
+        id: `pi_missing_stage_${uid}`,
+        amount: depositCents,
+        currency: "usd",
+        metadata: {},
+      } as import("stripe").Stripe.PaymentIntent;
+      const convertInput = buildConvertHoldInputFromSucceededPaymentIntent(pi, {
+        pricing: { totalCents },
+        tipCents: 0,
+        discountCents: 0,
+      });
+      const result = await convertHoldToBooking(db, holdId, convertInput);
+      assert.ok("bookingId" in result);
+      if (!("bookingId" in result)) return;
+      const bookingSnap = await db.collection("bookings").doc(result.bookingId).get();
+      assert.strictEqual(bookingSnap.exists, true);
+      const booking = bookingSnap.data() as { status?: string };
+      assert.strictEqual(booking.status, "final_due");
+    });
+
     it("reconcile path (mirrors run-final-charges when final PI succeeded) transitions deposit booking to final_paid", async () => {
       const { finalChargeSuccessOutboxDocId } = await import("../lib/booking/notification-outbox");
 

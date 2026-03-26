@@ -29,7 +29,7 @@ describe("buildConvertHoldInputFromSucceededPaymentIntent (deposit)", () => {
 describe("resolveUsesDepositInputFromPaymentIntent (missing payment_stage)", () => {
   const totalCents = 100_00;
 
-  it("defaults to full payment when payment_stage is absent (no amount-ratio heuristic)", () => {
+  it("classifies as deposit when payment_stage is absent and charged amount is ~50% of authoritative total", () => {
     const depositCents = Math.round(totalCents * 0.5);
     const pi = {
       metadata: {},
@@ -37,7 +37,7 @@ describe("resolveUsesDepositInputFromPaymentIntent (missing payment_stage)", () 
     } as Pick<Stripe.PaymentIntent, "metadata" | "amount">;
     assert.strictEqual(
       resolveUsesDepositInputFromPaymentIntent(pi, { pricing: { totalCents }, tipCents: 0, discountCents: 0 }),
-      false
+      true
     );
   });
 

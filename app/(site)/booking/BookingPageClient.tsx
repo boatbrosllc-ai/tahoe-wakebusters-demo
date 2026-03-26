@@ -73,6 +73,7 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const [slotsPartialData, setSlotsPartialData] = useState(false);
   const slotsRequestRangeRef = useRef<{ start: string; end: string } | null>(null);
   const [slotsRetryTrigger, setSlotsRetryTrigger] = useState(0);
+  const [checkoutInlineError, setCheckoutInlineError] = useState<string | null>(null);
   const lastSlotsRetryForRef = useRef<string | null>(null);
   /** Bounded auto-retries per visible date range (failed fetch); reset when range or experience changes. */
   const slotsAutoRetryCountRef = useRef(0);
@@ -312,14 +313,34 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
   const canContinue =
     selectedExperience &&
     !boatsLoading &&
+    !boatsLoadError &&
     (selectedBoat || boats.length === 0) &&
     selectedDate &&
     (!slotsPartialData || selectedDateVerifiedInPartial);
 
-  const handleContinueToCheckout = () => {
+  const handleContinueToCheckout = async () => {
     if (!canContinue || !selectedExperience) return;
+    setCheckoutInlineError(null);
     bookingCache.invalidate(`slots|${selectedExperience.id}|`);
-    setSlotsRetryTrigger((t) => t + 1);
+    const { start: startDate, end: endDate } = getMonthRangeWithAdjacent(displayMonth.year, displayMonth.month);
+    try {
+      const data = await bookingCache.fetchSlots(selectedExperience.id, startDate, endDate, undefined, {
+        ticketed: selectedExperience.pricingType === "ticketed",
+      });
+      const freshSlots = Array.isArray(data.slots) ? data.slots : [];
+      setAllSlots(freshSlots);
+      const freshAvailable = availableDateSetFromSlotsWithBoat(freshSlots, selectedBoat);
+      if (!selectedDate || !freshAvailable || !freshAvailable.has(selectedDate)) {
+        setSelectedDate(null);
+        setCheckoutInlineError("That date is no longer available. Please pick another date.");
+        return;
+      }
+    } catch {
+      setCheckoutInlineError("Could not refresh availability. Please try again.");
+      return;
+    } finally {
+      setSlotsRetryTrigger((t) => t + 1);
+    }
     openWithSelection({
       experienceId: selectedExperience.id,
       experienceSlug: selectedExperience.slug,
@@ -494,6 +515,11 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                 <h2 className="text-sm font-semibold text-brand-dark uppercase tracking-wider mb-3">
                   Select your date
                 </h2>
+                {boats.length === 0 && !boatsLoadError && (
+                  <p className="text-brand-muted text-sm mb-3">
+                    This experience does not require boat selection. Choose a date to continue.
+                  </p>
+                )}
                 <div className="flex items-center justify-between mb-3">
                   <button
                     type="button"
@@ -613,11 +639,17 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                 <p className="text-center text-xs text-brand-muted mt-3">
                   Instant confirmation · 10-minute hold at checkout
                 </p>
+                {checkoutInlineError && (
+                  <p className="text-center text-sm text-red-600 mt-3">{checkoutInlineError}</p>
+                )}
               </div>
             )}
 
             {error && (
               <p className="text-center text-sm text-red-600">{error}</p>
+            )}
+            {checkoutInlineError && !canContinue && (
+              <p className="text-center text-sm text-red-600">{checkoutInlineError}</p>
             )}
           </div>
         ) : error != null && Array.isArray(experiences) && experiences.length === 0 ? (

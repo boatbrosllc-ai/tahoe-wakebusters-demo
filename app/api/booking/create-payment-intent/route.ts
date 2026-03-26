@@ -422,21 +422,9 @@ export async function POST(request: NextRequest) {
       bookingLog("create-payment-intent", "hold expired", { holdId: input.holdId, expiresAt: expiresAt.toDate().toISOString() });
       return NextResponse.json({ error: "Hold expired" }, { status: 400 });
     }
-    let pricing: import("@/lib/booking/types").BookingPricing;
-    try {
-      const resolved = await resolveHoldBookingPricing(db, hold, { mode: "payment_intent" });
-      pricing = resolved.pricing;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "RATE_NOT_FOUND") return NextResponse.json({ error: "Rate not found" }, { status: 404 });
-      if (msg === "BOAT_NOT_FOUND") return NextResponse.json({ error: "Boat not found" }, { status: 404 });
-      throw e;
-    }
-    const tipCents = (hold as { tipCents?: number }).tipCents ?? 0;
-    const discountCents = (hold as { discountCents?: number }).discountCents ?? 0;
-    const totalCents = computeFinalChargeTotalCentsFromHoldPricing(pricing, tipCents, discountCents);
-    const depositCents = Math.round(totalCents * DEPOSIT_FRACTION);
-    const finalCents = totalCents - depositCents;
+    let totalCents = 0;
+    let depositCents = 0;
+    let finalCents = 0;
     // Shared ticketed experiences always charge full — no deposit option.
     let payFullAmount: boolean;
     if ((hold as { bookingMode?: string }).bookingMode === "shared") {
@@ -502,7 +490,6 @@ export async function POST(request: NextRequest) {
         bookingWarn("create-payment-intent", "deposit coerced to full: legacy hold without experience allowDeposit", { holdId: input.holdId });
       }
     }
-    const chargeCents = payFullAmount ? totalCents : depositCents;
     const isOneTimeTicketed = (hold as { bookingMode?: string }).bookingMode === "shared" && payFullAmount === true;
     bookingLog("create-payment-intent", "pricing", {
       holdId: input.holdId,
@@ -520,14 +507,17 @@ export async function POST(request: NextRequest) {
           /** PI id for this payment stage read inside the transaction (authoritative vs non-transactional get). */
           existingPiIdForStage?: string;
           holdPaymentAttemptVersion: number;
+          holdSnapshot: Hold;
+          pricingFingerprint: string;
         };
 
     /** Extends hold expiry when first entering payment; optionally persists paymentIntent id in the same write (atomic with expiry). */
     const runHoldExtensionTransaction = async (
       paymentIntentIdToPersist: string | null,
-      options?: { noExtend?: boolean }
+      options?: { noExtend?: boolean; expectedPricingFingerprint?: string }
     ): Promise<MergeTxResult> => {
       const noExtend = options?.noExtend === true;
+      const expectedPricingFingerprint = options?.expectedPricingFingerprint;
       return await db.runTransaction(async (tx): Promise<MergeTxResult> => {
         const snap = await tx.get(holdRef);
         if (!snap.exists) return { ok: false, code: "not_found" };
@@ -547,6 +537,16 @@ export async function POST(request: NextRequest) {
         const otherIdRaw = (payFullAmount ? h.depositPaymentIntentId : h.fullPaymentIntentId)?.trim();
         const existingPiIdForStage = (h[piField as "fullPaymentIntentId"] as string | undefined)?.trim() || undefined;
         const holdPaymentAttemptVersion = typeof h.paymentAttemptVersion === "number" ? h.paymentAttemptVersion : 1;
+        const pricingFingerprint = JSON.stringify({
+          total: h.pricing?.totalCents ?? null,
+          subtotal: h.pricing?.subtotalCents ?? null,
+          tip: (h as { tipCents?: number }).tipCents ?? 0,
+          discount: (h as { discountCents?: number }).discountCents ?? 0,
+          currency: h.pricing?.currency ?? null,
+        });
+        if (expectedPricingFingerprint && expectedPricingFingerprint !== pricingFingerprint) {
+          return { ok: false, code: "pi_field_conflict", existingPiId: undefined };
+        }
 
         if (noExtend && !paymentIntentIdToPersist) {
           return {
@@ -556,6 +556,8 @@ export async function POST(request: NextRequest) {
             otherIdToCancel: undefined,
             existingPiIdForStage,
             holdPaymentAttemptVersion,
+            holdSnapshot: h,
+            pricingFingerprint,
           };
         }
 
@@ -596,6 +598,8 @@ export async function POST(request: NextRequest) {
           otherIdToCancel: otherIdRaw,
           existingPiIdForStage,
           holdPaymentAttemptVersion,
+          holdSnapshot: h,
+          pricingFingerprint,
         };
       });
     };
@@ -622,6 +626,7 @@ export async function POST(request: NextRequest) {
 
     const receiptClaimToken = signReceiptClaimToken(input.holdId);
 
+    // Transactional probe captures authoritative hold snapshot before any Stripe side effects.
     const probeBeforeCustomer = await runHoldExtensionTransaction(null, { noExtend: true });
     if (!probeBeforeCustomer.ok) {
       if (probeBeforeCustomer.code === "not_found") {
@@ -638,12 +643,13 @@ export async function POST(request: NextRequest) {
     }
 
     const stripe = getStripe();
+    const customerDraft = probeBeforeCustomer.holdSnapshot.customerDraft ?? hold.customerDraft;
     const customerId = await getOrCreateStripeCustomer(
       db,
       stripe,
-      hold.customerDraft.email,
-      hold.customerDraft.name,
-      hold.customerDraft.phone
+      customerDraft.email,
+      customerDraft.name,
+      customerDraft.phone
     );
 
     for (let spin = 0; spin < 5; spin++) {
@@ -663,6 +669,23 @@ export async function POST(request: NextRequest) {
       }
       const existingPiId = probe.existingPiIdForStage;
       let holdPaymentAttemptVersion = probe.holdPaymentAttemptVersion;
+      const holdForCharge = probe.holdSnapshot;
+      let pricing: import("@/lib/booking/types").BookingPricing;
+      try {
+        const resolved = await resolveHoldBookingPricing(db, holdForCharge, { mode: "payment_intent" });
+        pricing = resolved.pricing;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg === "RATE_NOT_FOUND") return NextResponse.json({ error: "Rate not found" }, { status: 404 });
+        if (msg === "BOAT_NOT_FOUND") return NextResponse.json({ error: "Boat not found" }, { status: 404 });
+        throw e;
+      }
+      const tipCents = (holdForCharge as { tipCents?: number }).tipCents ?? 0;
+      const discountCents = (holdForCharge as { discountCents?: number }).discountCents ?? 0;
+      totalCents = computeFinalChargeTotalCentsFromHoldPricing(pricing, tipCents, discountCents);
+      depositCents = Math.round(totalCents * DEPOSIT_FRACTION);
+      finalCents = totalCents - depositCents;
+      const chargeCents = payFullAmount ? totalCents : depositCents;
 
       // Reuse an existing active PaymentIntent for this hold+stage to prevent duplicate charges.
       // PI id is read inside `probe` (transactional) — not a separate get() before Stripe calls.
@@ -850,7 +873,9 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
       }
-      const mergeNew = await runHoldExtensionTransaction(paymentIntent.id);
+      const mergeNew = await runHoldExtensionTransaction(paymentIntent.id, {
+        expectedPricingFingerprint: probe.pricingFingerprint,
+      });
       if (!mergeNew.ok) {
         await stripe.paymentIntents.cancel(paymentIntent.id).catch(() => {});
         if (mergeNew.code === "pi_field_conflict") {

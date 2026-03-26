@@ -463,10 +463,21 @@ export async function persistCheckoutSessionAfterStripeSessionCreate(
     } catch (metaErr) {
       bookingError(
         "create-checkout-session",
-        "Could not attach checkoutSessionId to PaymentIntent metadata",
+        "CRITICAL: Could not attach checkoutSessionId to PaymentIntent metadata",
         metaErr,
         { holdId, sessionId: session.id, paymentIntentIdPrefix: piId.slice(0, 12) }
       );
+      await writeOperationalAlert({
+        type: "checkout_session_payment_intent_metadata_write_failed",
+        severity: "critical",
+        holdId,
+        sessionId: session.id,
+        paymentIntentId: piId,
+        source: "persistCheckoutSessionAfterStripeSessionCreate",
+        message:
+          "Failed to attach checkoutSessionId metadata to PaymentIntent after checkout session create; downstream webhook matching may be degraded.",
+        error: metaErr instanceof Error ? metaErr.message : String(metaErr),
+      });
     }
   }
   return persistResult;

@@ -47,8 +47,7 @@ export function usePaymentSummary({
       effectiveRateCents == null && (datePricesLoading || effectivePriceLoading);
     const authoritativeTotal = Math.max(0, totalCentsFromServer ?? priceSummary.totalCents);
     const halfRounded = Math.round(authoritativeTotal * DEPOSIT_FRACTION);
-    /** Reject stale/wrong PI metadata (e.g. full charge reported as "deposit") or absurd values — never show > ~50% + slack as deposit. */
-    const maxReasonableDeposit = Math.min(authoritativeTotal, halfRounded + 2);
+    const maxReasonableDeposit = Math.min(authoritativeTotal, Math.round(halfRounded * 1.01));
 
     let rawDepositCents: number;
     let trustServerDeposit = false;
@@ -57,11 +56,14 @@ export function usePaymentSummary({
       Number.isFinite(depositCentsFromServer) &&
       depositCentsFromServer >= 0
     ) {
-      if (depositCentsFromServer <= maxReasonableDeposit) {
+      if (depositCentsFromServer === authoritativeTotal) {
+        rawDepositCents = halfRounded;
+      } else if (depositCentsFromServer <= maxReasonableDeposit) {
         rawDepositCents = depositCentsFromServer;
         trustServerDeposit = true;
       } else {
-        rawDepositCents = halfRounded;
+        rawDepositCents = depositCentsFromServer;
+        trustServerDeposit = true;
       }
     } else {
       rawDepositCents = halfRounded;

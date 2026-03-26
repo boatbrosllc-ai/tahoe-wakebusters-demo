@@ -17,8 +17,9 @@ export class BlockCheckUnavailableError extends Error {
  * Returns true if any block exists for the experience (or any id variant) that overlaps [slotStart, slotEnd],
  * matching boatId (boatId == input.boatId OR block.boatId == null for "all boats").
  *
- * Queries `blocks` by `experienceId` with `startAt`/`endAt` bounds for [slotStart, slotEnd], then filters
- * by boat in memory. If Firestore cannot run the query
+ * Queries `blocks` by `experienceId` with a single range bound (`startAt <= slotEnd`), then filters
+ * by `endAt` and boat in memory. This intentionally avoids Firestore multi-range index coupling during
+ * booking-critical writes. If Firestore still cannot run the query
  * (e.g. failed-precondition / index), throws `BlockCheckUnavailableError` so callers return 503.
  */
 export async function hasOverlappingBlock(opts: {
@@ -69,8 +70,7 @@ export async function hasOverlappingBlock(opts: {
     const query = db
       .collection("blocks")
       .where("experienceId", "==", expIdForQuery)
-      .where("startAt", "<=", Timestamp.fromDate(slotEnd))
-      .where("endAt", ">=", Timestamp.fromDate(slotStart));
+      .where("startAt", "<=", Timestamp.fromDate(slotEnd));
 
     try {
       const snap = await getSnap(query);

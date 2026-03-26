@@ -1,5 +1,6 @@
-import { SESSION_HOLD_ID_KEY, clearModalHoldRecoverySession } from "@/components/site/useHoldCreation";
+import { clearModalHoldRecoverySession } from "@/components/site/useHoldCreation";
 import type { ModalHoldRecoveryPayloadV1 } from "@/components/site/useHoldCreation";
+import { readModalHoldSessionPayload } from "@/lib/booking/modal-hold-session";
 
 /**
  * Best-effort release of a hold persisted for the booking modal (e.g. after failed redirect).
@@ -11,12 +12,11 @@ import type { ModalHoldRecoveryPayloadV1 } from "@/components/site/useHoldCreati
  * monitor stuck holds.
  */
 export async function releaseHoldFromModalSessionStorage(): Promise<void> {
-  const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_HOLD_ID_KEY) : null;
-  if (!raw) return;
-  let parsed: ModalHoldRecoveryPayloadV1 | { holdId?: string; releaseToken?: string | null };
-  try {
-    parsed = JSON.parse(raw) as ModalHoldRecoveryPayloadV1 | { holdId?: string; releaseToken?: string | null };
-  } catch {
+  const parsed = readModalHoldSessionPayload() as
+    | ModalHoldRecoveryPayloadV1
+    | { holdId?: string; releaseToken?: string | null }
+    | null;
+  if (!parsed) {
     clearModalHoldRecoverySession();
     return;
   }

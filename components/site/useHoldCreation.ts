@@ -15,6 +15,7 @@ import { bookingError, bookingWarn } from "@/lib/booking/debug";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import { TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
+import { readModalSessionReleaseTokenForHold } from "@/lib/booking/modal-hold-session";
 import type { PriceSummary } from "@/components/site/usePriceSummary";
 import type { ExperienceItem } from "./useBookingModalData";
 import type { BoatOption, SlotDto } from "./useBookingModalData";
@@ -188,17 +189,7 @@ export function clearModalHoldRecoverySession(): void {
 
 /** When React state lost the token, sessionStorage may still hold it from the last persist. */
 export function readReleaseTokenFromModalSession(holdId: string): string | null {
-  try {
-    if (typeof window === "undefined") return null;
-    const raw = sessionStorage.getItem(SESSION_HOLD_ID_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { holdId?: string; releaseToken?: string | null };
-    if (parsed.holdId !== holdId) return null;
-    const t = typeof parsed.releaseToken === "string" ? parsed.releaseToken.trim() : "";
-    return t || null;
-  } catch {
-    return null;
-  }
+  return readModalSessionReleaseTokenForHold(holdId);
 }
 
 async function postReleaseHold(

@@ -7,10 +7,7 @@ import { siteConfig } from "@/config/site";
 import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { releaseHoldFromModalSessionStorage } from "@/components/site/useBookingPayment";
 import { completeAfterPaymentWithPolling } from "@/lib/booking/complete-after-payment-client";
-import {
-  SESSION_HOLD_ID_KEY,
-  type ModalHoldRecoveryPayloadV1,
-} from "@/components/site/useHoldCreation";
+import { readModalSessionHoldId, readModalSessionReceiptClaimToken } from "@/lib/booking/modal-hold-session";
 
 export function BookingStripeReturnHandler({
   paymentIntentId,
@@ -66,22 +63,8 @@ export function BookingStripeReturnHandler({
       setError(null);
       setProcessing(false);
       setHoldExpired(false);
-      let holdIdFromSession: string | undefined;
-      let receiptClaimFromSession: string | null = null;
-      try {
-        const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_HOLD_ID_KEY) : null;
-        if (raw) {
-          const parsed = JSON.parse(raw) as ModalHoldRecoveryPayloadV1;
-          if (parsed?.v === 1 && typeof parsed.holdId === "string" && parsed.holdId.trim()) {
-            holdIdFromSession = parsed.holdId.trim();
-          }
-          if (parsed?.v === 1 && typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()) {
-            receiptClaimFromSession = parsed.receiptClaimToken.trim();
-          }
-        }
-      } catch {
-        /* ignore */
-      }
+      const holdIdFromSession = readModalSessionHoldId() ?? undefined;
+      const receiptClaimFromSession = readModalSessionReceiptClaimToken();
       try {
         const outcome = await completeAfterPaymentWithPolling({
           paymentIntentId,

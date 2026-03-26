@@ -49,6 +49,7 @@ import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-b
 import { assertProductionReleaseTokenSecret } from "@/lib/booking/env";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
+import { applyDiscountCounterSwapInTransaction } from "@/lib/booking/discount-counter-swap";
 
 type ExperienceForTicketed = import("@/lib/booking/ticketed-slot-utils").ExperienceForTicketed;
 
@@ -174,15 +175,15 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const input = parsed.input;
+    const parsedInput = parsed.input;
     bookingLog("create-hold", "parsed input", {
-      experienceId: input.experienceId ?? null,
-      boatId: input.boatId ?? null,
-      slotId: input.slotId,
-      rateId: input.rateId,
-      partySize: input.partySize,
-      bookingMode: input.bookingMode,
-      resumeHoldId: input.resumeHoldId ?? null,
+      experienceId: parsedInput.experienceId ?? null,
+      boatId: parsedInput.boatId ?? null,
+      slotId: parsedInput.slotId,
+      rateId: parsedInput.rateId,
+      partySize: parsedInput.partySize,
+      bookingMode: parsedInput.bookingMode,
+      resumeHoldId: parsedInput.resumeHoldId ?? null,
     });
     let db: ReturnType<typeof getDb>;
     try {
@@ -206,38 +207,42 @@ export async function POST(request: NextRequest) {
     }
     const { FieldValue, Timestamp } = getFirestoreExports();
     assertProductionReleaseTokenSecret();
-    const hasExperience = !!input.experienceId;
-    const hasBoat = !!input.boatId;
+    const hasExperience = !!parsedInput.experienceId;
+    const hasBoat = !!parsedInput.boatId;
     /** Reuse when boatId auto-resolution already read this doc (avoids duplicate experience fetch in listing-boat flow). */
     let cachedExperienceDoc: import("firebase-admin").firestore.DocumentSnapshot | null = null;
     // When the experience has listing boats, slots live under boats/{boatId}/slots. We must have boatId.
     // Exception: shared ticketed — no boat on hold (inventory-only); charter ticketed and non-ticketed resolve
     // listing boats via id/slug variants. When there is exactly one listing boat, use it if the client omitted boatId.
+    let resolvedBoatId: string | undefined = parsedInput.boatId;
     if (hasExperience && !hasBoat) {
-      const expCheckDoc = await db.collection("experiences").doc(input.experienceId!).get();
+      const expCheckDoc = await db.collection("experiences").doc(parsedInput.experienceId!).get();
       cachedExperienceDoc = expCheckDoc;
       const expCheckData = expCheckDoc.exists ? (expCheckDoc.data() as Experience) : null;
       const isTicketedExperience = expCheckData?.pricingType === "ticketed";
       // Shared ticketed: no boat on hold (admin may assign later). Charter + non-ticketed: resolve listing boats
       // using id/slug/alias variants so boats match experienceIds even when only the slug is stored.
-      const skipListingBoatResolution = isTicketedExperience === true && input.bookingMode === "shared";
+      const skipListingBoatResolution = isTicketedExperience === true && parsedInput.bookingMode === "shared";
       if (!skipListingBoatResolution) {
         const expSlug = typeof expCheckData?.slug === "string" ? expCheckData.slug.trim() : "";
-        const { boatId: resolvedBoatId, uniqueBoatCount } = await resolveSingleListingBoatIdForExperience(
+        const { boatId: autoResolvedBoatId, uniqueBoatCount } = await resolveSingleListingBoatIdForExperience(
           db,
-          input.experienceId!,
+          parsedInput.experienceId!,
           expSlug
         );
-        if (uniqueBoatCount === 1 && resolvedBoatId) {
-          input.boatId = resolvedBoatId;
-        } else if (uniqueBoatCount > 1) {
+        if (uniqueBoatCount > 1) {
           return NextResponse.json(
             { error: "Please select a boat. This experience has multiple boats.", hint: "boatId is required." },
             { status: 400 }
           );
         }
+        if (uniqueBoatCount === 1 && autoResolvedBoatId) {
+          resolvedBoatId = autoResolvedBoatId;
+        }
       }
     }
+    const resolvedInput = { ...parsedInput, boatId: resolvedBoatId };
+    const input = resolvedInput;
     const hasBoatResolved = !!input.boatId;
     const isListingBoatFlow = hasExperience && hasBoatResolved; // experience slots + boat rates
     const isExperienceOnly = hasExperience && !hasBoatResolved;
@@ -975,12 +980,15 @@ export async function POST(request: NextRequest) {
                 checkoutSessionId: FieldValue.delete(),
               };
 
-              if (oldDiscountDecrementRef && oldDiscountNextCount != null) {
-                tx.update(oldDiscountDecrementRef, { usedCount: oldDiscountNextCount, updatedAt: FieldValue.serverTimestamp() });
-              }
-              if (shouldIncrementNewDiscount && discountRef) {
-                tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
-              }
+              // Keep both mutations in the same Firestore transaction callback.
+              // If this transaction aborts, neither counter change is committed.
+              applyDiscountCounterSwapInTransaction(tx, {
+                oldDiscountDecrementRef,
+                oldDiscountNextCount,
+                shouldIncrementNewDiscount,
+                discountRef,
+                FieldValue,
+              });
               if (delta === 0) {
                 tx.update(db.collection("holds").doc(resumeTargetId), holdUpdatePayload);
               } else {
@@ -1089,6 +1097,22 @@ export async function POST(request: NextRequest) {
               : ""
           )
         : [];
+
+    // Operator-block contract: create-hold preflight must match convert-hold-to-booking enforcement.
+    // We check here (before the main charter/legacy transaction) so blocked dates never enter payment.
+    if (isExperienceOnly && input.experienceId && slotStartForBlock && slotEndForBlock) {
+      const blockedPreflight = await hasOverlappingBlock({
+        db,
+        Timestamp,
+        experienceId: input.experienceId,
+        experienceIdVariants: experienceIdVariantsForAssert,
+        slotStart: slotStartForBlock,
+        slotEnd: slotEndForBlock,
+      });
+      if (blockedPreflight) {
+        throw new SlotConflictError("This slot is blocked");
+      }
+    }
 
     if (isSharedTicketed) {
       throw new Error("Unexpected: charter transaction reached for shared ticketed flow");
@@ -1378,15 +1402,15 @@ export async function POST(request: NextRequest) {
                     shouldIncrementNewDiscountCharter = true;
                   }
                 }
-                if (oldDiscountDecrementRefCharter && oldDiscountNextCountCharter != null) {
-                  tx.update(oldDiscountDecrementRefCharter, {
-                    usedCount: oldDiscountNextCountCharter,
-                    updatedAt: FieldValue.serverTimestamp(),
-                  });
-                }
-                if (shouldIncrementNewDiscountCharter && discountRef) {
-                  tx.update(discountRef, { usedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
-                }
+                // Keep both mutations in the same Firestore transaction callback.
+                // If this transaction aborts, neither counter change is committed.
+                applyDiscountCounterSwapInTransaction(tx, {
+                  oldDiscountDecrementRef: oldDiscountDecrementRefCharter,
+                  oldDiscountNextCount: oldDiscountNextCountCharter,
+                  shouldIncrementNewDiscount: shouldIncrementNewDiscountCharter,
+                  discountRef,
+                  FieldValue,
+                });
                 // Clear stage-specific payment intent IDs when reusing/extending a hold with mutated pricing
                 // so stale intents (wrong amount) cannot be reused.
                 // Reused-hold update must match what a new hold would persist: include all mutable checkout fields

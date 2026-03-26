@@ -28,6 +28,7 @@ import {
   resolveFinalBalanceFromBooking,
 } from "@/lib/booking/final-balance-resolver";
 import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
+import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 
 const ALLOWED_STATUSES = ["final_due", "final_failed", "final_requires_action", "final_processing"] as const;
 
@@ -35,7 +36,13 @@ type FinalPiGateResult =
   | { kind: "busy_cron" }
   | { kind: "busy_customer" }
   | { kind: "reuse"; existingPiId: string }
-  | { kind: "acquired_create"; freshSavedPmId: string | undefined; freshFinalCents: number; normalizedInGate: boolean }
+  | {
+      kind: "acquired_create";
+      freshSavedPmId: string | undefined;
+      freshCustomerId: string | undefined;
+      freshFinalCents: number;
+      normalizedInGate: boolean;
+    }
   | { kind: "waiver_blocked" };
 
 function getTokenFromRequest(request: NextRequest): string | null {
@@ -138,6 +145,8 @@ export async function POST(request: NextRequest) {
         const b = snap.data() as Booking;
         const freshSavedPmId =
           typeof b.stripe?.paymentMethodId === "string" ? b.stripe.paymentMethodId.trim() : undefined;
+        const freshCustomerId =
+          typeof b.stripe?.customerId === "string" ? b.stripe.customerId.trim() : undefined;
         const currentStatus = b.status;
         const currentPiId = b.stripe?.finalPaymentIntentId;
         const lockAt = b.stripe?.finalChargeLockAt;
@@ -180,7 +189,13 @@ export async function POST(request: NextRequest) {
           gatePatch["stripe.finalBalanceNormalizedAt"] = Timestamp.fromDate(now);
         }
         tx.update(bookingRef, gatePatch as UpdateData<DocumentData>);
-        return { kind: "acquired_create", freshSavedPmId, freshFinalCents, normalizedInGate: res.mismatchVsStored };
+        return {
+          kind: "acquired_create",
+          freshSavedPmId,
+          freshCustomerId,
+          freshFinalCents,
+          normalizedInGate: res.mismatchVsStored,
+        };
       });
 
     const bookingSnap = await bookingRef.get();
@@ -192,12 +207,46 @@ export async function POST(request: NextRequest) {
     if (!bookingEmail || bookingEmail !== customerEmail) {
       return NextResponse.json({ error: "This link is not valid for this booking" }, { status: 403 });
     }
-    const customerId = booking.stripe?.customerId;
+    let customerId = booking.stripe?.customerId;
     const persistAfterLoad = await persistFinalBalanceNormalizationIfNeeded(bookingRef, booking, {
       bookingId: payload.bookingId,
       source: "manage/pay-remaining",
     });
     const authoritativeFinalCents = persistAfterLoad.authoritativeFinalCents;
+    if (!customerId && booking.customer?.email) {
+      const emailKey = booking.customer.email.trim().toLowerCase();
+      if (emailKey) {
+        const stripe = getStripe();
+        try {
+          const idxRef = db.collection("stripeCustomerIndex").doc(emailKey);
+          const idxSnap = await idxRef.get();
+          const indexedId = idxSnap.exists ? (idxSnap.data() as { customerId?: string | null })?.customerId : undefined;
+          if (typeof indexedId === "string" && indexedId.trim()) {
+            const verified = await verifyIndexedStripeCustomerOrClear(
+              stripe,
+              idxRef,
+              emailKey,
+              indexedId,
+              "stripe-customer-index"
+            );
+            if (verified) customerId = verified;
+          }
+          if (!customerId) {
+            const listed = await stripe.customers.list({ email: emailKey, limit: 1 });
+            const listedId = listed.data[0]?.id;
+            if (listedId) customerId = listedId;
+          }
+          if (customerId) {
+            await bookingRef.update({
+              "stripe.customerId": customerId,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+    }
     if (!customerId) {
       return NextResponse.json({ error: "No customer on booking" }, { status: 400 });
     }
@@ -249,7 +298,7 @@ export async function POST(request: NextRequest) {
         }
         const patch: Record<string, unknown> = {
           "stripe.finalPaymentIntentId": piId,
-          "stripe.finalChargedAt": Timestamp.now(),
+          "stripe.finalChargedAt": FieldValue.serverTimestamp(),
           "stripe.finalError": FieldValue.delete(),
           "stripe.customerFinalPiInFlightAt": FieldValue.delete(),
           "stripe.pendingFinalPaymentIntentKey": FieldValue.delete(),
@@ -388,6 +437,12 @@ export async function POST(request: NextRequest) {
 
       if (gate.kind === "acquired_create") {
         const savedPmId = gate.freshSavedPmId?.trim() ?? "";
+        const gateCustomerId = gate.freshCustomerId?.trim() ?? "";
+        const customerIdForCreate = gateCustomerId || customerId || "";
+        if (!customerIdForCreate) {
+          await clearCustomerFinalPiInFlight().catch(() => {});
+          return NextResponse.json({ error: "No customer on booking" }, { status: 400 });
+        }
         /** Gate reads paymentMethodId inside the transaction — do not use stale pre-transaction `booking.stripe`. */
         const shouldAttemptOffSession =
           savedPmId.length > 0 && !skipSavedPaymentMethod;
@@ -399,7 +454,7 @@ export async function POST(request: NextRequest) {
               {
                 amount: amountCentsForFinalPi,
                 currency: "usd",
-                customer: customerId,
+                customer: customerIdForCreate,
                 payment_method: savedPmId,
                 off_session: true,
                 confirm: true,
@@ -476,7 +531,7 @@ export async function POST(request: NextRequest) {
             {
               amount: amountCentsForFinalPi,
               currency: "usd",
-              customer: customerId,
+              customer: customerIdForCreate,
               payment_method_types: ["card", "link"],
               metadata: { bookingId: payload.bookingId, payment_stage: "final" },
             },
