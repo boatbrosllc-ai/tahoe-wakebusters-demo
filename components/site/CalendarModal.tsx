@@ -65,6 +65,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [slotsRetryKey, setSlotsRetryKey] = useState(0);
   const [slotsPartialData, setSlotsPartialData] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => initialChicagoCalendarMonth());
+  /** Date-specific prices for the visible month (holiday/weekend), keyed by YYYY-MM-DD. */
+  const [datePrices, setDatePrices] = useState<Record<string, number>>({});
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [detailBoats, setDetailBoats] = useState<ExperienceDetailBoat[]>([]);
@@ -151,6 +153,28 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
       });
     return () => controller.abort();
   }, [experienceId]);
+
+  useEffect(() => {
+    if (!experienceId || !rates[0]?.id) {
+      setDatePrices({});
+      return;
+    }
+    const y = calendarMonth.getFullYear();
+    const m = calendarMonth.getMonth();
+    const start = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+    const days = new Date(y, m + 1, 0).getDate();
+    const controller = new AbortController();
+    bookingCache
+      .fetchDatePrices(experienceId, start, days, rates[0].id, controller.signal)
+      .then((data) => {
+        const p = data?.prices && typeof data.prices === "object" ? data.prices : {};
+        setDatePrices({ ...p } as Record<string, number>);
+      })
+      .catch(() => {
+        setDatePrices({});
+      });
+    return () => controller.abort();
+  }, [experienceId, calendarMonth, rates]);
 
   const wakeBoatIds = useMemo(() => {
     if (detailBoats.length === 0) return null;
@@ -494,7 +518,10 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                         ? `${parsed.durationHours} hr${parsed.durationHours !== 1 ? "s" : ""}`
                         : "";
                       const rate = parsed ? rates.find((r) => r.durationHours === parsed.durationHours) : null;
-                      const priceLabel = rate ? formatPrice(rate.priceCents) : null;
+                      const effectiveCents =
+                        rate != null ? datePrices[selectedDate ?? ""] ?? rate.priceCents : null;
+                      const priceLabel =
+                        rate != null && typeof effectiveCents === "number" ? formatPrice(effectiveCents) : null;
                       const canOpenBookingModal =
                         typeof experienceSlug === "string" &&
                         experienceSlug.trim().length > 0 &&

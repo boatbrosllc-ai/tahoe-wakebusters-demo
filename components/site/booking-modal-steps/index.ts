@@ -1,6 +1,10 @@
 export { WEEKDAY_LABELS } from "./booking-calendar-constants";
 export { BookingStep1Category } from "./BookingStep1Category";
 export type { BookingStep1CategoryProps } from "./BookingStep1Category";
+export { BookingStep2Calendar } from "./BookingStep2Calendar";
+export type { BookingStep2CalendarProps } from "./BookingStep2Calendar";
+export { BookingStep3Boat } from "./BookingStep3Boat";
+export type { BookingStep3BoatProps } from "./BookingStep3Boat";
 export type { ExperienceItem, BoatOption, SlotDto, RateOption, AddonOption } from "./types";
 export { AddonSelector } from "./AddonSelector";
 export { BookingStep4PaymentForm } from "./BookingStep4PaymentForm";

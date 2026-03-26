@@ -24,20 +24,6 @@ function formatYmd(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Minimal body that passes `parseCreateHoldBody` and reaches Firestore (`getDb()`) before slot/experience validation fails. */
-const WARM_CREATE_HOLD_BODY = {
-  experienceId: "_warm_",
-  slotId: "_warm_slot_",
-  rateId: "_warm_rate_",
-  partySize: 2,
-  bookingMode: "charter" as const,
-  customerDraft: {
-    name: "Warm Cron",
-    email: "warm@example.com",
-    phone: "5125550100",
-  },
-};
-
 /** Warm common booking API routes so cold Netlify starts are less likely during checkout. */
 export const handler = schedule("*/5 * * * *", async () => {
   const base = process.env.APP_BASE_URL ?? process.env.URL;
@@ -63,8 +49,7 @@ export const handler = schedule("*/5 * * * *", async () => {
     await getUrl(datePricesUrl);
   }
 
-  await postJson(`${root}/api/booking/create-hold`, WARM_CREATE_HOLD_BODY);
-  await postJson(`${root}/api/booking/create-payment-intent`, { holdId: "_warm_" });
+  await getUrl(`${root}/api/health`);
   await postJson(`${root}/api/stripe/webhook`, { type: "warm_ping" });
 
   const warmDatePricesPing = `${root}/api/booking/date-prices?experienceId=_warm_&startDate=2099-01-01&days=1`;

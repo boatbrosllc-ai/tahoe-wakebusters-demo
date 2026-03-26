@@ -2,7 +2,12 @@ import { SESSION_HOLD_ID_KEY, type ModalHoldRecoveryPayloadV1 } from "@/componen
 
 export type ParsedModalHoldSession =
   | ModalHoldRecoveryPayloadV1
-  | { holdId?: string; releaseToken?: string | null; receiptClaimToken?: string | null };
+  | {
+      holdId?: string;
+      releaseToken?: string | null;
+      receiptClaimToken?: string | null;
+      experienceId?: string;
+    };
 
 export function readModalHoldSessionPayload(): ParsedModalHoldSession | null {
   try {

@@ -243,7 +243,6 @@ export function useBookingModalData(
         setBoats(boatList);
         const rateList = Array.isArray(data.rates) ? (data.rates as RateOption[]) : [];
         setExperienceRates(rateList);
-        setRatesSummary(rateList);
         setRatesLoadError(null);
         const viewMonth = viewMonthForPrefetchRef.current;
         if (viewMonth && rateList.length > 0) {
@@ -315,6 +314,7 @@ export function useBookingModalData(
       setDatePricesLoading(false);
       return;
     }
+    setDatePrices({});
     const key = `${exp.id}|${viewMonthStartStr}|${daysInViewMonth}|${rateIdForDatePrices}`;
     inFlightKeyRef.current = key;
     setDatePricesLoading(true);
@@ -736,10 +736,17 @@ export function useBookingModalData(
         ticketed: resolveExperiencePricingType(exp) === "ticketed",
       });
       const slots = (data?.slots ?? []) as SlotDto[];
+      const partialData = Boolean((data as { partialData?: boolean })?.partialData);
       setMonthSlots(slots);
-      setSlotsPartialData(Boolean((data as { partialData?: boolean })?.partialData));
+      setSlotsPartialData(partialData);
       setSlotsFetchedAt(Date.now());
       setSlotsLoadError(null);
+      if (partialData) {
+        return {
+          ok: false,
+          error: "Availability data is still loading — please wait a moment and try again.",
+        };
+      }
       return { ok: true, slots };
     } catch (err: unknown) {
       if ((err as { name?: string })?.name === "AbortError") {

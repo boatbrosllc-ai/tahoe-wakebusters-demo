@@ -17,7 +17,6 @@ import { cn, getDisplayImageUrl } from "@/lib/utils";
 import {
   parseSlotId,
   parseSlotIdRelaxed,
-  isSeasonalAllowed,
   isMonthInSeasonalRange,
   shouldUseWakeBoardCharterGrid,
 } from "@/lib/booking/experience-slots";
@@ -53,10 +52,11 @@ import { location } from "@/content/location";
 import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
+import { BookingStep2Calendar } from "@/components/site/booking-modal-steps/BookingStep2Calendar";
+import { BookingStep3Boat } from "@/components/site/booking-modal-steps/BookingStep3Boat";
 import { AddonSelector } from "@/components/site/booking-modal-steps/AddonSelector";
 import { BookingStep4PaymentForm } from "@/components/site/booking-modal-steps/BookingStep4PaymentForm";
 import { BookingSuccessPanel } from "@/components/site/booking-modal-steps/BookingSuccessPanel";
-import { WEEKDAY_LABELS } from "@/components/site/booking-modal-steps/booking-calendar-constants";
 import { usePriceSummary } from "@/components/site/usePriceSummary";
 import { usePaymentSummary } from "@/components/site/usePaymentSummary";
 import { useDiscountValidation } from "@/components/site/useDiscountValidation";
@@ -85,7 +85,7 @@ import {
   bookingModalEffectsPhase,
   type BookingModalPaymentPhase,
 } from "@/lib/booking/booking-modal-state";
-import { readModalSessionReleaseTokenForHold } from "@/lib/booking/modal-hold-session";
+import { readModalHoldSessionPayload, readModalSessionReleaseTokenForHold } from "@/lib/booking/modal-hold-session";
 import {
   BOOKING_MODAL_SESSION_SUCCESS_KEY as SESSION_SUCCESS_KEY,
   BOOKING_MODAL_SESSION_SUCCESS_MAX_AGE_MS as SESSION_SUCCESS_MAX_AGE_MS,
@@ -1387,7 +1387,17 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     let recoveryDelayTimer: number | null = null;
 
     void (async () => {
-      const skipSessionHydration = Boolean(initialSelection?.experienceId);
+      const storedSession = readModalHoldSessionPayload();
+      const storedExperienceId =
+        storedSession && typeof storedSession.experienceId === "string"
+          ? storedSession.experienceId.trim()
+          : "";
+      const initialExperienceId =
+        typeof initialSelection?.experienceId === "string" ? initialSelection.experienceId.trim() : "";
+      const skipSessionHydration =
+        Boolean(initialSelection?.experienceId) &&
+        Boolean(storedExperienceId) &&
+        storedExperienceId !== initialExperienceId;
 
       if (skipSessionHydration && typeof sessionStorage !== "undefined") {
         try {
@@ -2714,444 +2724,64 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     )
               )}
             >
-              <div className="space-y-2 sm:space-y-3 md:space-y-4 min-w-0">
-                {/* When opened with a pre-selected experience but list failed or didn't match, show why the calendar never loads */}
-                {step === 2 && initialSelection && !selectedExperience && !loading && (
-                  <p className="text-sm text-amber-700 py-3 px-2">
-                    {experiencesLoadError
-                      ? `${experiencesLoadError} Please try again or contact us.`
-                      : "Couldn’t load this experience. Please select one from the list on the left."}
-                  </p>
-                )}
-                {step === 2 && initialSelection && !selectedExperience && loading && (
-                  <div className="flex min-h-[min(48dvh,380px)] flex-col items-center justify-center gap-3 py-8">
-                    <div className="h-9 w-9 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                    <p className="text-sm text-brand-muted text-center">Loading experience…</p>
-                  </div>
-                )}
-                {step === 2 && isTicketed && boatsLoading && selectedExperience && (
-                  <div className="flex items-center justify-center gap-2 py-4">
-                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                    <span className="text-sm text-brand-muted">Loading departure times…</span>
-                  </div>
-                )}
-                {ratesLoadError && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-3 mb-2 text-sm text-amber-950">
-                    <p>{ratesLoadError} Try again or contact us.</p>
-                    <button
-                      type="button"
-                      onClick={() => retryBoats()}
-                      className="mt-2 font-semibold text-brand-primary underline underline-offset-2"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-                {experienceDetailLoadError && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-3 mb-2 text-sm text-amber-950">
-                    <p>Could not load booking details. Please try again or contact us.</p>
-                    <button
-                      type="button"
-                      onClick={() => retryBoats()}
-                      className="mt-2 font-semibold text-brand-primary underline underline-offset-2"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-                      {ratesForSelection.length > 0 && !isTicketed && (
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-semibold text-brand-dark mb-1.5 sm:mb-2 md:mb-3">Duration</p>
-                    <div className="grid grid-cols-3 gap-1.5 sm:gap-2 sm:flex sm:flex-wrap md:gap-3">
-                      {[...ratesForSelection]
-                        .sort((a, b) => a.durationHours - b.durationHours)
-                        .map((r) => {
-                        const isSelected = selectedRateIdForCalendar === r.id;
-                        return (
-                          <button
-                            key={r.id}
-                            type="button"
-                            onClick={() => selectCharterCalendarRate(r.id)}
-                            className={cn(
-                              "rounded-lg sm:rounded-xl border sm:border-2 px-1.5 py-1.5 sm:px-4 sm:py-3 text-[10px] leading-tight sm:text-sm font-semibold min-h-[36px] sm:min-h-[44px] md:min-h-[48px] transition-all text-center",
-                              isSelected ? "border-brand-primary bg-brand-primary/10 text-brand-dark" : "border-brand-dark/15 text-brand-muted hover:border-brand-dark/30"
-                            )}
-                          >
-                            {r.displayName ?? `${r.durationHours} hr`}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {!selectedRateIdForCalendar && (
-                      <p className="mt-2 text-xs text-brand-muted">Select a duration to see available dates.</p>
-                    )}
-                  </div>
-                )}
-                {selectedRateIdForCalendar && (
-                  <>
-                  <div className="relative w-full min-w-0 max-w-full overflow-x-clip">
-                  <div className="flex flex-col items-center gap-1.5 sm:gap-2 mb-2 sm:mb-3 md:mb-3">
-                    <p className="text-[11px] sm:text-xs font-semibold text-brand-dark w-full">Date</p>
-                    <div className="flex items-center justify-center gap-1 sm:gap-2 w-full min-w-0">
-                      <button
-                        type="button"
-                        disabled={isViewMonthCurrent || !canGoPrevMonth}
-                        onClick={() => {
-                          if (viewMonthMonth === 1) {
-                            setViewMonthYear((y) => y - 1);
-                            setViewMonthMonth(12);
-                          } else {
-                            setViewMonthMonth((m) => m - 1);
-                          }
-                        }}
-                        className={cn(
-                          "rounded-lg sm:rounded-xl p-1.5 sm:p-2.5 text-brand-dark transition-colors touch-manipulation shrink-0",
-                          (isViewMonthCurrent || !canGoPrevMonth) ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
-                        )}
-                        aria-label="Previous month"
-                      >
-                        <ChevronLeft className="h-5 w-5 sm:h-6 sm:w-6" />
-                      </button>
-                      <span className="text-xs sm:text-base md:text-lg font-semibold text-brand-dark min-w-0 flex-1 text-center truncate px-0.5">
-                        {viewMonthLabel}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={!canGoNextMonth}
-                        onClick={() => {
-                          if (viewMonthMonth === 12) {
-                            setViewMonthYear((y) => y + 1);
-                            setViewMonthMonth(1);
-                          } else {
-                            setViewMonthMonth((m) => m + 1);
-                          }
-                        }}
-                        className={cn(
-                          "rounded-lg sm:rounded-xl p-1.5 sm:p-2.5 text-brand-dark transition-colors touch-manipulation shrink-0",
-                          !canGoNextMonth ? "cursor-not-allowed opacity-40" : "hover:bg-brand-dark/10 active:bg-brand-dark/15"
-                        )}
-                        aria-label="Next month"
-                      >
-                        <ChevronRight className="h-5 w-5 sm:h-6 sm:w-6" />
-                      </button>
-                    </div>
-                  </div>
-                  {slotsLoadError && (
-                    <p className="text-sm text-amber-700 py-3 px-2 mb-2">
-                      Unable to load availability. Please try again, or{" "}
-                      <a href="/contact" className="font-medium text-brand-primary underline underline-offset-2">
-                        contact us
-                      </a>{" "}
-                      if the problem persists.
-                    </p>
-                  )}
-                  {monthSlots.length === 0 &&
-                    !slotsLoading &&
-                    !slotsLoadError &&
-                    selectedExperience &&
-                    selectedRateIdForCalendar && (
-                      <p className="text-sm text-brand-muted text-center py-2 px-2 mb-2" role="status">
-                        No trips available this month. Try a different month.
-                      </p>
-                    )}
-                  {slotsPartialData && selectedDate != null && !selectedDateVerifiedInPartial && (
-                    <div
-                      className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
-                      role="status"
-                    >
-                      <p>
-                        Availability data may be slightly delayed — your slot will be confirmed at checkout.
-                        {" "}
-                        <button
-                          type="button"
-                          onClick={() => retrySlots()}
-                          className="font-semibold text-brand-primary underline underline-offset-2"
-                        >
-                          Refresh
-                        </button>
-                      </p>
-                    </div>
-                  )}
-                  {datePricesRateMismatchMessage && (
-                    <div
-                      className="w-full rounded-lg border border-amber-300 bg-amber-50/90 p-3 mb-3 text-sm text-amber-950"
-                      role="alert"
-                    >
-                      {datePricesRateMismatchMessage}
-                    </div>
-                  )}
-                  {multiBoatListing && !isTicketed && (
-                    <p className="text-[10px] text-brand-muted text-center mb-2 px-1">
-                      Calendar prices may vary by boat; your final price updates after you select a boat.
-                    </p>
-                  )}
-                  <div key={calendarRenderKey} className="w-full min-w-0 max-w-full">
-                    <div className="grid grid-cols-7 gap-px sm:gap-0.5 md:gap-2 min-w-0">
-                      {WEEKDAY_LABELS.map((dayLabel, dayIdx) => (
-                        <div key={`step3-weekday-${dayIdx}`} className="text-center text-[9px] sm:text-xs font-semibold uppercase tracking-wide text-brand-muted py-0.5 sm:py-1 shrink-0 min-w-0 flex items-center justify-center leading-none">
-                          {dayLabel}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="grid grid-cols-7 gap-px sm:gap-1 md:gap-2 mt-0.5 sm:mt-1 min-w-0">
-                      {step3CalendarGrid.map((cell, idx) => {
-                      if (cell == null) {
-                        return <div key={`empty-${idx}`} className="aspect-square min-w-0 sm:aspect-auto sm:min-h-[58px] md:min-h-[64px]" />;
-                      }
-                      const { dateStr, label, weekday } = cell;
-                      const isSelected = selectedDate === dateStr;
-                      const isPast = dateStr < chicagoTodayStr;
-                      const entry = slotsByDate.get(dateStr);
-                      const openForDuration =
-                        isTicketed
-                          ? (entry?.open ?? 0)
-                          : (rateForCalendar?.durationHours != null
-                            ? (openCountByDateAndDuration.get(dateStr)?.get(rateForCalendar.durationHours) ?? 0)
-                            : (entry?.open ?? 0));
-                      const ticketsLeft = isTicketed ? (ticketsAvailableByDate[dateStr] ?? null) : null;
-                      const dateSeasonalAllowed = !selectedExperience?.seasonal?.enabled || isSeasonalAllowed(selectedExperience.seasonal, new Date(dateStr + "T12:00:00"), dateStr);
-                      const isAvailable = !isPast && dateSeasonalAllowed && (isTicketed
-                        ? openForDuration > 0
-                        : openForDuration > 0);
-                      const takenCount = (entry?.booked ?? 0) + (entry?.held ?? 0) + (entry?.blocked ?? 0);
-                      const bookedCount = entry?.booked ?? 0;
-                      const ticketsBooked = isTicketed ? (ticketsBookedByDate[dateStr] ?? 0) : 0;
-                      const displayBookedCount = isTicketed ? ticketsBooked : bookedCount;
-                      const isFullyBooked = !isPast && (isTicketed
-                        ? (entry != null && (ticketsLeft === 0 || (ticketsLeft == null && (entry?.open ?? 0) === 0)))
-                        : (takenCount > 0 && openForDuration === 0));
-                      const hasBookingsUrgency = !isPast && (isTicketed ? ticketsBooked > 0 : (isAvailable && bookedCount > 0));
-                      const isUnavailable = !isPast && !isAvailable && !isFullyBooked;
-                      const isOutsideSeasonal = selectedExperience?.seasonal?.enabled && !dateSeasonalAllowed;
-                      const priceCents = datePrices[dateStr];
-                      const isHoliday = holidayDateStrings.has(dateStr);
-                      const holdUncertain =
-                        isTicketed &&
-                        isAvailable &&
-                        !isPast &&
-                        !isFullyBooked &&
-                        holdDataMissingByDate.has(dateStr);
-                      const a11yStatus = isPast
-                        ? "past date"
-                        : isOutsideSeasonal
-                          ? "outside booking season"
-                          : isFullyBooked
-                            ? "fully booked"
-                            : !isAvailable
-                              ? "unavailable"
-                              : holdUncertain
-                                ? "available, hold counts may be incomplete"
-                                : "available";
-                      const priceA11y =
-                        typeof priceCents === "number" && isAvailable
-                          ? `, $${(priceCents / 100).toFixed(0)}${isTicketed ? " per ticket" : ""}`
-                          : "";
-                      const holidayA11y = isHoliday && !isPast ? ", holiday pricing" : "";
-                      const urgencyA11y =
-                        hasBookingsUrgency && !isFullyBooked && !isPast
-                          ? `, ${displayBookedCount} already booked this day`
-                          : "";
-                      const dateAriaLabel = `${weekday} ${label}, ${viewMonthLabel}. ${a11yStatus}${priceA11y}${holidayA11y}${urgencyA11y}${
-                        holdUncertain ? ", availability uncertain" : ""
-                      }`;
-                      return (
-                        <button
-                          key={dateStr}
-                          type="button"
-                          disabled={isPast || !isAvailable || isFullyBooked || isOutsideSeasonal}
-                          onClick={() => {
-                            if (!isAvailable) return;
-                            setSelectedDate(dateStr);
-                            setSelectedSlot(null);
-                          }}
-                          aria-label={dateAriaLabel}
-                          title={isHoliday ? "Holiday pricing" : hasBookingsUrgency ? `${displayBookedCount} already booked this day` : undefined}
-                          className={cn(
-                            "rounded-md sm:rounded-xl border max-sm:border sm:border-2 max-sm:p-0.5 sm:p-1 sm:py-2 sm:px-1.5 md:py-2.5 md:px-2 text-center transition-all aspect-square sm:aspect-auto sm:min-h-[58px] md:min-h-[64px] flex flex-col justify-center gap-0 max-sm:gap-0 sm:gap-0.5 touch-manipulation min-w-0 max-w-full overflow-hidden",
-                            isPast && "opacity-50 cursor-not-allowed border-brand-dark/10",
-                            isUnavailable && !isPast && "bg-brand-dark/10 text-brand-muted border-brand-dark/15 cursor-not-allowed",
-                            isFullyBooked && "bg-red-100/95 text-red-900 border-red-400/60 cursor-not-allowed",
-                            hasBookingsUrgency && !isFullyBooked && !isHoliday && "bg-amber-50/95 text-amber-900 border-amber-400/50",
-                            hasBookingsUrgency && !isFullyBooked && isHoliday && "bg-amber-50/90 border-amber-400/50 text-amber-900",
-                            isHoliday && !isPast && !hasBookingsUrgency && "ring-1 sm:ring-1.5 ring-violet-400/80 bg-violet-50/90 border-violet-300/60",
-                            isAvailable && !isHoliday && !hasBookingsUrgency &&
-                              "bg-emerald-500/15 text-emerald-900 border-emerald-500/40 hover:bg-emerald-500/25 hover:border-emerald-500/60 active:scale-[0.98]",
-                            isAvailable && isHoliday && !hasBookingsUrgency && "text-violet-900 border-violet-400/60 hover:bg-violet-100 active:scale-[0.98]",
-                            isSelected && "border-brand-primary bg-brand-primary/10 font-semibold ring-1 sm:ring-2 ring-brand-primary/40",
-                            isOutsideSeasonal && "opacity-50 cursor-not-allowed border-brand-dark/10 bg-brand-dark/5",
-                            holdUncertain && "border-dashed border-amber-500/70 ring-1 ring-amber-400/40"
-                          )}
-                        >
-                          <span className="hidden sm:block text-[10px] md:text-xs text-brand-muted uppercase leading-tight">{weekday}</span>
-                          <span className="block font-semibold text-[11px] sm:text-sm md:text-base leading-none max-sm:mt-0 sm:mt-0.5">{label}</span>
-                          {typeof priceCents === "number" && isAvailable && (
-                            <span className={cn(
-                              "block text-[9px] sm:text-sm font-bold leading-none max-sm:truncate mt-0.5 sm:mt-0.5",
-                              isSelected ? "text-brand-primary" : hasBookingsUrgency ? "text-amber-800" : "text-emerald-800"
-                            )}>
-                              ${(priceCents / 100).toFixed(0)}{isTicketed && <span className="text-[8px] sm:text-[10px] font-normal">/ea</span>}
-                            </span>
-                          )}
-                          {hasBookingsUrgency && (
-                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5 max-sm:truncate">
-                              {displayBookedCount} booked
-                            </span>
-                          )}
-                          {isAvailable && isTicketed && ticketsLeft !== null && ticketsLeft <= 10 && !hasBookingsUrgency && (
-                            <span className="block text-[8px] sm:text-[10px] font-semibold text-amber-700 leading-none mt-0.5 max-sm:truncate">{ticketsLeft} left</span>
-                          )}
-                          {isFullyBooked && (
-                            <span className="block text-[9px] sm:text-xs font-semibold text-red-700 leading-tight mt-0.5">Full</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                    </div>
-                  </div>
-                  {(slotsLoading || datePricesLoading) && (
-                    <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center gap-3 rounded-xl z-10" aria-busy="true" aria-live="polite">
-                      <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" aria-hidden />
-                      <span className="text-sm font-medium text-brand-muted text-center px-2">
-                        {slotsLoading && datePricesLoading
-                          ? "Loading availability & prices…"
-                          : slotsLoading
-                            ? "Loading availability…"
-                            : "Loading dates & prices…"}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                {selectedDate && (
-                  <div className="min-h-[2.5rem] transition-[opacity] duration-150 ease-out">
-                    {isTicketed ? (
-                      departureTimeLabel ? (
-                        <div className="rounded-xl border-2 border-brand-primary/30 bg-brand-primary/5 px-4 py-3">
-                          <p className="text-xs font-semibold text-brand-muted uppercase tracking-wider mb-0.5">Departure time</p>
-                          <p className="text-base font-bold text-brand-dark">{departureTimeLabel}</p>
-                          {(slotsLoading || ticketCountsLoading) && (
-                            <p className="text-xs text-brand-muted mt-1">Checking availability…</p>
-                          )}
-                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length === 0 && (
-                            <p className="text-xs text-amber-700 mt-1">No availability this day — please pick another date.</p>
-                          )}
-                          {!slotsLoading && !ticketCountsLoading && openSlotsForDate.length > 0 && ticketCounts && (
-                            <div className="mt-2 flex items-center gap-2">
-                              {ticketCounts.conservativeEstimate === true ? (
-                                <p className="text-xs font-medium text-brand-dark flex-1" role="status">
-                                  {ticketCounts.availabilityNote ??
-                                    "Availability may be limited — your selection will be confirmed at checkout"}
-                                </p>
-                              ) : (
-                                <>
-                                  <div className="flex-1 h-1.5 rounded-full bg-brand-dark/10 overflow-hidden">
-                                    <div
-                                      className="h-full rounded-full bg-brand-primary transition-all"
-                                      style={{
-                                        width: `${Math.round(((ticketCounts.total - ticketCounts.available) / ticketCounts.total) * 100)}%`,
-                                      }}
-                                    />
-                                  </div>
-                                  <p className="text-xs font-semibold text-brand-dark whitespace-nowrap">
-                                    {ticketCounts.available} / {ticketCounts.total} tickets left
-                                  </p>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          {datePricesPartialData && (
-                            <p className="text-[11px] text-amber-800/90 mt-1.5" role="status">
-                              Exact availability will be confirmed at checkout.
-                            </p>
-                          )}
-                          {!slotsLoading &&
-                            !ticketCountsLoading &&
-                            openSlotsForDate.length > 0 &&
-                            !ticketCounts &&
-                            !ticketCountsError && (
-                              <p className="text-xs text-brand-muted mt-1">Confirming ticket availability…</p>
-                            )}
-                          {ticketCountsError && (
-                            <div className="mt-2 flex flex-col gap-2">
-                              <p className="text-sm font-medium text-amber-800">
-                                {ticketCountsError}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => retryTicketCounts()}
-                                className="w-full rounded-lg bg-brand-primary text-white text-sm font-semibold py-2.5 px-3 hover:bg-brand-primary/90 focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                              >
-                                Retry
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        slotsLoading ? <p className="text-xs text-brand-muted">Loading times…</p> : null
-                      )
-                    ) : (
-                      <>
-                      <p className="text-[11px] sm:text-xs font-semibold text-brand-dark mb-1 sm:mb-1.5 md:mb-2">Time</p>
-                      {slotsLoading ? (
-                        <p className="text-xs text-brand-muted">Loading times…</p>
-                      ) : (() => {
-                        const slotsForDay = openSlotsByTime
-                          .filter((s) => isoToChicagoDateStr(s.startAt) === selectedDate)
-                          .sort((a, b) => slotTimeSortKey(a.startAt, a.id) - slotTimeSortKey(b.startAt, b.id));
-                        return slotsForDay.length === 0 ? (
-                          <p className="text-xs text-brand-muted">No open slots this day.</p>
-                        ) : (
-                        <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                          {slotsForDay.map((slot) => {
-                            const isSelected = selectedSlot?.id === slot.id;
-                            return (
-                              <button
-                                key={slot.id}
-                                type="button"
-                                onClick={() => {
-                                  const expSlug = (selectedExperience?.slug ?? "").toLowerCase().trim();
-                                  const watersportsCharter = !isTicketed && selectedExperience != null && isWatersportsSlug(expSlug);
-                                  const scope =
-                                    watersportsCharter && wakeCharterBoatIdsForStep2 != null
-                                      ? (selectedBoat != null && wakeCharterBoatIdsForStep2.has(selectedBoat.id)
-                                          ? new Set<string>([selectedBoat.id])
-                                          : wakeCharterBoatIdsForStep2.size > 0
-                                            ? wakeCharterBoatIdsForStep2
-                                            : null)
-                                      : null;
-                                  const candidates = monthSlots
-                                    .filter((s) => {
-                                      if (s.id !== slot.id || s.status !== "open") return false;
-                                      if (scope == null) return true;
-                                      const bid = (s.boatId ?? "").trim();
-                                      return bid.length > 0 && scope.has(bid);
-                                    })
-                                    .sort((a, b) => (a.boatId ?? "").localeCompare(b.boatId ?? ""));
-                                  if (candidates[0]) setSelectedSlot(candidates[0]);
-                                }}
-                                className={cn(
-                                  "rounded-lg border sm:border-2 px-2.5 py-2 text-xs sm:text-sm font-medium transition-all min-h-[40px] sm:min-h-[44px] touch-manipulation sm:px-3 sm:py-2.5 md:px-4 md:py-2.5",
-                                  isSelected ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 hover:border-brand-dark/30"
-                                )}
-                              >
-                                {slot.timeLabel}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                      })()}
-                      </>
-                    )}
-                    {noRateForSelectedSlot && (
-                      <p className="text-xs text-amber-700 mt-2" role="alert">
-                        This time slot is not currently available for online booking — please choose another time or contact us.
-                      </p>
-                    )}
-                  </div>
-                )}
-                </>
-                )}
-              </div>
+              <BookingStep2Calendar
+                step={step}
+                initialSelection={initialSelection}
+                selectedExperience={selectedExperience}
+                loading={loading}
+                experiencesLoadError={experiencesLoadError}
+                isTicketed={isTicketed}
+                boatsLoading={boatsLoading}
+                ratesLoadError={ratesLoadError}
+                experienceDetailLoadError={experienceDetailLoadError}
+                retryBoats={retryBoats}
+                ratesForSelection={ratesForSelection}
+                selectedRateIdForCalendar={selectedRateIdForCalendar}
+                selectCharterCalendarRate={selectCharterCalendarRate}
+                isViewMonthCurrent={isViewMonthCurrent}
+                canGoPrevMonth={canGoPrevMonth}
+                canGoNextMonth={canGoNextMonth}
+                viewMonthMonth={viewMonthMonth}
+                viewMonthYear={viewMonthYear}
+                setViewMonthYear={setViewMonthYear}
+                setViewMonthMonth={setViewMonthMonth}
+                viewMonthLabel={viewMonthLabel}
+                slotsLoadError={slotsLoadError}
+                monthSlots={monthSlots}
+                slotsLoading={slotsLoading}
+                slotsPartialData={slotsPartialData}
+                selectedDate={selectedDate}
+                selectedDateVerifiedInPartial={selectedDateVerifiedInPartial}
+                retrySlots={retrySlots}
+                datePricesRateMismatchMessage={datePricesRateMismatchMessage}
+                multiBoatListing={multiBoatListing}
+                calendarRenderKey={calendarRenderKey}
+                step3CalendarGrid={step3CalendarGrid}
+                chicagoTodayStr={chicagoTodayStr}
+                slotsByDate={slotsByDate}
+                rateForCalendar={rateForCalendar}
+                openCountByDateAndDuration={openCountByDateAndDuration}
+                ticketsAvailableByDate={ticketsAvailableByDate}
+                ticketsBookedByDate={ticketsBookedByDate}
+                datePrices={datePrices}
+                holidayDateStrings={holidayDateStrings}
+                holdDataMissingByDate={holdDataMissingByDate}
+                datePricesLoading={datePricesLoading}
+                setSelectedDate={setSelectedDate}
+                setSelectedSlot={setSelectedSlot}
+                departureTimeLabel={departureTimeLabel}
+                openSlotsForDate={openSlotsForDate}
+                ticketCountsLoading={ticketCountsLoading}
+                ticketCounts={ticketCounts}
+                datePricesPartialData={datePricesPartialData}
+                ticketCountsError={ticketCountsError}
+                retryTicketCounts={retryTicketCounts}
+                openSlotsByTime={openSlotsByTime}
+                selectedSlot={selectedSlot}
+                wakeCharterBoatIdsForStep2={wakeCharterBoatIdsForStep2}
+                selectedBoat={selectedBoat}
+                noRateForSelectedSlot={noRateForSelectedSlot}
+              />
               <button
                 type="button"
                 onClick={() => void handleStep2Next()}
@@ -3183,86 +2813,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     )
               )}
             >
-              {boatsLoading ? (
-                <div className="py-8 flex justify-center">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-primary border-t-transparent" />
-                </div>
-              ) : boats.length === 0 ? (
-                <p className="text-sm text-brand-muted py-4 md:py-6">No boats assigned — continue to details.</p>
-              ) : !selectedSlot ? (
-                <p className="text-sm text-brand-muted py-4 md:py-6">Pick a date and time first.</p>
-              ) : boats.length > 0 && availableBoatIdsForSelectedSlot.size === 0 ? (
-                <p className="text-sm text-amber-700 py-4 md:py-6">No boats available for this time. Please go back and choose another date or time.</p>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 md:gap-4 mb-6">
-                  {boats.map((boat) => {
-                    const isAvailable =
-                      availableBoatIdsForSelectedSlot.has(boat.id) &&
-                      !unavailableBoatIdsForSelectedSlot.has(boat.id);
-                    /** Match calendar `aggregateSlotsByDate`: only `booked` rows count as "Booked"; held/blocked are separate. */
-                    const isBooked = bookedBoatIdsForSelectedSlot.has(boat.id);
-                    const isHeld = heldBoatIdsForSelectedSlot.has(boat.id);
-                    const isBlocked = blockedBoatIdsForSelectedSlot.has(boat.id);
-                    const unavailableOverlay =
-                      isBooked ? { label: "Booked" as const, suffix: " (Booked)" as const }
-                      : isHeld ? { label: "On hold" as const, suffix: " (On hold)" as const }
-                      : isBlocked ? { label: "Unavailable" as const, suffix: " (Unavailable)" as const }
-                      : null;
-                    const isSelected = selectedBoat?.id === boat.id;
-                    const thumb = boat.photos?.[0];
-                    return (
-                      <button
-                        key={boat.id}
-                        type="button"
-                        disabled={!isAvailable}
-                        onClick={() => isAvailable && setSelectedBoat(boat)}
-                        className={cn(
-                          "relative flex flex-col overflow-hidden rounded-lg sm:rounded-xl border-2 text-left transition-all min-h-0",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
-                          "touch-manipulation",
-                          isSelected ? "border-brand-primary bg-brand-primary ring-2 ring-brand-primary/30" : "border-brand-dark/15 bg-white hover:border-brand-dark/30 active:scale-[0.99]",
-                          !isAvailable && "cursor-not-allowed",
-                          unavailableOverlay && "border-brand-dark/25 bg-brand-dark/5",
-                          !isAvailable && !unavailableOverlay && "opacity-60 bg-brand-dark/5 border-brand-dark/20"
-                        )}
-                      >
-                        <div className="relative w-full aspect-[4/3] bg-brand-dark/10 shrink-0 overflow-hidden rounded-t-[6px] sm:rounded-t-[10px]">
-                          {thumb ? (
-                            <Image src={thumb} alt="" fill className="object-cover" sizes="(max-width: 640px) 50vw, (max-width: 768px) 50vw, 33vw" />
-                          ) : (
-                            <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
-                          )}
-                        </div>
-                        {unavailableOverlay && (
-                          <div className="absolute inset-0 flex items-center justify-center rounded-lg sm:rounded-xl bg-slate-500/70 pointer-events-none z-10" aria-hidden>
-                            <span className="text-sm sm:text-base font-bold text-white uppercase tracking-wider drop-shadow-md px-4 py-2 rounded-lg bg-slate-800/90 border border-white/30">{unavailableOverlay.label}</span>
-                          </div>
-                        )}
-                        <div className={cn("flex flex-col justify-center p-2 sm:p-3 md:p-4 flex-1 min-w-0", unavailableOverlay && "relative z-0")}>
-                          <span className={cn("text-sm sm:text-base md:text-lg font-semibold truncate", isSelected ? "text-white" : isAvailable ? "text-brand-dark" : "text-brand-muted")}>
-                            {boat.name}{unavailableOverlay?.suffix ?? ""}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => void handleStep3Next()}
-                disabled={!canGoFromStep3}
-                className="mt-auto mb-[max(1rem,env(safe-area-inset-bottom))] sm:mb-4 w-full rounded-xl bg-brand-primary text-white font-semibold py-3.5 px-4 min-h-[48px] touch-manipulation md:py-3.5 hover:bg-brand-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 text-base"
-              >
-                {confirmingAvailability ? (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent shrink-0" aria-hidden />
-                    Confirming availability…
-                  </span>
-                ) : (
-                  "Continue to checkout"
-                )}
-              </button>
+              <BookingStep3Boat
+                boatsLoading={boatsLoading}
+                boats={boats}
+                selectedSlot={selectedSlot}
+                availableBoatIdsForSelectedSlot={availableBoatIdsForSelectedSlot}
+                unavailableBoatIdsForSelectedSlot={unavailableBoatIdsForSelectedSlot}
+                bookedBoatIdsForSelectedSlot={bookedBoatIdsForSelectedSlot}
+                heldBoatIdsForSelectedSlot={heldBoatIdsForSelectedSlot}
+                blockedBoatIdsForSelectedSlot={blockedBoatIdsForSelectedSlot}
+                selectedBoat={selectedBoat}
+                onSelectBoat={setSelectedBoat}
+                onStep3Next={handleStep3Next}
+                canGoFromStep3={canGoFromStep3}
+                confirmingAvailability={confirmingAvailability}
+              />
             </div>
 
             {/* Step 4: Details & payment — scrollable form area + sticky pay block */}

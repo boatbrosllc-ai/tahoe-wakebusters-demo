@@ -166,7 +166,11 @@ export type ModalHoldRecoveryPayloadV1 = {
 function persistModalHoldRecoveryPayload(payload: ModalHoldRecoveryPayloadV1): void {
   try {
     if (typeof window === "undefined") return;
-    sessionStorage.setItem(SESSION_HOLD_ID_KEY, JSON.stringify(payload));
+    const out: ModalHoldRecoveryPayloadV1 = {
+      ...payload,
+      releaseToken: payload.releaseToken ?? null,
+    };
+    sessionStorage.setItem(SESSION_HOLD_ID_KEY, JSON.stringify(out));
   } catch {
     /* ignore */
   }
