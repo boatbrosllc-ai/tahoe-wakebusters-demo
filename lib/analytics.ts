@@ -27,7 +27,7 @@ function logEvent(event: AnalyticsEvent): void {
   const payload = { ...event.payload, event_category: "booking" };
   const hasGtag = typeof w.gtag === "function";
   if (hasGtag) {
-    w.gtag("event", event.name, payload);
+    w.gtag!("event", event.name, payload);
   } else {
     void sendGaFallbackEvent(event.name, payload);
   }
