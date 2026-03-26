@@ -51,10 +51,24 @@ export function createPendingConfirmationPayload(bookingId: string): Omit<Notifi
   };
 }
 
-export function addConfirmationOutboxInTransaction(tx: FirebaseFirestore.Transaction, db: Firestore, bookingId: string): void {
-  const ref = db.collection(COLLECTION).doc();
-  const entry = createPendingConfirmationPayload(bookingId);
-  tx.set(ref, entry);
+/** Deterministic doc id for booking confirmation jobs (idempotent enqueue). */
+export function confirmationOutboxDocId(bookingId: string): string {
+  return `${bookingId}_booking_confirmation`;
+}
+
+export async function addConfirmationOutboxInTransaction(
+  tx: FirebaseFirestore.Transaction,
+  db: Firestore,
+  bookingId: string
+): Promise<void> {
+  const ref = db.collection(COLLECTION).doc(confirmationOutboxDocId(bookingId));
+  const snap = await tx.get(ref);
+  if (snap.exists) {
+    const st = (snap.data() as Partial<NotificationOutboxEntry>).status;
+    if (st === "sent" || st === "dead_letter") return;
+    return;
+  }
+  tx.set(ref, createPendingConfirmationPayload(bookingId));
 }
 
 export function createPendingFinalChargeSuccessPayload(
@@ -1055,8 +1069,13 @@ export async function processNextPendingDiscountLimitExceeded(
   const doc = snap.docs[0];
   const data = doc.data() as NotificationOutboxEntry;
   const bookingId = data.bookingId as string;
-
-  const ref = doc.ref;
+  const deterministicRef = col.doc(confirmationOutboxDocId(bookingId));
+  const deterministicSnap = await deterministicRef.get();
+  const ref =
+    deterministicSnap.exists &&
+    (deterministicSnap.data() as NotificationOutboxEntry).type === "booking_confirmation"
+      ? deterministicRef
+      : doc.ref;
   const claimed = await db.runTransaction(async (tx) => {
     const fresh = await tx.get(ref);
     if (!fresh.exists) return false;
@@ -1121,20 +1140,19 @@ export async function processNextPendingConfirmation(db: Firestore): Promise<"se
   const { Timestamp, FieldValue } = getFirestoreExports();
   const now = Timestamp.now();
   const col = db.collection(COLLECTION);
-  let snap = await col
+  const directPendingSnap = await col
     .where("type", "==", "booking_confirmation")
     .where("status", "==", "pending")
     .where("nextAttemptAt", "<=", now)
     .limit(1)
     .get();
-  if (snap.empty) {
-    snap = await col
-      .where("type", "==", "booking_confirmation")
-      .where("status", "==", "failed")
-      .where("nextAttemptAt", "<=", now)
-      .limit(1)
-      .get();
-  }
+  const directFailedSnap = await col
+    .where("type", "==", "booking_confirmation")
+    .where("status", "==", "failed")
+    .where("nextAttemptAt", "<=", now)
+    .limit(1)
+    .get();
+  let snap = !directPendingSnap.empty ? directPendingSnap : directFailedSnap;
 
   if (snap.empty) return "none";
 
@@ -1172,26 +1190,32 @@ export async function tryImmediateConfirmationSendForBooking(db: Firestore, book
   try {
     const { Timestamp, FieldValue } = getFirestoreExports();
     const now = Timestamp.now();
-    const snap = await db
-      .collection(COLLECTION)
-      .where("type", "==", "booking_confirmation")
-      .where("bookingId", "==", bookingId)
-      .where("status", "==", "pending")
-      .limit(1)
-      .get();
-
-    if (snap.empty) return;
-
-    const doc = snap.docs[0];
-    const data = doc.data() as NotificationOutboxEntry;
-    const ref = doc.ref;
+    const ref = db.collection(COLLECTION).doc(confirmationOutboxDocId(bookingId));
+    const primarySnap = await ref.get();
+    let data: NotificationOutboxEntry | null = primarySnap.exists
+      ? (primarySnap.data() as NotificationOutboxEntry)
+      : null;
+    let claimRef = ref;
+    if (!data || data.type !== "booking_confirmation" || data.bookingId !== bookingId || data.status !== "pending") {
+      const legacySnap = await db
+        .collection(COLLECTION)
+        .where("type", "==", "booking_confirmation")
+        .where("bookingId", "==", bookingId)
+        .where("status", "==", "pending")
+        .limit(1)
+        .get();
+      if (legacySnap.empty) return;
+      const legacyDoc = legacySnap.docs[0];
+      claimRef = legacyDoc.ref;
+      data = legacyDoc.data() as NotificationOutboxEntry;
+    }
 
     const claimed = await db.runTransaction(async (tx) => {
-      const fresh = await tx.get(ref);
+      const fresh = await tx.get(claimRef);
       if (!fresh.exists) return false;
       const d = fresh.data() as NotificationOutboxEntry;
       if (d.status !== "pending") return false;
-      tx.update(ref, {
+      tx.update(claimRef, {
         status: "claimed",
         claimedAt: now,
         claimExpiresAt: claimExpiresAtTimestamp(),
@@ -1203,7 +1227,7 @@ export async function tryImmediateConfirmationSendForBooking(db: Firestore, book
 
     if (!claimed) return;
 
-    await deliverClaimedConfirmationEntry(db, ref, bookingId, data);
+    await deliverClaimedConfirmationEntry(db, claimRef, bookingId, data);
   } catch (err) {
     console.warn("[notification-outbox] tryImmediateConfirmationSendForBooking failed", err);
   }

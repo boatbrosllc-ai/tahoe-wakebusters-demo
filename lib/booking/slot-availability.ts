@@ -128,7 +128,11 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     boatId,
     slotStart,
     slotEnd,
-    get,
+    // hasOverlappingBlock only issues query reads; adapt the wider transaction getter.
+    get: (q) =>
+      get(q as import("firebase-admin/firestore").Query) as Promise<
+        import("firebase-admin/firestore").QuerySnapshot
+      >,
   });
   if (blocked) throw new SlotConflictError("This slot is blocked");
 
@@ -143,7 +147,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
           .where("experienceId", "==", v)
           .where("startDateStr", ">=", startDateLower)
           .where("startDateStr", "<=", startDateUpper)
-      )
+      ) as Promise<import("firebase-admin/firestore").QuerySnapshot>
     )
   );
   const seenIds = new Set<string>();
@@ -173,7 +177,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
             .where("experienceId", "==", v)
             .where("startDateStr", "==", null)
             .limit(1)
-        )
+        ) as Promise<import("firebase-admin/firestore").QuerySnapshot>
       )
     );
     if (legacyNullSnaps.some((s) => !s.empty)) {
@@ -192,7 +196,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
             .where("experienceId", "==", v)
             .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
             .limit(LEGACY_BOOKING_LIMIT)
-        )
+        ) as Promise<import("firebase-admin/firestore").QuerySnapshot>
       )
     );
     const legacySnaps = snaps;

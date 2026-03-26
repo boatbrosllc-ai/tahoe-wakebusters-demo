@@ -419,7 +419,6 @@ export async function POST(request: NextRequest) {
       status: "paid",
       stripe: {},
       ...(pricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
-      // Manual bookings do not reserve shared-departure inventory; use charter or leave unset so cancel does not release capacity that was never held.
       ...(exp.pricingType === "ticketed" && inventoryRef !== null && { bookingMode: "charter" as const }),
       ...(hasBilling && billingAddress && { billingAddress }),
       ...(hasCard && cardDisplay && { card: cardDisplay }),
@@ -498,9 +497,14 @@ export async function POST(request: NextRequest) {
               : `Only ${available} ticket${available === 1 ? "" : "s"} remaining for this date.`
           );
         }
-        // Touching this document inside the transaction forces Firestore to serialize this admin booking against any concurrent create-hold that also reads/writes inventoryRef in the same transaction, preventing over-selling. reservedSeats is intentionally not modified: the new booking appears in the sold count of subsequent queries and does not need a separate reservation.
-        tx.set(inventoryRef, { updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-        // Manual booking does not change reservedSeats; the new paid row is counted in `sold` above.
+        tx.set(
+          inventoryRef,
+          {
+            reservedSeats: FieldValue.increment(-partySizeNum),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       const slotsRef = boatId
@@ -593,7 +597,7 @@ export async function POST(request: NextRequest) {
       }
 
       tx.set(bookingRef, booking);
-      addConfirmationOutboxInTransaction(tx, db, bookingId);
+      await addConfirmationOutboxInTransaction(tx, db, bookingId);
       if (pricing.totalCents > 0) {
         const summaryRef = db.collection("summaries").doc("revenue");
         tx.set(
@@ -623,7 +627,6 @@ export async function POST(request: NextRequest) {
         endAt: Timestamp.fromDate(slotEnd),
         updatedAt: FieldValue.serverTimestamp(),
       });
-      // Do not increment reservedSeats for ticketed: the new booking is already counted in sold queries from the bookings collection.
     });
     try {
       const { createWaiverForBooking, sendWaiverInviteAndMarkSent } = await import("@/lib/waiver/on-booking-created");

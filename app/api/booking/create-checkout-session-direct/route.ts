@@ -565,7 +565,7 @@ export async function POST(request: NextRequest) {
           await assertSlotAvailable({
             db,
             Timestamp,
-            get: (q) => tx.get(q),
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             experienceIdVariants,
             parsed,
@@ -619,7 +619,7 @@ export async function POST(request: NextRequest) {
           await assertSlotAvailable({
             db,
             Timestamp,
-            get: (q) => tx.get(q),
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             experienceIdVariants,
             parsed,

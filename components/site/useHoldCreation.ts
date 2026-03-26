@@ -344,7 +344,6 @@ export function useHoldCreation(
   }, [releaseCreatedHold]);
 
   const handleProceedToPayment = useCallback(async () => {
-    resetCharterHoldRequestId();
     if (proceedToPaymentInFlightRef.current) return;
     proceedToPaymentInFlightRef.current = true;
     setProceedToPaymentInFlight(true);
@@ -592,6 +591,7 @@ export function useHoldCreation(
     } catch (err) {
       const isFailedFetch = err instanceof TypeError && err.message === "Failed to fetch";
       if (isFailedFetch) {
+        // Preserve lastHoldRef so the next retry can send resumeHoldId and reuse the existing hold.
         bookingWarn("client", "create-hold flow: could not reach server (network or dev server stopped)", null);
       } else {
         bookingError("client", "create-hold or create-payment-intent threw", err, {});
@@ -628,7 +628,11 @@ export function useHoldCreation(
         }
       }
     }
-  }, [releaseCreatedHold, resetCharterHoldRequestId]);
+  }, [releaseCreatedHold]);
+
+  useEffect(() => {
+    resetCharterHoldRequestId();
+  }, [bookingContext.selectedSlot?.id, bookingContext.selectedDate, resetCharterHoldRequestId]);
 
   const paymentIntentFetchGenRef = useRef(0);
 

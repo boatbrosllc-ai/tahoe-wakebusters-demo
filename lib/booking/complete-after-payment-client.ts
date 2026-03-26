@@ -19,6 +19,24 @@ export const COMPLETE_AFTER_INITIAL_FETCH_TIMEOUT_MS = COMPLETE_AFTER_PAYMENT_FE
 export const COMPLETE_AFTER_PAYMENT_STALLED_MESSAGE =
   "Your payment was received — we are confirming your booking. You will receive a confirmation email shortly.";
 
+function triggerRollbackPendingReconcileHint(body: {
+  paymentIntentId: string;
+  holdId?: string;
+  receiptClaimToken?: string | null;
+}): void {
+  const token = body.receiptClaimToken?.trim();
+  const holdId = body.holdId?.trim();
+  void fetch("/api/booking/trigger-reconcile-rollback-pending-holds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      paymentIntentId: body.paymentIntentId,
+      ...(holdId ? { holdId } : {}),
+      ...(token ? { receipt_claim_token: token } : {}),
+    }),
+  }).catch(() => {});
+}
+
 function mergeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   if (typeof AbortSignal !== "undefined" && "any" in AbortSignal && typeof AbortSignal.any === "function") {
     return AbortSignal.any([a, b]);
@@ -264,6 +282,11 @@ export async function completeAfterPaymentWithPolling(options: {
         return { kind: "aborted" };
       }
       if (Date.now() - pollStart > hardLimitMs) {
+        triggerRollbackPendingReconcileHint({
+          paymentIntentId,
+          holdId: holdIdTrim,
+          receiptClaimToken: token,
+        });
         signal.removeEventListener("abort", onParentAbort);
         return {
           kind: "processing_timeout",

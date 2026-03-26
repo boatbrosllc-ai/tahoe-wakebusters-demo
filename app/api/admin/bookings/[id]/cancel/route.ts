@@ -18,6 +18,7 @@ import { pendingRefundDocumentId } from "@/lib/booking/pending-refund-idempotent
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { buildAdminCancelRefundIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import {
   classifyStripeRefundStatus,
   PENDING_STRIPE_REFUND_POLL_MS,
@@ -304,6 +305,25 @@ export async function POST(
             slotId,
             hint: "Could not resolve Firestore path for slot document; investigate and backfill boatId/experienceId on booking.",
           }).catch(() => {});
+        }
+
+        if (tripDateStr && b.experienceId && Number.isFinite(b.partySize)) {
+          const expRef = db.collection("experiences").doc(b.experienceId);
+          const expTxSnap = await tx.get(expRef);
+          if (expTxSnap.exists) {
+            const expTx = expTxSnap.data() as { pricingType?: string };
+            if (expTx.pricingType === "ticketed") {
+              const inventoryRef = getDepartureInventoryRef(db, b.experienceId, tripDateStr);
+              tx.set(
+                inventoryRef,
+                {
+                  reservedSeats: FieldValue.increment(b.partySize ?? 0),
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+          }
         }
       });
     } else {

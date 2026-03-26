@@ -66,8 +66,8 @@
 [functions."api-admin-cron-process-pending-refunds"]
   timeout = 60
 
-# Scheduled in netlify/functions/warm-booking.mts via schedule("*/10 * * * *") — every 10 minutes, under typical
-# Netlify idle cold-start windows (~10–15 min) so booking API routes stay warm.
+# Scheduled in netlify/functions/warm-booking.mts via schedule("*/5 * * * *") — every 5 minutes to keep
+# booking checkout routes and webhook path warm through cold-start windows.
 [functions."warm-booking"]
   timeout = 10
 

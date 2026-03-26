@@ -39,7 +39,7 @@ const WARM_CREATE_HOLD_BODY = {
 };
 
 /** Warm common booking API routes so cold Netlify starts are less likely during checkout. */
-export const handler = schedule("*/10 * * * *", async () => {
+export const handler = schedule("*/5 * * * *", async () => {
   const base = process.env.APP_BASE_URL ?? process.env.URL;
   if (!base) return { statusCode: 200 };
   const root = base.replace(/\/$/, "");
@@ -65,6 +65,7 @@ export const handler = schedule("*/10 * * * *", async () => {
 
   await postJson(`${root}/api/booking/create-hold`, WARM_CREATE_HOLD_BODY);
   await postJson(`${root}/api/booking/create-payment-intent`, { holdId: "_warm_" });
+  await postJson(`${root}/api/stripe/webhook`, { type: "warm_ping" });
 
   const warmDatePricesPing = `${root}/api/booking/date-prices?experienceId=_warm_&startDate=2099-01-01&days=1`;
   await getUrl(warmDatePricesPing);

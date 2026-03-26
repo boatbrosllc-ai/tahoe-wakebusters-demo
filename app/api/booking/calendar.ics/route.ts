@@ -6,11 +6,12 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking } from "@/lib/booking/types";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 import {
   checkRateLimit,
@@ -208,6 +209,39 @@ export async function GET(request: NextRequest) {
       bookings.push({ id: doc.id, data });
     }
   }
+  let legacyTruncated = false;
+  const legacyFallbackEnabled = process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true";
+  if (legacyFallbackEnabled && variantIds.length > 0) {
+    // Remove this fallback after startDateStr backfill is complete and DISABLE_LEGACY_BOOKING_FALLBACK=true fleet-wide.
+    const { Timestamp } = getFirestoreExports();
+    const startThreshold = new Date(new Date(fromStr + "T12:00:00.000Z").getTime() - 14 * 24 * 60 * 60 * 1000);
+    const legacyScanLimit = getLegacyBookingScanLimit();
+    const legacySnaps = await Promise.all(
+      variantIds.map((id) =>
+        db
+          .collection("bookings")
+          .where("experienceId", "==", id)
+          .where("createdAt", ">=", Timestamp.fromDate(startThreshold))
+          .orderBy("createdAt", "desc")
+          .limit(legacyScanLimit)
+          .get()
+      )
+    );
+    for (const snap of legacySnaps) {
+      if (snap.size >= legacyScanLimit) legacyTruncated = true;
+      for (const doc of snap.docs) {
+        if (seen.has(doc.id)) continue;
+        const data = doc.data() as Booking;
+        if (data.startDateStr) continue;
+        if (!BOOKING_STATUSES_SLOT_TAKEN.has(data.status as never)) continue;
+        const parsed = parseSlotIdRelaxed(data.slotId ?? "");
+        const dateStr = parsed?.dateStr ?? null;
+        if (!dateStr || dateStr < fromStr || dateStr > toStr) continue;
+        seen.add(doc.id);
+        bookings.push({ id: doc.id, data });
+      }
+    }
+  }
 
   const lastModified = bookings.length > 0
     ? bookings.reduce((latest, b) => {
@@ -278,6 +312,7 @@ export async function GET(request: NextRequest) {
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
       "Cache-Control": "private, max-age=600",
+      ...(legacyTruncated ? { "X-Calendar-Partial-Data": "true" } : {}),
       ...(lastModified && { "Last-Modified": lastModified.toUTCString() }),
     },
   });

@@ -1332,7 +1332,7 @@ export async function POST(request: NextRequest) {
                   await assertSlotAvailable({
                     db,
                     Timestamp,
-                    get: (q) => tx.get(q),
+                    get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
                     experienceId: input.experienceId,
                     experienceIdVariants: experienceIdVariantsForAssert,
                     parsed: parsedSlotForHold,
@@ -1495,7 +1495,7 @@ export async function POST(request: NextRequest) {
           await assertSlotAvailable({
             db,
             Timestamp,
-            get: (q) => tx.get(q),
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             experienceIdVariants: experienceIdVariantsForAssert,
             parsed: parsedSlotForHold,
@@ -1566,7 +1566,7 @@ export async function POST(request: NextRequest) {
           await assertSlotAvailable({
             db,
             Timestamp,
-            get: (q) => tx.get(q),
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             experienceIdVariants: experienceIdVariantsForAssert,
             parsed,

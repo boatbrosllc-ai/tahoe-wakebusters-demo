@@ -18,8 +18,8 @@ import type Stripe from "stripe";
 export { getCleanupHoldSlotAction };
 
 export function getRollbackPendingAutoReleaseMs(): number {
-  const n = parseInt(process.env.ROLLBACK_PENDING_AUTO_RELEASE_MS ?? "86400000", 10);
-  return Number.isFinite(n) && n >= 60_000 ? Math.min(n, 7 * 86400000) : 86400000;
+  const n = parseInt(process.env.ROLLBACK_PENDING_AUTO_RELEASE_MS ?? "1800000", 10);
+  return Number.isFinite(n) && n >= 60_000 ? Math.min(n, 7 * 86400000) : 1800000;
 }
 
 /** True when hold is past the auto-reconcile window (matches `runRollbackPendingAutoResolveTransaction` pre-check). */

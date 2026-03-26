@@ -813,7 +813,7 @@ export async function convertHoldToBooking(
       }
     }
     tx.set(db.collection("bookings").doc(bookingId), bookingDoc);
-    addConfirmationOutboxInTransaction(tx, db, bookingId);
+    await addConfirmationOutboxInTransaction(tx, db, bookingId);
     const holdUpdate: Record<string, unknown> = { status: "converted", bookingId };
     if (recomputedPricingForLegacyHold) {
       holdUpdate.pricing = finalPricing;
