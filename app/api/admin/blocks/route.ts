@@ -12,6 +12,11 @@ function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   return null;
 }
 
+function isMissingIndexError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /FAILED_PRECONDITION.*index/i.test(msg);
+}
+
 /** GET: list blocks in range. Query: experienceId, from (YYYY-MM-DD or ISO), to (YYYY-MM-DD or ISO), boatId (optional). Includes slug variants so blocks created under a variant experienceId are returned. */
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -41,20 +46,36 @@ export async function GET(request: NextRequest) {
       ? (expSnap.data() as { slug: string }).slug.trim()
       : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
-    const blocksSnaps = await Promise.all([
-      db
-        .collection("blocks")
-        .where("experienceId", "==", experienceId)
-        .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
-        .get(),
-      experienceSlug
-        ? db
-            .collection("blocks")
-            .where("experienceSlug", "==", experienceSlug)
-            .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
-            .get()
-        : Promise.resolve({ docs: [] } as { docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] }),
-    ]);
+    const fetchBlocksByExperienceId = async () => {
+      try {
+        return await db
+          .collection("blocks")
+          .where("experienceId", "==", experienceId)
+          .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
+          .get();
+      } catch (err) {
+        if (!isMissingIndexError(err)) throw err;
+        console.warn("[admin/blocks GET] missing index for experienceId+startAt; using fallback query");
+        return db.collection("blocks").where("experienceId", "==", experienceId).get();
+      }
+    };
+    const fetchBlocksByExperienceSlug = async () => {
+      if (!experienceSlug) {
+        return { docs: [] } as { docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] };
+      }
+      try {
+        return await db
+          .collection("blocks")
+          .where("experienceSlug", "==", experienceSlug)
+          .where("startAt", "<=", Timestamp.fromDate(rangeEnd))
+          .get();
+      } catch (err) {
+        if (!isMissingIndexError(err)) throw err;
+        console.warn("[admin/blocks GET] missing index for experienceSlug+startAt; using fallback query");
+        return db.collection("blocks").where("experienceSlug", "==", experienceSlug).get();
+      }
+    };
+    const blocksSnaps = await Promise.all([fetchBlocksByExperienceId(), fetchBlocksByExperienceSlug()]);
     const seenBlockIds = new Set<string>();
     const docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
     for (const snap of blocksSnaps) {
