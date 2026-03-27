@@ -30,10 +30,12 @@ import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
 import {
-  addConfirmationOutboxInTransaction,
-  addWaiverInviteOutboxInTransaction,
+  confirmationOutboxDocId,
+  createPendingConfirmationPayload,
+  createPendingWaiverInvitePayload,
   tryImmediateConfirmationSendForBooking,
   tryImmediateWaiverInviteSendForBooking,
+  waiverInviteOutboxDocId,
 } from "@/lib/booking/notification-outbox";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
@@ -404,7 +406,13 @@ export async function convertHoldToBooking(
       cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
       rate = rateSnap.data() as ExperienceRate;
       slot = slotSnap.data() as Slot;
-      if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
+      if (slot.holdId !== holdId) {
+        bookingWarn("convert-hold", "pre-transaction slot hold mismatch; will re-check transactionally", {
+          holdId,
+          slotId: hold.slotId,
+          slotHoldId: slot.holdId ?? null,
+        });
+      }
       slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
     } else {
       if (!expSnap.exists || !boatSnap.exists || !rateSnap.exists) {
@@ -451,7 +459,13 @@ export async function convertHoldToBooking(
       cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
       rate = rateSnap.data() as ExperienceRate;
       slot = slotSnap.data() as Slot;
-      if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
+      if (slot.holdId !== holdId) {
+        bookingWarn("convert-hold", "pre-transaction slot hold mismatch; will re-check transactionally", {
+          holdId,
+          slotId: hold.slotId,
+          slotHoldId: slot.holdId ?? null,
+        });
+      }
       slotRef = db.collection("experiences").doc(hold.experienceId!).collection("slots").doc(hold.slotId);
     } else {
       if (!expSnap.exists || !rateSnap.exists) {
@@ -493,7 +507,13 @@ export async function convertHoldToBooking(
     cancellationPolicyText = boat.cancellationPolicyText ?? DEFAULT_CANCELLATION_POLICY;
     rate = rateSnap.data() as Rate;
     slot = slotSnap.data() as Slot;
-    if (slot.holdId !== holdId) throw new Error("Slot not held by this hold");
+    if (slot.holdId !== holdId) {
+      bookingWarn("convert-hold", "pre-transaction slot hold mismatch; will re-check transactionally", {
+        holdId,
+        slotId: hold.slotId,
+        slotHoldId: slot.holdId ?? null,
+      });
+    }
     slotRef = db.collection("boats").doc(hold.boatId!).collection("slots").doc(hold.slotId);
   }
 
@@ -923,7 +943,12 @@ export async function convertHoldToBooking(
       const s = await tx.get(slotRef);
       if (!s.exists) throw new Error("Slot not found");
       const slotData = s.data() as Slot;
-      if (slotData.holdId !== holdId) throw new Error("Slot not held by this hold");
+      const heldByThisHold = slotData.holdId === holdId;
+      const canRecoverReleasedSlot =
+        graceVerifiedForConversion === true &&
+        (slotData.holdId == null || slotData.holdId === "") &&
+        slotData.status !== "booked";
+      if (!heldByThisHold && !canRecoverReleasedSlot) throw new Error("Slot not held by this hold");
       tx.update(slotRef, {
         status: "booked",
         bookingId,
@@ -963,7 +988,6 @@ export async function convertHoldToBooking(
         },
       };
       if (activeWaiverTemplate.sendSeparateWaiverInvite === true) {
-        await addWaiverInviteOutboxInTransaction(tx, db, bookingId);
         enqueueWaiverInviteOutbox = true;
       }
     }
@@ -974,7 +998,16 @@ export async function convertHoldToBooking(
       };
     }
     tx.set(db.collection("bookings").doc(bookingId), bookingDoc);
-    await addConfirmationOutboxInTransaction(tx, db, bookingId);
+    tx.set(
+      db.collection("notificationOutbox").doc(confirmationOutboxDocId(bookingId)),
+      createPendingConfirmationPayload(bookingId)
+    );
+    if (enqueueWaiverInviteOutbox) {
+      tx.set(
+        db.collection("notificationOutbox").doc(waiverInviteOutboxDocId(bookingId)),
+        createPendingWaiverInvitePayload(bookingId)
+      );
+    }
     const holdUpdate: Record<string, unknown> = { status: "converted", bookingId };
     if (isDeposit) {
       holdUpdate.depositPaymentIntentId = input.paymentIntentId;
