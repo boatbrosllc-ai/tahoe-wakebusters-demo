@@ -766,7 +766,7 @@ export default function CalendarsPage() {
       for (const item of settled) {
         if (item.status === "fulfilled") {
           if (item.value.skipped) continue;
-          totalBlocksCreated += item.value.blocksCreated;
+          totalBlocksCreated += item.value.blocksCreated ?? 0;
           succeeded.push(experienceNames.get(item.value.experienceId) ?? item.value.experienceId);
         } else {
           failed.push(item.reason instanceof Error ? item.reason.message : "Failed");
