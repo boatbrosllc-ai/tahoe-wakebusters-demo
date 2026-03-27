@@ -11,6 +11,8 @@ import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 export const COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS = 3000;
 export const COMPLETE_AFTER_POLL_MAX_INTERVAL_MS = 15_000;
 export const COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS = 300_000;
+/** Client will not poll longer than this even if the server suggests a higher value. */
+export const COMPLETE_AFTER_POLL_HARD_TIMEOUT_CEILING_MS = 900_000;
 /** Initial POST and single-shot retries use this bound so a stalled server cannot spin forever. */
 export const COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS = 30_000;
 /** @deprecated Use COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS */
@@ -171,6 +173,8 @@ export type CompleteAfterPaymentClientOutcome =
       message: string;
       holdExpired?: boolean;
       status: number;
+      /** Stripe PaymentIntent.status when the server returned a structured payment failure. */
+      paymentIntentStatus?: string;
     }
   | { kind: "processing_timeout"; message: string; pollHardTimeoutMs?: number; experienceId?: string }
   | { kind: "aborted" }
@@ -184,6 +188,7 @@ function parseJsonSafe<T>(res: Response): Promise<T> {
 type CompleteAfterJson = {
   success?: boolean;
   error?: string;
+  recoveryMessage?: string;
   processing?: boolean;
   pollHardTimeoutMs?: number;
   reconciliationPending?: boolean;
@@ -197,7 +202,17 @@ type CompleteAfterJson = {
   paymentSummary?: CompleteAfterPaymentSuccessPayload["paymentSummary"];
   discountLimitExceeded?: boolean;
   degradedConfirmation?: CompleteAfterPaymentSuccessPayload["degradedConfirmation"];
+  paymentIntentStatus?: string;
 };
+
+function userFacingTerminalMessage(json: CompleteAfterJson): string {
+  const err = typeof json.error === "string" ? json.error.trim() : "";
+  const rec = typeof json.recoveryMessage === "string" ? json.recoveryMessage.trim() : "";
+  if (err && rec) return `${err}\n\n${rec}`;
+  if (err) return err;
+  if (rec) return rec;
+  return "We couldn't confirm your booking. Please check your email for next steps.";
+}
 
 function pollFetchSignal(parent: AbortSignal): AbortSignal {
   const t = timeoutAbortSignal(COMPLETE_AFTER_PAYMENT_FETCH_TIMEOUT_MS);
@@ -288,8 +303,8 @@ export async function completeAfterPaymentWithPolling(options: {
         ? json.pollHardTimeoutMs
         : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS;
     const hardLimitMs = Math.min(
-      COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
-      Number.isFinite(rawPollLimit) ? rawPollLimit : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS
+      Number.isFinite(rawPollLimit) ? rawPollLimit : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
+      COMPLETE_AFTER_POLL_HARD_TIMEOUT_CEILING_MS
     );
     let pollIntervalMs = COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS;
     let firstReconciliationPoll = isReconciliationPending && !isProcessing;
@@ -406,17 +421,19 @@ export async function completeAfterPaymentWithPolling(options: {
 
       signal.removeEventListener("abort", onParentAbort);
       const isHoldExpired = !!(pollJson && pollJson.holdExpired);
-      const msg =
-        isHoldExpired
-          ? "We've received your payment. Your booking is being confirmed and you'll receive a confirmation email shortly. If you don't see it, check your spam or contact us."
-          : (pollJson && typeof pollJson.error === "string" && pollJson.error)
-            ? pollJson.error
-            : "We couldn't confirm your booking. Please check your email for next steps.";
+      const msg = isHoldExpired
+        ? "We've received your payment. Your booking is being confirmed and you'll receive a confirmation email shortly. If you don't see it, check your spam or contact us."
+        : userFacingTerminalMessage(pollJson);
+      const piStat =
+        typeof pollJson.paymentIntentStatus === "string" && pollJson.paymentIntentStatus.trim()
+          ? pollJson.paymentIntentStatus.trim()
+          : undefined;
       return {
         kind: "terminal_error",
         message: msg,
         holdExpired: isHoldExpired,
         status: pollRes.status,
+        ...(piStat ? { paymentIntentStatus: piStat } : {}),
       };
     }
   }
@@ -445,16 +462,18 @@ export async function completeAfterPaymentWithPolling(options: {
   }
 
   const isHoldExpired = !!(json && json.holdExpired);
-  const msg =
-    isHoldExpired
-      ? "We've received your payment. Your booking is being confirmed and you'll receive a confirmation email shortly. If you don't see it, check your spam or contact us."
-      : (json && typeof json.error === "string" && json.error)
-        ? json.error
-        : "We couldn't confirm your booking. Please check your email for next steps.";
+  const msg = isHoldExpired
+    ? "We've received your payment. Your booking is being confirmed and you'll receive a confirmation email shortly. If you don't see it, check your spam or contact us."
+    : userFacingTerminalMessage(json);
+  const piStat =
+    typeof json.paymentIntentStatus === "string" && json.paymentIntentStatus.trim()
+      ? json.paymentIntentStatus.trim()
+      : undefined;
   return {
     kind: "terminal_error",
     message: msg,
     holdExpired: isHoldExpired,
     status: res.status,
+    ...(piStat ? { paymentIntentStatus: piStat } : {}),
   };
 }

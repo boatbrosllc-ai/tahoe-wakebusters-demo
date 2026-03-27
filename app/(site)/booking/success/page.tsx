@@ -89,6 +89,8 @@ function BookingSuccessContent() {
   const [showStillConfirming, setShowStillConfirming] = useState(false);
   const [showContactHelp, setShowContactHelp] = useState(false);
   const [showCheckBookingStatusLink, setShowCheckBookingStatusLink] = useState(false);
+  /** Stripe PaymentIntent.status for structured payment failures from complete-after-payment. */
+  const [paymentFailureStatus, setPaymentFailureStatus] = useState<string | null>(null);
 
   const RECEIPT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
@@ -127,6 +129,7 @@ function BookingSuccessContent() {
     if (fetchedRef.current && rToken && fetchedForTokenRef.current === rToken) return;
     setLoading(true);
     setError(null);
+    setPaymentFailureStatus(null);
     const postReceipt = (token: string) =>
       fetch("/api/booking/receipt", {
         method: "POST",
@@ -164,30 +167,35 @@ function BookingSuccessContent() {
           return;
         }
         if (outcome.kind === "processing_timeout") {
+          setPaymentFailureStatus(null);
           setError(outcome.message);
           setData(null);
           setLoading(false);
           return;
         }
         if (outcome.kind === "stall_timeout") {
+          setPaymentFailureStatus(null);
           setError(outcome.message);
           setData(null);
           setLoading(false);
           return;
         }
         if (outcome.kind === "fetch_error") {
+          setPaymentFailureStatus(null);
           setError(outcome.message);
           setData(null);
           setLoading(false);
           return;
         }
         if (outcome.kind === "terminal_error") {
+          setPaymentFailureStatus(outcome.paymentIntentStatus ?? null);
           setError(outcome.message);
           setData(null);
           setLoading(false);
           return;
         }
         if (outcome.kind === "reconciliation_pending") {
+          setPaymentFailureStatus(null);
           setError(outcome.message);
           setData(null);
           setLoading(false);
@@ -448,7 +456,9 @@ function BookingSuccessContent() {
           />
           <div>
             <p className="text-brand-dark font-medium mb-2">Loading your confirmation…</p>
-            <p className="text-sm">We&apos;re confirming your payment — this can take a minute.</p>
+            <p className="text-sm">
+              We&apos;re confirming your payment — this can take a minute. Bank debits may take longer than cards.
+            </p>
             {showStillConfirming && (
               <p className="mt-3 text-sm text-brand-muted">Still confirming — this usually takes a few seconds</p>
             )}
@@ -484,6 +494,15 @@ function BookingSuccessContent() {
     const isInvalidReceipt = error === "This receipt link is invalid or has expired.";
     const isMissingOrInvalidReceipt = isMissingToken || isInvalidReceipt;
     const isPaymentIncompleteRedirect = error === "payment_incomplete_redirect";
+    const piFail = paymentFailureStatus;
+    const paymentFailureTitle =
+      piFail === "canceled"
+        ? "Payment was canceled"
+        : piFail === "requires_payment_method"
+          ? "Payment didn’t go through"
+          : piFail === "requires_action"
+            ? "Finish authenticating your payment"
+            : null;
     return (
       <div className="section-padding bg-brand-bg/30">
         <div className="container-narrow px-4 sm:px-6 lg:px-8">
@@ -494,11 +513,13 @@ function BookingSuccessContent() {
                 ? "Check your email for confirmation"
                 : isInvalidReceipt
                   ? "We couldn’t verify your booking on this page"
-                  : paymentIntentId
-                    ? "Your booking is being confirmed"
-                    : "Something went wrong"}
+                  : paymentFailureTitle
+                    ? paymentFailureTitle
+                    : paymentIntentId
+                      ? "Your booking is being confirmed"
+                      : "Something went wrong"}
           </h1>
-          <p className="text-brand-muted mb-6">
+          <p className="text-brand-muted mb-6 whitespace-pre-line">
             {isPaymentIncompleteRedirect
               ? "Your bank or card did not complete authentication (for example 3D Secure). You have not been charged. Please start a new booking and try again."
               : isMissingToken

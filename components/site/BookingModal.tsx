@@ -216,7 +216,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [receiptClaimToken, setReceiptClaimToken] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  /** Server-computed deposit/total/final from create-payment-intent so step-4 summary and Stripe recap use server-authoritative values. */
+  /** Server-computed deposit/total/final from create-payment-intent so step-4 summary and Stripe recap use server-authoritative values (payment methods are also chosen server-side: card-first unless env+experience allow alternatives). */
   const [depositCentsFromServer, setDepositCentsFromServer] = useState<number | null>(null);
   const [totalCentsFromServer, setTotalCentsFromServer] = useState<number | null>(null);
   const [finalCentsFromServer, setFinalCentsFromServer] = useState<number | null>(null);

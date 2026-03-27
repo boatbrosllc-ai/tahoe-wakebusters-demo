@@ -41,6 +41,10 @@ import {
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import { recordReconcilingPayment } from "@/lib/booking/reconciling-payments";
 import { isTransientFirestoreFailure } from "@/lib/booking/firestore-transient";
+import {
+  paymentIntentTerminalFailureCopy,
+  pollHardTimeoutMsForProcessingPaymentIntent,
+} from "@/lib/booking/complete-after-payment-pi-policy";
 
 const PI_MISMATCH_DELAY_MS = 80;
 
@@ -396,28 +400,53 @@ export async function POST(request: NextRequest) {
       piId: pi.id,
     });
     if (pi.status !== "succeeded") {
-      if (pi.status === "processing") {
-        bookingLog("complete-after-payment", "payment still processing, returning 202", { holdId });
+      if (
+        pi.status === "processing" ||
+        pi.status === "requires_confirmation" ||
+        pi.status === "requires_capture"
+      ) {
+        bookingLog("complete-after-payment", "payment in flight, returning 202", { holdId, status: pi.status });
         const pmType =
           typeof pi.payment_method === "object" && pi.payment_method && "type" in pi.payment_method
             ? (pi.payment_method as { type?: string }).type
             : undefined;
-        const asyncPmTypes = new Set(["us_bank_account", "acss_debit", "customer_balance", "sepa_debit"]);
-        const isSyncForPolling = pmType == null ? true : !asyncPmTypes.has(pmType);
-        const pollHardTimeoutMs = isSyncForPolling ? 30_000 : 300_000;
+        const pollHardTimeoutMs = pollHardTimeoutMsForProcessingPaymentIntent(pi);
+        const message =
+          pi.status === "processing"
+            ? "Payment is processing. Your booking will be confirmed once the payment completes."
+            : "Payment is being finalized. Your booking will be confirmed once the payment completes.";
         return NextResponse.json(
           {
             processing: true,
-            message: "Payment is processing. Your booking will be confirmed shortly.",
+            message,
             pollHardTimeoutMs,
             ...(pmType ? { paymentMethodType: pmType } : {}),
           },
           { status: 202 }
         );
       }
-      bookingLog("complete-after-payment", "payment not succeeded", { holdId, status: pi.status });
+
+      const terminalCopy = paymentIntentTerminalFailureCopy(pi.status);
+      if (terminalCopy) {
+        bookingLog("complete-after-payment", "payment terminal failure", { holdId, status: pi.status });
+        return NextResponse.json(
+          {
+            error: terminalCopy.headline,
+            recoveryMessage: terminalCopy.recovery,
+            paymentIntentStatus: pi.status,
+          },
+          { status: 400 }
+        );
+      }
+
+      bookingLog("complete-after-payment", "payment not succeeded (unhandled status)", { holdId, status: pi.status });
       return NextResponse.json(
-        { error: "Payment has not succeeded yet. Your booking will be created shortly—check your email and Admin." },
+        {
+          error: "This payment did not complete successfully.",
+          recoveryMessage:
+            "Your booking is not confirmed. Return to checkout to try again, or contact us with your email and the time you attempted to book.",
+          paymentIntentStatus: pi.status,
+        },
         { status: 400 }
       );
     }

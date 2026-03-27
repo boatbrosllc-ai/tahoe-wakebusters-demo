@@ -27,6 +27,8 @@ export function BookingStripeReturnHandler({
   const [showContactHelp, setShowContactHelp] = useState(false);
   const [showCheckBookingStatusLink, setShowCheckBookingStatusLink] = useState(false);
   const [reconciliationPending, setReconciliationPending] = useState(false);
+  /** Set when complete-after-payment returns a terminal Stripe failure (canceled, requires_payment_method, etc.). */
+  const [terminalPaymentIntentStatus, setTerminalPaymentIntentStatus] = useState<string | null>(null);
   const fetchErrorAutoRetryDoneRef = useRef(false);
 
   useEffect(() => {
@@ -78,6 +80,7 @@ export function BookingStripeReturnHandler({
       setError(null);
       setProcessing(false);
       setReconciliationPending(false);
+      setTerminalPaymentIntentStatus(null);
       setHoldExpired(false);
       const holdIdFromSession = readModalSessionHoldId() ?? undefined;
       const receiptClaimFromSession = readModalSessionReceiptClaimToken();
@@ -146,6 +149,7 @@ export function BookingStripeReturnHandler({
         if (outcome.kind === "terminal_error") {
           setProcessing(false);
           if (outcome.holdExpired) setHoldExpired(true);
+          setTerminalPaymentIntentStatus(outcome.paymentIntentStatus ?? null);
           setError(outcome.message);
           setLoading(false);
           return;
@@ -232,7 +236,10 @@ export function BookingStripeReturnHandler({
           />
           <div>
             <p className="text-brand-dark font-medium mb-2">Your payment is processing</p>
-            <p>We&apos;ll send you a confirmation email shortly. No need to do anything else.</p>
+            <p>
+              We&apos;ll confirm your booking after your payment clears. You&apos;ll get a confirmation email once that
+              happens — bank debits can take longer than cards. No need to repeat payment.
+            </p>
             {showStillConfirming && (
               <p className="mt-3 text-sm text-brand-muted">Still confirming — this usually takes a few seconds</p>
             )}
@@ -278,9 +285,17 @@ export function BookingStripeReturnHandler({
       <div className="section-padding bg-brand-bg/30">
         <div className="container-narrow px-4 sm:px-6 lg:px-8">
           <h1 className="text-2xl font-bold text-brand-dark mb-2">
-            {holdExpired ? "Payment received" : "We couldn't confirm your booking"}
+            {holdExpired
+              ? "Payment received"
+              : terminalPaymentIntentStatus === "canceled"
+                ? "Payment was canceled"
+                : terminalPaymentIntentStatus === "requires_payment_method"
+                  ? "Payment didn’t go through"
+                  : terminalPaymentIntentStatus === "requires_action"
+                    ? "Finish authenticating your payment"
+                    : "We couldn't confirm your booking"}
           </h1>
-          <p className="text-brand-muted mb-6">{error}</p>
+          <p className="text-brand-muted mb-6 whitespace-pre-line">{error}</p>
           <div className="flex flex-wrap gap-4">
             <button
               type="button"

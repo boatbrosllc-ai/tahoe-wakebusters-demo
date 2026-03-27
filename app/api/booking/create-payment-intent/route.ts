@@ -22,6 +22,7 @@ import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
+import { buildBookingPaymentIntentMethodParams } from "@/lib/booking/payment-intent-methods";
 
 /** Re-sign after optional hold extension so the client can cancel/back after the original create-hold window. */
 function releaseTokenFieldForResponse(holdId: string, effectiveExpiresAt: Date): { releaseToken: string } | Record<string, never> {
@@ -427,15 +428,12 @@ export async function POST(request: NextRequest) {
     let totalCents = 0;
     let depositCents = 0;
     let finalCents = 0;
-    // Shared ticketed experiences always charge full — no deposit option.
-    let payFullAmount: boolean;
-    if ((hold as { bookingMode?: string }).bookingMode === "shared") {
-      payFullAmount = true;
-    } else if (hold.experienceId) {
+    let experienceForPolicy: Experience | null = null;
+    if (hold.experienceId) {
       try {
         const expSnap = await db.collection("experiences").doc(hold.experienceId).get();
-        const experience = expSnap.exists ? (expSnap.data() as Experience) : null;
-        if (!experience) {
+        experienceForPolicy = expSnap.exists ? (expSnap.data() as Experience) : null;
+        if (!experienceForPolicy) {
           const incidentCode = generateIncidentCode();
           bookingError(
             "create-payment-intent",
@@ -454,16 +452,6 @@ export async function POST(request: NextRequest) {
             { error: "Booking configuration error. Please try again shortly.", incidentCode },
             { status: 503 }
           );
-        }
-        // Charter: allowDeposit gates whether deposit is offered; when true, honor client payFullAmount (default deposit).
-        if (experience.allowDeposit === true) {
-          payFullAmount = input.clientPayFullAmount;
-        } else {
-          payFullAmount = true;
-          bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", {
-            holdId: input.holdId,
-            experienceId: hold.experienceId,
-          });
         }
       } catch (fetchErr) {
         const incidentCode = generateIncidentCode();
@@ -485,12 +473,27 @@ export async function POST(request: NextRequest) {
           { status: 503 }
         );
       }
+    }
+    // Shared ticketed experiences always charge full — no deposit option.
+    let payFullAmount: boolean;
+    if ((hold as { bookingMode?: string }).bookingMode === "shared") {
+      payFullAmount = true;
+    } else if (hold.experienceId && experienceForPolicy) {
+      // Charter: allowDeposit gates whether deposit is offered; when true, honor client payFullAmount (default deposit).
+      if (experienceForPolicy.allowDeposit === true) {
+        payFullAmount = input.clientPayFullAmount;
+      } else {
+        payFullAmount = true;
+        bookingWarn("create-payment-intent", "deposit coerced to full: allowDeposit disabled or not set", {
+          holdId: input.holdId,
+          experienceId: hold.experienceId,
+        });
+      }
     } else {
       // Legacy boat holds have no experience allowDeposit — deposits are not allowed.
       payFullAmount = true;
       bookingWarn("create-payment-intent", "deposit coerced to full: legacy hold without experience allowDeposit", { holdId: input.holdId });
     }
-    const isOneTimeTicketed = (hold as { bookingMode?: string }).bookingMode === "shared" && payFullAmount === true;
     bookingLog("create-payment-intent", "pricing", {
       holdId: input.holdId,
       payFullAmount,
@@ -887,15 +890,8 @@ export async function POST(request: NextRequest) {
         currency: "usd",
         customer: customerId,
         metadata,
+        ...buildBookingPaymentIntentMethodParams({ payFullAmount, experience: experienceForPolicy }),
       };
-      if (isOneTimeTicketed) {
-        paymentIntentParams.automatic_payment_methods = { enabled: true };
-      } else if (payFullAmount === false) {
-        paymentIntentParams.payment_method_types = ["card"];
-        paymentIntentParams.setup_future_usage = "off_session";
-      } else {
-        paymentIntentParams.automatic_payment_methods = { enabled: true };
-      }
       const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams, { idempotencyKey });
       if (!paymentIntent.client_secret) {
         bookingError("create-payment-intent", "PaymentIntent missing client secret", null, {

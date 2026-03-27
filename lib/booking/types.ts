@@ -180,6 +180,12 @@ export interface Experience {
   fromPriceCents?: number;
   /** When true, charter customers can choose between 50% deposit and full payment. Defaults to false (full-only). */
   allowDeposit?: boolean;
+  /**
+   * When true (and BOOKING_ALLOW_ALTERNATIVE_PAYMENT_METHODS is enabled on the server), full-payment
+   * PaymentIntents may use automatic_payment_methods (e.g. delayed bank methods). Defaults to false:
+   * full pay uses card/wallet card rails only for instant-confirmation UX.
+   */
+  allowDelayedPaymentMethods?: boolean;
   /** When false, hide "Tip now" option for this listing. Defaults to true. */
   allowTipNow?: boolean;
   /** When false, hide "Tip later" option for this listing. Defaults to true. */

@@ -80,4 +80,12 @@ describe("complete-after-payment hold expired response (contract for BookingStri
     assert.match(src, /holdExpired:\s*true/);
     assert.match(src, /logReconcilingPending\([\s\S]*hold_expired_after_payment/);
   });
+
+  it("route returns structured payment failures for terminal PaymentIntent statuses", () => {
+    const src = readFileSync(join(__dirname, "../app/api/booking/complete-after-payment/route.ts"), "utf8");
+    assert.match(src, /paymentIntentTerminalFailureCopy/);
+    assert.match(src, /recoveryMessage/);
+    assert.match(src, /paymentIntentStatus/);
+    assert.match(src, /pollHardTimeoutMsForProcessingPaymentIntent/);
+  });
 });

@@ -6,6 +6,8 @@ import { useState, useRef } from "react";
 
 /**
  * Payment form for Payment Element.
+ * Available payment methods are determined by the PaymentIntent from create-payment-intent (card-first;
+ * broader automatic methods only when BOOKING_ALLOW_ALTERNATIVE_PAYMENT_METHODS and experience.allowDelayedPaymentMethods).
  * Stripe appends `redirect_status` to the success URL after 3DS; `/booking/success` reads it.
  *
  * Apple Pay requires registering the site origin(s) in Stripe (Payment method domains); otherwise
