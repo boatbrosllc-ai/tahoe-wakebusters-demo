@@ -3,7 +3,7 @@
  * Used by POST /api/booking/release-hold and cron/tooling.
  */
 
-import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import type { Booking, Hold, Slot } from "@/lib/booking/types";
 import type { DocumentReference, Firestore } from "firebase-admin/firestore";
