@@ -1415,7 +1415,13 @@ export async function GET(request: NextRequest) {
 
           let rowStatus: string;
           let rowBookingId: string | null = null;
-          if (blockedByCalendar || overlappingOtherTaken) {
+          if (blockedByCalendar) {
+            rowStatus = "blocked";
+          } else if (existing?.status === "open") {
+            // Exact slot row is authoritative; do not let synthetic overlap rows override it.
+            rowStatus = "open";
+          } else if (overlappingOtherTaken) {
+            // Fallback path only when exact row is missing: non-booked taken intervals are generic unavailable.
             rowStatus = "blocked";
           } else if (overlappingBooked) {
             // Same paid charter overlapping this start time (e.g. 7am–10am trip blocks a 9am start on the same boat).
