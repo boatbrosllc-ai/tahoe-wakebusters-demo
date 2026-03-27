@@ -1155,7 +1155,7 @@ export async function GET(request: NextRequest) {
 
       // Backfill canonical duration by scanning merged booked rows. This protects UI duration accuracy
       // when booking docs are partially unavailable and booked rows come from fallback slot-doc merges.
-      for (const row of existingByBoatAndKey.values()) {
+      for (const row of Array.from(existingByBoatAndKey.values())) {
         if (row.status !== "booked" || !row.bookingId) continue;
         const parsedRow = parseSlotIdRelaxed(row.id);
         const rowDuration =
