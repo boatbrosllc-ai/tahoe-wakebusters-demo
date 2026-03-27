@@ -189,10 +189,29 @@ export function BookingStripeReturnHandler({
           />
           <div>
             <p className="text-brand-dark font-medium mb-2">Confirming your booking</p>
-            <p>{error}</p>
-            <p className="mt-4 text-sm text-amber-900">
-              Please keep this tab open — we&apos;re finishing your confirmation. You&apos;ll get a confirmation email when it&apos;s ready.
+            <p className="max-w-lg mx-auto">{error}</p>
+            <p className="mt-4 text-sm text-amber-900 max-w-lg mx-auto">
+              You don&apos;t need to keep this tab open — check your email for confirmation. You can also tap Try again or open your receipt page.
             </p>
+            <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setReconciliationPending(false);
+                  setError(null);
+                  setRetryNonce((n) => n + 1);
+                }}
+                className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 min-h-[44px]"
+              >
+                Try again
+              </button>
+              <Link
+                href={`/booking/success?payment_intent_id=${encodeURIComponent(paymentIntentId)}`}
+                className="text-brand-primary font-medium hover:underline min-h-[44px] inline-flex items-center"
+              >
+                Open receipt status page
+              </Link>
+            </div>
           </div>
         </div>
       </div>

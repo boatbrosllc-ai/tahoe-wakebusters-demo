@@ -1283,6 +1283,21 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [open]);
 
+  /** Safety net if an older client ever lands on reconciliation-only; new flow polls inside complete-after-payment. */
+  useEffect(() => {
+    if (paymentPhase !== "reconciliationPending" || !open) return;
+    const first = window.setTimeout(() => {
+      void runCompleteAfterPaymentForModal();
+    }, 4000);
+    const interval = window.setInterval(() => {
+      void runCompleteAfterPaymentForModal();
+    }, 12_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
+  }, [paymentPhase, open, runCompleteAfterPaymentForModal]);
+
   useEffect(() => {
     if (paymentPhase !== "stripe") {
       setStripePaymentSubmitInProgress(false);
@@ -3624,9 +3639,19 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       ? paymentError
                       : "Payment went through — we’re creating your reservation on our servers. This usually takes a few seconds."}
                   </p>
-                  <p className="text-xs text-amber-900">
-                    Please keep this page open until we finish confirming — you&apos;ll see your receipt here or in your email.
+                  <p className="text-xs text-amber-900 max-w-[320px]">
+                    You don&apos;t have to wait on this screen — we&apos;ll email you when it&apos;s done. Tap Try again if nothing changes after a minute.
                   </p>
+                  <button
+                    type="button"
+                    disabled={completeAfterRetryInFlight}
+                    onClick={() => {
+                      void runCompleteAfterPaymentForModal();
+                    }}
+                    className="rounded-xl bg-brand-primary text-white font-semibold py-2.5 px-5 text-sm hover:bg-brand-primary/90 disabled:opacity-60"
+                  >
+                    {completeAfterRetryInFlight ? "Trying…" : "Try again"}
+                  </button>
                 </div>
               )}
               {paymentPhase === "completeAfterPaymentRetry" && (

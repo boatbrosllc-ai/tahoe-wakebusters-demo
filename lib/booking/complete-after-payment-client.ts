@@ -263,20 +263,32 @@ export async function completeAfterPaymentWithPolling(options: {
   }
 
   let json = (await parseJsonSafe<CompleteAfterJson>(res)) as CompleteAfterJson;
-  const experienceIdInitial =
+  let experienceIdInitial =
     typeof json.experienceId === "string" && json.experienceId.trim() ? json.experienceId.trim() : undefined;
 
   const isProcessing =
     json?.processing === true || (res.status === 202 && json?.processing !== false);
+  /** Server may return 200 + reconciliationPending while webhook/cron finishes conversion — keep polling like processing. */
+  const isReconciliationPending =
+    res.ok && json?.reconciliationPending === true && json?.success !== true;
+  const shouldPollForConfirmation = isProcessing || isReconciliationPending;
 
-  if (isProcessing) {
+  if (shouldPollForConfirmation) {
     onEnteredProcessing?.();
+    if (isReconciliationPending && !isProcessing) {
+      triggerRollbackPendingReconcileHint({
+        paymentIntentId,
+        holdId: holdIdTrim,
+        receiptClaimToken: token,
+      });
+    }
     const pollStart = Date.now();
     const hardLimitMs =
       typeof json.pollHardTimeoutMs === "number" && json.pollHardTimeoutMs >= 1000
         ? json.pollHardTimeoutMs
         : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS;
     let pollIntervalMs = COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS;
+    let firstReconciliationPoll = isReconciliationPending && !isProcessing;
 
     for (;;) {
       if (signal.aborted) {
@@ -284,23 +296,27 @@ export async function completeAfterPaymentWithPolling(options: {
         return { kind: "aborted" };
       }
       if (Date.now() - pollStart > hardLimitMs) {
+        signal.removeEventListener("abort", onParentAbort);
+        if (experienceIdInitial) invalidateBookingCaches(experienceIdInitial);
         triggerRollbackPendingReconcileHint({
           paymentIntentId,
           holdId: holdIdTrim,
           receiptClaimToken: token,
         });
-        signal.removeEventListener("abort", onParentAbort);
-        if (experienceIdInitial) invalidateBookingCaches(experienceIdInitial);
         return {
           kind: "processing_timeout",
           message:
-            "Your payment was received — we are confirming your booking. You will receive a confirmation email shortly.",
+            "Your payment went through, but confirmation is taking longer than usual. Tap “Try again” below—we’ll keep trying. You can also check your email; if nothing arrives within 15 minutes, contact us with the email you used to book.",
           pollHardTimeoutMs: hardLimitMs,
           experienceId: experienceIdInitial,
         };
       }
-      await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
-      pollIntervalMs = Math.min(COMPLETE_AFTER_POLL_MAX_INTERVAL_MS, pollIntervalMs * 2);
+      if (!firstReconciliationPoll) {
+        await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
+        pollIntervalMs = Math.min(COMPLETE_AFTER_POLL_MAX_INTERVAL_MS, pollIntervalMs * 2);
+      } else {
+        firstReconciliationPoll = false;
+      }
       if (signal.aborted) {
         signal.removeEventListener("abort", onParentAbort);
         return { kind: "aborted" };
@@ -348,20 +364,16 @@ export async function completeAfterPaymentWithPolling(options: {
         continue;
       }
 
-      if (pollRes.ok && pollJson?.reconciliationPending) {
-        signal.removeEventListener("abort", onParentAbort);
-        const expId =
+      if (pollRes.ok && pollJson?.reconciliationPending === true && pollJson?.success !== true) {
+        const expPoll =
           typeof pollJson.experienceId === "string" && pollJson.experienceId.trim()
             ? pollJson.experienceId.trim()
             : undefined;
-        if (expId) invalidateBookingCaches(expId);
-        return {
-          kind: "reconciliation_pending",
-          message:
-            (typeof pollJson.message === "string" && pollJson.message) ||
-            "Your payment went through — we're finishing your confirmation. Watch for your confirmation email shortly.",
-          experienceId: expId,
-        };
+        if (expPoll) {
+          experienceIdInitial = experienceIdInitial ?? expPoll;
+          invalidateBookingCaches(expPoll);
+        }
+        continue;
       }
 
       if (pollRes.ok && pollJson?.success === true) {
@@ -406,17 +418,6 @@ export async function completeAfterPaymentWithPolling(options: {
   }
 
   signal.removeEventListener("abort", onParentAbort);
-
-  if (res.ok && json?.reconciliationPending) {
-    if (typeof json.experienceId === "string" && json.experienceId.trim()) invalidateBookingCaches(json.experienceId.trim());
-    return {
-      kind: "reconciliation_pending",
-      message:
-        (typeof json.message === "string" && json.message) ||
-        "Your payment is being reconciled. Please wait for email confirmation or contact us.",
-      experienceId: typeof json.experienceId === "string" ? json.experienceId : undefined,
-    };
-  }
 
   if (res.ok && json?.success === true) {
     const experienceIdOk =
