@@ -423,6 +423,213 @@ describe(
       assert.strictEqual(reserved, 0, "reservedSeats must be released after checkout conversion");
     });
 
+    it("convertHoldToBooking enqueue path writes confirmation outbox without read-after-write transaction failure", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { convertHoldToBooking } = await import("../lib/booking/convert-hold-to-booking");
+      const { confirmationOutboxDocId } = await import("../lib/booking/notification-outbox");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `conc_conv_outbox_${uid}`;
+      const dateStr = "2030-06-22";
+      const slotId = `${dateStr}-10-3`;
+      const holdId = `conc_conv_outbox_hold_${uid}`;
+      const partySize = 2;
+      const pricing = { subtotalCents: 1000, totalCents: 1083, taxCents: 83, currency: "usd" };
+
+      await db.collection("experiences").doc(expId).set({
+        slug: "conv-outbox-test",
+        title: "Conversion Outbox Test",
+        subtitle: "",
+        descriptionLong: "",
+        heroMedia: { type: "image", url: "https://example.com/x.jpg" },
+        gallery: [],
+        location: { title: "Lake Austin", addressText: "Lake Austin, TX" },
+        maxGuests: 14,
+        petsMax: 0,
+        included: [],
+        whatToBring: [],
+        rules: [],
+        cancellationPolicy: {
+          freeCancelDays: 2,
+          partialRefundDaysStart: 1,
+          partialRefundDaysEnd: 0,
+          noRefundWithinDays: 0,
+          fullText: "",
+        },
+        faqs: [],
+        seasonal: { enabled: false },
+        active: true,
+        pricingType: "ticketed",
+        maxCapacity: 10,
+        departureHour: 10,
+        departureMinute: 0,
+        tripDurationHours: 3,
+        defaultRateId: "rate1",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      await db.collection("experiences").doc(expId).collection("rates").doc("rate1").set({
+        durationHours: 3,
+        displayName: "3h",
+        priceCents: 10000,
+        active: true,
+      });
+      await db.collection("holds").doc(holdId).set({
+        experienceId: expId,
+        slotId,
+        startDateStr: dateStr,
+        rateId: "rate1",
+        partySize,
+        bookingMode: "shared",
+        pricingType: "ticketed",
+        status: "active",
+        expiresAt: Timestamp.fromDate(new Date(Date.now() + 120_000)),
+        createdAt: FieldValue.serverTimestamp(),
+        customerDraft: { name: "Outbox", email: "outbox@example.com", phone: "+15125550001" },
+        addonSelections: [],
+        answers: {},
+        marketingOptIn: false,
+        pricing,
+      });
+
+      let conversionResult: Awaited<ReturnType<typeof convertHoldToBooking>> | null = null;
+      await assert.doesNotReject(async () => {
+        conversionResult = await convertHoldToBooking(db, holdId, {
+          paymentIntentId: `pi_conv_outbox_${uid}`,
+          amountTotalCents: pricing.totalCents,
+          currency: "usd",
+          customerOverride: { name: "Outbox", email: "outbox@example.com", phone: "+15125550001" },
+          checkoutSessionId: `cs_conv_outbox_${uid}`,
+        });
+      });
+      assert.ok(conversionResult && "bookingId" in conversionResult);
+      if (!conversionResult || !("bookingId" in conversionResult)) return;
+      const bookingId = conversionResult.bookingId;
+
+      const outboxSnap = await db.collection("notificationOutbox").doc(confirmationOutboxDocId(bookingId)).get();
+      assert.strictEqual(outboxSnap.exists, true);
+      const outbox = outboxSnap.data() as { type?: string; bookingId?: string; status?: string };
+      assert.strictEqual(outbox.type, "booking_confirmation");
+      assert.strictEqual(outbox.bookingId, bookingId);
+      assert.strictEqual(outbox.status, "pending");
+    });
+
+    it("executeReleaseHoldTransaction with discount lookup path releases hold without read-after-write errors", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { executeReleaseHoldTransaction } = await import("../lib/booking/release-hold-transaction");
+      const { getDepartureInventoryRef } = await import("../lib/booking/shared-departure-inventory");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `conc_rel_order_${uid}`;
+      const dateStr = "2030-06-23";
+      const slotId = `${dateStr}-10-3`;
+      const holdId = `conc_rel_order_hold_${uid}`;
+      const partySize = 3;
+      const discountCode = `ORDER_${uid}`;
+
+      await db.collection("discounts").doc(`disc_${uid}`).set({
+        code: discountCode,
+        usedCount: 1,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+      await inventoryRef.set({ reservedSeats: partySize, updatedAt: FieldValue.serverTimestamp() });
+
+      await db.collection("holds").doc(holdId).set({
+        experienceId: expId,
+        slotId,
+        startDateStr: dateStr,
+        rateId: "rate1",
+        partySize,
+        bookingMode: "shared",
+        pricingType: "ticketed",
+        discountCode,
+        status: "active",
+        expiresAt: Timestamp.fromDate(new Date(Date.now() + 120_000)),
+        createdAt: FieldValue.serverTimestamp(),
+        customerDraft: { name: "Release", email: "release@example.com", phone: "+15125550002" },
+        addonSelections: [],
+        answers: {},
+        marketingOptIn: false,
+        pricing: { subtotalCents: 1000, totalCents: 1083, taxCents: 83, currency: "usd" },
+      });
+
+      let result: Awaited<ReturnType<typeof executeReleaseHoldTransaction>> | null = null;
+      await assert.doesNotReject(async () => {
+        result = await executeReleaseHoldTransaction(db, holdId);
+      });
+      assert.deepStrictEqual(result, { released: true });
+
+      const holdAfter = await db.collection("holds").doc(holdId).get();
+      assert.strictEqual((holdAfter.data() as { status?: string })?.status, "expired");
+      const invAfter = await inventoryRef.get();
+      assert.strictEqual((invAfter.data() as { reservedSeats?: number } | undefined)?.reservedSeats ?? -1, 0);
+      const discountAfter = await db.collection("discounts").doc(`disc_${uid}`).get();
+      assert.strictEqual((discountAfter.data() as { usedCount?: number } | undefined)?.usedCount ?? -1, 0);
+    });
+
+    it("runExpiredHoldReleaseTransaction cleanup expiration with discount path completes without read-after-write errors", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { runExpiredHoldReleaseTransaction } = await import("../lib/booking/cleanup-holds-logic");
+      const { getDepartureInventoryRef } = await import("../lib/booking/shared-departure-inventory");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const expId = `conc_cln_order_${uid}`;
+      const dateStr = "2030-06-24";
+      const slotId = `${dateStr}-10-3`;
+      const holdId = `conc_cln_order_hold_${uid}`;
+      const partySize = 2;
+      const discountCode = `CLN_ORDER_${uid}`;
+
+      await db.collection("discounts").doc(`disc_cln_${uid}`).set({
+        code: discountCode,
+        usedCount: 1,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      const inventoryRef = getDepartureInventoryRef(db, expId, dateStr);
+      await inventoryRef.set({ reservedSeats: partySize, updatedAt: FieldValue.serverTimestamp() });
+
+      await db.collection("holds").doc(holdId).set({
+        experienceId: expId,
+        slotId,
+        startDateStr: dateStr,
+        rateId: "rate1",
+        partySize,
+        bookingMode: "shared",
+        pricingType: "ticketed",
+        discountCode,
+        status: "active",
+        expiresAt: Timestamp.fromDate(new Date(Date.now() - 90_000)),
+        createdAt: FieldValue.serverTimestamp(),
+        customerDraft: { name: "Cleanup", email: "cleanup@example.com", phone: "+15125550003" },
+        addonSelections: [],
+        answers: {},
+        marketingOptIn: false,
+        pricing: { subtotalCents: 1000, totalCents: 1083, taxCents: 83, currency: "usd" },
+      });
+
+      const holdRef = db.collection("holds").doc(holdId);
+      let outcome: Awaited<ReturnType<typeof runExpiredHoldReleaseTransaction>> | null = null;
+      await assert.doesNotReject(async () => {
+        outcome = await runExpiredHoldReleaseTransaction(db, FieldValue, holdRef);
+      });
+      assert.strictEqual(outcome, "processed");
+
+      const holdAfter = await holdRef.get();
+      assert.strictEqual((holdAfter.data() as { status?: string })?.status, "expired");
+      const invAfter = await inventoryRef.get();
+      assert.strictEqual((invAfter.data() as { reservedSeats?: number } | undefined)?.reservedSeats ?? -1, 0);
+      const discountAfter = await db.collection("discounts").doc(`disc_cln_${uid}`).get();
+      assert.strictEqual((discountAfter.data() as { usedCount?: number } | undefined)?.usedCount ?? -1, 0);
+    });
+
     it("two concurrent charter holds for the same boat slot: one 200, one 409; slot held by winner", async () => {
       const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
       const { getSlotStartEnd } = await import("../lib/booking/experience-slots");

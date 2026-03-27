@@ -3,7 +3,7 @@
  * Used by POST /api/booking/release-hold and cron/tooling.
  */
 
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import type { Booking, Hold, Slot } from "@/lib/booking/types";
 import type { DocumentReference, Firestore } from "firebase-admin/firestore";
@@ -72,21 +72,47 @@ export async function executeReleaseHoldTransaction(
       if (!discountSnap.empty) discountDocRef = discountSnap.docs[0].ref;
     }
 
-    const applyDiscountDecrementTx = async () => {
-      if (!discountDocRef) return;
+    let discountNextUsedCount: number | null = null;
+    if (discountDocRef) {
       const dSnap = await tx.get(discountDocRef);
       if (dSnap.exists) {
         const d = dSnap.data() as { usedCount?: number };
-        const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-        tx.update(discountDocRef, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
+        discountNextUsedCount = Math.max(0, (d.usedCount ?? 0) - 1);
       }
-    };
+    }
 
     const slotSnap = await tx.get(slotRef);
+    const shouldReleaseSharedCapacity = isSharedHold && Boolean(experienceId) && Boolean(dateStr);
+    let inventoryRefForShared: ReturnType<typeof getDepartureInventoryRef> | null = null;
+    let inventoryReservedSeats: number | null = null;
+    if (shouldReleaseSharedCapacity) {
+      inventoryRefForShared = getDepartureInventoryRef(db, experienceId!, dateStr);
+      const inventorySnap = await tx.get(inventoryRefForShared);
+      inventoryReservedSeats = inventorySnap.exists
+        ? ((inventorySnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+        : 0;
+    }
+
+    const applySharedCapacityReleaseWrite = () => {
+      if (!inventoryRefForShared || inventoryReservedSeats == null) return;
+      tx.set(
+        inventoryRefForShared,
+        {
+          reservedSeats: Math.max(0, inventoryReservedSeats - Math.max(0, hold.partySize)),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    };
+
+    const applyDiscountDecrementWrite = () => {
+      if (!discountDocRef || discountNextUsedCount == null) return;
+      tx.update(discountDocRef, { usedCount: discountNextUsedCount, updatedAt: FieldValue.serverTimestamp() });
+    };
+
     if (!slotSnap.exists) {
-      if (isSharedHold && experienceId && dateStr) {
-        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-        await releaseCapacity(tx, inventoryRef, hold.partySize);
+      if (shouldReleaseSharedCapacity) {
+        applySharedCapacityReleaseWrite();
       } else if (isSharedHold) {
         void writeOperationalAlert({
           type: "release_hold_missing_date_str",
@@ -102,15 +128,14 @@ export async function executeReleaseHoldTransaction(
         rollbackPending: FieldValue.delete(),
         rollbackPendingExpiresAt: FieldValue.delete(),
       });
-      await applyDiscountDecrementTx();
+      applyDiscountDecrementWrite();
       outcome = { released: true };
       return;
     }
     const slot = slotSnap.data() as Slot;
     if (slot.holdId !== holdId) {
-      if (isSharedHold && experienceId && dateStr) {
-        const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-        await releaseCapacity(tx, inventoryRef, hold.partySize);
+      if (shouldReleaseSharedCapacity) {
+        applySharedCapacityReleaseWrite();
       } else if (isSharedHold) {
         void writeOperationalAlert({
           type: "release_hold_missing_date_str",
@@ -126,7 +151,7 @@ export async function executeReleaseHoldTransaction(
         rollbackPending: FieldValue.delete(),
         rollbackPendingExpiresAt: FieldValue.delete(),
       });
-      await applyDiscountDecrementTx();
+      applyDiscountDecrementWrite();
       outcome = { released: true };
       return;
     }
@@ -135,9 +160,8 @@ export async function executeReleaseHoldTransaction(
       holdId: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    if (isSharedHold && experienceId && dateStr) {
-      const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-      await releaseCapacity(tx, inventoryRef, hold.partySize);
+    if (shouldReleaseSharedCapacity) {
+      applySharedCapacityReleaseWrite();
     } else if (isSharedHold) {
       void writeOperationalAlert({
         type: "release_hold_missing_date_str",
@@ -153,7 +177,7 @@ export async function executeReleaseHoldTransaction(
       rollbackPending: FieldValue.delete(),
       rollbackPendingExpiresAt: FieldValue.delete(),
     });
-    await applyDiscountDecrementTx();
+    applyDiscountDecrementWrite();
     outcome = { released: true };
   });
 

@@ -9,7 +9,7 @@
 
 import type { Firestore, DocumentReference, Transaction } from "firebase-admin/firestore";
 import { Timestamp } from "firebase-admin/firestore";
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { getCleanupHoldSlotAction } from "@/lib/booking/cleanup-holds-slot-action";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
@@ -77,24 +77,50 @@ async function expireHoldAndReleaseSlotInTransaction(
     if (!discountSnap.empty) discountRef = discountSnap.docs[0].ref;
   }
 
-  const applyDiscountDecrement = async (ref: DocumentReference | null) => {
-    if (!ref) return;
-    const dSnap = await tx.get(ref);
+  let discountNextUsedCount: number | null = null;
+  if (discountRef) {
+    const dSnap = await tx.get(discountRef);
     if (dSnap.exists) {
       const d = dSnap.data() as { usedCount?: number };
-      const nextCount = Math.max(0, (d.usedCount ?? 0) - 1);
-      tx.update(ref, { usedCount: nextCount, updatedAt: FieldValue.serverTimestamp() });
+      discountNextUsedCount = Math.max(0, (d.usedCount ?? 0) - 1);
     }
-  };
+  }
 
   const slotSnap = await tx.get(slotRef);
+  const shouldReleaseSharedCapacity = isSharedHold && Boolean(experienceId) && Boolean(dateStr);
+  let inventoryRefForShared: ReturnType<typeof getDepartureInventoryRef> | null = null;
+  let inventoryReservedSeats: number | null = null;
+  if (shouldReleaseSharedCapacity) {
+    inventoryRefForShared = getDepartureInventoryRef(db, experienceId!, dateStr);
+    const inventorySnap = await tx.get(inventoryRefForShared);
+    inventoryReservedSeats = inventorySnap.exists
+      ? ((inventorySnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+      : 0;
+  }
+
+  const applySharedCapacityReleaseWrite = () => {
+    if (!inventoryRefForShared || inventoryReservedSeats == null) return;
+    tx.set(
+      inventoryRefForShared,
+      {
+        reservedSeats: Math.max(0, inventoryReservedSeats - Math.max(0, (hold.partySize as number) ?? 0)),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  };
+
+  const applyDiscountDecrementWrite = () => {
+    if (!discountRef || discountNextUsedCount == null) return;
+    tx.update(discountRef, { usedCount: discountNextUsedCount, updatedAt: FieldValue.serverTimestamp() });
+  };
+
   if (!slotSnap.exists) {
-    if (isSharedHold && experienceId && dateStr) {
-      const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-      await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+    if (shouldReleaseSharedCapacity) {
+      applySharedCapacityReleaseWrite();
     }
     tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete(), rollbackPendingExpiresAt: FieldValue.delete() });
-    await applyDiscountDecrement(discountRef);
+    applyDiscountDecrementWrite();
     return true;
   }
 
@@ -106,9 +132,8 @@ async function expireHoldAndReleaseSlotInTransaction(
       holdId: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    if (isSharedHold && experienceId && dateStr) {
-      const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
-      await releaseCapacity(tx, inventoryRef, (hold.partySize as number) ?? 0);
+    if (shouldReleaseSharedCapacity) {
+      applySharedCapacityReleaseWrite();
     }
   }
   // Correctness proof for shared capacity with action === "expire_only":
@@ -116,7 +141,7 @@ async function expireHoldAndReleaseSlotInTransaction(
   // The replacement path already wrote the net reservedSeats state, so releasing again here would double-decrement.
 
   tx.update(holdRef, { status: "expired", rollbackPending: FieldValue.delete(), rollbackPendingExpiresAt: FieldValue.delete() });
-  await applyDiscountDecrement(discountRef);
+  applyDiscountDecrementWrite();
   return true;
 }
 
