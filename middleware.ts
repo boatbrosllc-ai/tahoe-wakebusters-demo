@@ -104,7 +104,10 @@ export async function middleware(request: NextRequest) {
       res.headers.set("Content-Security-Policy", csp);
       return res;
     }
-    if (pathname.startsWith("/api/admin/")) {
+    // Optional defense-in-depth: when ADMIN_COOKIE_SECRET is set, require HMAC(admin_session)
+    // in admin_session_sig. When unset, admin APIs rely on Firebase session verification only
+    // (see requireAdminSession). Requiring the HMAC unconditionally broke production when the secret was not configured.
+    if (pathname.startsWith("/api/admin/") && process.env.ADMIN_COOKIE_SECRET?.trim()) {
       const ok = await verifyAdminCookieSignature(request);
       if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
