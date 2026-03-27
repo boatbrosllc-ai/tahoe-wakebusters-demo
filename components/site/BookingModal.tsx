@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState, useMemo, useCallback, useReducer } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { loadStripe } from "@stripe/stripe-js";
 import type { PaymentIntent } from "@stripe/stripe-js";
@@ -140,6 +141,7 @@ type BookingModalProps = {
 
 
 export function BookingModal({ open, onOpenChange, initialSelection, selectionKey, onBookAnother }: BookingModalProps) {
+  const router = useRouter();
   const [bookingState, dispatchBooking] = useReducer(bookingModalReducer, BOOKING_MODAL_INITIAL_STATE);
   const step = bookingState.step;
   const paymentPhase = bookingState.paymentPhase as BookingModalPaymentPhase;
@@ -1482,7 +1484,39 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     selectedRateId?: string | null;
                     selectedBoatId?: string | null;
                     partySize?: number;
+                    converted?: boolean;
+                    holdStatus?: string;
+                    bookingId?: string;
+                    error?: string;
                   };
+                  if (
+                    summaryRes.ok &&
+                    summaryRes.status === 200 &&
+                    (summary.holdStatus === "converted" || summary.converted === true)
+                  ) {
+                    const piForReceipt =
+                      typeof parsed.paymentIntentId === "string" && parsed.paymentIntentId.trim()
+                        ? parsed.paymentIntentId.trim()
+                        : null;
+                    clearModalHoldRecoverySession();
+                    if (!cancelled && piForReceipt) {
+                      router.replace(`/booking/success?payment_intent_id=${encodeURIComponent(piForReceipt)}`);
+                    } else if (!cancelled) {
+                      setHoldSessionVerifyError(
+                        "Your booking is already complete. Check your email for confirmation, or contact us for your receipt.",
+                      );
+                    }
+                    return;
+                  }
+                  if (summaryRes.status === 410) {
+                    clearModalHoldRecoverySession();
+                    if (!cancelled) {
+                      setHoldSessionVerifyError(
+                        "Your hold has expired. Please start a new booking.",
+                      );
+                    }
+                    return;
+                  }
                   if (!summaryRes.ok || !summary.holdId || !summary.selectedSlot?.id) {
                     clearModalHoldRecoverySession();
                     setHoldSessionVerifyError("Could not restore your saved payment session. Please start a new booking.");
@@ -2115,6 +2149,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     initialSelection?.experienceId,
     retrySlots,
     handleCompleteAfterPaymentOutcome,
+    router,
   ]);
 
   /** Drop stale success snapshot from session on mount (full hydration runs in the recovery effect when the modal opens). */

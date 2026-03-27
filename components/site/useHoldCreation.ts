@@ -737,6 +737,8 @@ export function useHoldCreation(
           experienceSlug: opts.selectedExperience.slug,
           isTicketed: opts.isTicketed,
           payFullAmount: typeof pi.payFullAmount === "boolean" ? pi.payFullAmount : payFull,
+          receiptClaimToken: pi.receiptClaimToken?.trim() || null,
+          paymentIntentId: pi.paymentIntentId?.trim() || null,
         });
       }
     })();

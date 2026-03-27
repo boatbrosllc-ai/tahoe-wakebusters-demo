@@ -7,6 +7,9 @@ import { useState, useRef } from "react";
 /**
  * Payment form for Payment Element.
  * Stripe appends `redirect_status` to the success URL after 3DS; `/booking/success` reads it.
+ *
+ * Apple Pay requires registering the site origin(s) in Stripe (Payment method domains); otherwise
+ * the wallet may not appear—no code change fixes that. See Stripe PMD registration docs.
  */
 export function BookingStep4PaymentForm({
   onSuccess,

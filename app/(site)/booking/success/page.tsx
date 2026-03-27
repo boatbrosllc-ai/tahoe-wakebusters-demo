@@ -88,6 +88,7 @@ function BookingSuccessContent() {
   const completeAfterPaymentAbortRef = useRef<AbortController | null>(null);
   const [showStillConfirming, setShowStillConfirming] = useState(false);
   const [showContactHelp, setShowContactHelp] = useState(false);
+  const [showCheckBookingStatusLink, setShowCheckBookingStatusLink] = useState(false);
 
   const RECEIPT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
@@ -95,13 +96,16 @@ function BookingSuccessContent() {
     if (!loading) {
       setShowStillConfirming(false);
       setShowContactHelp(false);
+      setShowCheckBookingStatusLink(false);
       return;
     }
     const t1 = window.setTimeout(() => setShowStillConfirming(true), 5000);
     const t2 = window.setTimeout(() => setShowContactHelp(true), 15_000);
+    const t3 = window.setTimeout(() => setShowCheckBookingStatusLink(true), 25_000);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(t3);
     };
   }, [loading]);
 
@@ -457,6 +461,16 @@ function BookingSuccessContent() {
                 >
                   Contact us at {siteConfig.phone}
                 </a>
+              </p>
+            )}
+            {showCheckBookingStatusLink && paymentIntentId && (
+              <p className="mt-4">
+                <Link
+                  href={`/booking/success?payment_intent_id=${encodeURIComponent(paymentIntentId)}`}
+                  className="text-brand-primary font-medium hover:underline min-h-[44px] inline-flex items-center"
+                >
+                  Check my booking status
+                </Link>
               </p>
             )}
           </div>

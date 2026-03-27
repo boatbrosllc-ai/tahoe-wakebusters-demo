@@ -49,6 +49,21 @@ export async function GET(request: NextRequest) {
     }
     const hold = holdSnap.data() as Hold;
     if (hold.status !== "active") {
+      if (hold.status === "converted") {
+        const bookingId =
+          typeof hold.bookingId === "string" && hold.bookingId.trim() ? hold.bookingId.trim() : undefined;
+        return NextResponse.json({
+          converted: true as const,
+          holdStatus: "converted" as const,
+          ...(bookingId ? { bookingId } : {}),
+        });
+      }
+      if (hold.status === "expired") {
+        return NextResponse.json(
+          { error: "Hold expired", holdStatus: "expired" as const },
+          { status: 410 },
+        );
+      }
       return NextResponse.json({ error: "Hold is not active", holdStatus: hold.status }, { status: 409 });
     }
     const expiresAtIso = (hold.expiresAt as { toDate?: () => Date })?.toDate?.()?.toISOString?.() ?? null;

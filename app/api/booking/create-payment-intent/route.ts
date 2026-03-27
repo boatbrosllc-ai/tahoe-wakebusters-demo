@@ -889,12 +889,12 @@ export async function POST(request: NextRequest) {
         metadata,
       };
       if (isOneTimeTicketed) {
-        paymentIntentParams.payment_method_types = ["card", "link"];
+        paymentIntentParams.automatic_payment_methods = { enabled: true };
       } else if (payFullAmount === false) {
         paymentIntentParams.payment_method_types = ["card"];
         paymentIntentParams.setup_future_usage = "off_session";
       } else {
-        paymentIntentParams.payment_method_types = ["card", "link"];
+        paymentIntentParams.automatic_payment_methods = { enabled: true };
       }
       const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams, { idempotencyKey });
       if (!paymentIntent.client_secret) {
