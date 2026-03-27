@@ -49,6 +49,7 @@
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }] },
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "claimExpiresAt", "order": "ASCENDING" }] },
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "bookingId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
+    { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
 
     { "collectionGroup": "reminderRetryQueue", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "templateKey", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "lastAttemptAt", "order": "DESCENDING" }] },
 

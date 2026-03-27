@@ -329,6 +329,30 @@ export type NotificationOutboxStats = {
   staleClaimCountsByTemplate: Record<string, number>;
 };
 
+function isMissingFirestoreIndexError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /FAILED_PRECONDITION/i.test(msg) && /requires an index|indexes\?create_composite/i.test(msg);
+}
+
+async function safeCount(
+  p: Promise<import("firebase-admin/firestore").AggregateQuerySnapshot<{ count: import("firebase-admin/firestore").AggregateField<number> }>>,
+  context: string
+): Promise<number> {
+  try {
+    const snap = await p;
+    return snap.data().count;
+  } catch (err) {
+    if (isMissingFirestoreIndexError(err)) {
+      bookingWarn("notification-outbox", "missing Firestore index for aggregate count; returning 0", {
+        context,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 0;
+    }
+    throw err;
+  }
+}
+
 /** Aggregate counts for admin visibility (all outbox types + retry queue + stale claims). */
 export async function getNotificationOutboxStats(db: Firestore): Promise<NotificationOutboxStats> {
   const { Timestamp } = getFirestoreExports();
@@ -341,31 +365,68 @@ export async function getNotificationOutboxStats(db: Firestore): Promise<Notific
       | "waiver_invite_send"
   ): Promise<NotificationOutboxTypeStats> => {
     const base = () => db.collection(COLLECTION).where("type", "==", outboxType);
-    const [pendingSnap, deadSnap, stuckSnap] = await Promise.all([
-      base().where("status", "==", "pending").count().get(),
-      base().where("status", "==", "dead_letter").count().get(),
-      db
-        .collection(COLLECTION)
-        .where("status", "==", "claimed")
-        .where("type", "==", outboxType)
-        .where("claimExpiresAt", "<", now)
-        .count()
-        .get(),
+    const [pendingCount, deadCount, stuckCount] = await Promise.all([
+      safeCount(base().where("status", "==", "pending").count().get(), `${outboxType}:pending`),
+      safeCount(base().where("status", "==", "dead_letter").count().get(), `${outboxType}:dead_letter`),
+      safeCount(
+        db
+          .collection(COLLECTION)
+          .where("status", "==", "claimed")
+          .where("type", "==", outboxType)
+          .where("claimExpiresAt", "<", now)
+          .count()
+          .get(),
+        `${outboxType}:claimed_expired`
+      ),
     ]);
     return {
-      pending: pendingSnap.data().count,
-      deadLetter: deadSnap.data().count,
-      stuckClaims: stuckSnap.data().count,
+      pending: pendingCount,
+      deadLetter: deadCount,
+      stuckClaims: stuckCount,
     };
   };
-  const [bc, fc, disc, wv, reminderRetryQueue, staleClaimCountsByTemplate] = await Promise.all([
+  const [bc, fc, disc, wv, reminderRetryQueueSettled, staleClaimCountsSettled] = await Promise.all([
     countForType("booking_confirmation"),
     countForType("final_charge_success"),
     countForType("discount_limit_exceeded_notification"),
     countForType("waiver_invite_send"),
-    getReminderRetryQueueStatsByTemplate(db),
-    getStaleClaimCountsByTemplateKey(db),
+    getReminderRetryQueueStatsByTemplate(db).then(
+      (value) => ({ ok: true as const, value }),
+      (err) => ({ ok: false as const, err })
+    ),
+    getStaleClaimCountsByTemplateKey(db).then(
+      (value) => ({ ok: true as const, value }),
+      (err) => ({ ok: false as const, err })
+    ),
   ]);
+  let reminderRetryQueue: Awaited<ReturnType<typeof getReminderRetryQueueStatsByTemplate>>;
+  if (reminderRetryQueueSettled.ok) {
+    reminderRetryQueue = reminderRetryQueueSettled.value;
+  } else if (isMissingFirestoreIndexError(reminderRetryQueueSettled.err)) {
+    bookingWarn("notification-outbox", "missing Firestore index for reminder retry stats; returning empty stats", {
+      error:
+        reminderRetryQueueSettled.err instanceof Error
+          ? reminderRetryQueueSettled.err.message
+          : String(reminderRetryQueueSettled.err),
+    });
+    reminderRetryQueue = {} as Awaited<ReturnType<typeof getReminderRetryQueueStatsByTemplate>>;
+  } else {
+    throw reminderRetryQueueSettled.err;
+  }
+  let staleClaimCountsByTemplate: Record<string, number>;
+  if (staleClaimCountsSettled.ok) {
+    staleClaimCountsByTemplate = staleClaimCountsSettled.value;
+  } else if (isMissingFirestoreIndexError(staleClaimCountsSettled.err)) {
+    bookingWarn("notification-outbox", "missing Firestore index for stale claim stats; returning empty stats", {
+      error:
+        staleClaimCountsSettled.err instanceof Error
+          ? staleClaimCountsSettled.err.message
+          : String(staleClaimCountsSettled.err),
+    });
+    staleClaimCountsByTemplate = {};
+  } else {
+    throw staleClaimCountsSettled.err;
+  }
   return {
     pending: bc.pending,
     deadLetter: bc.deadLetter,
@@ -387,13 +448,16 @@ export async function alertOnStalledOutbox(db: Firestore, thresholdMinutes: numb
   const cutoff = Timestamp.fromDate(new Date(Date.now() - thresholdMinutes * 60 * 1000));
 
   const col = db.collection(COLLECTION);
-  const [pendingSnap, deadSnap] = await Promise.all([
-    col.where("status", "==", "pending").where("nextAttemptAt", "<=", cutoff).count().get(),
-    col.where("status", "==", "dead_letter").where("createdAt", "<", cutoff).count().get(),
+  const [pendingStalledCount, deadLetterStalledCount] = await Promise.all([
+    safeCount(
+      col.where("status", "==", "pending").where("nextAttemptAt", "<=", cutoff).count().get(),
+      "stalled:pending_nextAttemptAt"
+    ),
+    safeCount(
+      col.where("status", "==", "dead_letter").where("createdAt", "<", cutoff).count().get(),
+      "stalled:dead_letter_createdAt"
+    ),
   ]);
-
-  const pendingStalledCount = pendingSnap.data().count;
-  const deadLetterStalledCount = deadSnap.data().count;
 
   if (pendingStalledCount === 0 && deadLetterStalledCount === 0) return;
 
