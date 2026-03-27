@@ -14,6 +14,7 @@ import { writeOperationalAlert } from "./operational-alerts";
 import type { NotificationOutboxEntry, NotificationOutboxStatus } from "./types";
 import { randomUUID } from "crypto";
 import { isPlaceholderCheckoutEmail } from "@/lib/booking/stripe-payment-intent-convert";
+import { bookingWarn } from "@/lib/booking/debug";
 import { isDepositMode } from "./deposit-mode";
 import { getReminderRetryQueueStatsByTemplate } from "./reminder-retry";
 import { getStaleClaimCountsByTemplateKey } from "./notification-claim";
@@ -343,7 +344,7 @@ async function safeCount(
     return snap.data().count;
   } catch (err) {
     if (isMissingFirestoreIndexError(err)) {
-      bookingWarn("notification-outbox", "missing Firestore index for aggregate count; returning 0", {
+      console.warn("[notification-outbox] missing Firestore index for aggregate count; returning 0", {
         context,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -403,7 +404,7 @@ export async function getNotificationOutboxStats(db: Firestore): Promise<Notific
   if (reminderRetryQueueSettled.ok) {
     reminderRetryQueue = reminderRetryQueueSettled.value;
   } else if (isMissingFirestoreIndexError(reminderRetryQueueSettled.err)) {
-    bookingWarn("notification-outbox", "missing Firestore index for reminder retry stats; returning empty stats", {
+    console.warn("[notification-outbox] missing Firestore index for reminder retry stats; returning empty stats", {
       error:
         reminderRetryQueueSettled.err instanceof Error
           ? reminderRetryQueueSettled.err.message
@@ -417,7 +418,7 @@ export async function getNotificationOutboxStats(db: Firestore): Promise<Notific
   if (staleClaimCountsSettled.ok) {
     staleClaimCountsByTemplate = staleClaimCountsSettled.value;
   } else if (isMissingFirestoreIndexError(staleClaimCountsSettled.err)) {
-    bookingWarn("notification-outbox", "missing Firestore index for stale claim stats; returning empty stats", {
+    console.warn("[notification-outbox] missing Firestore index for stale claim stats; returning empty stats", {
       error:
         staleClaimCountsSettled.err instanceof Error
           ? staleClaimCountsSettled.err.message
