@@ -59,11 +59,31 @@ describe("paymentIntentMatchesHoldForConversion", () => {
     assert.equal(r.ok, false);
   });
 
-  it("rejects when hold has paymentAttemptVersion >= 1 but no PI ids on hold yet (persist race)", () => {
+  it("rejects persist race when holdDocId is not supplied (ambiguous)", () => {
     const r = paymentIntentMatchesHoldForConversion(
-      { id: "pi_first", metadata: { totalCents: "10000", ...v(1) }, amount: 10_000 },
+      { id: "pi_first", metadata: { holdId: "hold_a", totalCents: "10000", ...v(1) }, amount: 10_000 },
       { paymentAttemptVersion: 1 },
       pricing
+    );
+    assert.equal(r.ok, false);
+  });
+
+  it("allows persist race when PI metadata holdId matches holdDocId", () => {
+    const r = paymentIntentMatchesHoldForConversion(
+      { id: "pi_first", metadata: { holdId: "hold_a", totalCents: "10000", ...v(1) }, amount: 10_000 },
+      { paymentAttemptVersion: 1 },
+      pricing,
+      { holdDocId: "hold_a" }
+    );
+    assert.equal(r.ok, true);
+  });
+
+  it("rejects persist race when metadata holdId does not match holdDocId", () => {
+    const r = paymentIntentMatchesHoldForConversion(
+      { id: "pi_first", metadata: { holdId: "hold_other", totalCents: "10000", ...v(1) }, amount: 10_000 },
+      { paymentAttemptVersion: 1 },
+      pricing,
+      { holdDocId: "hold_a" }
     );
     assert.equal(r.ok, false);
   });

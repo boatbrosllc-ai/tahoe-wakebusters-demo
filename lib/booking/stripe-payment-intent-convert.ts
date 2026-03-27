@@ -184,10 +184,16 @@ export type HoldStripeIntentIds = {
  * and that the intent matches at least one hold record when any intent id is stored.
  * Aligns with complete-after-payment hold / PI enforcement.
  */
+export type PaymentIntentHoldMatchOptions = {
+  /** Firestore holds/{id}. When set, allows a brief race where PI succeeded but deposit/full IDs are not on the hold yet. */
+  holdDocId?: string;
+};
+
 export function paymentIntentMatchesHoldForConversion(
   pi: Pick<Stripe.PaymentIntent, "id" | "metadata" | "amount">,
   hold: HoldStripeIntentIds,
-  holdPricingFallback: HoldPricingFallback
+  holdPricingFallback: HoldPricingFallback,
+  options?: PaymentIntentHoldMatchOptions
 ): { ok: true } | { ok: false } {
   const useDeposit = resolveUsesDepositInputFromPaymentIntent(pi, holdPricingFallback);
   const dep = hold.depositPaymentIntentId;
@@ -202,6 +208,15 @@ export function paymentIntentMatchesHoldForConversion(
 
   const holdVer = typeof hold.paymentAttemptVersion === "number" ? hold.paymentAttemptVersion : 0;
   if (holdVer >= 1 && !dep && !full) {
+    const doc = options?.holdDocId?.trim() ?? "";
+    const metaHold = typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
+    if (doc && metaHold && metaHold === doc) {
+      bookingWarn("convert-hold", "hold PI fields not persisted yet; metadata holdId matches doc — allowing conversion guard", {
+        paymentIntentIdPrefix: typeof pi.id === "string" ? pi.id.slice(0, 12) : undefined,
+        holdVer,
+      });
+      return { ok: true };
+    }
     return { ok: false };
   }
 

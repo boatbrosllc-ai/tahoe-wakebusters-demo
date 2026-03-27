@@ -529,7 +529,9 @@ export async function POST(request: NextRequest) {
       tipCents?: number;
       discountCents?: number;
     };
-    let piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+    let piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing, {
+      holdDocId: holdId,
+    }).ok;
     if (!piMatchesHold) {
       const holdVerEarly = typeof holdStripeIds.paymentAttemptVersion === "number" ? holdStripeIds.paymentAttemptVersion : 0;
       /** Version bumped: empty PI fields on hold, or PI ids present but stale vs this PaymentIntent — do not block; client polls. */
@@ -545,7 +547,9 @@ export async function POST(request: NextRequest) {
           holdRow = holdSnap.data() as Hold & { stripe?: { customerId?: string } };
           holdStripeIds = holdRow as typeof holdStripeIds;
           holdForPricing = holdSnap.data() as typeof holdForPricing;
-          piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+          piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing, {
+            holdDocId: holdId,
+          }).ok;
         }
         if (!piMatchesHold) {
           bookingLog("complete-after-payment", "returning 202 — hold paymentAttemptVersion>=1 and PI not matched after server retries", {
@@ -583,7 +587,9 @@ export async function POST(request: NextRequest) {
         holdRow = holdSnap.data() as Hold & { stripe?: { customerId?: string } };
         holdStripeIds = holdRow as typeof holdStripeIds;
         holdForPricing = holdSnap.data() as typeof holdForPricing;
-        piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing).ok;
+        piMatchesHold = paymentIntentMatchesHoldForConversion(pi, holdStripeIds, holdForPricing, {
+          holdDocId: holdId,
+        }).ok;
       }
     }
     let holdCustomerId = typeof holdRow.stripe?.customerId === "string" ? holdRow.stripe.customerId.trim() : "";

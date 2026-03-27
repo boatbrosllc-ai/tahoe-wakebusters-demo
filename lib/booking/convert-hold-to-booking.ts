@@ -735,7 +735,8 @@ export async function convertHoldToBooking(
         fullPaymentIntentId: freshHold.fullPaymentIntentId,
         paymentAttemptVersion: (freshHold as { paymentAttemptVersion?: number }).paymentAttemptVersion,
       },
-      freshHoldForPricing
+      freshHoldForPricing,
+      { holdDocId: holdId }
     );
     if (!transactionalPiMatch.ok) throw HOLD_PI_MATCH_FAILED_SENTINEL;
     if (hold.experienceId && parsedForBlock) {

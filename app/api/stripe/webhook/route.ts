@@ -2372,7 +2372,9 @@ export async function POST(request: NextRequest) {
           fullPaymentIntentId: (holdRow as { fullPaymentIntentId?: string }).fullPaymentIntentId,
           paymentAttemptVersion: (holdRow as { paymentAttemptVersion?: number }).paymentAttemptVersion,
         };
-        const intentMatch = paymentIntentMatchesHoldForConversion(pi, holdIntentIds, holdForPricing);
+        const intentMatch = paymentIntentMatchesHoldForConversion(pi, holdIntentIds, holdForPricing, {
+          holdDocId: holdId,
+        });
         if (!intentMatch.ok) {
           try {
             await upsertPendingRefundRecord(

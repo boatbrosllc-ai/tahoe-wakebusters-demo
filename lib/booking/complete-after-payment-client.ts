@@ -283,10 +283,14 @@ export async function completeAfterPaymentWithPolling(options: {
       });
     }
     const pollStart = Date.now();
-    const hardLimitMs =
+    const rawPollLimit =
       typeof json.pollHardTimeoutMs === "number" && json.pollHardTimeoutMs >= 1000
         ? json.pollHardTimeoutMs
         : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS;
+    const hardLimitMs = Math.min(
+      COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS,
+      Number.isFinite(rawPollLimit) ? rawPollLimit : COMPLETE_AFTER_POLL_HARD_TIMEOUT_DEFAULT_MS
+    );
     let pollIntervalMs = COMPLETE_AFTER_POLL_INITIAL_INTERVAL_MS;
     let firstReconciliationPoll = isReconciliationPending && !isProcessing;
 
