@@ -16,6 +16,7 @@ import {
   isListingBoatCharterStartTimeAllowed,
   isWakeListingBoatType,
   shouldUseWakeBoardCharterGrid,
+  getDateStrInSlotTimezone,
 } from "../experience-slots";
 import { bookingIntervalMsFromSlotFields, intervalOverlapsRequestWindow } from "../booking-interval";
 
@@ -142,6 +143,20 @@ describe("getSlotStartEnd", () => {
     assert.strictEqual(rebuilt, slotId);
     const { start, end } = getSlotStartEnd(parsed!.dateStr, parsed!.startHour, parsed!.durationHours, parsed!.startMinute);
     assert.ok(start.getTime() < end.getTime());
+  });
+});
+
+describe("getDateStrInSlotTimezone", () => {
+  it("keeps evening Chicago times on the same business date (UTC midnight edge)", () => {
+    const chicagoEvening = new Date("2026-01-16T03:30:00.000Z"); // 2026-01-15 9:30 PM CST
+    assert.strictEqual(getDateStrInSlotTimezone(chicagoEvening), "2026-01-15");
+  });
+
+  it("returns stable business dates across DST spring-forward boundary", () => {
+    const beforeJump = new Date("2026-03-08T07:59:00.000Z"); // 1:59 AM CST
+    const afterJump = new Date("2026-03-08T08:01:00.000Z"); // 3:01 AM CDT
+    assert.strictEqual(getDateStrInSlotTimezone(beforeJump), "2026-03-08");
+    assert.strictEqual(getDateStrInSlotTimezone(afterJump), "2026-03-08");
   });
 });
 

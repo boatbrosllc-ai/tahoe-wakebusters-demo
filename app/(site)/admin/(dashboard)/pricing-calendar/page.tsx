@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
+import { getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 
 const BOAT_TYPES = [
   { value: "pontoon", label: "Pontoon" },
@@ -22,7 +23,7 @@ const PRESETS = [
 ] as const;
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return getDateStrInSlotTimezone(d);
 }
 
 function getMonthRange(month: Date): { start: string; end: string } {

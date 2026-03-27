@@ -114,6 +114,7 @@ function resolveOverlaps(events: CalendarEvent[]): PositionedEvent[] {
 interface AdminCalendarWeekViewProps {
   experienceId?: string;
   experienceIds?: string[];
+  experienceNamesById?: Record<string, string>;
   boatList: { id: string; name: string }[];
   weekStart: Date;
   selectedBoatIds?: string[];
@@ -128,6 +129,7 @@ interface AdminCalendarWeekViewProps {
 export function AdminCalendarWeekView({
   experienceId,
   experienceIds,
+  experienceNamesById = {},
   boatList,
   weekStart,
   selectedBoatIds,
@@ -144,7 +146,10 @@ export function AdminCalendarWeekView({
       : experienceId
       ? [experienceId]
       : [];
-  const effectiveExpId = experienceId ?? resolvedExperienceIds[0];
+  const hasSingleExperienceContext = resolvedExperienceIds.length === 1;
+  const [newBlockExperienceId, setNewBlockExperienceId] = useState(
+    hasSingleExperienceContext ? resolvedExperienceIds[0] ?? "" : ""
+  );
 
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -154,6 +159,7 @@ export function AdminCalendarWeekView({
   const [newBlockBoatId, setNewBlockBoatId] = useState("");
   const [newBlockNote, setNewBlockNote] = useState("");
   const [newBlockSaving, setNewBlockSaving] = useState(false);
+  const [blockNotice, setBlockNotice] = useState<string | null>(null);
   const [blockDetailOpen, setBlockDetailOpen] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<CalendarEvent | null>(null);
   const [editBlockSaving, setEditBlockSaving] = useState(false);
@@ -199,6 +205,14 @@ export function AdminCalendarWeekView({
   }, [resolvedIdsKey, fromStr, toStr]);
 
   const visibilityDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (hasSingleExperienceContext) {
+      setNewBlockExperienceId(resolvedExperienceIds[0] ?? "");
+    } else if (!resolvedExperienceIds.includes(newBlockExperienceId)) {
+      setNewBlockExperienceId("");
+    }
+  }, [hasSingleExperienceContext, resolvedExperienceIds, newBlockExperienceId]);
 
   useEffect(() => {
     fetchEvents();
@@ -263,7 +277,7 @@ export function AdminCalendarWeekView({
   }, [filteredEvents, weekDayKeys]);
 
   const handleCellClick = (dayIndex: number, hour: number) => {
-    if (effectiveExpId == null) {
+    if (resolvedExperienceIds.length === 0) {
       setBlockError("No experience selected. Select an experience or use a calendar that has an experience.");
       return;
     }
@@ -274,15 +288,22 @@ export function AdminCalendarWeekView({
     setNewBlockBoatId(boatList[0]?.id ?? "");
     setNewBlockNote("");
     setBlockError(null);
+    setBlockNotice(null);
+    if (resolvedExperienceIds.length > 1) setNewBlockExperienceId("");
     setNewBlockOpen(true);
   };
 
   const createBlock = async () => {
     if (!newBlockStart || !newBlockEnd) return;
     setBlockError(null);
+    setBlockNotice(null);
     const startDate = parseCentralDatetimeLocal(newBlockStart);
     const endDate = parseCentralDatetimeLocal(newBlockEnd);
     if (startDate >= endDate) return;
+    if (!newBlockExperienceId) {
+      setBlockError("Select which experience to block for this time slot.");
+      return;
+    }
     setNewBlockSaving(true);
     try {
       const res = await fetch("/api/admin/blocks", {
@@ -290,7 +311,7 @@ export function AdminCalendarWeekView({
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          experienceId: effectiveExpId,
+          experienceId: newBlockExperienceId,
           startAt: startDate.toISOString(),
           endAt: endDate.toISOString(),
           boatId: newBlockBoatId || undefined,
@@ -298,6 +319,9 @@ export function AdminCalendarWeekView({
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      const experienceLabel =
+        experienceNamesById[newBlockExperienceId] ?? newBlockExperienceId;
+      setBlockNotice(`Blocked time for ${experienceLabel}.`);
       setNewBlockOpen(false);
       fetchEvents();
       onRefresh();
@@ -414,6 +438,11 @@ export function AdminCalendarWeekView({
       {blockError && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-800">
           {blockError}
+        </div>
+      )}
+      {blockNotice && (
+        <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-sm text-emerald-800">
+          {blockNotice}
         </div>
       )}
 
@@ -614,6 +643,23 @@ export function AdminCalendarWeekView({
               className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
             />
           </label>
+          {resolvedExperienceIds.length > 1 && (
+            <label className="block">
+              <span className="text-xs font-medium text-brand-muted">Experience</span>
+              <select
+                value={newBlockExperienceId}
+                onChange={(e) => setNewBlockExperienceId(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+              >
+                <option value="">Select experience</option>
+                {resolvedExperienceIds.map((id) => (
+                  <option key={id} value={id}>
+                    {experienceNamesById[id] ?? id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {boatList.length > 0 && (
             <label className="block">
               <span className="text-xs font-medium text-brand-muted">Boat (optional)</span>
@@ -648,7 +694,12 @@ export function AdminCalendarWeekView({
             <Button
               size="sm"
               onClick={createBlock}
-              disabled={newBlockSaving || !newBlockStart || !newBlockEnd}
+              disabled={
+                newBlockSaving ||
+                !newBlockStart ||
+                !newBlockEnd ||
+                (resolvedExperienceIds.length > 1 && !newBlockExperienceId)
+              }
             >
               {newBlockSaving ? "Saving…" : "Create block"}
             </Button>

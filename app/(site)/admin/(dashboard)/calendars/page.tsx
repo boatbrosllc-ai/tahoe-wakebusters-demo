@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getDateStrInSlotTimezone, getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTime, formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import Link from "next/link";
@@ -51,7 +51,7 @@ interface SlotDto {
 }
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return getDateStrInSlotTimezone(d);
 }
 
 /** Format slot start time in America/Chicago. Prefers slot id so display is correct even if startAt is wrong in DB. */
@@ -219,6 +219,7 @@ export default function CalendarsPage() {
   const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ level: "success" | "warning"; message: string } | null>(null);
   const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
   const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
@@ -580,11 +581,13 @@ export default function CalendarsPage() {
     for (const block of blocks) {
       const start = new Date(block.startAt);
       const end = new Date(block.endAt);
-      const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
-      const endDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
+      const cur = new Date(start);
+      cur.setHours(12, 0, 0, 0);
+      const endDay = new Date(end);
+      endDay.setHours(12, 0, 0, 0);
       while (cur <= endDay) {
-        set.add(toDateStr(cur));
-        cur.setUTCDate(cur.getUTCDate() + 1);
+        set.add(getDateStrInSlotTimezone(cur));
+        cur.setDate(cur.getDate() + 1);
       }
     }
     return set;
@@ -703,8 +706,11 @@ export default function CalendarsPage() {
     const key = `date-${dateStr}`;
     setBlocking(key);
     setError(null);
+    setNotice(null);
     const boatIdsPayload = blockDayBoatIds.size > 0 ? Array.from(blockDayBoatIds) : undefined;
     try {
+      let totalBlocksCreated = 0;
+      const targetedExperienceLabels: string[] = [];
       for (const experienceId of uniqueExperienceIds) {
         const boatIds = boatIdsPayload != null
           ? boatList.filter((b) => b.experienceIds?.includes(experienceId) && blockDayBoatIds.has(b.id)).map((b) => b.id)
@@ -718,6 +724,22 @@ export default function CalendarsPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? "Failed to block date");
+        totalBlocksCreated += typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
+          ? (data as { blocksCreated: number }).blocksCreated
+          : 0;
+        targetedExperienceLabels.push(experienceNames.get(experienceId) ?? experienceId);
+      }
+      const expSummary = targetedExperienceLabels.length > 0 ? targetedExperienceLabels.join(", ") : "selected experiences";
+      if (totalBlocksCreated === 0) {
+        setNotice({
+          level: "warning",
+          message: `No blocks were created for ${expSummary}. Check listing-boat assignment for this date.`,
+        });
+      } else {
+        setNotice({
+          level: "success",
+          message: `Blocked ${dateStr} for ${expSummary}.`,
+        });
       }
       await fetchSlots();
       setDayDetailOpen(false);
@@ -733,7 +755,9 @@ export default function CalendarsPage() {
     const key = `date-${dateStr}`;
     setBlocking(key);
     setError(null);
+    setNotice(null);
     try {
+      const targetedExperienceLabels: string[] = [];
       for (const experienceId of uniqueExperienceIds) {
         const res = await fetch("/api/admin/blocks/block-date", {
           method: "POST",
@@ -743,7 +767,13 @@ export default function CalendarsPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
+        targetedExperienceLabels.push(experienceNames.get(experienceId) ?? experienceId);
       }
+      const expSummary = targetedExperienceLabels.length > 0 ? targetedExperienceLabels.join(", ") : "selected experiences";
+      setNotice({
+        level: "success",
+        message: `Unblocked ${dateStr} for ${expSummary}.`,
+      });
       await fetchSlots();
       setDayDetailOpen(false);
     } catch (e) {
@@ -754,7 +784,7 @@ export default function CalendarsPage() {
   };
 
   const blockSlot = async (slot: SlotDto) => {
-    const experienceId = slot.experienceId ?? uniqueExperienceIds[0];
+    const experienceId = slot.experienceId;
     if (!experienceId) return;
     setBlocking(slot.id);
     setError(null);
@@ -776,7 +806,7 @@ export default function CalendarsPage() {
   };
 
   const unblockSlot = async (slot: SlotDto) => {
-    const experienceId = slot.experienceId ?? uniqueExperienceIds[0];
+    const experienceId = slot.experienceId;
     if (!experienceId) return;
     setActionLoading(slot.id);
     setError(null);
@@ -890,10 +920,13 @@ export default function CalendarsPage() {
     }
     setRangeLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const boatIds = rangeBoatId ? [rangeBoatId] : undefined;
-      for (let d = new Date(rangeStart + "T00:00:00"); d <= new Date(rangeEnd + "T00:00:00"); d.setDate(d.getDate() + 1)) {
-        const dateStr = toDateStr(d);
+      let totalBlocksCreated = 0;
+      const targetedExperienceLabels = new Set<string>();
+      for (let d = new Date(`${rangeStart}T12:00:00.000Z`); d <= new Date(`${rangeEnd}T12:00:00.000Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+        const dateStr = getDateStrInSlotTimezone(d);
         if (dateStr < todayStr) continue;
         for (const experienceId of uniqueExperienceIds) {
           const res = await fetch("/api/admin/blocks/block-date", {
@@ -904,7 +937,23 @@ export default function CalendarsPage() {
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error ?? "Failed to block date");
+          totalBlocksCreated += typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
+            ? (data as { blocksCreated: number }).blocksCreated
+            : 0;
+          targetedExperienceLabels.add(experienceNames.get(experienceId) ?? experienceId);
         }
+      }
+      const expSummary = Array.from(targetedExperienceLabels).join(", ") || "selected experiences";
+      if (totalBlocksCreated === 0) {
+        setNotice({
+          level: "warning",
+          message: `No blocks were created for ${expSummary}. Check listing-boat assignment for the selected range.`,
+        });
+      } else {
+        setNotice({
+          level: "success",
+          message: `Blocked ${rangeStart} to ${rangeEnd} for ${expSummary}.`,
+        });
       }
       await fetchSlots();
       await fetchBlocks();
@@ -1002,12 +1051,29 @@ export default function CalendarsPage() {
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(cents / 100);
 
   const fmtBlockDate = (startAt: string, endAt: string): string => {
-    const sDay = startAt.slice(0, 10);
-    const eDay = endAt.slice(0, 10);
+    const sDay = getDateStrInSlotTimezone(new Date(startAt));
+    const eDay = getDateStrInSlotTimezone(new Date(endAt));
     const fmt = (d: string) =>
       new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
     return sDay === eDay ? fmt(sDay) : `${fmt(sDay)} – ${fmt(eDay)}`;
   };
+
+  const weekViewExperienceIds = useMemo(() => {
+    if (selectedBoatIds.size === 0) return uniqueExperienceIds;
+    const set = new Set<string>();
+    for (const boat of boatList) {
+      if (!selectedBoatIds.has(boat.id)) continue;
+      for (const rawId of boat.experienceIds ?? []) {
+        set.add(experienceDocIdBySlugOrId.get(rawId) ?? rawId);
+      }
+    }
+    return Array.from(set);
+  }, [selectedBoatIds, uniqueExperienceIds, boatList, experienceDocIdBySlugOrId]);
+  const weekViewBlockExperienceId = weekViewExperienceIds.length === 1 ? weekViewExperienceIds[0] : undefined;
+  const experienceNamesById = useMemo(
+    () => Object.fromEntries(Array.from(experienceNames.entries())),
+    [experienceNames]
+  );
 
   return (
     <div className="space-y-6 pb-20 lg:pb-0">
@@ -1033,6 +1099,19 @@ export default function CalendarsPage() {
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div
+          className={cn(
+            "rounded-xl border px-4 py-3 text-sm",
+            notice.level === "warning"
+              ? "border-amber-200 bg-amber-50 text-amber-800"
+              : "border-emerald-200 bg-emerald-50 text-emerald-800"
+          )}
+          role="status"
+        >
+          {notice.message}
         </div>
       )}
 
@@ -1254,7 +1333,9 @@ export default function CalendarsPage() {
               </div>
             ) : (
             <AdminCalendarWeekView
-              experienceIds={uniqueExperienceIds}
+              experienceId={weekViewBlockExperienceId}
+              experienceIds={weekViewExperienceIds}
+              experienceNamesById={experienceNamesById}
               boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
               weekStart={weekStart}
               selectedBoatIds={selectedBoatIds.size === 0 ? undefined : Array.from(selectedBoatIds)}

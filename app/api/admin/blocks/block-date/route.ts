@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
         const endAt = b.endAt?.toDate?.();
         if (!endAt || endAt.getTime() < dayStart.getTime()) return false;
         if (boatIds.length === 0) return true;
-        if (b.boatId == null) return false;
+        if (b.boatId == null) return true;
         return boatIds.includes(b.boatId);
       });
       const BATCH_SIZE = 500;
@@ -130,7 +130,8 @@ export async function POST(request: NextRequest) {
 
     let created = 0;
     const batch = db.batch();
-    for (const boatId of boatIds) {
+    const createTargets = boatIds.length > 0 ? boatIds : [null];
+    for (const boatId of createTargets) {
       const blockRef = db.collection("blocks").doc();
       batch.set(blockRef, {
         experienceId,

@@ -7,10 +7,30 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
 
 const COLLECTION = "pricingCalendar";
+
+export async function applyPricingCalendarDateUpdates(input: {
+  boatType: string;
+  dates: string[];
+  reset: boolean;
+  hourlyRateCents?: number;
+}): Promise<void> {
+  const db = getDb();
+  const { FieldValue } = getFirestoreExports();
+  const ref = db.collection(COLLECTION).doc(input.boatType);
+  const updates: Record<string, number | ReturnType<typeof FieldValue.delete>> = {};
+  for (const d of input.dates) {
+    updates[`rates.${d}`] = input.reset ? FieldValue.delete() : (input.hourlyRateCents as number);
+  }
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) tx.set(ref, {}, { merge: true });
+    tx.set(ref, updates, { merge: true });
+  });
+}
 
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -70,15 +90,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const db = getDb();
-    const ref = db.collection(COLLECTION).doc(boatType);
-    const snap = await ref.get();
-    const currentRates = (snap.exists ? (snap.data()?.rates as Record<string, number>) : undefined) ?? {};
-
     if (reset) {
-      const nextRates = { ...currentRates };
-      for (const d of dates) delete nextRates[d];
-      await ref.set({ rates: nextRates }, { merge: true });
+      await applyPricingCalendarDateUpdates({
+        boatType,
+        dates,
+        reset: true,
+      });
       return NextResponse.json({ ok: true, reset: true, dates });
     }
 
@@ -87,9 +104,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "hourlyRateCents required (number, cents per hour)" }, { status: 400 });
     }
 
-    const nextRates = { ...currentRates };
-    for (const d of dates) nextRates[d] = hourlyRateCents;
-    await ref.set({ rates: nextRates }, { merge: true });
+    await applyPricingCalendarDateUpdates({
+      boatType,
+      dates,
+      reset: false,
+      hourlyRateCents,
+    });
     return NextResponse.json({ ok: true, dates, hourlyRateCents });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
