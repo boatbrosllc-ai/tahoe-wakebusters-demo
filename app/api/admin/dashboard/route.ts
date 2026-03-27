@@ -245,13 +245,18 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     const needsFirestoreIndex =
       /FAILED_PRECONDITION/i.test(message) && /requires an index|indexes\?create_composite/i.test(message);
-    const hint = isFirebaseConfig
-      ? FIREBASE_SETUP_HINT
-      : needsFirestoreIndex
-        ? "Firestore composite index missing or still building. Use the create_composite URL in the error, or deploy firestore.indexes.json (firebase deploy --only firestore:indexes). Indexes often take a few minutes after deploy."
+    // Do not treat index error text as missing credentials: the message contains "firebase.google.com".
+    const isFirebaseConfig =
+      !needsFirestoreIndex &&
+      /config missing|credential|truncated|private key|FIREBASE_PRIVATE_KEY|FIREBASE_PROJECT_ID|service account/i.test(
+        message
+      );
+    const hint = needsFirestoreIndex
+      ? "Firestore composite index missing or still building. Open the create_composite link in the error, or deploy indexes: firebase deploy --only firestore:indexes. Wait until the index shows Enabled in the Firebase console."
+      : isFirebaseConfig
+        ? FIREBASE_SETUP_HINT
         : undefined;
     return NextResponse.json(
       { error: message, ...(hint && { hint }) },
