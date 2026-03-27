@@ -9,7 +9,7 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyHoldsFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { operationalAlertDedupeDocId, writeOperationalAlertIfNewDocId } from "@/lib/booking/operational-alerts";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import {
   LEGACY_HOLDS_CONSERVATIVE_AVAILABILITY_NOTE,
@@ -229,13 +229,16 @@ export async function GET(request: NextRequest) {
     if (legacyHoldsPartial || legacyBookingsCapHit) {
       conservativeEstimate = true;
       available = charterLockedForDate ? 0 : Math.max(0, total - sold - onHold);
-      void writeOperationalAlert({
-        type: "ticket_availability_legacy_holds_truncated",
-        experienceId,
-        date,
-        source: "ticket-availability",
-        maxPages: MAX_PAGES,
-      }).catch(() => {});
+      void writeOperationalAlertIfNewDocId(
+        operationalAlertDedupeDocId([experienceId, date, "ticket_availability_legacy_holds_truncated"]),
+        {
+          type: "ticket_availability_legacy_holds_truncated",
+          experienceId,
+          date,
+          source: "ticket-availability",
+          maxPages: MAX_PAGES,
+        },
+      );
     }
     try {
       const departure = getTicketedDepartureAndDuration(exp, []);

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
-import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN, type Booking, type BookingStatus } from "@/lib/booking/types";
+import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 
 const PAGE_SIZE = 150;
 const FINAL_FAILED_RELEASE_SLA_HOURS = (() => {
@@ -17,6 +19,32 @@ export async function POST(request: NextRequest) {
     const { FieldValue } = getFirestoreExports();
     let scanned = 0;
     let reopened = 0;
+    let slotResetPendingCleared = 0;
+    try {
+      const pendingSnap = await db.collection("bookings").where("slotResetPending", "==", true).limit(40).get();
+      for (const doc of pendingSnap.docs) {
+        const b = doc.data() as Booking;
+        if (b.status !== "canceled" && b.status !== "refunded") continue;
+        const pendingBookingId = doc.id;
+        try {
+          const released = await db.runTransaction(async (tx) => {
+            const n = await resetBookingSlotsToOpenInTransaction(db, tx, pendingBookingId, b, "");
+            if (n > 0) {
+              tx.update(doc.ref, {
+                slotResetPending: FieldValue.delete(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+            }
+            return n;
+          });
+          if (released > 0) slotResetPendingCleared++;
+        } catch (e) {
+          console.warn("[reconcile-booked-slot-status] slotResetPending booking release failed", { pendingBookingId }, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[reconcile-booked-slot-status] slotResetPending query failed", e);
+    }
     let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
 
     while (true) {
@@ -36,6 +64,12 @@ export async function POST(request: NextRequest) {
           const bookingSnap = await db.collection("bookings").doc(bookingId).get();
           if (!bookingSnap.exists) {
             shouldReopen = true;
+            void writeOperationalAlert({
+              type: "reconcile_orphaned_slot_no_booking",
+              source: "reconcile-booked-slot-status",
+              bookingId,
+              slotRefPath: slotDoc.ref.path,
+            });
           } else {
             const b = bookingSnap.data() as { status?: BookingStatus; finalChargeAt?: { toDate(): Date } };
             const st = b.status;
@@ -71,7 +105,7 @@ export async function POST(request: NextRequest) {
       cursor = snap.docs[snap.docs.length - 1];
     }
 
-    return NextResponse.json({ ok: true, scanned, reopened });
+    return NextResponse.json({ ok: true, scanned, reopened, slotResetPendingCleared });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

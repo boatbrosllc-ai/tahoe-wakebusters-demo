@@ -25,6 +25,8 @@ export interface CreateHoldAndPaymentParams {
   resumeHoldId?: string;
   /** Dedupes rapid double-submit for shared-ticketed create-hold. */
   holdRequestId?: string;
+  /** Proves ownership when resuming a hold (required server-side if hold-request claim does not). */
+  releaseToken?: string | null;
 }
 
 /** Successful create-hold only (before PaymentIntent). */
@@ -191,6 +193,9 @@ function buildCreateHoldRequestBody(params: CreateHoldAndPaymentParams): string 
     bookingMode: params.bookingMode,
     ...(params.resumeHoldId && { resumeHoldId: params.resumeHoldId }),
     ...(params.holdRequestId && { holdRequestId: params.holdRequestId }),
+    ...(params.resumeHoldId && params.releaseToken?.trim()
+      ? { release_token: params.releaseToken.trim() }
+      : {}),
   });
 }
 

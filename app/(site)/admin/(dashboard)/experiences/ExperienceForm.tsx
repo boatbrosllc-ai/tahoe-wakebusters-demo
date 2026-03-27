@@ -343,6 +343,7 @@ export function ExperienceForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const initialDataSnapshot = initialData ?? getDefaultFormData();
   const toggleSection = (name: string) => setCollapsedSections((prev) => {
     const next = new Set(prev);
     if (next.has(name)) next.delete(name); else next.add(name);
@@ -456,6 +457,57 @@ export function ExperienceForm({
       return;
     }
     try {
+      const pricingChanged =
+        JSON.stringify({
+          rates: data.rates,
+          addons: data.addons,
+          pricingType: data.pricingType,
+          maxCapacity: data.maxCapacity,
+          departureHour: data.departureHour,
+          departureMinute: data.departureMinute,
+          tripDurationHours: data.tripDurationHours,
+          allowDeposit: data.allowDeposit,
+          weekendDays: data.weekendDays,
+          friSunDays: data.friSunDays,
+          holidayDates: data.holidayDates,
+        }) !==
+        JSON.stringify({
+          rates: initialDataSnapshot.rates,
+          addons: initialDataSnapshot.addons,
+          pricingType: initialDataSnapshot.pricingType,
+          maxCapacity: initialDataSnapshot.maxCapacity,
+          departureHour: initialDataSnapshot.departureHour,
+          departureMinute: initialDataSnapshot.departureMinute,
+          tripDurationHours: initialDataSnapshot.tripDurationHours,
+          allowDeposit: initialDataSnapshot.allowDeposit,
+          weekendDays: initialDataSnapshot.weekendDays,
+          friSunDays: initialDataSnapshot.friSunDays,
+          holidayDates: initialDataSnapshot.holidayDates,
+        });
+      if (experienceId && pricingChanged) {
+        const checkRes = await fetch(`/api/admin/bookings?experienceId=${encodeURIComponent(experienceId)}&limit=1`, {
+          credentials: "include",
+        });
+        if (checkRes.ok) {
+          const payload = (await checkRes.json()) as { bookings?: { status?: string }[] };
+          const hasActiveBookings =
+            Array.isArray(payload.bookings) &&
+            payload.bookings.some((b) =>
+              ["paid", "final_due", "final_paid", "final_processing", "final_requires_action", "final_failed"].includes(
+                String(b.status ?? "")
+              )
+            );
+          if (hasActiveBookings) {
+            const confirmed = window.confirm(
+              "Pricing changes apply to new holds created after saving. Active holds already in progress will use their original quoted price. Customers currently selecting a date but not yet in checkout may see the new price when they proceed."
+            );
+            if (!confirmed) {
+              setLoading(false);
+              return;
+            }
+          }
+        }
+      }
       const body = formDataToBody(data);
       const result = await onSubmit(body);
       if (result.id) {

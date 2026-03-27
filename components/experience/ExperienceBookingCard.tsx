@@ -607,6 +607,16 @@ export function ExperienceBookingCard({
                 ? holdResumeRef.current.holdId
                 : undefined,
           holdRequestId: holdRequestIdRef.current,
+          ...(() => {
+            const rid =
+              holdId && holdSlotId === selectedSlot.id
+                ? holdId
+                : holdResumeRef.current?.slotId === selectedSlot.id
+                  ? holdResumeRef.current.holdId
+                  : undefined;
+            const tok = typeof releaseToken === "string" ? releaseToken.trim() : "";
+            return rid && tok ? { releaseToken: tok } : {};
+          })(),
         },
         { persistHoldForResume: holdResumeRef }
       );

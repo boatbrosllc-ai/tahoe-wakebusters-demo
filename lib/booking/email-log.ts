@@ -13,6 +13,7 @@ export type NotificationEventSubtype =
   | "booking_cancellation"
   | "final_charge_failed"
   | "final_charge_success"
+  | "dead_letter_ops_alert"
   | "waiver_invite"
   | "waiver_reminder"
   | "staff_booking_confirmation"

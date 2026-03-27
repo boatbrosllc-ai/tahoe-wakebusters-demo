@@ -6,7 +6,7 @@
 
 import { bookingEnv } from "./env";
 import { validatePhone } from "./validate-phone";
-import { logNotificationSent, logSmsSent, type NotificationEventSubtype } from "./email-log";
+import { logNotificationSent, type NotificationEventSubtype } from "./email-log";
 import type { EmailTemplateId } from "./email-templates";
 
 const TWILIO_API_BASE = "https://api.twilio.com/2010-04-01";
@@ -84,14 +84,28 @@ async function sendAndLog(params: {
   const e164 = toE164(params.phone);
   if (!e164) return false;
   const ok = await sendTwilioSms(e164, params.body);
-  if (ok && params.bookingId) {
-    await logSmsSent({
+  if (ok) {
+    await logNotificationSent({
+      channel: "sms",
       to: e164,
       toName: params.toName,
       templateId: params.templateId,
       bookingId: params.bookingId,
+      eventSubtype: params.templateId,
       bodySnippet: params.body.slice(0, 100),
-    }).catch((err) => console.error("[sms] logSmsSent failed", err));
+      deliveryState: "sent",
+    }).catch((err) => console.error("[sms] logNotificationSent failed", err));
+  } else {
+    await logNotificationSent({
+      channel: "sms",
+      to: e164,
+      toName: params.toName,
+      templateId: params.templateId,
+      bookingId: params.bookingId,
+      eventSubtype: params.templateId,
+      bodySnippet: params.body.slice(0, 100),
+      deliveryState: "failed",
+    }).catch((err) => console.error("[sms] logNotificationSent failed", err));
   }
   return ok;
 }
@@ -201,17 +215,40 @@ export async function sendStaffEventSms(params: {
   return ok;
 }
 
-/** Cancellation SMS. */
+export type BookingCancellationRefundOutcome = "succeeded" | "pending" | "failed" | "skipped";
+
+/** Cancellation SMS (wording matches email for the same admin-cancel event). */
 export async function sendBookingCancellationSms(params: {
   phone: string;
   customerName: string;
   experienceName: string;
   tripDate?: string;
   bookingId: string;
+  refundOutcome: BookingCancellationRefundOutcome;
+  /** When outcome is succeeded, optional human-readable total (e.g. "$42.00"). */
+  refundAmountFormatted?: string;
 }): Promise<boolean> {
-  const { phone, customerName, experienceName, tripDate, bookingId } = params;
+  const { phone, customerName, experienceName, tripDate, bookingId, refundOutcome, refundAmountFormatted } = params;
   const trip = tripDate ? ` for ${tripDate}` : "";
-  const body = `Boat Bros: Your booking${trip} (${experienceName}) has been canceled. Refund will be processed to your original payment method.`;
+  let refundLine: string;
+  switch (refundOutcome) {
+    case "skipped":
+      refundLine = " No refund is being issued for this cancellation.";
+      break;
+    case "succeeded":
+      refundLine = refundAmountFormatted
+        ? ` A refund of ${refundAmountFormatted} will be returned to your original payment method.`
+        : " Your refund will be returned to your original payment method.";
+      break;
+    case "pending":
+      refundLine = " A refund is being processed and will post to your original payment method when complete.";
+      break;
+    case "failed":
+    default:
+      refundLine = " We could not complete your refund automatically; our team will follow up with you.";
+      break;
+  }
+  const body = `Boat Bros: Your booking${trip} (${experienceName}) has been canceled.${refundLine}`;
   return sendAndLog({
     phone,
     toName: customerName,

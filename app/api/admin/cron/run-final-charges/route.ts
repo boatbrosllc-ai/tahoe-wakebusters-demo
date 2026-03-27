@@ -44,6 +44,8 @@ import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 import { transitionBookingStatus } from "@/lib/booking/transition-booking-status";
 import { resetBookingToFinalDue, transitionToFinalPaid } from "@/lib/booking/final-paid-transition";
 import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
+import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
+import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 
 const PAGE_SIZE = 100;
 const FINAL_FAILED_GRACE_HOURS = (() => {
@@ -53,6 +55,10 @@ const FINAL_FAILED_GRACE_HOURS = (() => {
 const FINAL_REQUIRES_ACTION_RELEASE_HOURS = (() => {
   const n = parseInt(process.env.FINAL_REQUIRES_ACTION_RELEASE_HOURS ?? "48", 10);
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 30) : 48;
+})();
+const FINAL_MISSING_STRIPE_DATA_GRACE_DAYS = (() => {
+  const n = parseInt(process.env.FINAL_MISSING_STRIPE_DATA_GRACE_DAYS ?? "7", 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 90) : 7;
 })();
 
 async function alertIfPiAmountDiffersFromBookingExpected(
@@ -104,7 +110,7 @@ async function recoverFinalChargeAfterFirestorePersistFailure(
     }
   }
   if (lastRecoveryErr != null) {
-    console.error("[run-final-charges] recovery update failed after Firestore error post-PI", lastRecoveryErr);
+    bookingError("run-final-charges", "recovery update failed after Firestore error post-PI", lastRecoveryErr);
   }
   await writeOperationalAlert({
     type: "final_charge_firestore_persist_failed_after_pi_created",
@@ -170,6 +176,7 @@ export async function POST(request: NextRequest) {
               if (isDepositFlow && finalRev <= 0) {
                 depositFlowMissingAuthoritativeRevenue = true;
               }
+              // Monthly revenue bucket comes from booking.summaryMonthKey (or createdAt) inside transitionToFinalPaid, not cron run time.
               await transitionToFinalPaid(
                 tx,
                 db,
@@ -194,7 +201,10 @@ export async function POST(request: NextRequest) {
                 reason: "deposit_flow_missing_total_or_deposit_cents",
               });
             }
-            console.log("[run-final-charges] reconciled final_processing → final_paid", { bookingId, piId: existingFinalPiId });
+            bookingLog("run-final-charges", "reconciled final_processing → final_paid", {
+              bookingId,
+              paymentIntentId: existingFinalPiId,
+            });
             continue;
           }
           // Terminal incomplete or failed: allow retries by resetting status and clearing stale intent.
@@ -222,7 +232,7 @@ export async function POST(request: NextRequest) {
             }
             bookingLog("run-final-charges", "stale final_processing intent recovery", {
               bookingId,
-              piIdPrefix: existingFinalPiId.slice(0, 8),
+              paymentIntentId: existingFinalPiId,
               piStatus,
               metric: "cron_stale_final_intent_recovered",
             });
@@ -234,18 +244,20 @@ export async function POST(request: NextRequest) {
               phase: "reconcile_final_processing",
               source: "run-final-charges",
             });
-            console.log("[run-final-charges] reconciled final_processing → final_due (stale intent cleared)", {
+            bookingLog("run-final-charges", "reconciled final_processing → final_due (stale intent cleared)", {
               bookingId,
-              piId: existingFinalPiId,
+              paymentIntentId: existingFinalPiId,
               piStatus,
             });
             continue;
           }
           if (piStatus === "requires_action") {
-            await transitionBookingStatus(db, bookingId, "final_processing", "final_requires_action", {});
-            console.log("[run-final-charges] reconciled final_processing → final_requires_action", {
+            await transitionBookingStatus(db, bookingId, "final_processing", "final_requires_action", {
+              transitionSource: "cron:run-final-charges",
+            });
+            bookingLog("run-final-charges", "reconciled final_processing → final_requires_action", {
               bookingId,
-              piId: existingFinalPiId,
+              paymentIntentId: existingFinalPiId,
             });
             continue;
           }
@@ -254,12 +266,7 @@ export async function POST(request: NextRequest) {
           const err = retrieveErr as { code?: string; message?: string; type?: string };
           bookingError("run-final-charges", "reconcile final_processing: PaymentIntent retrieve failed", retrieveErr, {
             bookingId,
-            existingFinalPiId,
-            code: err.code,
-          });
-          console.error("[run-final-charges] reconcile final_processing: PaymentIntent retrieve failed", {
-            bookingId,
-            existingFinalPiId,
+            paymentIntentId: existingFinalPiId,
             code: err.code,
             message: err.message,
           });
@@ -329,7 +336,7 @@ export async function POST(request: NextRequest) {
               updatedAt: FieldValue.serverTimestamp(),
             });
           } catch (waiverBlockErr) {
-            console.error("[run-final-charges] waiver block alert/update failed", bookingId, waiverBlockErr);
+            bookingError("run-final-charges", "waiver block alert/update failed", waiverBlockErr, { bookingId });
           }
           continue;
         }
@@ -427,7 +434,7 @@ export async function POST(request: NextRequest) {
             // create: cancel stale/abandoned intent only after transactional confirmation that customer locks are not fresh
             bookingLog("run-final-charges", "stale final_due intent recovery (cancel + clear)", {
               bookingId,
-              piIdPrefix: existingFinalPiId.slice(0, 8),
+              paymentIntentId: existingFinalPiId,
               piStatus: existingPi.status,
               customerLocksFresh,
               metric: "cron_stale_final_intent_recovered",
@@ -513,12 +520,7 @@ export async function POST(request: NextRequest) {
             const err = retrieveErr as { code?: string; message?: string; type?: string };
             bookingError("run-final-charges", "final_due loop: PaymentIntent retrieve failed before create", retrieveErr, {
               bookingId,
-              existingFinalPiId,
-              code: err.code,
-            });
-            console.error("[run-final-charges] final_due loop: PaymentIntent retrieve failed before create", {
-              bookingId,
-              existingFinalPiId,
+              paymentIntentId: existingFinalPiId,
               code: err.code,
               message: err.message,
             });
@@ -602,7 +604,7 @@ export async function POST(request: NextRequest) {
           }
         }
         if (!customerId || !paymentMethodId || authoritativeFinalCents <= 0) {
-          console.warn("[run-final-charges] booking missing customerId/pm or zero final balance", { bookingId });
+          bookingWarn("run-final-charges", "booking missing customerId/pm or zero final balance", { bookingId });
           const missingFields: string[] = [];
           if (!customerId) missingFields.push("stripe.customerId");
           if (!paymentMethodId) missingFields.push("stripe.paymentMethodId");
@@ -663,7 +665,7 @@ export async function POST(request: NextRequest) {
             continue;
           }
         } catch (txErr) {
-          console.warn("[run-final-charges] lock transaction failed", { bookingId }, txErr);
+          bookingWarn("run-final-charges", "lock transaction failed", { bookingId, err: txErr });
           skipped++;
           continue;
         }
@@ -692,7 +694,7 @@ export async function POST(request: NextRequest) {
               "stripe.finalChargeLockAt": FieldValue.delete(),
               updatedAt: FieldValue.serverTimestamp(),
             });
-            console.log("[run-final-charges] idempotency conflict — lock cleared, staying final_due for retry", {
+            bookingLog("run-final-charges", "idempotency conflict — lock cleared, staying final_due for retry", {
               bookingId,
               code,
             });
@@ -711,7 +713,7 @@ export async function POST(request: NextRequest) {
             "stripe.finalChargeLockAt": FieldValue.delete(),
             updatedAt: FieldValue.serverTimestamp(),
           });
-          console.log("[run-final-charges] final charge failed, lock cleared, status updated", { bookingId, newStatus, code });
+          bookingLog("run-final-charges", "final charge failed, lock cleared, status updated", { bookingId, newStatus, code });
           attempted++;
           failed++;
           errors.push(`${bookingId}: ${code ?? err.message}`);
@@ -727,8 +729,42 @@ export async function POST(request: NextRequest) {
                 });
                 if (token) manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
               }
+              let experienceNameFc = "Your trip";
+              if (booking.experienceId) {
+                const exFc = await db.collection("experiences").doc(booking.experienceId).get();
+                if (exFc.exists) experienceNameFc = (exFc.data() as { title?: string }).title ?? experienceNameFc;
+              }
+              let tripDateFc = booking.startDateStr ?? "";
+              let startTimeFc = "";
+              if (booking.slotId) {
+                const parsedFc = parseSlotId(booking.slotId.trim());
+                if (parsedFc) {
+                  const tripStartFc = getSlotStartEnd(
+                    parsedFc.dateStr,
+                    parsedFc.startHour,
+                    parsedFc.durationHours ?? 2,
+                    parsedFc.startMinute ?? 0,
+                  ).start;
+                  tripDateFc = tripStartFc.toLocaleDateString("en-US", {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    timeZone: "America/Chicago",
+                  });
+                  startTimeFc = tripStartFc.toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    timeZone: "America/Chicago",
+                  });
+                }
+              }
               const subject = requiresAction ? "Action needed to complete your booking – Boat Bros ATX" : "Payment failed for your upcoming trip – Boat Bros ATX";
-              await sendFinalChargeFailedEmail(booking.customer.email, booking.customer.name, manageLink, requiresAction);
+              await sendFinalChargeFailedEmail(booking.customer.email, booking.customer.name, manageLink, requiresAction, {
+                experienceName: experienceNameFc,
+                tripDate: tripDateFc,
+                startTime: startTimeFc,
+              });
               await logNotificationSent({
                 channel: "email",
                 to: booking.customer.email,
@@ -737,12 +773,12 @@ export async function POST(request: NextRequest) {
                 subject,
                 bookingId,
                 eventSubtype: "final_charge_failed",
-              }).catch((logErr) => console.error("[run-final-charges] logNotificationSent failed", bookingId, logErr));
+              }).catch((logErr) => bookingError("run-final-charges", "logNotificationSent failed", logErr, { bookingId }));
               await finalizeFinalFailureNotification(db, bookingId, failedPiId);
             } catch (emailErr) {
-              console.error("[run-final-charges] sendFinalChargeFailedEmail failed", bookingId, emailErr);
+              bookingError("run-final-charges", "sendFinalChargeFailedEmail failed", emailErr, { bookingId });
               await clearFinalFailureNotificationLease(db, bookingId).catch((clearErr) =>
-                console.error("[run-final-charges] clearFinalFailureNotificationLease failed", bookingId, clearErr)
+                bookingError("run-final-charges", "clearFinalFailureNotificationLease failed", clearErr, { bookingId })
               );
             }
           }
@@ -807,7 +843,7 @@ export async function POST(request: NextRequest) {
           if (fsMsg.includes("Illegal booking status transition")) {
             throw fsErr;
           }
-          console.error("[run-final-charges] Firestore persist failed after Stripe PI create", bookingId, fsErr);
+          bookingError("run-final-charges", "Firestore persist failed after Stripe PI create", fsErr, { bookingId });
           await recoverFinalChargeAfterFirestorePersistFailure(bookingRef, pi, fsErr);
           attempted++;
           successCount++;
@@ -815,9 +851,15 @@ export async function POST(request: NextRequest) {
         }
 
         if (isSucceeded) {
-          console.log("[run-final-charges] PaymentIntent succeeded immediately (final_paid persisted)", { bookingId, piId: pi.id });
+          bookingLog("run-final-charges", "PaymentIntent succeeded immediately (final_paid persisted)", {
+            bookingId,
+            paymentIntentId: pi.id,
+          });
         } else {
-          console.log("[run-final-charges] PaymentIntent created (webhook will set final_paid)", { bookingId, piId: pi.id });
+          bookingLog("run-final-charges", "PaymentIntent created (webhook will set final_paid)", {
+            bookingId,
+            paymentIntentId: pi.id,
+          });
         }
         attempted++;
         successCount++;
@@ -912,7 +954,132 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch (orphanErr) {
-      console.error("[run-final-charges] orphaned pendingRefunds scan failed", orphanErr);
+      bookingError("run-final-charges", "orphaned pendingRefunds scan failed", orphanErr);
+    }
+
+    // Auto-cancel final_due bookings past finalChargeAt that still cannot be charged (missing Stripe customer / PM).
+    try {
+      const msCutoff = new Date(Date.now() - FINAL_MISSING_STRIPE_DATA_GRACE_DAYS * 86400000);
+      const msCutoffTs = Timestamp.fromDate(msCutoff);
+      const stuckMissingStripeSnap = await db
+        .collection("bookings")
+        .where("status", "==", "final_due")
+        .where("finalChargeAt", "<=", msCutoffTs)
+        .limit(150)
+        .get();
+      for (const doc of stuckMissingStripeSnap.docs) {
+        const b = doc.data() as Booking;
+        const customerIdEarly = b.stripe?.customerId?.trim();
+        const pmEarly = b.stripe?.paymentMethodId?.trim();
+        if (customerIdEarly && pmEarly) continue;
+        const bookingRefMs = db.collection("bookings").doc(doc.id);
+        const { authoritativeFinalCents } = await persistFinalBalanceNormalizationIfNeeded(bookingRefMs, b, {
+          bookingId: doc.id,
+          source: "run-final-charges-missing-stripe-cancel",
+        });
+        if (authoritativeFinalCents <= 0) continue;
+        try {
+          await db.runTransaction(async (tx) => {
+            const ref = db.collection("bookings").doc(doc.id);
+            const snap = await tx.get(ref);
+            if (!snap.exists) return;
+            const fresh = snap.data() as Booking;
+            if (fresh.status !== "final_due") return;
+            const cId = fresh.stripe?.customerId?.trim();
+            const pId = fresh.stripe?.paymentMethodId?.trim();
+            if (cId && pId) return;
+            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
+            const expResolved = await resolveExperienceDocAndSlug(db, fresh.experienceId);
+            const bookingForReset = expResolved ? ({ ...fresh, experienceId: expResolved.docId } as Booking) : fresh;
+            await resetBookingSlotsToOpenInTransaction(
+              db,
+              tx,
+              doc.id,
+              bookingForReset,
+              expResolved?.slug ?? ""
+            );
+          });
+          const depPi = typeof b.stripe?.depositPaymentIntentId === "string" ? b.stripe.depositPaymentIntentId.trim() : "";
+          const fullPi = typeof b.stripe?.paymentIntentId === "string" ? b.stripe.paymentIntentId.trim() : "";
+          const piQueueMs = new Set<string>();
+          if (depPi) piQueueMs.add(depPi);
+          if (fullPi) piQueueMs.add(fullPi);
+          for (const paymentIntentId of Array.from(piQueueMs)) {
+            try {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "final_missing_stripe_auto_canceled_deposit_refund",
+                  bookingId: doc.id,
+                  paymentIntentId,
+                },
+                {
+                  bookingId: doc.id,
+                  paymentIntentId,
+                  ...(typeof b.customer?.email === "string" && b.customer.email.trim()
+                    ? { customerEmail: b.customer.email.trim() }
+                    : {}),
+                }
+              );
+            } catch (prErr) {
+              bookingWarn("run-final-charges", "upsert pending refund after missing-stripe auto-cancel failed", {
+                bookingId: doc.id,
+                err: prErr,
+              });
+            }
+          }
+          await writeOperationalAlert({
+            type: "final_due_missing_stripe_auto_canceled",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            graceDays: FINAL_MISSING_STRIPE_DATA_GRACE_DAYS,
+            pendingRefundPaymentIntentsQueued: Array.from(piQueueMs),
+            slotId: b.slotId ?? null,
+            boatId: b.boatId ?? null,
+            experienceId: b.experienceId ?? null,
+          }).catch(() => {});
+          const emailMs = b.customer?.email?.trim();
+          if (emailMs) {
+            try {
+              const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
+              let experienceNameMs = "Your trip";
+              if (b.experienceId) {
+                const ex = await db.collection("experiences").doc(b.experienceId).get();
+                if (ex.exists) experienceNameMs = (ex.data() as { title?: string }).title ?? experienceNameMs;
+              }
+              await sendBookingCancellationEmail({
+                to: emailMs,
+                customerName: b.customer?.name ?? "Guest",
+                experienceName: experienceNameMs,
+                tripDate: b.startDateStr,
+                refundPending: piQueueMs.size > 0,
+                refundOutcome: piQueueMs.size > 0 ? "pending" : "skipped",
+              });
+            } catch (mailErr) {
+              bookingWarn("run-final-charges", "cancellation email after missing-stripe auto-cancel failed", {
+                bookingId: doc.id,
+                err: mailErr,
+              });
+            }
+          }
+        } catch (msCancelErr) {
+          await writeOperationalAlert({
+            type: "final_due_missing_stripe_auto_cancel_error",
+            source: "run-final-charges",
+            bookingId: doc.id,
+            error: msCancelErr instanceof Error ? msCancelErr.message : String(msCancelErr),
+          }).catch(() => {});
+        }
+      }
+    } catch (missingStripeCancelScanErr) {
+      await writeOperationalAlert({
+        type: "final_due_missing_stripe_auto_cancel_scan_error",
+        source: "run-final-charges",
+        error:
+          missingStripeCancelScanErr instanceof Error
+            ? missingStripeCancelScanErr.message
+            : String(missingStripeCancelScanErr),
+      }).catch(() => {});
     }
 
     // Auto-cancel long-stuck final_failed bookings so slots are eventually released.
@@ -967,15 +1134,69 @@ export async function POST(request: NextRequest) {
               expResolved?.slug ?? ""
             );
           });
+          const depPiFf = typeof b.stripe?.depositPaymentIntentId === "string" ? b.stripe.depositPaymentIntentId.trim() : "";
+          const fullPiFf = typeof b.stripe?.paymentIntentId === "string" ? b.stripe.paymentIntentId.trim() : "";
+          const piQueueFf = new Set<string>();
+          if (depPiFf) piQueueFf.add(depPiFf);
+          if (fullPiFf) piQueueFf.add(fullPiFf);
+          for (const paymentIntentId of Array.from(piQueueFf)) {
+            try {
+              await upsertPendingRefundRecord(
+                db,
+                {
+                  reason: "final_failed_auto_canceled_deposit_refund",
+                  bookingId: doc.id,
+                  paymentIntentId,
+                },
+                {
+                  bookingId: doc.id,
+                  paymentIntentId,
+                  ...(typeof b.customer?.email === "string" && b.customer.email.trim()
+                    ? { customerEmail: b.customer.email.trim() }
+                    : {}),
+                }
+              );
+            } catch (prErr) {
+              bookingWarn("run-final-charges", "upsert pending refund after final_failed auto-cancel failed", {
+                bookingId: doc.id,
+                err: prErr,
+              });
+            }
+          }
           await writeOperationalAlert({
             type: "final_failed_auto_canceled",
             source: "run-final-charges",
             bookingId: doc.id,
             autoCancelGraceHours: FINAL_FAILED_GRACE_HOURS,
+            pendingRefundPaymentIntentsQueued: Array.from(piQueueFf),
             slotId: b.slotId ?? null,
             boatId: b.boatId ?? null,
             experienceId: b.experienceId ?? null,
           });
+          const emailFf = b.customer?.email?.trim();
+          if (emailFf) {
+            try {
+              const { sendBookingCancellationEmail } = await import("@/lib/booking/brevo");
+              let experienceNameFf = "Your trip";
+              if (b.experienceId) {
+                const ex = await db.collection("experiences").doc(b.experienceId).get();
+                if (ex.exists) experienceNameFf = (ex.data() as { title?: string }).title ?? experienceNameFf;
+              }
+              await sendBookingCancellationEmail({
+                to: emailFf,
+                customerName: b.customer?.name ?? "Guest",
+                experienceName: experienceNameFf,
+                tripDate: b.startDateStr,
+                refundPending: piQueueFf.size > 0,
+                refundOutcome: piQueueFf.size > 0 ? "pending" : "skipped",
+              });
+            } catch (mailErr) {
+              bookingWarn("run-final-charges", "cancellation email after final_failed auto-cancel failed", {
+                bookingId: doc.id,
+                err: mailErr,
+              });
+            }
+          }
         } catch (bookingAutoCancelErr) {
           await writeOperationalAlert({
             type: "final_failed_auto_cancel_booking_error",
@@ -1074,7 +1295,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, matched, processed, attempted, successCount, skipped, failed, errors });
   } catch (err) {
-    console.error("[admin/cron/run-final-charges]", err);
+    bookingError("run-final-charges", "run-final-charges top-level failure", err);
     return NextResponse.json({ error: "Final charge run failed" }, { status: 500 });
   }
 }

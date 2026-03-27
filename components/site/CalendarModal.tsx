@@ -65,8 +65,8 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   const [slotsRetryKey, setSlotsRetryKey] = useState(0);
   const [slotsPartialData, setSlotsPartialData] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => initialChicagoCalendarMonth());
-  /** Date-specific prices for the visible month (holiday/weekend), keyed by YYYY-MM-DD. */
-  const [datePrices, setDatePrices] = useState<Record<string, number>>({});
+  /** Date-specific prices for the visible month, keyed by rateId then YYYY-MM-DD. */
+  const [datePricesByRate, setDatePricesByRate] = useState<Map<string, Record<string, number>>>(new Map());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [detailBoats, setDetailBoats] = useState<ExperienceDetailBoat[]>([]);
@@ -155,8 +155,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
   }, [experienceId]);
 
   useEffect(() => {
-    if (!experienceId || !rates[0]?.id) {
-      setDatePrices({});
+    const activeRates = rates.filter((rate) => typeof rate.id === "string" && rate.id.trim().length > 0);
+    if (!experienceId || activeRates.length === 0) {
+      setDatePricesByRate(new Map());
       return;
     }
     const y = calendarMonth.getFullYear();
@@ -164,14 +165,20 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     const start = `${y}-${String(m + 1).padStart(2, "0")}-01`;
     const days = new Date(y, m + 1, 0).getDate();
     const controller = new AbortController();
-    bookingCache
-      .fetchDatePrices(experienceId, start, days, rates[0].id, controller.signal)
-      .then((data) => {
-        const p = data?.prices && typeof data.prices === "object" ? data.prices : {};
-        setDatePrices({ ...p } as Record<string, number>);
+    Promise.all(
+      activeRates.map(async (rate) => {
+        const data = await bookingCache.fetchDatePrices(experienceId, start, days, rate.id, controller.signal);
+        const prices = data?.prices && typeof data.prices === "object" ? data.prices : {};
+        return [rate.id, { ...prices } as Record<string, number>] as const;
+      }),
+    )
+      .then((results) => {
+        const next = new Map<string, Record<string, number>>();
+        for (const [rateId, prices] of results) next.set(rateId, prices);
+        setDatePricesByRate(next);
       })
       .catch(() => {
-        setDatePrices({});
+        setDatePricesByRate(new Map());
       });
     return () => controller.abort();
   }, [experienceId, calendarMonth, rates]);
@@ -310,6 +317,13 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
     }
     return cells;
   }, [calendarMonth, slotsByDate, todayStr]);
+  const calendarWeeks = useMemo(() => {
+    const weeks: Array<typeof calendarDays> = [];
+    for (let i = 0; i < calendarDays.length; i += 7) {
+      weeks.push(calendarDays.slice(i, i + 7));
+    }
+    return weeks;
+  }, [calendarDays]);
 
   const selectedDateOpenSlots = useMemo(
     () => (selectedDate ? openSlotsByDate.get(selectedDate) ?? [] : []),
@@ -445,42 +459,68 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
           {/* Scroll wrapper: flex+grid alone is unreliable for min-height 0 / overflow on mobile WebKit */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
-          <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
+          <div className={cn(slotsLoading ? "grid grid-cols-7 gap-0.5 sm:gap-1" : "space-y-0.5 sm:space-y-1")} role="grid">
             {slotsLoading ? (
-              Array.from({ length: 35 }, (_, i) => (
-                <div key={i} className="min-h-[36px] sm:min-h-[44px] animate-pulse rounded bg-brand-dark/10" aria-hidden />
+              Array.from({ length: 5 }, (_, rowIdx) => (
+                <div key={`loading-row-${rowIdx}`} role="row" className="grid grid-cols-7 gap-0.5 sm:gap-1 col-span-7">
+                  {Array.from({ length: 7 }, (_, colIdx) => (
+                    <div
+                      key={`loading-${rowIdx}-${colIdx}`}
+                      role="gridcell"
+                      className="min-h-[36px] sm:min-h-[44px] animate-pulse rounded bg-brand-dark/10"
+                      aria-hidden
+                    />
+                  ))}
+                </div>
               ))
             ) : (
-              calendarDays.map((cell) => {
-                const isAvailable = cell.available && !cell.isPast;
-                const isPast = cell.isPast;
-                const isClickable = cell.isCurrentMonth && !isPast;
-                const isToday = cell.dateStr === todayStr;
-                const isSelected = selectedDate === cell.dateStr;
-                return (
-                  <button
-                    key={cell.dateStr + cell.day}
-                    type="button"
-                    disabled={!isClickable}
-                    onClick={() => handleDayClick(cell.dateStr)}
-                    className={cn(
-                      "min-h-[36px] sm:min-h-[44px] flex flex-col items-center justify-center rounded text-xs sm:text-sm font-medium transition-all touch-manipulation",
-                      !cell.isCurrentMonth && "text-brand-muted/40",
-                      cell.isCurrentMonth && cell.isPast && "text-brand-muted/50 bg-brand-dark/5",
-                      cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted hover:bg-brand-dark/15 cursor-pointer",
-                      isAvailable && !slotsPartialData && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
-                      isAvailable && slotsPartialData && "bg-amber-50 text-amber-900 ring-1 ring-amber-400/60 border border-dashed border-amber-400/60 hover:bg-amber-100 cursor-pointer",
-                      isClickable && "cursor-pointer",
-                      isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1",
-                      isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/15"
-                    )}
-                  >
-                    <span className={cn("font-bold", isToday && cell.isCurrentMonth && "text-brand-primary")}>{cell.day}</span>
-                    {isAvailable && !isToday && !slotsPartialData && <span className="w-1 h-1 rounded-full bg-emerald-500 mt-0.5" aria-hidden />}
-                    {isAvailable && !isToday && slotsPartialData && <span className="w-1.5 h-1.5 rounded-full border border-amber-600 mt-0.5" aria-hidden />}
-                  </button>
-                );
-              })
+              calendarWeeks.map((week, weekIdx) => (
+                <div key={`week-${weekIdx}`} role="row" className="grid grid-cols-7 gap-0.5 sm:gap-1">
+                  {week.map((cell) => {
+                    const isAvailable = cell.available && !cell.isPast;
+                    const isPast = cell.isPast;
+                    const isClickable = cell.isCurrentMonth && !isPast;
+                    const isToday = cell.dateStr === todayStr;
+                    const isSelected = selectedDate === cell.dateStr;
+                    const isDisabled = !isClickable;
+                    const dayDate = new Date(`${cell.dateStr}T12:00:00`);
+                    const weekdayLabel = dayDate.toLocaleDateString("en-US", { weekday: "long" });
+                    const monthDayLabel = dayDate.toLocaleDateString("en-US", { month: "long", day: "numeric" });
+                    const availabilityLabel = !cell.isCurrentMonth
+                      ? "Outside current month"
+                      : isPast
+                        ? "Unavailable. Past date"
+                        : isAvailable
+                          ? "Available"
+                          : "Unavailable";
+                    return (
+                      <div key={cell.dateStr + cell.day} role="gridcell">
+                        <button
+                          type="button"
+                          disabled={isDisabled}
+                          aria-label={`${weekdayLabel} ${monthDayLabel}. ${availabilityLabel}`}
+                          onClick={() => handleDayClick(cell.dateStr)}
+                          className={cn(
+                            "min-h-[36px] sm:min-h-[44px] w-full flex flex-col items-center justify-center rounded text-xs sm:text-sm font-medium transition-all touch-manipulation",
+                            !cell.isCurrentMonth && "text-brand-muted/40",
+                            cell.isCurrentMonth && cell.isPast && "text-brand-muted/50 bg-brand-dark/5",
+                            cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted hover:bg-brand-dark/15 cursor-pointer",
+                            isAvailable && !slotsPartialData && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
+                            isAvailable && slotsPartialData && "bg-amber-50 text-amber-900 ring-1 ring-amber-400/60 border border-dashed border-amber-400/60 hover:bg-amber-100 cursor-pointer",
+                            isClickable && "cursor-pointer",
+                            isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1",
+                            isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/15"
+                          )}
+                        >
+                          <span className={cn("font-bold", isToday && cell.isCurrentMonth && "text-brand-primary")}>{cell.day}</span>
+                          {isAvailable && !isToday && !slotsPartialData && <span className="w-1 h-1 rounded-full bg-emerald-500 mt-0.5" aria-hidden />}
+                          {isAvailable && !isToday && slotsPartialData && <span className="w-1.5 h-1.5 rounded-full border border-amber-600 mt-0.5" aria-hidden />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
             )}
           </div>
           </div>
@@ -519,7 +559,9 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                         : "";
                       const rate = parsed ? rates.find((r) => r.durationHours === parsed.durationHours) : null;
                       const effectiveCents =
-                        rate != null ? datePrices[selectedDate ?? ""] ?? rate.priceCents : null;
+                        rate != null
+                          ? datePricesByRate.get(rate.id)?.[selectedDate ?? ""] ?? rate.priceCents
+                          : null;
                       const priceLabel =
                         rate != null && typeof effectiveCents === "number" ? formatPrice(effectiveCents) : null;
                       const canOpenBookingModal =

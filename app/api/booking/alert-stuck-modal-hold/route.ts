@@ -8,6 +8,11 @@ import { checkRateLimitPostPayment, getClientKey } from "@/lib/booking/rate-limi
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { verifyReleaseTokenIgnoreExpiry } from "@/lib/booking/releaseToken";
+import { verifyReceiptClaimTokenIgnoreExpiry } from "@/lib/booking/receiptToken";
+
+/** Aligns with cleanup-holds cadence (~2 min) so rollbackPending is picked up quickly. */
+const STUCK_MODAL_ROLLBACK_PENDING_MS = 2 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   const notReady = bookingNotReadyResponse();
@@ -27,14 +32,40 @@ export async function POST(request: NextRequest) {
   }
 
   let holdId: string | null = null;
+  let releaseToken = "";
+  let receiptClaimToken = "";
   try {
-    const body = (await request.json().catch(() => ({}))) as { holdId?: string };
+    const body = (await request.json().catch(() => ({}))) as {
+      holdId?: string;
+      release_token?: string;
+      receipt_claim_token?: string;
+    };
     holdId = typeof body.holdId === "string" && body.holdId.length >= 10 ? body.holdId : null;
+    releaseToken = typeof body.release_token === "string" ? body.release_token.trim() : "";
+    receiptClaimToken = typeof body.receipt_claim_token === "string" ? body.receipt_claim_token.trim() : "";
   } catch {
     /* ignore */
   }
   if (!holdId) {
     return NextResponse.json({ error: "holdId required" }, { status: 400 });
+  }
+  let tokenAuthorized = false;
+  if (releaseToken) {
+    const rel = verifyReleaseTokenIgnoreExpiry(releaseToken);
+    if (rel?.holdId === holdId) tokenAuthorized = true;
+  }
+  if (!tokenAuthorized && receiptClaimToken) {
+    const claim = verifyReceiptClaimTokenIgnoreExpiry(receiptClaimToken);
+    if (claim?.holdId === holdId) tokenAuthorized = true;
+  }
+  if (!tokenAuthorized) {
+    return NextResponse.json(
+      {
+        error:
+          "A valid release_token or receipt_claim_token for this hold is required to flag rollback (possibly expired tokens are accepted).",
+      },
+      { status: 403 }
+    );
   }
 
   try {
@@ -55,7 +86,7 @@ export async function POST(request: NextRequest) {
     }
     await holdRef.update({
       rollbackPending: true,
-      rollbackPendingExpiresAt: Timestamp.fromMillis(Date.now() + 5 * 60 * 1000),
+      rollbackPendingExpiresAt: Timestamp.fromMillis(Date.now() + STUCK_MODAL_ROLLBACK_PENDING_MS),
       updatedAt: FieldValue.serverTimestamp(),
     });
   } catch (err) {

@@ -117,6 +117,8 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
       holdRequestId = trimmed;
     }
   }
+  const release_token =
+    typeof o.release_token === "string" && o.release_token.trim() ? o.release_token.trim() : undefined;
   return {
     input: {
       boatId: boatId ?? undefined,
@@ -138,6 +140,7 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
       bookingMode,
       resumeHoldId,
       holdRequestId,
+      ...(release_token ? { release_token } : {}),
     },
   };
 }

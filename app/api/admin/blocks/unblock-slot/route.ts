@@ -11,6 +11,7 @@ import { parseSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 async function isAllowed(request: NextRequest): Promise<boolean> {
   const secret = process.env.BLOCK_SECRET?.trim();
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
         : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
     const blocksRef = db.collection("blocks");
-    const snaps = await Promise.all(
+    const slotIdSnaps = await Promise.all(
       variantIds.map((variantId) =>
         boatId
           ? blocksRef.where("experienceId", "==", variantId).where("slotId", "==", slotId).where("boatId", "==", boatId).get()
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest) {
       )
     );
     const docsById = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
-    for (const snap of snaps) {
+    for (const snap of slotIdSnaps) {
       for (const doc of snap.docs) docsById.set(doc.id, doc);
     }
     if (docsById.size === 0) {
@@ -63,6 +64,13 @@ export async function POST(request: NextRequest) {
       batch.delete(doc.ref);
     }
     await batch.commit();
+    void writeAdminAuditLog("block_slot", {
+      action: "unblock",
+      experienceId,
+      slotId,
+      boatId,
+      blocksDeleted: docsById.size,
+    });
     return NextResponse.json({ ok: true, slotId, boatId, blocksDeleted: docsById.size });
   } catch (err) {
     console.error("[admin/blocks/unblock-slot]", err);

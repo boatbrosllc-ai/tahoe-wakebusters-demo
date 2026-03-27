@@ -5,14 +5,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
+import { getAdminEmailFromSessionCookie, requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { tryClaimSend, markClaimSent, markClaimFailed } from "@/lib/booking/notification-claim";
+import { suppressPendingOutboxForBookingOnCancel } from "@/lib/booking/notification-outbox";
 import { sendPendingRefundPermanentFailureAlert } from "@/lib/booking/brevo";
 import type { Booking, BookingCancellationRefundStatus } from "@/lib/booking/types";
-import { totalSummaryAttributedRevenueCents } from "@/lib/booking/summary-revenue";
+import {
+  applyExperienceRevenueDelta,
+  totalSummaryAttributedRevenueCents,
+} from "@/lib/booking/summary-revenue";
 import type { DocumentSnapshot, Firestore } from "firebase-admin/firestore";
 import { pendingRefundDocumentId } from "@/lib/booking/pending-refund-idempotent";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
@@ -23,8 +27,36 @@ import {
 } from "@/lib/booking/stripe-refund-status";
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
+import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
 
 const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
+
+type CancellationRefundOutcome = "succeeded" | "pending" | "failed" | "skipped";
+
+function deriveCancellationRefundOutcome(params: {
+  refundRequested: boolean;
+  distinctIds: string[];
+  refunds: Array<{ paymentIntentId: string; status?: string; error?: string }>;
+  skippedRefunds: Array<{ paymentIntentId: string; reason: string }>;
+}): CancellationRefundOutcome {
+  if (!params.refundRequested) return "skipped";
+  if (params.distinctIds.length === 0) return "skipped";
+  const { refunds, skippedRefunds } = params;
+  if (skippedRefunds.length > 0 && refunds.length === 0) return "failed";
+  const succeeded = refunds.filter((r) => !r.error && r.status === "succeeded");
+  const pending = refunds.filter((r) => !r.error && r.status === "pending");
+  const failed = refunds.filter((r) => r.error);
+  const allSucceeded =
+    succeeded.length > 0 &&
+    params.distinctIds.every((id) => succeeded.some((r) => r.paymentIntentId === id));
+  if (allSucceeded) return "succeeded";
+  if (pending.length > 0) return "pending";
+  if (failed.length > 0) return "failed";
+  if (succeeded.length > 0 && (pending.length > 0 || failed.length > 0)) return "pending";
+  if (succeeded.length > 0 && skippedRefunds.length > 0) return "pending";
+  return "failed";
+}
 
 function getDistinctStripePaymentIntentIds(b: Booking): string[] {
   const intentIds = [
@@ -61,30 +93,62 @@ function parseBody(body: unknown): { refund?: boolean; overridePolicy?: boolean 
   return { refund: true, overridePolicy: o.overridePolicy === true };
 }
 
+function getPolicyCutoffHours(policy: { noRefundAfterHours?: number; noRefundWithinDays?: number } | undefined): number | null {
+  if (!policy) return null;
+  if (typeof policy.noRefundAfterHours === "number") return policy.noRefundAfterHours;
+  if (typeof policy.noRefundWithinDays === "number") return policy.noRefundWithinDays * 24;
+  return null;
+}
+
 async function isPastNoRefundCutoff(db: Firestore, booking: Booking): Promise<boolean> {
   const experienceId = booking.experienceId;
   const slotId = booking.slotId;
   if (!experienceId || !slotId) return false;
   try {
-    const expSnap = await db.collection("experiences").doc(experienceId).get();
-    if (!expSnap.exists) return false;
-    const exp = expSnap.data() as { cancellationPolicy?: { noRefundAfterHours?: number } };
-    if (exp.cancellationPolicy?.noRefundAfterHours == null) return false;
     const parsedSlot = parseSlotId(slotId);
     if (!parsedSlot) return false;
+    const bookingPolicy = booking.cancellationPolicy as
+      | { noRefundAfterHours?: number; noRefundWithinDays?: number }
+      | undefined;
+    let cutoffHours = getPolicyCutoffHours(bookingPolicy);
+    if (cutoffHours == null) {
+      const expSnap = await db.collection("experiences").doc(experienceId).get();
+      if (!expSnap.exists) return false;
+      const exp = expSnap.data() as { cancellationPolicy?: { noRefundAfterHours?: number; noRefundWithinDays?: number } };
+      cutoffHours = getPolicyCutoffHours(exp.cancellationPolicy);
+    }
+    if (cutoffHours == null) return false;
     const { start: departureStart } = getSlotStartEnd(
       parsedSlot.dateStr,
       parsedSlot.startHour,
       parsedSlot.durationHours,
       parsedSlot.startMinute ?? 0
     );
-    const cutoff = new Date(
-      departureStart.getTime() - (exp.cancellationPolicy.noRefundAfterHours ?? 0) * 60 * 60 * 1000
-    );
+    const cutoff = new Date(departureStart.getTime() - cutoffHours * 60 * 60 * 1000);
     return new Date() > cutoff;
   } catch {
     return false;
   }
+}
+
+async function updateCancellationRefundStatusIfCanceled(
+  db: Firestore,
+  bookingRef: FirebaseFirestore.DocumentReference,
+  status: BookingCancellationRefundStatus,
+  Timestamp: { now: () => FirebaseFirestore.Timestamp }
+): Promise<void> {
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(bookingRef);
+    if (!snap.exists) return;
+    const booking = snap.data() as Booking;
+    if (booking.status !== "canceled") return;
+    tx.update(bookingRef, {
+      cancellationRefund: {
+        status,
+        ...(status === "succeeded" ? { summaryAppliedAt: Timestamp.now() } : {}),
+      },
+    });
+  });
 }
 
 export async function POST(
@@ -172,6 +236,7 @@ export async function POST(
     let distinctIds: string[] = getDistinctStripePaymentIntentIds(booking);
     let shouldAdjustSummary = false;
     let concurrentCanceled = false;
+    let pendingRefundIds: string[] = [];
 
     if (!isResume) {
       await db.runTransaction(async (tx) => {
@@ -188,8 +253,10 @@ export async function POST(
 
         const createdAt = (b as { createdAt?: { toDate?: () => Date } }).createdAt;
         const createdDate = createdAt?.toDate?.();
-        const monthKey =
-          createdDate
+        const monthKeyStored = typeof b.summaryMonthKey === "string" ? b.summaryMonthKey.trim() : "";
+        const monthKey = monthKeyStored
+          ? monthKeyStored
+          : createdDate
             ? `revenue_${createdDate.getFullYear()}_${String(createdDate.getMonth() + 1).padStart(2, "0")}`
             : null;
 
@@ -213,6 +280,7 @@ export async function POST(
               paymentIntentId: piId,
             });
             const prRef = db.collection("pendingRefunds").doc(prId);
+            pendingRefundIds.push(prId);
             tx.set(
               prRef,
               {
@@ -232,10 +300,15 @@ export async function POST(
           }
         }
 
+        const bExpId = typeof b.experienceId === "string" ? b.experienceId.trim() : "";
+        const bBoatId = typeof b.boatId === "string" ? b.boatId.trim() : "";
+        const slotResetPending = !!(slotId && !bExpId && !bBoatId);
+
         tx.update(bookingRef, {
           status: "canceled",
           updatedAt: FieldValue.serverTimestamp(),
           cancellationRefund,
+          ...(slotResetPending ? { slotResetPending: true } : {}),
         });
 
         if (shouldAdjustSummary) {
@@ -251,9 +324,12 @@ export async function POST(
               bookingCount: FieldValue.increment(-1),
             }, { merge: true });
           }
+          if (bExpId) {
+            applyExperienceRevenueDelta(tx, db, FieldValue, bExpId, -revenueCents, -1);
+          }
         }
 
-        if (slotId && experienceId) {
+        if (slotId && bExpId) {
           const expResolved = await resolveExperienceDocAndSlug(db, b.experienceId);
           const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
           const releasedCount = await resetBookingSlotsToOpenInTransaction(
@@ -269,6 +345,39 @@ export async function POST(
             }
           );
           if (releasedCount > 0) slotReleased = true;
+          const expPricingType = expSnapForName?.exists
+            ? ((expSnapForName.data() as { pricingType?: string })?.pricingType ?? "")
+            : "";
+          if (b.bookingMode === "shared" && expPricingType === "ticketed") {
+            const oldDateStr = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+            if (oldDateStr) {
+              await releaseCapacity(
+                tx,
+                getDepartureInventoryRef(db, bExpId, oldDateStr),
+                b.partySize
+              );
+            }
+          }
+        } else if (slotId && bBoatId) {
+          const releasedBoatOnly = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, "", {
+            onHeldReleased: () => {
+              heldSlotsReleased++;
+            },
+          });
+          if (releasedBoatOnly > 0) slotReleased = true;
+          const expPricingTypeBoat = expSnapForName?.exists
+            ? ((expSnapForName.data() as { pricingType?: string })?.pricingType ?? "")
+            : "";
+          if (b.bookingMode === "shared" && expPricingTypeBoat === "ticketed" && bExpId) {
+            const oldDateStrBoat = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+            if (oldDateStrBoat) {
+              await releaseCapacity(
+                tx,
+                getDepartureInventoryRef(db, bExpId, oldDateStrBoat),
+                b.partySize
+              );
+            }
+          }
         } else if (slotId) {
           console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
             bookingId,
@@ -304,6 +413,7 @@ export async function POST(
             paymentIntentId: piId,
           });
           const prRef = db.collection("pendingRefunds").doc(prId);
+          pendingRefundIds.push(prId);
           tx.set(
             prRef,
             {
@@ -320,6 +430,10 @@ export async function POST(
       });
     }
 
+    if (!isResume) {
+      await suppressPendingOutboxForBookingOnCancel(db, bookingId);
+    }
+
     if (!isResume && concurrentCanceled) {
       return NextResponse.json({ ok: true, already: true, slotReleased: false });
     }
@@ -332,8 +446,22 @@ export async function POST(
       }).catch(() => {});
     }
 
-    let refunds: Array<{ paymentIntentId: string; id?: string; status?: string; amount?: number; error?: string }> = [];
+    let refunds: Array<{
+      paymentIntentId: string;
+      id?: string;
+      status?: string;
+      amount?: number;
+      error?: string;
+      amountReceived?: number;
+      amountRefundedBefore?: number;
+      refundAmountCents?: number;
+      priorPartialRefund?: boolean;
+    }> = [];
     const skippedRefunds: Array<{ paymentIntentId: string; reason: string }> = [];
+    let refundPreviouslyRefundedTotalCents = 0;
+    let refundExpectedTotalCents = 0;
+    let refundIssuedThisRequestCents = 0;
+    let priorPartialRefundDetected = false;
     if (body.refund !== false && process.env.STRIPE_SECRET_KEY) {
       const stripe = getStripe();
       for (const piId of distinctIds) {
@@ -352,15 +480,37 @@ export async function POST(
             });
             continue;
           }
+          const piAmt = pi as unknown as { amount_received?: number; amount_refunded?: number };
+          const amountReceived = typeof piAmt.amount_received === "number" ? piAmt.amount_received : 0;
+          const amountRefundedBefore = typeof piAmt.amount_refunded === "number" ? piAmt.amount_refunded : 0;
+          refundExpectedTotalCents += amountReceived;
+          refundPreviouslyRefundedTotalCents += amountRefundedBefore;
+          const remainingRefundable = Math.max(0, amountReceived - amountRefundedBefore);
+          const hadPriorPartial = amountRefundedBefore > 0;
+          if (hadPriorPartial) priorPartialRefundDetected = true;
+          if (remainingRefundable <= 0) {
+            skippedRefunds.push({
+              paymentIntentId: piId,
+              reason:
+                "No remaining refundable balance on PaymentIntent (amount_received minus amount_refunded is zero or negative)",
+            });
+            continue;
+          }
           const refund = await stripe.refunds.create(
-            { payment_intent: piId },
+            { payment_intent: piId, amount: remainingRefundable },
             { idempotencyKey: buildAdminCancelRefundIdempotencyKey(prId) }
           );
+          const issued = refund.amount ?? remainingRefundable;
+          refundIssuedThisRequestCents += issued;
           refunds.push({
             paymentIntentId: piId,
             id: refund.id,
             status: refund.status ?? undefined,
             amount: refund.amount ?? undefined,
+            amountReceived,
+            amountRefundedBefore,
+            refundAmountCents: issued,
+            priorPartialRefund: hadPriorPartial,
           });
           const outcome = classifyStripeRefundStatus(refund.status ?? undefined);
           if (outcome === "terminal_success") {
@@ -422,38 +572,35 @@ export async function POST(
 
     if (body.refund && shouldAdjustSummary) {
       if (distinctIds.length === 0) {
-        await bookingRef.update({
-          cancellationRefund: {
-            status: "succeeded",
-            summaryAppliedAt: Timestamp.now(),
-          },
-        });
+        await updateCancellationRefundStatusIfCanceled(db, bookingRef, "succeeded", Timestamp);
       } else {
         const allSucceeded = distinctIds.every((piId) => {
           const r = refunds.find((x) => x.paymentIntentId === piId);
           return Boolean(r && !r.error && r.status === "succeeded");
         });
         if (allSucceeded) {
-          await bookingRef.update({
-            cancellationRefund: {
-              status: "succeeded",
-              summaryAppliedAt: Timestamp.now(),
-            },
-          });
+          await updateCancellationRefundStatusIfCanceled(db, bookingRef, "succeeded", Timestamp);
         } else {
           const anySucceeded = refunds.some((r) => !r.error && r.status === "succeeded");
           const anyFailure = refunds.some((r) => r.error) || skippedRefunds.length > 0;
           let st: BookingCancellationRefundStatus = "pending";
           if (anySucceeded) st = "partial";
           else if (anyFailure) st = "failed";
-          await bookingRef.update({ cancellationRefund: { status: st } });
+          await updateCancellationRefundStatusIfCanceled(db, bookingRef, st, Timestamp);
         }
       }
     } else if (body.refund && !shouldAdjustSummary) {
-      await bookingRef.update({ cancellationRefund: { status: "skipped" } });
+      await updateCancellationRefundStatusIfCanceled(db, bookingRef, "skipped", Timestamp);
     }
 
     const experienceName = expSnapForName?.exists ? (expSnapForName.data() as { title?: string })?.title ?? "Your trip" : "Your trip";
+
+    const refundOutcome = deriveCancellationRefundOutcome({
+      refundRequested: body.refund !== false,
+      distinctIds,
+      refunds,
+      skippedRefunds,
+    });
 
     const bookingExtNotify = booking as { cancellationNotifiedAt?: unknown };
     const skipCancellationEmail = isResume && bookingExtNotify.cancellationNotifiedAt != null;
@@ -481,6 +628,7 @@ export async function POST(
           refundAmount,
           refundPending,
           pendingRefundAmount,
+          refundOutcome,
         });
         const { logNotificationSent } = await import("@/lib/booking/email-log");
         await logNotificationSent({
@@ -500,6 +648,8 @@ export async function POST(
             experienceName,
             tripDate: tripDateStr ?? undefined,
             bookingId,
+            refundOutcome,
+            ...(refundOutcome === "succeeded" && refundAmount ? { refundAmountFormatted: refundAmount } : {}),
           });
           if (smsSent) {
             await bookingRef.update({ cancellationSmsSentAt: Timestamp.now() });
@@ -519,31 +669,50 @@ export async function POST(
     const expId = booking.experienceId;
     if (expId) {
       try {
-        const expSnap = await db.collection("experiences").doc(expId).get();
-        if (expSnap.exists) {
-          const exp = expSnap.data() as { cancellationPolicy?: { fullText?: string; noRefundAfterHours?: number } };
-          if (exp.cancellationPolicy?.noRefundAfterHours != null) {
-            const parsedSlot = slotId ? parseSlotId(slotId) : null;
-            if (parsedSlot) {
-              const { start: departureStart } = getSlotStartEnd(
-                parsedSlot.dateStr,
-                parsedSlot.startHour,
-                parsedSlot.durationHours,
-                parsedSlot.startMinute ?? 0
-              );
-              const cutoff = new Date(
-                departureStart.getTime() - (exp.cancellationPolicy.noRefundAfterHours ?? 0) * 60 * 60 * 1000
-              );
-              if (new Date() > cutoff) {
-                cancellationPolicyWarning = "No-refund window may have passed per experience cancellation policy. Review before confirming refund.";
-              }
+        const parsedSlot = slotId ? parseSlotId(slotId) : null;
+        if (parsedSlot) {
+          const bookingPolicy = booking.cancellationPolicy as
+            | { noRefundAfterHours?: number; noRefundWithinDays?: number }
+            | undefined;
+          let cutoffHours = getPolicyCutoffHours(bookingPolicy);
+          if (cutoffHours == null) {
+            const expSnap = await db.collection("experiences").doc(expId).get();
+            if (expSnap.exists) {
+              const exp = expSnap.data() as { cancellationPolicy?: { noRefundAfterHours?: number; noRefundWithinDays?: number } };
+              cutoffHours = getPolicyCutoffHours(exp.cancellationPolicy);
+              void writeAdminAuditLog("booking_cancel_policy_fallback_live_experience", {
+                bookingId,
+                experienceId: expId,
+              });
             }
           }
+          if (cutoffHours != null) {
+          const { start: departureStart } = getSlotStartEnd(
+            parsedSlot.dateStr,
+            parsedSlot.startHour,
+            parsedSlot.durationHours,
+            parsedSlot.startMinute ?? 0
+          );
+          const cutoff = new Date(departureStart.getTime() - cutoffHours * 60 * 60 * 1000);
+          if (new Date() > cutoff) {
+            cancellationPolicyWarning = "No-refund window may have passed per booking cancellation policy snapshot.";
+          }
+        }
         }
       } catch {
         // non-fatal; omit warning
       }
     }
+
+    const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
+    void writeAdminAuditLog("booking_cancel", {
+      bookingId,
+      overridePolicy: body.overridePolicy === true,
+      refundRequested: body.refund !== false,
+      paymentIntentIdsAtCancel: distinctIds,
+      refundResults: refunds.map((r) => ({ paymentIntentId: r.paymentIntentId, status: r.status ?? null, error: r.error ?? null })),
+      adminEmail,
+    });
 
     const refundFailureCount = refunds.filter((r) => r.error).length;
     const refundPartialFailure =
@@ -556,6 +725,16 @@ export async function POST(
       ok: true,
       slotReleased,
       refunds,
+      pendingRefundIds,
+      ...(body.refund !== false &&
+        distinctIds.length > 0 && {
+          refundLedger: {
+            expectedTotalChargeCents: refundExpectedTotalCents,
+            previouslyRefundedTotalCents: refundPreviouslyRefundedTotalCents,
+            refundedThisRequestCents: refundIssuedThisRequestCents,
+          },
+        }),
+      ...(priorPartialRefundDetected && { priorPartialRefundDetected: true as const }),
       ...(refundPartialFailure && { refundPartialFailure: true as const }),
       ...(skippedRefunds.length > 0 && { skippedRefunds }),
       ...(cancellationPolicyWarning && { cancellationPolicyWarning }),

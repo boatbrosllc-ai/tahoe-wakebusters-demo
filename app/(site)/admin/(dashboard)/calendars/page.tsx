@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
-import { getDateStrInSlotTimezone, getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { buildSlotId, getDateStrInSlotTimezone, getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatBookingTime, formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import Link from "next/link";
@@ -220,6 +220,14 @@ export default function CalendarsPage() {
   const [deletingAll, setDeletingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ level: "success" | "warning"; message: string } | null>(null);
+  /** Confirms destructive calendar actions (block/unblock date or slot, release hold) before calling APIs. */
+  const [calendarActionConfirm, setCalendarActionConfirm] = useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [calendarActionConfirmBusy, setCalendarActionConfirmBusy] = useState(false);
   const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
   const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
@@ -244,6 +252,7 @@ export default function CalendarsPage() {
     addonsWithNames: { addonId: string; name: string; qty: number }[];
     pricing?: { totalCents?: number; currency?: string };
     status: string;
+    slotId?: string | null;
     startDate: string | null;
     startTime: string | null;
     endTime: string | null;
@@ -258,6 +267,10 @@ export default function CalendarsPage() {
   const [cancelCalNoRefundWarn, setCancelCalNoRefundWarn] = useState<string | null>(null);
   const [cancelCalPendingId, setCancelCalPendingId] = useState<string | null>(null);
   const [cancelCalLoading, setCancelCalLoading] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleHour, setRescheduleHour] = useState("7");
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleConfirmPricing, setRescheduleConfirmPricing] = useState(false);
   /** User-assigned boat colors (boatId -> rgb). Persisted in localStorage. */
   const [boatColors, setBoatColors] = useState<Record<string, string>>({});
   const [boatColorsSectionOpen, setBoatColorsSectionOpen] = useState(false);
@@ -313,6 +326,14 @@ export default function CalendarsPage() {
   }, [boatList, experienceDocIdBySlugOrId, ticketedExperienceIds]);
 
   const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
+  const visibleBlockRange = useMemo(() => {
+    if (calendarView === "week") {
+      const start = toDateStr(weekStart);
+      const end = toDateStr(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6));
+      return { start, end };
+    }
+    return dateRange;
+  }, [calendarView, dateRange, weekStart]);
 
   const fetchBoatsAndExperiences = useCallback(async () => {
     setLoading(true);
@@ -510,6 +531,9 @@ export default function CalendarsPage() {
   useEffect(() => {
     if (!bookingDetailOpen || !bookingDetailId) {
       setBookingDetail(null);
+      setRescheduleDate("");
+      setRescheduleHour("7");
+      setRescheduleConfirmPricing(false);
       return;
     }
     setBookingDetailLoading(true);
@@ -523,6 +547,14 @@ export default function CalendarsPage() {
       .catch(() => setBookingDetail(null))
       .finally(() => setBookingDetailLoading(false));
   }, [bookingDetailOpen, bookingDetailId]);
+
+  useEffect(() => {
+    if (!bookingDetail?.slotId) return;
+    const parsed = parseSlotId(bookingDetail.slotId);
+    if (!parsed) return;
+    setRescheduleDate(parsed.dateStr);
+    setRescheduleHour(String(parsed.startHour));
+  }, [bookingDetail?.slotId]);
 
   const enrichedSlots = useMemo(() => {
     // Composite key experienceId:slotId — slot ids alone are NOT globally unique across experiences
@@ -701,7 +733,7 @@ export default function CalendarsPage() {
 
   const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate)?.slots ?? [] : [];
 
-  const blockDate = async (dateStr: string) => {
+  const runBlockDate = async (dateStr: string) => {
     if (uniqueExperienceIds.length === 0) return;
     const key = `date-${dateStr}`;
     setBlocking(key);
@@ -709,13 +741,11 @@ export default function CalendarsPage() {
     setNotice(null);
     const boatIdsPayload = blockDayBoatIds.size > 0 ? Array.from(blockDayBoatIds) : undefined;
     try {
-      let totalBlocksCreated = 0;
-      const targetedExperienceLabels: string[] = [];
-      for (const experienceId of uniqueExperienceIds) {
+      const requests = uniqueExperienceIds.map(async (experienceId) => {
         const boatIds = boatIdsPayload != null
           ? boatList.filter((b) => b.experienceIds?.includes(experienceId) && blockDayBoatIds.has(b.id)).map((b) => b.id)
           : undefined;
-        if (boatIdsPayload != null && boatIds?.length === 0) continue;
+        if (boatIdsPayload != null && boatIds?.length === 0) return { skipped: true, experienceId };
         const res = await fetch("/api/admin/blocks/block-date", {
           method: "POST",
           credentials: "include",
@@ -724,11 +754,31 @@ export default function CalendarsPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? "Failed to block date");
-        totalBlocksCreated += typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
+        const blocksCreated = typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
           ? (data as { blocksCreated: number }).blocksCreated
           : 0;
-        targetedExperienceLabels.push(experienceNames.get(experienceId) ?? experienceId);
+        return { skipped: false, experienceId, blocksCreated };
+      });
+      const settled = await Promise.allSettled(requests);
+      const succeeded: string[] = [];
+      const failed: string[] = [];
+      let totalBlocksCreated = 0;
+      for (const item of settled) {
+        if (item.status === "fulfilled") {
+          if (item.value.skipped) continue;
+          totalBlocksCreated += item.value.blocksCreated;
+          succeeded.push(experienceNames.get(item.value.experienceId) ?? item.value.experienceId);
+        } else {
+          failed.push(item.reason instanceof Error ? item.reason.message : "Failed");
+        }
       }
+      if (failed.length > 0) {
+        const successMsg = succeeded.length > 0 ? `Succeeded: ${succeeded.join(", ")}.` : "No successful experience writes.";
+        setError(`${successMsg} Failed: ${failed.join(" | ")}`);
+        await fetchBlocks();
+        return;
+      }
+      const targetedExperienceLabels = succeeded;
       const expSummary = targetedExperienceLabels.length > 0 ? targetedExperienceLabels.join(", ") : "selected experiences";
       if (totalBlocksCreated === 0) {
         setNotice({
@@ -742,6 +792,7 @@ export default function CalendarsPage() {
         });
       }
       await fetchSlots();
+      await fetchBlocks();
       setDayDetailOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to block date");
@@ -750,7 +801,17 @@ export default function CalendarsPage() {
     }
   };
 
-  const unblockDate = async (dateStr: string) => {
+  const blockDate = (dateStr: string) => {
+    setCalendarActionConfirm({
+      title: "Block this date for all selected experiences?",
+      description:
+        "Customers will not be able to book on this calendar day for those experiences. This takes effect immediately.",
+      confirmLabel: "Block date",
+      run: () => runBlockDate(dateStr),
+    });
+  };
+
+  const runUnblockDate = async (dateStr: string) => {
     if (uniqueExperienceIds.length === 0) return;
     const key = `date-${dateStr}`;
     setBlocking(key);
@@ -783,7 +844,17 @@ export default function CalendarsPage() {
     }
   };
 
-  const blockSlot = async (slot: SlotDto) => {
+  const unblockDate = (dateStr: string) => {
+    setCalendarActionConfirm({
+      title: "Unblock this date?",
+      description:
+        "Remove full-day blocks for this date on all selected experiences so customers can book again (subject to availability).",
+      confirmLabel: "Unblock date",
+      run: () => runUnblockDate(dateStr),
+    });
+  };
+
+  const runBlockSlot = async (slot: SlotDto) => {
     const experienceId = slot.experienceId;
     if (!experienceId) return;
     setBlocking(slot.id);
@@ -798,6 +869,7 @@ export default function CalendarsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to block slot");
       await fetchSlots();
+      await fetchBlocks();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to block slot");
     } finally {
@@ -805,7 +877,17 @@ export default function CalendarsPage() {
     }
   };
 
-  const unblockSlot = async (slot: SlotDto) => {
+  const blockSlot = (slot: SlotDto) => {
+    setCalendarActionConfirm({
+      title: "Block this time slot?",
+      description:
+        "This creates an admin block for this slot so it is not bookable. Applies to the selected boat (or all boats if none specified).",
+      confirmLabel: "Block slot",
+      run: () => runBlockSlot(slot),
+    });
+  };
+
+  const runUnblockSlot = async (slot: SlotDto) => {
     const experienceId = slot.experienceId;
     if (!experienceId) return;
     setActionLoading(slot.id);
@@ -820,6 +902,7 @@ export default function CalendarsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to unblock slot");
       await fetchSlots();
+      await fetchBlocks();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to unblock slot");
     } finally {
@@ -827,7 +910,16 @@ export default function CalendarsPage() {
     }
   };
 
-  const releaseHold = async (holdId: string) => {
+  const unblockSlot = (slot: SlotDto) => {
+    setCalendarActionConfirm({
+      title: "Remove block for this slot?",
+      description: "This removes the matching admin block so the slot can be booked again if nothing else holds it.",
+      confirmLabel: "Unblock slot",
+      run: () => runUnblockSlot(slot),
+    });
+  };
+
+  const runReleaseHold = async (holdId: string) => {
     setActionLoading(holdId);
     setError(null);
     try {
@@ -845,6 +937,17 @@ export default function CalendarsPage() {
     } finally {
       setActionLoading(null);
     }
+  };
+
+  /** Admin-only: releases checkout hold (admin session). Prefer this over calling the API directly from UI. */
+  const releaseHold = (holdId: string) => {
+    setCalendarActionConfirm({
+      title: "Release this hold?",
+      description:
+        "This will release the customer’s hold and they may lose their checkout slot. The time may become available to others immediately.",
+      confirmLabel: "Release hold",
+      run: () => runReleaseHold(holdId),
+    });
   };
 
   const openCancelCalendarBooking = (bookingId: string) => {
@@ -896,6 +999,57 @@ export default function CalendarsPage() {
     }
   };
 
+  const executeRescheduleFromDetail = async () => {
+    if (!bookingDetail?.id || !bookingDetail.slotId || !rescheduleDate) return;
+    const parsedOld = parseSlotId(bookingDetail.slotId);
+    const duration = parsedOld?.durationHours ?? bookingDetail.durationHours ?? 1;
+    const slotId = buildSlotId(rescheduleDate, Number(rescheduleHour), duration);
+    setRescheduleLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/bookings/${bookingDetail.id}/reschedule`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotId, confirmPricingChange: rescheduleConfirmPricing }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        if ((data as { code?: string }).code === "PRICING_CHANGE_REQUIRES_CONFIRMATION") {
+          setRescheduleConfirmPricing(true);
+          const oldTotal = typeof (data as { oldTotalCents?: number }).oldTotalCents === "number"
+            ? (data as { oldTotalCents: number }).oldTotalCents
+            : null;
+          const newTotal = typeof (data as { newTotalCents?: number }).newTotalCents === "number"
+            ? (data as { newTotalCents: number }).newTotalCents
+            : null;
+          setError(
+            oldTotal != null && newTotal != null
+              ? `Pricing changes from ${formatCents(oldTotal)} to ${formatCents(newTotal)}. Check "confirm pricing change" and retry.`
+              : ((data as { error?: string }).error ?? "Reschedule requires confirmation.")
+          );
+          return;
+        }
+        setError((data as { error?: string }).error ?? "Slot conflict. Pick a different time.");
+        return;
+      }
+      if (res.status === 400) {
+        setError((data as { error?: string }).error ?? "Invalid time selection.");
+        return;
+      }
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed to reschedule booking");
+      await fetchSlots();
+      await fetchBookings();
+      setBookingDetailOpen(false);
+      setBookingDetailId(null);
+      setRescheduleConfirmPricing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reschedule booking");
+    } finally {
+      setRescheduleLoading(false);
+    }
+  };
+
   const calendarGridPending = slotsLoading || bookingsLoading;
 
   const openDayDetail = (dateStr: string) => {
@@ -923,25 +1077,46 @@ export default function CalendarsPage() {
     setNotice(null);
     try {
       const boatIds = rangeBoatId ? [rangeBoatId] : undefined;
-      let totalBlocksCreated = 0;
-      const targetedExperienceLabels = new Set<string>();
+      const requests: Promise<{ experienceId: string; blocksCreated: number }>[] = [];
       for (let d = new Date(`${rangeStart}T12:00:00.000Z`); d <= new Date(`${rangeEnd}T12:00:00.000Z`); d.setUTCDate(d.getUTCDate() + 1)) {
         const dateStr = getDateStrInSlotTimezone(d);
         if (dateStr < todayStr) continue;
         for (const experienceId of uniqueExperienceIds) {
-          const res = await fetch("/api/admin/blocks/block-date", {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error ?? "Failed to block date");
-          totalBlocksCreated += typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
-            ? (data as { blocksCreated: number }).blocksCreated
-            : 0;
-          targetedExperienceLabels.add(experienceNames.get(experienceId) ?? experienceId);
+          requests.push(
+            fetch("/api/admin/blocks/block-date", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds }),
+            }).then(async (res) => {
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error(data.error ?? "Failed to block date");
+              const blocksCreated = typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
+                ? (data as { blocksCreated: number }).blocksCreated
+                : 0;
+              return { experienceId, blocksCreated };
+            })
+          );
         }
+      }
+      const settled = await Promise.allSettled(requests);
+      let totalBlocksCreated = 0;
+      const targetedExperienceLabels = new Set<string>();
+      const failed: string[] = [];
+      for (const item of settled) {
+        if (item.status === "fulfilled") {
+          totalBlocksCreated += item.value.blocksCreated;
+          targetedExperienceLabels.add(experienceNames.get(item.value.experienceId) ?? item.value.experienceId);
+        } else {
+          failed.push(item.reason instanceof Error ? item.reason.message : "Failed");
+        }
+      }
+      if (failed.length > 0) {
+        const successMsg =
+          targetedExperienceLabels.size > 0 ? `Succeeded: ${Array.from(targetedExperienceLabels).join(", ")}.` : "No successful experience writes.";
+        setError(`${successMsg} Failed: ${failed.join(" | ")}`);
+        await fetchBlocks();
+        return;
       }
       const expSummary = Array.from(targetedExperienceLabels).join(", ") || "selected experiences";
       if (totalBlocksCreated === 0) {
@@ -971,15 +1146,11 @@ export default function CalendarsPage() {
     if (uniqueExperienceIds.length === 0) { setBlocks([]); return; }
     setBlocksLoading(true);
     try {
-      const today = toDateStr(new Date());
-      const toDateObj = new Date();
-      toDateObj.setMonth(toDateObj.getMonth() + 3);
-      const toStr = toDateStr(toDateObj);
       const seen = new Set<string>();
       const all: { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }[] = [];
       for (const expId of uniqueExperienceIds) {
         const res = await fetch(
-          `/api/admin/blocks?experienceId=${encodeURIComponent(expId)}&from=${today}&to=${toStr}`,
+          `/api/admin/blocks?experienceId=${encodeURIComponent(expId)}&from=${visibleBlockRange.start}&to=${visibleBlockRange.end}`,
           { credentials: "include" }
         );
         if (!res.ok) continue;
@@ -994,17 +1165,27 @@ export default function CalendarsPage() {
       setBlocks(all);
     } catch { setBlocks([]); }
     finally { setBlocksLoading(false); }
-  }, [uniqueExperienceIds]);
+  }, [uniqueExperienceIds, visibleBlockRange.end, visibleBlockRange.start]);
 
   useEffect(() => { fetchBlocks(); }, [fetchBlocks]);
 
   const deleteBlock = async (id: string) => {
     setDeletingBlockId(id);
+    setError(null);
     try {
-      await fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" });
+      const res = await fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError((data as { error?: string }).error ?? "Failed to delete block");
+        await fetchBlocks();
+        return;
+      }
       setBlocks((prev) => prev.filter((b) => b.id !== id));
       await fetchSlots();
-    } catch { /* ignore */ }
+    } catch {
+      setError("Failed to delete block");
+      await fetchBlocks();
+    }
     finally { setDeletingBlockId(null); }
   };
 
@@ -1012,13 +1193,28 @@ export default function CalendarsPage() {
     if (blocks.length === 0) return;
     if (!confirm(`Remove all ${blocks.length} block${blocks.length !== 1 ? "s" : ""}? This will unblock every blocked date.`)) return;
     setDeletingAll(true);
+    setError(null);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         blocks.map((b) => fetch(`/api/admin/blocks/${b.id}`, { method: "DELETE", credentials: "include" }))
       );
+      const failures: string[] = [];
+      for (const res of results) {
+        if (res.ok || res.status === 404) continue;
+        const data = await res.json().catch(() => ({}));
+        failures.push((data as { error?: string }).error ?? `Delete failed (${res.status})`);
+      }
+      if (failures.length > 0) {
+        setError(`Some blocks failed to delete: ${failures.join(" | ")}`);
+        await fetchBlocks();
+        return;
+      }
       setBlocks([]);
       await fetchSlots();
-    } catch { /* ignore */ }
+    } catch {
+      setError("Failed to delete all blocks");
+      await fetchBlocks();
+    }
     finally { setDeletingAll(false); }
   };
 
@@ -2026,7 +2222,12 @@ export default function CalendarsPage() {
         open={bookingDetailOpen}
         onOpenChange={(open) => {
           setBookingDetailOpen(open);
-          if (!open) setBookingDetailId(null);
+          if (!open) {
+            setBookingDetailId(null);
+            setRescheduleDate("");
+            setRescheduleHour("7");
+            setRescheduleConfirmPricing(false);
+          }
         }}
         title={bookingDetail ? "Booking details" : bookingDetailId ? "Booking not found" : "Booking details"}
         description={bookingDetail ? `${bookingDetail.experienceName} · ${bookingDetail.startDate ?? ""} ${bookingDetail.startTime ?? ""}` : undefined}
@@ -2127,6 +2328,52 @@ export default function CalendarsPage() {
                   </div>
                 )}
               </div>
+              {bookingDetail.slotId && BOOKING_STATUSES_SLOT_TAKEN.has(bookingDetail.status as never) && (
+                <div className="rounded-lg border border-brand-dark/10 p-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Reschedule</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="text-xs text-brand-muted">
+                      Date
+                      <input
+                        type="date"
+                        value={rescheduleDate}
+                        onChange={(e) => setRescheduleDate(e.target.value)}
+                        className="mt-1 block rounded border border-brand-dark/20 px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <label className="text-xs text-brand-muted">
+                      Start hour
+                      <select
+                        value={rescheduleHour}
+                        onChange={(e) => setRescheduleHour(e.target.value)}
+                        className="mt-1 block rounded border border-brand-dark/20 px-2 py-1 text-sm"
+                      >
+                        {Array.from({ length: 13 }, (_, i) => i + 7).map((h) => (
+                          <option key={h} value={String(h)}>{h}:00</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs text-brand-muted flex items-center gap-1.5 mb-1">
+                      <input
+                        type="checkbox"
+                        checked={rescheduleConfirmPricing}
+                        onChange={(e) => setRescheduleConfirmPricing(e.target.checked)}
+                        className="rounded border-brand-dark/30"
+                      />
+                      confirm pricing change
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={rescheduleLoading || !rescheduleDate}
+                      onClick={() => void executeRescheduleFromDetail()}
+                    >
+                      {rescheduleLoading ? "Rescheduling..." : "Reschedule"}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="border-t border-brand-dark/10 pt-4 flex flex-wrap gap-2">
                 <Button
                   variant="outline"
@@ -2230,6 +2477,50 @@ export default function CalendarsPage() {
               {cancelCalLoading ? "Canceling…" : "Confirm cancel"}
             </Button>
           </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={calendarActionConfirm != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCalendarActionConfirm(null);
+            setCalendarActionConfirmBusy(false);
+          }
+        }}
+        title={calendarActionConfirm?.title}
+        description={calendarActionConfirm?.description}
+        fullScreenOnMobile
+      >
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={calendarActionConfirmBusy}
+            onClick={() => {
+              setCalendarActionConfirm(null);
+              setCalendarActionConfirmBusy(false);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={calendarActionConfirmBusy}
+            onClick={() => {
+              if (!calendarActionConfirm) return;
+              setCalendarActionConfirmBusy(true);
+              void calendarActionConfirm
+                .run()
+                .then(() => {
+                  setCalendarActionConfirm(null);
+                })
+                .catch(() => {})
+                .finally(() => setCalendarActionConfirmBusy(false));
+            }}
+          >
+            {calendarActionConfirmBusy ? "Working…" : calendarActionConfirm?.confirmLabel ?? "Confirm"}
+          </Button>
         </div>
       </Dialog>
 

@@ -3,20 +3,19 @@ import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firesto
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking } from "@/lib/booking/types";
-import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { bookingCountsTowardActiveRevenueTotals, totalSummaryAttributedRevenueCents } from "@/lib/booking/summary-revenue";
 
 const PAGE_SIZE = 100;
 
-function toDate(ts: { seconds?: number; toDate?: () => Date }): string | null {
+function toDateIso(ts: { seconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
   if (typeof ts.seconds === "number") return new Date(ts.seconds * 1000).toISOString();
   return null;
 }
 
 /**
- * Aggregates customers from all bookings (paged internally). Query `?cursor=<bookingDocId>`
- * starts after that booking (newest-first order) and returns `{ customers, nextCursor }` for UI pagination
- * (merge customer rows client-side across pages).
+ * One page of bookings (newest first). Aggregates customer rows for this page only; use `nextCursor` + client merge
+ * for full history without scanning the entire collection in one request.
  */
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -29,59 +28,58 @@ export async function GET(request: NextRequest) {
       { email: string; name: string; phone: string; bookingCount: number; lastBookingAt: string | null; totalSpentCents: number }
     >();
 
-    let cursor: QueryDocumentSnapshot<DocumentData> | null = null;
+    let q = db.collection("bookings").orderBy("createdAt", "desc").limit(PAGE_SIZE);
     const cursorParam = request.nextUrl.searchParams.get("cursor")?.trim();
     if (cursorParam) {
       const startDoc = await db.collection("bookings").doc(cursorParam).get();
       if (!startDoc.exists) {
         return NextResponse.json({ error: "Invalid cursor" }, { status: 400 });
       }
-      cursor = startDoc as QueryDocumentSnapshot<DocumentData>;
+      q = q.startAfter(startDoc as QueryDocumentSnapshot<DocumentData>);
     }
 
-    while (true) {
-      let q = db.collection("bookings").orderBy("createdAt", "desc").limit(PAGE_SIZE);
-      if (cursor) q = q.startAfter(cursor);
-      const snap = await q.get();
-      if (snap.empty) break;
+    const snap = await q.get();
 
-      snap.docs.forEach((d) => {
-        const b = d.data() as Booking;
-        const email = b.customer?.email?.trim() || "";
-        if (!email) return;
-        const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
-        const revenueStatus = BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never);
-        const totalCents = revenueStatus ? (b.pricing?.totalCents ?? 0) : 0;
+    snap.docs.forEach((d) => {
+      const b = d.data() as Booking;
+      const email = b.customer?.email?.trim() || "";
+      if (!email) return;
+      const createdAt = b.createdAt ? toDateIso(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
+      const totalCents = bookingCountsTowardActiveRevenueTotals(b) ? totalSummaryAttributedRevenueCents(b) : 0;
 
-        if (byEmail.has(email)) {
-          const cur = byEmail.get(email)!;
-          cur.bookingCount += 1;
-          cur.totalSpentCents += totalCents;
-          if (createdAt && (!cur.lastBookingAt || createdAt > cur.lastBookingAt)) cur.lastBookingAt = createdAt;
-        } else {
-          byEmail.set(email, {
-            email,
-            name: b.customer?.name ?? "",
-            phone: b.customer?.phone ?? "",
-            bookingCount: 1,
-            lastBookingAt: createdAt,
-            totalSpentCents: totalCents,
-          });
+      if (byEmail.has(email)) {
+        const cur = byEmail.get(email)!;
+        cur.bookingCount += 1;
+        cur.totalSpentCents += totalCents;
+        if (createdAt && (!cur.lastBookingAt || createdAt > cur.lastBookingAt)) {
+          cur.lastBookingAt = createdAt;
+          cur.name = b.customer?.name ?? cur.name;
+          cur.phone = b.customer?.phone ?? cur.phone;
         }
-      });
+      } else {
+        byEmail.set(email, {
+          email,
+          name: b.customer?.name ?? "",
+          phone: b.customer?.phone ?? "",
+          bookingCount: 1,
+          lastBookingAt: createdAt,
+          totalSpentCents: totalCents,
+        });
+      }
+    });
 
-      if (snap.size < PAGE_SIZE) break;
-      cursor = snap.docs[snap.docs.length - 1];
-    }
-
-    const list = Array.from(byEmail.values()).sort(
+    const customers = Array.from(byEmail.values()).sort(
       (a, b) => (b.lastBookingAt ?? "").localeCompare(a.lastBookingAt ?? "")
     );
 
-    if (cursorParam) {
-      return NextResponse.json({ customers: list, nextCursor: cursor?.id ?? null });
-    }
-    return NextResponse.json(list);
+    const nextCursor = snap.size === PAGE_SIZE ? snap.docs[snap.docs.length - 1]?.id ?? null : null;
+
+    return NextResponse.json({
+      customers,
+      nextCursor,
+      pageSize: PAGE_SIZE,
+      pageBookingDocs: snap.size,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

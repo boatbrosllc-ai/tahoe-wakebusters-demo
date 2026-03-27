@@ -492,6 +492,14 @@ export function InlineBookingDetailsStep({
           resumeHoldId:
             holdResumeRef.current?.slotId === slot.id ? holdResumeRef.current.holdId : holdId ?? undefined,
           holdRequestId: holdRequestIdRef.current,
+          ...(() => {
+            const rid =
+              holdResumeRef.current?.slotId === slot.id
+                ? holdResumeRef.current.holdId
+                : holdId ?? undefined;
+            const tok = releaseToken?.trim();
+            return rid && tok ? { releaseToken: tok } : {};
+          })(),
         },
         { persistHoldForResume: holdResumeRef }
       );

@@ -13,6 +13,7 @@ type PendingRefundRow = {
   reason: string;
   status: string;
   createdAt: string | null;
+  requiresReview?: boolean;
 };
 
 function formatDate(iso: string | null) {
@@ -38,6 +39,8 @@ export function PendingRefundsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/pending-refunds", { credentials: "include" })
@@ -73,6 +76,58 @@ export function PendingRefundsPanel() {
         <div className="rounded-2xl bg-red-50 border border-red-200 p-4 text-red-700 text-sm">{error}</div>
       </div>
     );
+  }
+
+  async function triggerReviewedRefund(id: string) {
+    setRetryingId(id);
+    try {
+      const res = await fetch(`/api/admin/pending-refunds/${encodeURIComponent(id)}/retry`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Retry failed");
+        return;
+      }
+      await fetch("/api/admin/pending-refunds", { credentials: "include" })
+        .then((r) => r.json().catch(() => ({})))
+        .then((d) => {
+          if (!d.error) setRefunds(Array.isArray(d.refunds) ? d.refunds : []);
+        });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed");
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
+  async function syncStripeFromRow(row: PendingRefundRow, forceExpired: boolean) {
+    const pi = (row.duplicatePaymentIntentId ?? row.paymentIntentId)?.trim();
+    if (!pi || !pi.startsWith("pi_")) {
+      setError("No Payment Intent on this row for sync.");
+      return;
+    }
+    setSyncingId(row.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/sync-stripe-payment", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentIntentId: pi, forceExpired }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Sync failed");
+        return;
+      }
+      setRefunds((prev) => prev.filter((r) => r.id !== row.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncingId(null);
+    }
   }
 
   async function markResolved(id: string) {
@@ -129,6 +184,9 @@ export function PendingRefundsPanel() {
                   <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark w-[1%] whitespace-nowrap">
                     Actions
                   </th>
+                  <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark w-[1%] whitespace-nowrap">
+                    Review
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -144,7 +202,7 @@ export function PendingRefundsPanel() {
                     <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark break-all font-mono text-xs">
                       {r.duplicatePaymentIntentId ?? r.paymentIntentId ?? "—"}
                     </td>
-                    <td className="px-3 py-3 sm:px-4 sm:py-4">
+                    <td className="px-3 py-3 sm:px-4 sm:py-4 space-y-1">
                       <Button
                         type="button"
                         variant="outline"
@@ -155,6 +213,36 @@ export function PendingRefundsPanel() {
                       >
                         {resolvingId === r.id ? "…" : "Mark resolved"}
                       </Button>
+                      {(r.duplicatePaymentIntentId ?? r.paymentIntentId)?.startsWith("pi_") && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-xs block w-full"
+                          disabled={syncingId === r.id}
+                          onClick={() => syncStripeFromRow(r, true)}
+                          title="Creates booking from succeeded PI when hold expired (same as Financials → force sync)."
+                        >
+                          {syncingId === r.id ? "…" : "Sync PI (force expired)"}
+                        </Button>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 sm:px-4 sm:py-4">
+                      {r.requiresReview && r.status === "pending" ? (
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          className="text-xs whitespace-normal text-left h-auto py-1.5"
+                          disabled={retryingId === r.id}
+                          onClick={() => triggerReviewedRefund(r.id)}
+                          title="Clears requiresReview and queues the refund processor (same as admin retry endpoint)."
+                        >
+                          {retryingId === r.id ? "…" : "Reviewed — trigger refund"}
+                        </Button>
+                      ) : (
+                        <span className="text-brand-muted text-xs">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -182,6 +270,30 @@ export function PendingRefundsPanel() {
                 >
                   {resolvingId === r.id ? "…" : "Mark resolved"}
                 </Button>
+                {r.requiresReview && r.status === "pending" && (
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="text-xs w-full"
+                    disabled={retryingId === r.id}
+                    onClick={() => triggerReviewedRefund(r.id)}
+                  >
+                    {retryingId === r.id ? "…" : "Reviewed — trigger refund"}
+                  </Button>
+                )}
+                {(r.duplicatePaymentIntentId ?? r.paymentIntentId)?.startsWith("pi_") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs w-full"
+                    disabled={syncingId === r.id}
+                    onClick={() => syncStripeFromRow(r, true)}
+                  >
+                    {syncingId === r.id ? "…" : "Sync PI (force expired)"}
+                  </Button>
+                )}
               </div>
             ))}
           </div>

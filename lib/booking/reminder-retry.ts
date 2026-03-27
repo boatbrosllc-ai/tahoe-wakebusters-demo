@@ -4,7 +4,8 @@
  * Max attempts, dead-letter, and admin-visible failed records.
  */
 
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
+import { markBookingNotificationPermanentlyFailed } from "@/lib/booking/booking-notification-failure-flag";
 import { getFirestoreExports } from "./firebase-admin";
 import type { ReminderRetryEntry, ReminderRetryStatus } from "./types";
 
@@ -27,6 +28,24 @@ function nextAttemptAt(attemptCount: number): Date {
 
 function docId(bookingId: string, templateKey: string): string {
   return `${bookingId}_${templateKey}`;
+}
+
+const TRIP_SCHEDULE_RETRY_TEMPLATE_KEYS: ReminderTemplateKey[] = [
+  "reminder_1week",
+  "reminder_24h",
+  "reminder_dayof",
+  "final_payment_request",
+];
+
+/** Drop retry-queue rows tied to trip timing when the booking is rescheduled (same doc ids as cron). */
+export function deleteTripScheduleReminderRetryQueueInTransaction(
+  tx: Transaction,
+  db: Firestore,
+  bookingId: string
+): void {
+  for (const tk of TRIP_SCHEDULE_RETRY_TEMPLATE_KEYS) {
+    tx.delete(db.collection(COLLECTION).doc(docId(bookingId, tk)));
+  }
 }
 
 export async function addToRetryQueue(
@@ -68,6 +87,11 @@ export async function addToRetryQueue(
 
   if (isDeadLetter) {
     console.warn("[reminder-retry] dead_letter", { bookingId, templateKey, attemptCount });
+    void markBookingNotificationPermanentlyFailed(
+      db,
+      bookingId,
+      `reminder_retry_dead_letter:${templateKey}:${lastError.slice(0, 300)}`
+    );
   }
 }
 
@@ -145,6 +169,14 @@ export async function markRetryFailed(
     lastAttemptAt: Timestamp.now(),
     updatedAt: FieldValue.serverTimestamp(),
   });
+
+  if (isDeadLetter) {
+    void markBookingNotificationPermanentlyFailed(
+      db,
+      bookingId,
+      `reminder_retry_dead_letter:${templateKey}:${lastError.slice(0, 300)}`
+    );
+  }
 }
 
 const ALL_TEMPLATE_KEYS: ReminderTemplateKey[] = [

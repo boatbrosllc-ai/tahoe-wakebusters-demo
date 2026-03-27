@@ -13,7 +13,7 @@ export type AnalyticsEvent =
   | { name: "booking_step_1_category_selected"; payload: Record<string, never> }
   | { name: "booking_step_2_date_selected"; payload: Record<string, never> }
   | { name: "booking_step_4_payment_started"; payload: Record<string, never> }
-  | { name: "booking_completed"; payload: Record<string, never> };
+  | { name: "booking_completed"; payload: { booking_id?: string; receipt_token?: string } };
 
 type GtagFn = (...args: unknown[]) => void;
 
@@ -64,7 +64,10 @@ export const analytics = {
   bookingStep4PaymentStarted() {
     logEvent({ name: "booking_step_4_payment_started", payload: {} });
   },
-  bookingCompleted() {
-    logEvent({ name: "booking_completed", payload: {} });
+  bookingCompleted(payload?: { bookingId?: string; receiptToken?: string }) {
+    const p: { booking_id?: string; receipt_token?: string } = {};
+    if (payload?.bookingId) p.booking_id = payload.bookingId;
+    if (payload?.receiptToken) p.receipt_token = payload.receiptToken;
+    logEvent({ name: "booking_completed", payload: p });
   },
 };

@@ -291,43 +291,44 @@ async function handleReceipt(
     let slot: Slot | null = null;
     let rate: Rate | ExperienceRate | BoatRate | null = null;
     if (isListingBoatFlow) {
-      const expSnap = await db.collection("experiences").doc(booking.experienceId!).get();
+      const [expSnap, boatSnap, slotSnap, rateSnap] = await Promise.all([
+        db.collection("experiences").doc(booking.experienceId!).get(),
+        db.collection("boats").doc(booking.boatId!).get(),
+        db.collection("boats").doc(booking.boatId!).collection("slots").doc(booking.slotId).get(),
+        db.collection("experiences").doc(booking.experienceId!).collection("rates").doc(booking.rateId).get(),
+      ]);
       experienceName = expSnap.exists ? (expSnap.data() as Experience).title : "Charter";
-      const boatSnap = await db.collection("boats").doc(booking.boatId!).get();
       boatName = boatSnap.exists ? (boatSnap.data() as { name?: string }).name ?? experienceName : experienceName;
-      const slotSnap = await db.collection("boats").doc(booking.boatId!).collection("slots").doc(booking.slotId).get();
-      const rateSnap = await db
-        .collection("experiences")
-        .doc(booking.experienceId!)
-        .collection("rates")
-        .doc(booking.rateId)
-        .get();
       slot = slotSnap.exists ? (slotSnap.data() as Slot) : null;
       rate = rateSnap.exists ? (rateSnap.data() as ExperienceRate) : null;
     } else if (hasExperience) {
-      const expSnap = await db.collection("experiences").doc(booking.experienceId!).get();
+      const [expSnap, slotSnap, rateSnap] = await Promise.all([
+        db.collection("experiences").doc(booking.experienceId!).get(),
+        db
+          .collection("experiences")
+          .doc(booking.experienceId!)
+          .collection("slots")
+          .doc(booking.slotId)
+          .get(),
+        db
+          .collection("experiences")
+          .doc(booking.experienceId!)
+          .collection("rates")
+          .doc(booking.rateId)
+          .get(),
+      ]);
       experienceName = expSnap.exists ? (expSnap.data() as Experience).title : "Charter";
       boatName = experienceName;
-      const slotSnap = await db
-        .collection("experiences")
-        .doc(booking.experienceId!)
-        .collection("slots")
-        .doc(booking.slotId)
-        .get();
-      const rateSnap = await db
-        .collection("experiences")
-        .doc(booking.experienceId!)
-        .collection("rates")
-        .doc(booking.rateId)
-        .get();
       slot = slotSnap.exists ? (slotSnap.data() as Slot) : null;
       rate = rateSnap.exists ? (rateSnap.data() as ExperienceRate) : null;
     } else {
-      const boatSnap = await db.collection("boats").doc(booking.boatId!).get();
+      const [boatSnap, slotSnap, rateSnap] = await Promise.all([
+        db.collection("boats").doc(booking.boatId!).get(),
+        db.collection("boats").doc(booking.boatId!).collection("slots").doc(booking.slotId).get(),
+        db.collection("boats").doc(booking.boatId!).collection("rates").doc(booking.rateId).get(),
+      ]);
       boatName = boatSnap.exists ? (boatSnap.data() as Boat).name : "Charter";
       experienceName = boatName;
-      const slotSnap = await db.collection("boats").doc(booking.boatId!).collection("slots").doc(booking.slotId).get();
-      const rateSnap = await db.collection("boats").doc(booking.boatId!).collection("rates").doc(booking.rateId).get();
       slot = slotSnap.exists ? (slotSnap.data() as Slot) : null;
       rate = rateSnap.exists ? (rateSnap.data() as Rate) : null;
     }
@@ -355,7 +356,7 @@ async function handleReceipt(
       }
     }
 
-    const addonSelectionsWithNames = await (async () => {
+    const addonsPromise = (async () => {
       if (!booking.addonSelections?.length) return [];
       const addonsRef = hasExperience
         ? db.collection("experiences").doc(booking.experienceId!).collection("addons")
@@ -369,14 +370,18 @@ async function handleReceipt(
         qty: sel.qty,
       }));
     })();
-
-    let discountLimitExceeded = false;
-    const pendingRefundSnap = await db
+    const pendingRefundPromise = db
       .collection("pendingRefunds")
       .where("bookingId", "==", doc.id)
       .where("reason", "==", "discount_limit_exceeded")
       .limit(1)
       .get();
+    const [addonSelectionsWithNames, pendingRefundSnap] = await Promise.all([
+      addonsPromise,
+      pendingRefundPromise,
+    ]);
+
+    let discountLimitExceeded = false;
     if (!pendingRefundSnap.empty) discountLimitExceeded = true;
 
     const slotDurationParsed = parseSlotIdRelaxed(booking.slotId ?? "");

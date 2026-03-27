@@ -5,6 +5,7 @@ import {
   isConvertHoldInputDeposit,
   type ConvertHoldInput,
   type ConvertHoldResult,
+  type ConvertHoldToBookingOptions,
 } from "@/lib/booking/convert-hold-to-booking";
 import {
   buildConvertHoldInputFromSucceededPaymentIntent,
@@ -23,6 +24,8 @@ export type PaymentContext = {
   checkoutSessionId?: string;
   checkoutSession?: Stripe.Checkout.Session;
   paymentIntent?: Stripe.PaymentIntent;
+  /** Admin sync: allow conversion when hold has expired but payment succeeded. */
+  forceExpiredConversion?: boolean;
 };
 
 export type ConvertResult = {
@@ -104,9 +107,11 @@ export async function resolveAndConvertPayment(
     : parseInt(pi.metadata?.totalCents ?? "0", 10) || (pi.amount ?? 0);
   const depositCents = isDeposit ? (pi.amount ?? 0) : totalCents;
   const finalCents = Math.max(0, totalCents - depositCents);
+  const convertOpts: ConvertHoldToBookingOptions | undefined =
+    context.forceExpiredConversion === true ? { graceVerifiedForConversion: true } : undefined;
   let result: ConvertHoldResult;
   try {
-    result = await convertHoldToBooking(db, context.holdId, convertInput);
+    result = await convertHoldToBooking(db, context.holdId, convertInput, convertOpts);
   } catch (err) {
     if (err instanceof Error && err.message === "Payment intent does not match hold") {
       throw new ResolveAndConvertPaymentError("PI_MATCH_FAILED", "Payment intent does not match hold");

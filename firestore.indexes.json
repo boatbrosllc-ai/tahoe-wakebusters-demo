@@ -32,6 +32,7 @@
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
+    { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "startDateStr", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "DESCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "DESCENDING" }] },
@@ -55,7 +56,9 @@
 
     { "collectionGroup": "notificationSendClaims", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "claimedAt", "order": "ASCENDING" }] },
 
-    { "collectionGroup": "stripeEvents", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "receivedAt", "order": "DESCENDING" }] }
+    { "collectionGroup": "stripeEvents", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "receivedAt", "order": "DESCENDING" }] },
+
+    { "collectionGroup": "operationalAlerts", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] }
   ],
   "fieldOverrides": [
     {

@@ -17,7 +17,8 @@ import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
  */
 export async function executeReleaseHoldTransaction(
   db: Firestore,
-  holdId: string
+  holdId: string,
+  options?: { releaseContext?: string }
 ): Promise<{ released: true } | { released: false; message: string }> {
   const { FieldValue } = getFirestoreExports();
   const holdRef = db.collection("holds").doc(holdId);
@@ -26,6 +27,7 @@ export async function executeReleaseHoldTransaction(
     released: false,
     message: "Hold already released or converted",
   };
+  const releasedForLog = { value: false };
 
   await db.runTransaction(async (tx) => {
     const holdSnap = await tx.get(holdRef);
@@ -130,6 +132,7 @@ export async function executeReleaseHoldTransaction(
       });
       applyDiscountDecrementWrite();
       outcome = { released: true };
+      releasedForLog.value = true;
       return;
     }
     const slot = slotSnap.data() as Slot;
@@ -153,6 +156,7 @@ export async function executeReleaseHoldTransaction(
       });
       applyDiscountDecrementWrite();
       outcome = { released: true };
+      releasedForLog.value = true;
       return;
     }
     tx.update(slotRef, {
@@ -179,7 +183,21 @@ export async function executeReleaseHoldTransaction(
     });
     applyDiscountDecrementWrite();
     outcome = { released: true };
+    releasedForLog.value = true;
   });
+
+  if (releasedForLog.value) {
+    const postSnap = await holdRef.get();
+    const h = postSnap.exists ? (postSnap.data() as Hold) : null;
+    const slotIdLog = h?.slotId ?? "";
+    const experienceIdLog = h?.experienceId ?? "";
+    console.log("[release-hold-transaction] hold released", {
+      holdId: holdRef.id,
+      slotId: slotIdLog,
+      experienceId: experienceIdLog,
+      source: options?.releaseContext ?? "release-hold-transaction",
+    });
+  }
 
   return outcome;
 }

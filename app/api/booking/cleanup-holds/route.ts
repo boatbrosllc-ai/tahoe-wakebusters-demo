@@ -108,7 +108,12 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      return NextResponse.json({ ok: true, matched, processed, skipped, failed });
+      const headers = new Headers();
+      if (processed > 0) {
+        headers.set("X-Slots-Invalidated", "true");
+      }
+
+      return NextResponse.json({ ok: true, matched, processed, skipped, failed }, { headers });
     } finally {
       await releaseCleanupHoldsRunLock(db);
     }

@@ -25,7 +25,52 @@ export function totalSummaryAttributedRevenueCents(booking: Booking): number {
   return s?.totalAmountCents ?? booking.pricing?.totalCents ?? 0;
 }
 
+/** Firestore doc id under `summaries/` for per-experience revenue counters (e.g. experience_abc123). */
+export const EXPERIENCE_SUMMARY_DOC_PREFIX = "experience_";
+
+export function experienceSummaryDocumentId(experienceId: string): string {
+  const id = experienceId.trim().replace(/[/\s]/g, "_");
+  return `${EXPERIENCE_SUMMARY_DOC_PREFIX}${id}`;
+}
+
+/**
+ * Month key for `summaries/revenue_YYYY_MM` — matches deposit booking-time bucket (see booking.summaryMonthKey).
+ */
+export function resolveRevenueSummaryMonthDocId(booking: Booking): string | null {
+  const stored = typeof booking.summaryMonthKey === "string" ? booking.summaryMonthKey.trim() : "";
+  if (stored) return stored;
+  const createdAt = (booking as { createdAt?: { toDate?: () => Date } }).createdAt;
+  const d = createdAt?.toDate?.();
+  if (d) {
+    return `revenue_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+  return null;
+}
+
 type FieldValueLike = { increment: (n: number) => unknown };
+
+/** Increment or decrement per-experience summary counters (forward-only until legacy backfill). */
+export function applyExperienceRevenueDelta(
+  tx: Transaction,
+  db: Firestore,
+  FieldValue: FieldValueLike,
+  experienceId: string | undefined | null,
+  revenueDeltaCents: number,
+  bookingCountDelta: number
+): void {
+  const eid = typeof experienceId === "string" ? experienceId.trim() : "";
+  if (!eid) return;
+  if (revenueDeltaCents === 0 && bookingCountDelta === 0) return;
+  const ref = db.collection("summaries").doc(experienceSummaryDocumentId(eid));
+  const patch: Record<string, unknown> = {};
+  if (revenueDeltaCents !== 0) {
+    patch.revenueCents = FieldValue.increment(revenueDeltaCents);
+  }
+  if (bookingCountDelta !== 0) {
+    patch.bookingCount = FieldValue.increment(bookingCountDelta);
+  }
+  tx.set(ref, patch, { merge: true });
+}
 
 /** Second increment when the final balance is collected (deposit bookings only). */
 export function applyFinalPaymentRevenueIncrement(
@@ -33,6 +78,7 @@ export function applyFinalPaymentRevenueIncrement(
   db: Firestore,
   FieldValue: FieldValueLike,
   finalCents: number,
+  summaryMonthKey: string | null,
   booking?: Booking | null,
   bookingId?: string
 ): void {
@@ -57,11 +103,19 @@ export function applyFinalPaymentRevenueIncrement(
     { totalRevenueCents: FieldValue.increment(finalCents) },
     { merge: true }
   );
-  const now = new Date();
-  const monthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
-  tx.set(
-    db.collection("summaries").doc(monthKey),
-    { revenueCents: FieldValue.increment(finalCents) },
-    { merge: true }
-  );
+  const mk = typeof summaryMonthKey === "string" ? summaryMonthKey.trim() : "";
+  if (mk) {
+    tx.set(
+      db.collection("summaries").doc(mk),
+      { revenueCents: FieldValue.increment(finalCents) },
+      { merge: true }
+    );
+  } else {
+    console.warn("[summary-revenue] final payment monthly increment skipped — no summaryMonthKey", {
+      bookingId: bookingId ?? "",
+    });
+  }
+  if (booking?.experienceId) {
+    applyExperienceRevenueDelta(tx, db, FieldValue, booking.experienceId, finalCents, 0);
+  }
 }

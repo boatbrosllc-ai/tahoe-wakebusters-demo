@@ -145,6 +145,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Hold not found" }, { status: 404 });
     }
     const hold = holdSnap.data() as Hold;
+    const holdAllowDeposit =
+      typeof (hold as { allowDeposit?: boolean }).allowDeposit === "boolean"
+        ? (hold as { allowDeposit?: boolean }).allowDeposit
+        : false;
     if (!input.release_token) {
       return NextResponse.json(
         { error: "release_token required (returned from create-hold with this hold)" },
@@ -272,6 +276,7 @@ export async function POST(request: NextRequest) {
       holdId: input.holdId,
       slotId: hold.slotId,
       rateId: hold.rateId,
+      allowDepositAtHold: holdAllowDeposit ? "true" : "false",
       ...versionMeta,
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;

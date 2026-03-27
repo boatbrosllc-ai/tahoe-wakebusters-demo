@@ -10,6 +10,27 @@ import { runSeedExperiences } from "@/lib/booking/seed-experiences";
 export async function POST(request: NextRequest) {
   const deny = await requireAdminSession(request.headers.get("cookie"));
   if (deny) return deny;
+  const body = (await request.json().catch(() => ({}))) as { confirmPhrase?: string };
+  const seedEnabled = process.env.ENABLE_SEED_ENDPOINT === "true";
+  const isProduction = process.env.NODE_ENV === "production";
+  if (!seedEnabled) {
+    return NextResponse.json(
+      { error: "Seed endpoints are disabled. Set ENABLE_SEED_ENDPOINT=true to enable." },
+      { status: 403 }
+    );
+  }
+  if (isProduction) {
+    const requiredPhrase = process.env.SEED_CONFIRM_PHRASE?.trim();
+    if (!requiredPhrase || body.confirmPhrase !== requiredPhrase) {
+      return NextResponse.json(
+        {
+          error:
+            "Seed endpoint is production-guarded. Provide body.confirmPhrase matching SEED_CONFIRM_PHRASE to proceed.",
+        },
+        { status: 403 }
+      );
+    }
+  }
   try {
     const result = await runSeedExperiences();
     if (!result.ok) {

@@ -16,6 +16,7 @@ import {
   inferListingBoatIdFromSlotDoc,
   resolveExperienceDocAndSlug,
 } from "@/lib/booking/listing-boat-resolution";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 /** GET is strictly read-only: always dry-run, no mutating behavior. */
 export async function GET(request: NextRequest) {
@@ -27,18 +28,18 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
-  const body = (await request.json().catch(() => ({}))) as { applyUpdates?: boolean; dryRun?: boolean };
-  const applyUpdates = body.applyUpdates === true || body.dryRun === false;
-  if (!applyUpdates) {
+  const body = (await request.json().catch(() => ({}))) as { applyUpdates?: boolean; dryRun?: boolean; verifyOnly?: boolean };
+  const verifyOnly = body.verifyOnly === true || body.dryRun === true;
+  const applyUpdates = (body.applyUpdates === true || body.dryRun === false) && !verifyOnly;
+  if (!applyUpdates && !verifyOnly) {
     return NextResponse.json(
       {
-        error:
-          "Actual updates require POST with body { applyUpdates: true } or { dryRun: false }. Use GET for a dry-run report.",
+        error: "Use POST { verifyOnly: true } for preview or POST { applyUpdates: true } to write updates.",
       },
       { status: 400 }
     );
   }
-  return runBackfill(false, request);
+  return runBackfill(!applyUpdates, request);
 }
 
 async function runBackfill(dryRun: boolean, request?: NextRequest) {
@@ -66,13 +67,13 @@ async function runBackfill(dryRun: boolean, request?: NextRequest) {
     }
   }
 
-  const results: { bookingId: string; experienceId?: string; slotId?: string; inferredBoatId?: string; updated?: boolean }[] =
+  const results: { bookingId: string; experienceId?: string; slotId?: string; beforeBoatId?: string | null; inferredBoatId?: string; outcome: "updated" | "skipped" | "failed"; error?: string }[] =
     [];
   const updatedIds: string[] = [];
 
   for (const b of missingBoatId) {
     if (!b.experienceId || !b.slotId) {
-      results.push({ bookingId: b.id, experienceId: b.experienceId, slotId: b.slotId });
+      results.push({ bookingId: b.id, experienceId: b.experienceId, slotId: b.slotId, beforeBoatId: null, outcome: "skipped" });
       continue;
     }
 
@@ -85,11 +86,30 @@ async function runBackfill(dryRun: boolean, request?: NextRequest) {
     });
 
     if (inferredBoatId && !dryRun) {
-      await db.collection("bookings").doc(b.id).update({ boatId: inferredBoatId });
-      results.push({ bookingId: b.id, experienceId: b.experienceId, slotId: b.slotId, inferredBoatId, updated: true });
-      updatedIds.push(b.id);
+      try {
+        await db.collection("bookings").doc(b.id).update({ boatId: inferredBoatId });
+        results.push({ bookingId: b.id, experienceId: b.experienceId, slotId: b.slotId, beforeBoatId: null, inferredBoatId, outcome: "updated" });
+        updatedIds.push(b.id);
+      } catch (err) {
+        results.push({
+          bookingId: b.id,
+          experienceId: b.experienceId,
+          slotId: b.slotId,
+          beforeBoatId: null,
+          inferredBoatId,
+          outcome: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     } else {
-      results.push({ bookingId: b.id, experienceId: b.experienceId, slotId: b.slotId, inferredBoatId: inferredBoatId ?? undefined });
+      results.push({
+        bookingId: b.id,
+        experienceId: b.experienceId,
+        slotId: b.slotId,
+        beforeBoatId: null,
+        inferredBoatId: inferredBoatId ?? undefined,
+        outcome: "skipped",
+      });
     }
   }
 
@@ -99,6 +119,10 @@ async function runBackfill(dryRun: boolean, request?: NextRequest) {
       updatedCount: updatedIds.length,
       bookingIds: updatedIds,
       at: new Date().toISOString(),
+    });
+    void writeAdminAuditLog("backfill_booking_boat_ids", {
+      updatedCount: updatedIds.length,
+      bookingIds: updatedIds.slice(0, 30),
     });
   }
 

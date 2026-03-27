@@ -28,6 +28,7 @@ import {
 import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import { resetBookingToFinalDue, transitionToFinalPaid } from "@/lib/booking/final-paid-transition";
+import { bookingError, bookingLog, bookingWarn } from "@/lib/booking/debug";
 
 const ALLOWED_STATUSES = ["final_due", "final_failed", "final_requires_action", "final_processing"] as const;
 
@@ -107,6 +108,7 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json({ error: "Invalid or expired link" }, { status: 401 });
     }
+    bookingLog("manage-pay-remaining", "request started", { bookingId: payload.bookingId });
     const resolvedEmail = resolveManageCustomerEmail(request, payload.bookingId, customerEmail);
     if (!resolvedEmail) {
       return NextResponse.json({ error: "customerEmail is required in the request body" }, { status: 400 });
@@ -317,7 +319,7 @@ export async function POST(request: NextRequest) {
     for (;;) {
       gateIterations++;
       if (gateIterations > MAX_PAY_REMAINING_GATE_ITERATIONS) {
-        console.warn("[manage/pay-remaining] max gate iterations reached", {
+        bookingWarn("manage-pay-remaining", "max gate iterations reached", {
           bookingId: payload.bookingId,
           gateIterations,
         });
@@ -360,6 +362,7 @@ export async function POST(request: NextRequest) {
           ? offSessionKey
           : elementKey;
       const gate = await runCustomerFinalPiGate(now, pendingKeyForGate);
+      bookingLog("manage-pay-remaining", "final PI gate result", { bookingId: payload.bookingId, gateKind: gate.kind });
       if (gate.kind === "busy_cron" || gate.kind === "busy_customer") {
         return NextResponse.json(
           { error: "A final charge is in progress. Please wait a moment and try again." },
@@ -399,8 +402,16 @@ export async function POST(request: NextRequest) {
       }
 
       if (gate.kind === "reuse") {
+        bookingLog("manage-pay-remaining", "reusing existing final PaymentIntent", {
+          bookingId: payload.bookingId,
+          paymentIntentId: gate.existingPiId,
+        });
         const pi = await stripe.paymentIntents.retrieve(gate.existingPiId);
         if (pi.status === "succeeded") {
+          bookingLog("manage-pay-remaining", "reconcile to final_paid (reuse path, PI succeeded)", {
+            bookingId: payload.bookingId,
+            paymentIntentId: pi.id,
+          });
           await reconcileBookingToFinalPaidFromSucceededIntent(pi.id);
           return NextResponse.json({
             status: "succeeded",
@@ -457,6 +468,10 @@ export async function POST(request: NextRequest) {
         const amountCentsForFinalPi = gate.freshFinalCents;
 
         if (shouldAttemptOffSession) {
+          bookingLog("manage-pay-remaining", "off-session final PaymentIntent attempt start", {
+            bookingId: payload.bookingId,
+            amountCents: amountCentsForFinalPi,
+          });
           try {
             const offPi = await stripe.paymentIntents.create(
               {
@@ -473,6 +488,10 @@ export async function POST(request: NextRequest) {
             if (offPi.status === "succeeded") {
               const succeededOffSessionPiId = offPi.id;
               try {
+                bookingLog("manage-pay-remaining", "reconcile to final_paid (off-session PI succeeded)", {
+                  bookingId: payload.bookingId,
+                  paymentIntentId: succeededOffSessionPiId,
+                });
                 await reconcileBookingToFinalPaidFromSucceededIntent(succeededOffSessionPiId);
               } catch {
                 await persistFinalPaymentIntentIdIfEligible(succeededOffSessionPiId);
@@ -528,13 +547,20 @@ export async function POST(request: NextRequest) {
             if (failedPiId) await stripe.paymentIntents.cancel(failedPiId).catch(() => {});
             attemptOffSessionFinal = false;
             await clearCustomerFinalPiInFlight().catch(() => {});
-            console.warn("[manage/pay-remaining] off_session final charge failed, retrying with client confirmation", offErr);
+            bookingWarn("manage-pay-remaining", "off_session final charge failed, retrying with client confirmation", {
+              bookingId: payload.bookingId,
+              err: offErr,
+            });
             continue;
           }
         }
 
         let paymentIntent: Awaited<ReturnType<typeof stripe.paymentIntents.create>>;
         try {
+          bookingLog("manage-pay-remaining", "creating element-scoped final PaymentIntent", {
+            bookingId: payload.bookingId,
+            amountCents: amountCentsForFinalPi,
+          });
           paymentIntent = await stripe.paymentIntents.create(
             {
               amount: amountCentsForFinalPi,
@@ -560,6 +586,10 @@ export async function POST(request: NextRequest) {
             if (existingPiId) {
               const pi = await stripe.paymentIntents.retrieve(existingPiId);
               if (pi.status === "succeeded") {
+                bookingLog("manage-pay-remaining", "reconcile to final_paid after idempotency recovery", {
+                  bookingId: payload.bookingId,
+                  paymentIntentId: pi.id,
+                });
                 await reconcileBookingToFinalPaidFromSucceededIntent(pi.id);
                 return NextResponse.json({
                   status: "succeeded",
@@ -609,6 +639,10 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
         }
         await persistFinalPaymentIntentIdIfEligible(paymentIntent.id);
+        bookingLog("manage-pay-remaining", "final PaymentIntent created (client_secret returned)", {
+          bookingId: payload.bookingId,
+          paymentIntentId: paymentIntent.id,
+        });
         return NextResponse.json({
           clientSecret: paymentIntent.client_secret,
           paymentIntentId: paymentIntent.id,
@@ -623,7 +657,7 @@ export async function POST(request: NextRequest) {
     if (err instanceof Error && (err.message === "Booking not found" || err.message === "Booking is already fully paid" || err.message === "Booking is not in a state that allows paying remaining balance")) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
-    console.error("[manage/pay-remaining]", err);
+    bookingError("manage-pay-remaining", "pay-remaining failed", err);
     return NextResponse.json({ error: "Failed to create payment intent" }, { status: 500 });
   }
 }

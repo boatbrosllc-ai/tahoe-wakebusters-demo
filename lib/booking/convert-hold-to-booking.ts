@@ -25,7 +25,7 @@ import { bookingEnv } from "@/lib/booking/env";
 import { getSlotStartEnd, parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import { departureTimesMatch } from "@/lib/booking/departure-match";
-import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { DEFAULT_CANCELLATION_POLICY, DEFAULT_EXPERIENCE_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getDepartureInventoryRef, checkCapacityAndRelease } from "@/lib/booking/shared-departure-inventory";
@@ -33,18 +33,21 @@ import {
   confirmationOutboxDocId,
   createPendingConfirmationPayload,
   createPendingWaiverInvitePayload,
+  enqueueAmountIntegrityMismatchCustomerOutbox,
+  enqueuePaymentUnderManualReviewCustomerOutbox,
   tryImmediateConfirmationSendForBooking,
   tryImmediateWaiverInviteSendForBooking,
   waiverInviteOutboxDocId,
 } from "@/lib/booking/notification-outbox";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import type { Booking, Hold, Slot, Boat, Rate, Addon, FirestoreTimestamp, BookingCardDisplay, BookingPricing } from "@/lib/booking/types";
+import { applyExperienceRevenueDelta } from "@/lib/booking/summary-revenue";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import type { Experience, ExperienceRate, ExperienceAddon, BoatRate, ListingBoat } from "@/lib/booking/types";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
-import { sendAmountIntegrityMismatchCustomerEmail, sendAmountIntegrityMismatchOpsEmail } from "@/lib/booking/brevo";
+import { sendAmountIntegrityMismatchOpsEmail } from "@/lib/booking/brevo";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 import {
   HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS,
@@ -105,6 +108,11 @@ export function isConvertHoldInputDeposit(input: ConvertHoldInput): input is Con
   return input.paymentStage === "deposit";
 }
 
+export type ConvertHoldToBookingOptions = {
+  /** Admin-only: succeeded PI conversion when hold clock has expired (sync-stripe-payment force). */
+  graceVerifiedForConversion?: boolean;
+};
+
 /** Thrown when admin blocks overlap the hold slot — payment succeeded but booking must not be created. */
 export const BOOKING_BLOCKED_BY_OPERATOR_MESSAGE =
   "Booking cannot be completed: this date has been blocked by the operator";
@@ -116,15 +124,22 @@ export function isBookingBlockedByOperatorError(err: unknown): boolean {
 export async function convertHoldToBooking(
   db: Firestore,
   holdId: string,
-  input: ConvertHoldInput
+  input: ConvertHoldInput,
+  options?: ConvertHoldToBookingOptions
 ): Promise<ConvertHoldResult> {
   const isDeposit = isConvertHoldInputDeposit(input);
   if ((input as { requiresManualReview?: boolean }).requiresManualReview === true) {
     const firestoreExportsBlocked = getFirestoreExports();
     bookingWarn("convert-hold", "manual review required for payment-stage classification; blocking auto-conversion", {
       holdId,
-      paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
+      paymentIntentId: input.paymentIntentId,
     });
+    const holdRefBlocked = db.collection("holds").doc(holdId);
+    const holdSnapBlocked = await holdRefBlocked.get();
+    const custEmailForRefund =
+      holdSnapBlocked.exists && (holdSnapBlocked.data() as Hold).customerDraft?.email?.trim()
+        ? (holdSnapBlocked.data() as Hold).customerDraft!.email!.trim()
+        : undefined;
     // Conversion is permanently blocked in this case, so create an ops-visible pending refund record.
     await upsertPendingRefundRecord(
       db,
@@ -137,10 +152,9 @@ export async function convertHoldToBooking(
         holdId,
         paymentIntentId: input.paymentIntentId,
         requiresReview: true,
+        ...(custEmailForRefund ? { customerEmail: custEmailForRefund } : {}),
       }
     );
-    const holdRefBlocked = db.collection("holds").doc(holdId);
-    const holdSnapBlocked = await holdRefBlocked.get();
     if (holdSnapBlocked.exists) {
       const hb = holdSnapBlocked.data() as Hold & {
         discountCode?: string;
@@ -176,13 +190,13 @@ export async function convertHoldToBooking(
       : undefined;
     if (custEmailBlocked) {
       try {
-        await sendAmountIntegrityMismatchCustomerEmail({
-          to: custEmailBlocked,
-          customerName: (holdSnapBlocked.data() as Hold).customerDraft?.name?.trim() ?? "Guest",
+        await enqueuePaymentUnderManualReviewCustomerOutbox(db, {
           holdId,
+          customerEmail: custEmailBlocked,
+          customerName: (holdSnapBlocked.data() as Hold).customerDraft?.name?.trim() ?? "Guest",
         });
       } catch (e) {
-        bookingError("convert-hold", "sendAmountIntegrityMismatchCustomerEmail failed", e, { holdId });
+        bookingError("convert-hold", "enqueuePaymentUnderManualReviewCustomerOutbox failed", e, { holdId });
       }
     }
     return { amountIntegrityMismatch: true };
@@ -190,7 +204,7 @@ export async function convertHoldToBooking(
   bookingLog("convert-hold", "convertHoldToBooking started", {
     holdId,
     paymentStage: isDeposit ? "deposit" : "full",
-    paymentIntentIdPrefix: input.paymentIntentId?.slice(0, 24) + "...",
+    paymentIntentId: input.paymentIntentId,
   });
   const { FieldValue, Timestamp } = getFirestoreExports();
   const holdRef = db.collection("holds").doc(holdId);
@@ -215,7 +229,7 @@ export async function convertHoldToBooking(
     expand: ["payment_method"],
   });
 
-  let graceVerifiedForConversion = false;
+  let graceVerifiedForConversion = options?.graceVerifiedForConversion === true;
   const piIdForGrace = typeof input.paymentIntentId === "string" ? input.paymentIntentId.trim() : "";
   const metaHoldFromPi =
     typeof piForTransactionalMatch.metadata?.holdId === "string"
@@ -628,6 +642,18 @@ export async function convertHoldToBooking(
     } catch (e) {
       bookingError("convert-hold", "failed to record pending refund for amount mismatch", e, { holdId });
     }
+    const custEmailMismatch = hold.customerDraft?.email?.trim();
+    if (custEmailMismatch) {
+      try {
+        await enqueueAmountIntegrityMismatchCustomerOutbox(db, {
+          holdId,
+          customerEmail: custEmailMismatch,
+          customerName: hold.customerDraft?.name?.trim() ?? "Guest",
+        });
+      } catch (e) {
+        bookingError("convert-hold", "enqueueAmountIntegrityMismatchCustomerOutbox failed", e, { holdId });
+      }
+    }
     return { amountIntegrityMismatch: true };
   }
 
@@ -706,6 +732,7 @@ export async function convertHoldToBooking(
     marketingOptIn: hold.marketingOptIn,
     ...(specialNotes ? { specialNotes } : {}),
     pricing: finalPricing,
+    cancellationPolicy: experienceForPricing?.cancellationPolicy ?? DEFAULT_EXPERIENCE_CANCELLATION_POLICY,
     status: isDeposit ? "final_due" : "paid",
     stripe: stripeBlock,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
@@ -714,6 +741,10 @@ export async function convertHoldToBooking(
     createdAt: Timestamp.now() as unknown as FirestoreTimestamp,
     ...(finalPricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
   };
+  if (typeof (booking.createdAt as { toDate?: () => Date }).toDate === "function") {
+    const createdAtDate = (booking.createdAt as { toDate: () => Date }).toDate();
+    booking.summaryMonthKey = `revenue_${createdAtDate.getFullYear()}_${String(createdAtDate.getMonth() + 1).padStart(2, "0")}`;
+  }
 
   if (parsedSlot) {
     const sds = booking.startDateStr;
@@ -745,8 +776,6 @@ export async function convertHoldToBooking(
 
   let enqueueWaiverInviteOutbox = false;
 
-  // Revenue attribution uses payment-conversion time (not trip date), so capture once right before the write transaction.
-  const revenueAttributionDate = new Date();
   bookingLog("convert-hold", "starting transaction (slot update + booking doc + hold status)", { holdId, bookingId });
   try {
     await db.runTransaction(async (tx) => {
@@ -1022,12 +1051,7 @@ export async function convertHoldToBooking(
         totalRevenueCents: FieldValue.increment(revenueCents),
         bookingCount: FieldValue.increment(1),
       }, { merge: true });
-      // Revenue recognition: monthly summaries are keyed by payment date (creation date), not trip date.
-      // Cancel route uses the same policy (booking.createdAt) for decrements. If trip-date attribution is
-      // required, use parsedSlot.dateStr for monthKey and update cancel/route.ts to use startDateStr consistently.
-      const monthKey = `revenue_${revenueAttributionDate.getFullYear()}_${String(
-        revenueAttributionDate.getMonth() + 1
-      ).padStart(2, "0")}`;
+      const monthKey = booking.summaryMonthKey as string;
       const monthRef = db.collection("summaries").doc(monthKey);
       // Revenue summary increments live inside the same transaction as the booking write, so the
       // `alreadyConverted` idempotency path never double-applies counters on recovery or stale replays.
@@ -1039,6 +1063,7 @@ export async function convertHoldToBooking(
         },
         { merge: true }
       );
+      applyExperienceRevenueDelta(tx, db, FieldValue, hold.experienceId, revenueCents, 1);
     }
   });
   } catch (err) {

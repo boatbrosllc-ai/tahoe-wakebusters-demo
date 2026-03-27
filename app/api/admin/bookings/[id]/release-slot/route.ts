@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import { BOOKING_STATUSES_SLOT_TAKEN, type Booking } from "@/lib/booking/types";
+import type { Booking } from "@/lib/booking/types";
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  // Intentionally releases slot documents only; it does not transition booking status.
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
   const { id: bookingId } = await params;
@@ -22,19 +22,34 @@ export async function POST(
     let updated = 0;
     let slotId: string | null = null;
     let alreadyCanceled = false;
-    let notReleasable = false;
+    let mustCancelFirst = false;
+    let slotBookingMismatch = false;
     await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
       if (!bookingSnap.exists) throw new Error("BOOKING_NOT_FOUND");
       const booking = bookingSnap.data() as Booking;
       slotId = typeof booking.slotId === "string" ? booking.slotId : null;
       if (!slotId) throw new Error("BOOKING_MISSING_SLOT");
-      if (booking.status === "canceled") {
-        alreadyCanceled = true;
+      if (booking.status !== "canceled") {
+        mustCancelFirst = true;
         return;
       }
-      if (!BOOKING_STATUSES_SLOT_TAKEN.has(booking.status)) {
-        notReleasable = true;
+      alreadyCanceled = true;
+      const slotRef = booking.boatId
+        ? db.collection("boats").doc(booking.boatId).collection("slots").doc(slotId)
+        : booking.experienceId
+          ? db.collection("experiences").doc(booking.experienceId).collection("slots").doc(slotId)
+          : null;
+      if (!slotRef) {
+        throw new Error("BOOKING_MISSING_SLOT_OWNER");
+      }
+      const slotSnap = await tx.get(slotRef);
+      if (!slotSnap.exists) {
+        throw new Error("SLOT_NOT_FOUND");
+      }
+      const slotBookingId = (slotSnap.data() as { bookingId?: string }).bookingId ?? null;
+      if (slotBookingId !== bookingId) {
+        slotBookingMismatch = true;
         return;
       }
       const expResolved = await resolveExperienceDocAndSlug(db, booking.experienceId);
@@ -49,16 +64,35 @@ export async function POST(
         expResolved?.slug ?? ""
       );
     });
-    if (alreadyCanceled) return NextResponse.json({ ok: true, bookingId, already: true, slotReleased: false });
-    if (notReleasable) {
+    if (mustCancelFirst) {
       return NextResponse.json({ error: "Booking status does not require slot release" }, { status: 409 });
     }
-    return NextResponse.json({ ok: true, bookingId, slotId, updated });
+    if (slotBookingMismatch) {
+      return NextResponse.json(
+        { error: "Slot is not currently assigned to this booking. Use admin cancel flow for slot-release recovery only." },
+        { status: 409 }
+      );
+    }
+    void writeAdminAuditLog("booking_release_slot", { bookingId, slotId, updated });
+    return NextResponse.json({
+      ok: true,
+      bookingId,
+      slotId,
+      updated,
+      alreadyCanceled,
+      message: "Slot release is only allowed for canceled bookings. Use the cancel flow first.",
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message === "BOOKING_NOT_FOUND") return NextResponse.json({ error: "Booking not found" }, { status: 404 });
     if (message === "BOOKING_MISSING_SLOT") {
       return NextResponse.json({ error: "Booking is missing slot metadata" }, { status: 400 });
+    }
+    if (message === "BOOKING_MISSING_SLOT_OWNER") {
+      return NextResponse.json({ error: "Booking is missing slot owner metadata" }, { status: 400 });
+    }
+    if (message === "SLOT_NOT_FOUND") {
+      return NextResponse.json({ error: "Slot not found for this booking" }, { status: 404 });
     }
     await writeOperationalAlert({
       type: "admin_release_slot_failed",

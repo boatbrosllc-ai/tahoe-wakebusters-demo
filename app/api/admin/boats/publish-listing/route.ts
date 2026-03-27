@@ -10,6 +10,17 @@ function slugFromName(name: string): string {
     .replace(/[^a-z0-9-]/g, "");
 }
 
+async function uniqueBoatSlug(db: ReturnType<typeof getDb>, candidate: string, currentBoatId: string): Promise<string> {
+  let n = 1;
+  let slug = candidate;
+  while (true) {
+    const snap = await db.collection("boats").where("slug", "==", slug).limit(1).get();
+    if (snap.empty || snap.docs[0].id === currentBoatId) return slug;
+    n += 1;
+    slug = `${candidate}-${n}`;
+  }
+}
+
 /**
  * POST /api/admin/boats/publish-listing
  * Sets isListingBoat: true and slug (from name) on every boat that's missing them,
@@ -23,13 +34,16 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const snap = await db.collection("boats").get();
     let updated = 0;
+    const updatedBoats: Array<{ id: string; slug: string; name: string }> = [];
     for (const doc of snap.docs) {
       const data = doc.data() as { name?: string; isListingBoat?: boolean; slug?: string; photos?: unknown; experienceIds?: unknown };
       const name = typeof data.name === "string" ? data.name.trim() : "";
       if (!name) continue;
       const needsPublish = data.isListingBoat !== true || !data.slug || typeof data.slug !== "string";
       if (!needsPublish) continue;
-      const slug = slugFromName(name);
+      const baseSlug = slugFromName(name);
+      if (!baseSlug) continue;
+      const slug = await uniqueBoatSlug(db, baseSlug, doc.id);
       const updates: Record<string, unknown> = {
         isListingBoat: true,
         slug,
@@ -38,8 +52,9 @@ export async function POST(request: NextRequest) {
       if (!Array.isArray(data.experienceIds)) updates.experienceIds = [];
       await doc.ref.update(updates);
       updated += 1;
+      updatedBoats.push({ id: doc.id, slug, name });
     }
-    return NextResponse.json({ ok: true, updated, total: snap.size });
+    return NextResponse.json({ ok: true, updated, total: snap.size, boats: updatedBoats });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

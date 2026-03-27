@@ -1,3 +1,8 @@
+/**
+ * Admin bookings list and calendar. Background polling uses {@link ADMIN_BOOKING_VISIBILITY_SLA_MS} (60s)
+ * so the list and calendar view stay within roughly a one-minute visibility window when auto-refresh is enabled,
+ * without masking concurrent edits from other admins when diagnostics or silent merges run too often.
+ */
 "use client";
 
 import { useEffect, useState, useCallback, Fragment, useRef, useMemo } from "react";
@@ -13,6 +18,8 @@ import { AddBookingModal } from "./AddBookingModal";
 import { AdminSessionRedirectError, subscribeAdminAuthRevalidate, throwIfAdminApiError } from "@/lib/admin-auth-client";
 import { ADMIN_BOOKING_VISIBILITY_SLA_MS } from "@/lib/admin-booking-visibility-sla";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { buildSlotId, parseSlotId } from "@/lib/booking/experience-slots";
+import { getAdminBookingStatusBadgeClass } from "@/lib/admin/admin-booking-status-badge";
 
 type StripeEventItem = {
   id: string;
@@ -156,6 +163,7 @@ export default function AdminBookingsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [requiresManualReviewOnly, setRequiresManualReviewOnly] = useState(false);
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [fromTripDate, setFromTripDate] = useState<string>("");
@@ -190,6 +198,12 @@ export default function AdminBookingsPage() {
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [calendarPollTick, setCalendarPollTick] = useState(0);
+  /** When false, no background interval merge — use Refresh or explicit actions only (avoids surprise overwrites). */
+  const [autoBackgroundRefresh, setAutoBackgroundRefresh] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleHour, setRescheduleHour] = useState("7");
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleConfirmPricing, setRescheduleConfirmPricing] = useState(false);
 
   const listFetchGenRef = useRef(0);
   const loadMoreGenRef = useRef(0);
@@ -203,6 +217,12 @@ export default function AdminBookingsPage() {
     });
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const v = new URLSearchParams(window.location.search).get("requiresManualReview");
+    if (v === "true") setRequiresManualReviewOnly(true);
+  }, []);
+
   const buildParams = useCallback((cursor?: string | null) => {
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
@@ -210,10 +230,11 @@ export default function AdminBookingsPage() {
     if (toDate) params.set("to", toDate);
     if (fromTripDate) params.set("fromTripDate", fromTripDate);
     if (toTripDate) params.set("toTripDate", toTripDate);
+    if (requiresManualReviewOnly) params.set("requiresManualReview", "true");
     params.set("limit", "50");
     if (cursor) params.set("cursor", cursor);
     return params.toString();
-  }, [statusFilter, fromDate, toDate, fromTripDate, toTripDate]);
+  }, [statusFilter, fromDate, toDate, fromTripDate, toTripDate, requiresManualReviewOnly]);
 
   const hasTripFilter = Boolean(fromTripDate || toTripDate);
   const listOrder: "trip" | "created" = hasTripFilter ? "trip" : "created";
@@ -354,13 +375,14 @@ export default function AdminBookingsPage() {
   }, [viewMode, calendarMonth, fromTripDate, toTripDate, statusFilter, calendarPollTick]);
 
   useEffect(() => {
+    if (!autoBackgroundRefresh) return;
     const id = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       void silentMergeFirstPage();
       setCalendarPollTick((t) => t + 1);
     }, ADMIN_BOOKING_VISIBILITY_SLA_MS);
     return () => clearInterval(id);
-  }, [silentMergeFirstPage]);
+  }, [silentMergeFirstPage, autoBackgroundRefresh]);
 
   const scheduleReconcile = useCallback(() => {
     if (reconcileDebounceRef.current) clearTimeout(reconcileDebounceRef.current);
@@ -382,6 +404,19 @@ export default function AdminBookingsPage() {
       if (reconcileDebounceRef.current) clearTimeout(reconcileDebounceRef.current);
     };
   }, [scheduleReconcile]);
+
+  useEffect(() => {
+    if (!selectedBooking?.slotId) {
+      setRescheduleDate("");
+      setRescheduleHour("7");
+      setRescheduleConfirmPricing(false);
+      return;
+    }
+    const parsed = parseSlotId(selectedBooking.slotId);
+    if (!parsed) return;
+    setRescheduleDate(parsed.dateStr);
+    setRescheduleHour(String(parsed.startHour));
+  }, [selectedBooking?.slotId]);
 
   useEffect(() => {
     if (!webhookEventsOpen) return;
@@ -408,8 +443,6 @@ export default function AdminBookingsPage() {
         const list = Array.isArray(data) ? (data as StripeEventItem[]) : [];
         setWebhookEvents(list);
         setWebhookEventsError(null);
-        void silentMergeFirstPage();
-        setCalendarPollTick((t) => t + 1);
       })
       .catch((e) => {
         console.error("[admin] stripe-events diagnostics fetch failed", {
@@ -420,7 +453,7 @@ export default function AdminBookingsPage() {
         setWebhookEventsError(e instanceof Error ? e.message : "Network error");
       })
       .finally(() => setWebhookEventsLoading(false));
-  }, [webhookEventsOpen, webhookEventsRefreshKey, silentMergeFirstPage]);
+  }, [webhookEventsOpen, webhookEventsRefreshKey]);
 
   function exportCsv() {
     const headers = ["Date", "Trip date", "Experience", "Party (guests)", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
@@ -520,16 +553,6 @@ export default function AdminBookingsPage() {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
   }
 
-  /** Shared status badge styling for list and detail (aligns with detail modal). */
-  function getBookingStatusBadgeClass(status: string): string {
-    if (status === "paid" || status === "final_paid") return "bg-green-100 text-green-800";
-    if (status === "canceled" || status === "refunded") return "bg-amber-100 text-amber-800";
-    if (status === "final_failed" || status === "final_requires_action") return "bg-red-100 text-red-800";
-    if (status === "final_due" || status === "deposit_paid") return "bg-blue-100 text-blue-800";
-    if (status === "final_processing") return "bg-yellow-100 text-yellow-800";
-    return "bg-gray-100 text-gray-800";
-  }
-
   const handleBookingClick = async (booking: AdminBookingCalendarItem) => {
     const fromList = list.find((b) => b.id === booking.id);
     if (fromList) {
@@ -564,6 +587,52 @@ export default function AdminBookingsPage() {
         setLoadError(e instanceof Error ? e.message : "Failed to refresh booking");
       }
     })();
+  };
+
+  const submitReschedule = async () => {
+    if (!selectedBooking?.id || !selectedBooking.slotId || !rescheduleDate) return;
+    const parsed = parseSlotId(selectedBooking.slotId);
+    const duration = parsed?.durationHours ?? selectedBooking.durationHours ?? 1;
+    const slotId = buildSlotId(rescheduleDate, Number(rescheduleHour), duration);
+    setRescheduleLoading(true);
+    try {
+      const res = await fetch(`/api/admin/bookings/${selectedBooking.id}/reschedule`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotId, confirmPricingChange: rescheduleConfirmPricing }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        if ((data as { code?: string }).code === "PRICING_CHANGE_REQUIRES_CONFIRMATION") {
+          setRescheduleConfirmPricing(true);
+          const oldTotal = typeof (data as { oldTotalCents?: number }).oldTotalCents === "number" ? (data as { oldTotalCents: number }).oldTotalCents : null;
+          const newTotal = typeof (data as { newTotalCents?: number }).newTotalCents === "number" ? (data as { newTotalCents: number }).newTotalCents : null;
+          setLoadError(
+            oldTotal != null && newTotal != null
+              ? `Pricing changes from ${formatCents(oldTotal)} to ${formatCents(newTotal)}. Enable confirmation and retry.`
+              : ((data as { error?: string }).error ?? "Reschedule conflict.")
+          );
+          return;
+        }
+        setLoadError((data as { error?: string }).error ?? "Slot conflict. Choose a different start.");
+        return;
+      }
+      if (res.status === 400) {
+        setLoadError((data as { error?: string }).error ?? "Invalid start time. Use an allowed operating hour.");
+        return;
+      }
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Failed to reschedule booking");
+      setDetailOpen(false);
+      setSelectedBooking(null);
+      setRescheduleConfirmPricing(false);
+      setRefreshKey((k) => k + 1);
+      setCalendarPollTick((t) => t + 1);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to reschedule booking");
+    } finally {
+      setRescheduleLoading(false);
+    }
   };
 
   const filteredList = useMemo(() => {
@@ -612,10 +681,23 @@ export default function AdminBookingsPage() {
                 <button
                   type="button"
                   className="text-brand-primary font-medium hover:underline"
-                  onClick={() => setRefreshKey((k) => k + 1)}
+                  onClick={() => {
+                    setRefreshKey((k) => k + 1);
+                    setCalendarPollTick((t) => t + 1);
+                  }}
                 >
                   Refresh
                 </button>
+                {" · "}
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoBackgroundRefresh}
+                    onChange={(e) => setAutoBackgroundRefresh(e.target.checked)}
+                    className="rounded border-brand-dark/30"
+                  />
+                  <span>Auto-refresh every {ADMIN_BOOKING_VISIBILITY_SLA_MS / 1000}s (tab visible)</span>
+                </label>
               </p>
             )}
           </div>
@@ -683,6 +765,7 @@ export default function AdminBookingsPage() {
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className={inputClass}
+              disabled={requiresManualReviewOnly}
             >
               <option value="">All</option>
               <option value="paid">Paid (full)</option>
@@ -695,7 +778,25 @@ export default function AdminBookingsPage() {
               <option value="canceled">Canceled</option>
               <option value="refunded">Refunded</option>
             </select>
+            <label className="flex items-center gap-2 text-sm text-brand-dark cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={requiresManualReviewOnly}
+                onChange={(e) => {
+                  setRequiresManualReviewOnly(e.target.checked);
+                  setRefreshKey((k) => k + 1);
+                }}
+                className="rounded border-brand-dark/30"
+              />
+              Manual payment review (pending refunds)
+            </label>
           </div>
+          {requiresManualReviewOnly && (
+            <p className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Showing bookings tied to <code className="text-xs">pendingRefunds</code> rows flagged for review. Clear the checkbox to return to the normal list. URL:{" "}
+              <code className="text-xs">?requiresManualReview=true</code>
+            </p>
+          )}
           <div className="border-l border-brand-dark/15 pl-4 sm:pl-6 flex flex-wrap items-end gap-3 sm:gap-4">
             <span className="text-xs font-medium text-brand-muted uppercase tracking-wide w-full sm:w-auto">Booking date</span>
             <div className="flex items-center gap-2">
@@ -866,7 +967,7 @@ export default function AdminBookingsPage() {
                       </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4">
                         <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${getBookingStatusBadgeClass(b.status)}`}
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${getAdminBookingStatusBadgeClass(b.status)}`}
                         >
                           {b.status}
                         </span>
@@ -895,7 +996,7 @@ export default function AdminBookingsPage() {
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-brand-dark text-sm">{b.customer?.name || "—"}</span>
                   <span
-                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${getBookingStatusBadgeClass(b.status)}`}
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${getAdminBookingStatusBadgeClass(b.status)}`}
                   >
                     {b.status}
                   </span>
@@ -1074,6 +1175,9 @@ export default function AdminBookingsPage() {
           setDetailOpen(open);
           if (!open) {
             setSelectedBooking(null);
+            setRescheduleDate("");
+            setRescheduleHour("7");
+            setRescheduleConfirmPricing(false);
             setCancelConfirmOpen(false);
             setCancelRefund(true);
             setCancelOverridePolicy(false);
@@ -1094,7 +1198,7 @@ export default function AdminBookingsPage() {
             {/* Status + Trip */}
             <div className="flex flex-wrap items-center gap-3 border-b border-brand-dark/10 pb-4">
               <span
-                className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getBookingStatusBadgeClass(selectedBooking.status)}`}
+                className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getAdminBookingStatusBadgeClass(selectedBooking.status)}`}
               >
                 {selectedBooking.status}
               </span>
@@ -1331,6 +1435,52 @@ export default function AdminBookingsPage() {
             {/* Actions */}
             <section className="border-t border-brand-dark/10 pt-4">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-3">Actions</h3>
+              {selectedBooking.slotId && BOOKING_STATUSES_SLOT_TAKEN.has(selectedBooking.status as never) && (
+                <div className="mb-3 rounded-lg border border-brand-dark/10 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Reschedule</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="text-xs text-brand-muted">
+                      Date
+                      <input
+                        type="date"
+                        value={rescheduleDate}
+                        onChange={(e) => setRescheduleDate(e.target.value)}
+                        className="mt-1 block rounded border border-brand-dark/20 px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <label className="text-xs text-brand-muted">
+                      Start hour
+                      <select
+                        value={rescheduleHour}
+                        onChange={(e) => setRescheduleHour(e.target.value)}
+                        className="mt-1 block rounded border border-brand-dark/20 px-2 py-1 text-sm"
+                      >
+                        {Array.from({ length: 13 }, (_, i) => i + 7).map((h) => (
+                          <option key={h} value={String(h)}>{h}:00</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs text-brand-muted flex items-center gap-1.5 mb-1">
+                      <input
+                        type="checkbox"
+                        checked={rescheduleConfirmPricing}
+                        onChange={(e) => setRescheduleConfirmPricing(e.target.checked)}
+                        className="rounded border-brand-dark/30"
+                      />
+                      confirm pricing change
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={rescheduleLoading || !rescheduleDate}
+                      onClick={() => void submitReschedule()}
+                    >
+                      {rescheduleLoading ? "Rescheduling..." : "Reschedule"}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -1360,7 +1510,7 @@ export default function AdminBookingsPage() {
                   className="inline-flex items-center gap-1.5"
                 >
                   <Mail className="w-4 h-4" aria-hidden />
-                  {resendLoading ? "Sending…" : "Resend confirmation email"}
+                  {resendLoading ? "Sending…" : "Resend confirmation (resets dead letter if needed)"}
                 </Button>
                 {["final_due", "final_requires_action", "final_failed"].includes(selectedBooking.status) &&
                   (selectedBooking.stripe?.finalAmountCents ?? 0) > 0 && (

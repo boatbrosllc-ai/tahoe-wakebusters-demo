@@ -19,6 +19,8 @@ import {
   Tag,
   FileSignature,
   FileText,
+  ClipboardList,
+  AlertTriangle,
 } from "lucide-react";
 import { brand } from "@/content/brand";
 import { cn } from "@/lib/utils";
@@ -47,6 +49,13 @@ const navGroups: { label: string; links: { href: string; label: string; icon: Re
       { href: "/admin/customers", label: "Customers", icon: Users },
       { href: "/admin/financials", label: "Financials", icon: DollarSign },
       { href: "/admin/emails", label: "Email notifications", icon: Mail },
+    ],
+  },
+  {
+    label: "Activity",
+    links: [
+      { href: "/admin/audit", label: "Audit log", icon: ClipboardList },
+      { href: "/admin/system-alerts", label: "System alerts", icon: AlertTriangle },
     ],
   },
 ];

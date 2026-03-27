@@ -1,6 +1,6 @@
 import type { Firestore, Transaction, DocumentReference } from "firebase-admin/firestore";
 import type { Booking } from "@/lib/booking/types";
-import { applyFinalPaymentRevenueIncrement } from "@/lib/booking/summary-revenue";
+import { applyFinalPaymentRevenueIncrement, resolveRevenueSummaryMonthDocId } from "@/lib/booking/summary-revenue";
 import { addFinalChargeSuccessOutboxInTransaction } from "@/lib/booking/notification-outbox";
 import { allowsTransition } from "@/lib/booking/transition-booking-status";
 
@@ -25,13 +25,17 @@ export async function transitionToFinalPaid(
   Timestamp: TimestampLike,
   overrideFinalCents?: number
 ): Promise<void> {
+  if (booking.status === "canceled" || booking.status === "refunded") {
+    return;
+  }
   const sb = booking.stripe;
   const isDepositFlow = typeof sb?.depositAmountCents === "number";
   const finalRev = typeof sb?.finalAmountCents === "number" ? sb.finalAmountCents : 0;
   const alreadySummarized = sb?.finalRevenueSummaryApplied === true;
   const revenueForIncrement = overrideFinalCents ?? finalRev;
+  const summaryMonthKey = resolveRevenueSummaryMonthDocId(booking);
   if (isDepositFlow && revenueForIncrement > 0 && !alreadySummarized) {
-    applyFinalPaymentRevenueIncrement(tx, db, FieldValue, revenueForIncrement, booking, bookingId);
+    applyFinalPaymentRevenueIncrement(tx, db, FieldValue, revenueForIncrement, summaryMonthKey, booking, bookingId);
   }
   const transitioning = booking.status !== "final_paid";
   if (transitioning && !allowsTransition(booking.status, "final_paid")) {

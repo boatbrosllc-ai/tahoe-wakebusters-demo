@@ -3,6 +3,8 @@
  * Keep in sync with customer-facing copy (BookingModal, emails).
  */
 
+import type { ExperienceCancellationPolicy } from "@/lib/booking/types";
+
 /** Full policy text for display in booking flow and emails. */
 export const DEFAULT_CANCELLATION_POLICY =
   "Free cancellations until 30 days before the booking start time. " +
@@ -15,3 +17,12 @@ export const DEFAULT_CANCELLATION_POLICY =
 /** Short summary (e.g. for compact UI). */
 export const DEFAULT_CANCELLATION_SUMMARY =
   "Free cancel until 30 days before · 50% refund 15–30 days · No refund within 14 days · No-shows charged in full. Contact us by phone to cancel.";
+
+/** Structured default aligned with {@link DEFAULT_CANCELLATION_POLICY} (snapshot on booking creation). */
+export const DEFAULT_EXPERIENCE_CANCELLATION_POLICY: ExperienceCancellationPolicy = {
+  freeCancelDays: 30,
+  partialRefundDaysStart: 15,
+  partialRefundDaysEnd: 30,
+  noRefundWithinDays: 14,
+  fullText: DEFAULT_CANCELLATION_POLICY,
+};

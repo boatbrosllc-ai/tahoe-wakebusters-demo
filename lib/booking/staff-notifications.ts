@@ -57,8 +57,10 @@ export async function notifyStaffBookingConfirmation(params: {
   boatName: string;
   startAt: string;
   endAt: string;
+  /** When set (e.g. per-reschedule dispatch), must match customer/business confirmation idempotency namespace. */
+  staffConfirmationIdempotencyKey?: string;
 }): Promise<void> {
-  const { bookingId, booking, boatName, startAt, endAt } = params;
+  const { bookingId, booking, boatName, startAt, endAt, staffConfirmationIdempotencyKey } = params;
   const cust = booking.customer;
   const subject = `[New booking] ${esc(boatName)} — ${esc(startAt)}`;
   const html = `
@@ -74,7 +76,7 @@ export async function notifyStaffBookingConfirmation(params: {
   await sendStaffInternalEmail({
     subject,
     htmlContent: html,
-    idempotencyKey: `${bookingId}_staff_booking_confirmation`,
+    idempotencyKey: staffConfirmationIdempotencyKey ?? `${bookingId}_staff_booking_confirmation`,
   });
   await logStaffEmailOk({
     subject,
@@ -131,14 +133,16 @@ export async function notifyStaffReminderSent(params: {
   experienceName: string;
   tripDate: string;
   customerName: string;
+  customerEmail?: string;
 }): Promise<void> {
   const label = params.kind === "1week" ? "1 week" : params.kind === "24h" ? "24h" : "day-of";
   const subject = `[Reminder ${label}] ${esc(params.experienceName)} — ${esc(params.bookingId)}`;
+  const guestEmail = params.customerEmail?.trim() ? params.customerEmail.trim() : "—";
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 16px;">
   <p><strong>Guest reminder sent (${label})</strong> — ${esc(params.bookingId)}</p>
-  <p><strong>Guest:</strong> ${esc(params.customerName)}<br/>
+  <p><strong>Guest:</strong> ${esc(params.customerName)} &lt;${esc(guestEmail)}&gt;<br/>
   <strong>Trip:</strong> ${esc(params.experienceName)} — ${esc(params.tripDate)}</p>
 </body></html>`;
   try {

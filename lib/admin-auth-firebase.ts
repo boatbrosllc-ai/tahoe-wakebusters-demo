@@ -109,6 +109,19 @@ export async function verifyAdminSessionCookie(cookieHeader: string | null): Pro
   return (await getAdminSessionVerifyOutcome(cookieHeader)) === "valid";
 }
 
+export async function getAdminEmailFromSessionCookie(cookieHeader: string | null): Promise<string | null> {
+  try {
+    const sessionCookie = extractAdminSessionCookieValue(cookieHeader);
+    if (!sessionCookie || !safeHasFirebaseConfig()) return null;
+    const app = getFirebaseApp();
+    const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
+    const email = decoded.email?.trim().toLowerCase();
+    return email || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getAdminSessionCookieName(): string {
   return COOKIE_NAME;
 }

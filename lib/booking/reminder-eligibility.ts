@@ -10,7 +10,8 @@ import type { ReminderTemplateKey } from "@/lib/booking/reminder-retry";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
-export const REMINDER_PAID_STATUSES = ["paid", "final_paid", "final_due", "final_requires_action", "final_failed"] as const;
+/** Trip reminders only for confirmed reservations — not unpaid / action-required / failed final-charge states. */
+export const REMINDER_PAID_STATUSES = ["paid", "final_paid", "final_due"] as const;
 
 export function in1WeekWindow(tripStartMs: number, nowMs: number): boolean {
   const diff = tripStartMs - nowMs;
@@ -30,6 +31,11 @@ export function inDayOfWindow(tripStartMs: number, nowMs: number): boolean {
 export function in48hWindow(tripStartMs: number, nowMs: number): boolean {
   const diff = tripStartMs - nowMs;
   return diff >= 46 * ONE_HOUR_MS && diff <= 50 * ONE_HOUR_MS;
+}
+
+/** Fractional hours from `nowMs` until trip start (may be negative if the trip already started). */
+export function getHoursUntilTrip(tripStartMs: number, nowMs: number): number {
+  return (tripStartMs - nowMs) / ONE_HOUR_MS;
 }
 
 type BookingReminderFields = Booking & {

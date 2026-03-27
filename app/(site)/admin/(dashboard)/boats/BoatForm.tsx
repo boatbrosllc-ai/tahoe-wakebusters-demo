@@ -107,6 +107,7 @@ export function BoatForm({
   const [experiences, setExperiences] = useState<ExperienceOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initialSlug = (initialData.slug ?? "").trim().toLowerCase();
 
   useEffect(() => {
     fetch("/api/admin/experiences", { credentials: "include" })
@@ -132,6 +133,16 @@ export function BoatForm({
     setLoading(true);
     setError(null);
     try {
+      const nextSlug = data.slug.trim().toLowerCase();
+      if (boatId && initialSlug && nextSlug && nextSlug !== initialSlug) {
+        const confirmed = window.confirm(
+          "Changing this boat slug will change the public /boats/[slug] URL and may break old links. Continue?"
+        );
+        if (!confirmed) {
+          setLoading(false);
+          return;
+        }
+      }
       const body = formDataToBody(data);
       const result = await onSubmit(body);
       if (result.id) {

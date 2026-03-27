@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { getAdminBookingStatusBadgeClass } from "@/lib/admin/admin-booking-status-badge";
 import {
   DollarSign,
   Calendar,
@@ -22,7 +23,13 @@ type DashboardStats = {
   totalRevenueCents: number;
   revenueThisMonthCents: number;
   revenueLastMonthCents: number;
-  bookingCountTotal: number;
+  /** Firestore count of bookings whose status holds slot inventory. */
+  slotTakenBookingsCount: number;
+  slotTakenBookingStatuses: string[];
+  /** `summaries/revenue` bookingCount — increments with revenue attribution, not raw doc volume. */
+  summaryIncrementedBookingCount: number;
+  /** Count of admin_cancel_summary_adjustment_skipped alerts in operationalAlerts (last 30 days). */
+  adminCancelSummaryAdjustmentSkippedCount?: number;
   uniqueCustomerCount: number;
   listingCount: number;
   /** Booking confirmation emails stuck in notification outbox (dead letter). Resend via booking admin. */
@@ -279,6 +286,26 @@ export default function AdminHomePage() {
               </p>
             </div>
           )}
+          {(stats.adminCancelSummaryAdjustmentSkippedCount ?? 0) > 0 && (
+            <div
+              className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 sm:px-5 sm:py-4"
+              role="alert"
+            >
+              <p className="font-semibold">Canceled bookings may have left revenue summaries overstated</p>
+              <p className="mt-1 text-sm text-amber-900/95">
+                {stats.adminCancelSummaryAdjustmentSkippedCount} recent{" "}
+                <code className="rounded bg-amber-100/80 px-1 text-xs">admin_cancel_summary_adjustment_skipped</code>{" "}
+                event{stats.adminCancelSummaryAdjustmentSkippedCount === 1 ? "" : "s"} in{" "}
+                <code className="rounded bg-amber-100/80 px-1 text-xs">operationalAlerts</code> (last 30 days): a legacy or
+                non-counter booking was canceled without decrementing summary revenue. Review those alerts and correct
+                summaries if needed. Open{" "}
+                <Link href="/admin/bookings" className="font-medium text-amber-950 underline underline-offset-2">
+                  Bookings
+                </Link>{" "}
+                or Firestore operational alerts for details.
+              </p>
+            </div>
+          )}
           {stats.notificationOutboxStats && (
             <div className="rounded-2xl border border-brand-dark/10 bg-white px-4 py-3 text-sm shadow-sm sm:px-5">
               <p className="font-semibold text-brand-dark">Notification outbox</p>
@@ -301,10 +328,15 @@ export default function AdminHomePage() {
                 <code className="rounded bg-red-100/80 px-1">boatId</code>, and are on experiences where a boat is required for calendar occupancy
                 (charter listings, and ticketed departures booked as private charter). This count does{" "}
                 <span className="font-medium">not</span> include shared ticketed tickets (pooled inventory; no per-boat{" "}
-                <code className="rounded bg-red-100/80 px-1">boatId</code> on the booking). If this number is non-zero, run the backfill (
-                <code className="rounded bg-red-100/80 px-1">POST /api/admin/backfill-booking-boat-ids</code> with body{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code> on the booking). Open{" "}
+                <Link href="/admin/backfill-tools" className="font-medium text-red-950 underline underline-offset-2">
+                  Admin → Backfill tools
+                </Link>{" "}
+                to run a dry-run preview, then apply the boatId backfill after explicit confirmation. The API accepts{" "}
+                <code className="rounded bg-red-100/80 px-1">{`{ "dryRun": true }`}</code> / preview via GET for read-only inspection, and{" "}
                 <code className="rounded bg-red-100/80 px-1">{`{ "applyUpdates": true }`}</code> or{" "}
-                <code className="rounded bg-red-100/80 px-1">{`{ "dryRun": false }`}</code>) or assign{" "}
+                <code className="rounded bg-red-100/80 px-1">{`{ "dryRun": false }`}</code> to write inferred{" "}
+                <code className="rounded bg-red-100/80 px-1">boatId</code> on booking documents. You can also assign{" "}
                 <code className="rounded bg-red-100/80 px-1">boatId</code> manually. See docs/BOOKING_AVAILABILITY.md.
               </p>
             </div>
@@ -327,8 +359,9 @@ export default function AdminHomePage() {
             />
             <StatCard
               href="/admin/bookings"
-              label="Bookings"
-              value={stats.bookingCountTotal}
+              label="Bookings (slot-taken statuses)"
+              value={stats.slotTakenBookingsCount}
+              sub={`Statuses: ${stats.slotTakenBookingStatuses.join(", ")}. Summary revenue counter: ${stats.summaryIncrementedBookingCount}.`}
               icon={BookOpen}
             />
             <StatCard
@@ -424,9 +457,7 @@ export default function AdminHomePage() {
                           </div>
                           <span className="text-sm font-semibold text-brand-dark">{formatCents(b.totalCents)}</span>
                           <span
-                            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                              b.status === "paid" ? "bg-emerald-100 text-emerald-800" : "bg-brand-dark/10 text-brand-muted"
-                            }`}
+                            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${getAdminBookingStatusBadgeClass(b.status)}`}
                           >
                             {b.status}
                           </span>

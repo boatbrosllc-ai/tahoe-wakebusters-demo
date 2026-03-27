@@ -4,6 +4,7 @@
  * Booking must be final_due, final_requires_action, or final_failed with stripe.finalAmountCents > 0.
  */
 
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
@@ -12,11 +13,17 @@ import { getFinalPaymentRequestSubject } from "@/lib/booking/reminder-emails";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { formatMoney } from "@/lib/booking/format-money";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
+import { getHoursUntilTrip } from "@/lib/booking/reminder-eligibility";
 import { signManageToken } from "@/lib/booking/manageToken";
 import { bookingEnv } from "@/lib/booking/env";
 import type { Booking } from "@/lib/booking/types";
 import type { Experience } from "@/lib/booking/types";
-import { tryClaimSend, markClaimSent } from "@/lib/booking/notification-claim";
+import {
+  tryClaimAdminOverrideSend,
+  markClaimSent,
+  markClaimFailed,
+  FINAL_PAYMENT_REQUEST_ADMIN_OVERRIDE_CLAIM_KEY,
+} from "@/lib/booking/notification-claim";
 
 const ALLOWED_STATUSES = ["final_due", "final_requires_action", "final_failed"] as const;
 
@@ -85,6 +92,7 @@ export async function POST(
       );
     }
     const { start } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours ?? 2, parsed.startMinute ?? 0);
+    const hoursUntilTrip = getHoursUntilTrip(start.getTime(), Date.now());
     const tripDateStr = start.toLocaleDateString("en-US", {
       weekday: "short",
       month: "short",
@@ -101,43 +109,49 @@ export async function POST(
     const manageToken = signManageToken({ bookingId, tripDateStr: booking.startDateStr });
     const payLink = manageToken ? `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(manageToken)}` : "";
 
-    // If business requirements demand admin overriding the notification claim, reset the claim explicitly
-    // (e.g. in notificationSendClaims) before attempting this resend.
-    const claimed = await tryClaimSend(db, bookingId, "final_payment_request");
+    const claimed = await tryClaimAdminOverrideSend(db, bookingId, FINAL_PAYMENT_REQUEST_ADMIN_OVERRIDE_CLAIM_KEY);
     if (!claimed) {
       return NextResponse.json(
-        { error: "Final payment request was already sent or another send is in progress" },
+        { error: "Another admin resend is in progress; try again in a few minutes" },
         { status: 409 }
       );
     }
 
-    const { providerMessageId } = await sendFinalPaymentRequestEmail(
-      {
+    const adminResendIdempotencyKey = `${bookingId}_final_payment_request_admin_${randomUUID()}`;
+    try {
+      const { providerMessageId } = await sendFinalPaymentRequestEmail(
+        {
+          to: toEmail,
+          customerName,
+          experienceName,
+          tripDate: tripDateStr,
+          startTime: startTimeStr,
+          amountFormatted: formatMoney(finalCents),
+          payLink,
+          hoursUntilTrip,
+        },
+        { idempotencyKey: adminResendIdempotencyKey }
+      );
+      await markClaimSent(db, bookingId, FINAL_PAYMENT_REQUEST_ADMIN_OVERRIDE_CLAIM_KEY, { providerMessageId });
+      await logEmailSent({
         to: toEmail,
-        customerName,
-        experienceName,
-        tripDate: tripDateStr,
-        startTime: startTimeStr,
-        amountFormatted: formatMoney(finalCents),
-        payLink,
-      },
-      { idempotencyKey: `${bookingId}_final_payment_request_resend` }
-    );
-    await markClaimSent(db, bookingId, "final_payment_request", { providerMessageId });
-    await logEmailSent({
-      to: toEmail,
-      toName: customerName,
-      templateId: "final_payment_request",
-      subject: getFinalPaymentRequestSubject(),
-      bookingId,
-    }).catch((err) => console.error("[resend-final-payment-request] logEmailSent failed", err));
+        toName: customerName,
+        templateId: "final_payment_request",
+        subject: getFinalPaymentRequestSubject(),
+        bookingId,
+      }).catch((err) => console.error("[resend-final-payment-request] logEmailSent failed", err));
 
-    await bookingSnap.ref.update({
-      finalPaymentRequestSentAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-    });
+      await bookingSnap.ref.update({
+        finalPaymentRequestSentAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
 
-    return NextResponse.json({ ok: true, message: "Final payment request email sent" });
+      return NextResponse.json({ ok: true, message: "Final payment request email sent" });
+    } catch (sendErr) {
+      const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      await markClaimFailed(db, bookingId, FINAL_PAYMENT_REQUEST_ADMIN_OVERRIDE_CLAIM_KEY, errMsg);
+      throw sendErr;
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

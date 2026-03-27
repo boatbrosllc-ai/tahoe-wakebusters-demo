@@ -5,7 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { confirmationOutboxDocId } from "@/lib/booking/notification-outbox";
 import { sendBookingConfirmationEmail } from "@/lib/booking/brevo";
 import { logEmailSent } from "@/lib/booking/email-log";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
@@ -32,6 +33,22 @@ export async function POST(
 
   try {
     const db = getDb();
+    const { Timestamp, FieldValue } = getFirestoreExports();
+    const outboxRef = db.collection("notificationOutbox").doc(confirmationOutboxDocId(bookingId));
+    const outboxSnap = await outboxRef.get();
+    if (outboxSnap.exists && (outboxSnap.data() as { status?: string }).status === "dead_letter") {
+      await outboxRef.update({
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAt: Timestamp.now(),
+        lastError: FieldValue.delete(),
+        claimExpiresAt: FieldValue.delete(),
+        claimedAt: FieldValue.delete(),
+        claimedBy: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
     const bookingSnap = await db.collection("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 });

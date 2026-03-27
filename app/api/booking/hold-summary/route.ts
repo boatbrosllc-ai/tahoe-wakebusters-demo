@@ -6,7 +6,7 @@ import { verifyReleaseToken } from "@/lib/booking/releaseToken";
 import { verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
     const rl = await checkRateLimitPublicRead(getClientKey(request));
     if (!rl.allowed) {
@@ -17,13 +17,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const holdId = request.nextUrl.searchParams.get("holdId")?.trim();
+    const body = await request.json().catch(() => ({}));
+    const holdId = typeof body.holdId === "string" ? body.holdId.trim() : "";
     if (!holdId) {
       return NextResponse.json({ error: "holdId is required" }, { status: 400 });
     }
 
-    const releaseToken = request.nextUrl.searchParams.get("release_token")?.trim() ?? "";
-    const receiptClaimToken = request.nextUrl.searchParams.get("receipt_claim_token")?.trim() ?? "";
+    const releaseToken = typeof body.release_token === "string" ? body.release_token.trim() : "";
+    const receiptClaimToken =
+      typeof body.receipt_claim_token === "string" ? body.receipt_claim_token.trim() : "";
 
     const isAdmin = await verifyAdminSessionCookie(request.headers.get("cookie"));
     let authorized = isAdmin;

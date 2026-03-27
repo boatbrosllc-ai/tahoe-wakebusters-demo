@@ -1,13 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getStripe } from "@/lib/booking/stripe-client";
 
-function parsePatchBody(body: unknown): { status: "resolved"; notes?: string } | null {
+function parsePatchBody(
+  body: unknown
+): {
+  status: "resolved";
+  notes?: string;
+  force?: boolean;
+  resolvedManuallyReason?: string;
+} | null {
   if (body == null || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
   if (o.status !== "resolved") return null;
   const notes = typeof o.notes === "string" ? o.notes.trim() : undefined;
-  return { status: "resolved", ...(notes ? { notes } : {}) };
+  const force = o.force === true;
+  const resolvedManuallyReason =
+    typeof o.resolvedManuallyReason === "string" ? o.resolvedManuallyReason.trim() : undefined;
+  return {
+    status: "resolved",
+    ...(notes ? { notes } : {}),
+    ...(force ? { force: true } : {}),
+    ...(resolvedManuallyReason ? { resolvedManuallyReason } : {}),
+  };
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -27,7 +43,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
   const input = parsePatchBody(body);
   if (!input) {
-    return NextResponse.json({ error: "Body must be { status: \"resolved\", notes?: string }" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Body must be { status: \"resolved\", notes?, force?, resolvedManuallyReason? }" },
+      { status: 400 }
+    );
+  }
+  if (input.force === true && !input.resolvedManuallyReason) {
+    return NextResponse.json(
+      { error: "force: true requires resolvedManuallyReason (auditable operator note)." },
+      { status: 400 }
+    );
   }
 
   try {
@@ -38,15 +63,44 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (!snap.exists) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const data = snap.data() as { status?: string };
+    const data = snap.data() as { status?: string; paymentIntentId?: string };
     if (data.status === "resolved") {
       return NextResponse.json({ ok: true, id, alreadyResolved: true });
     }
-    await ref.update({
+
+    const paymentIntentId = typeof data.paymentIntentId === "string" ? data.paymentIntentId.trim() : "";
+    if (paymentIntentId && process.env.STRIPE_SECRET_KEY && input.force !== true) {
+      const stripe = getStripe();
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+      const piAmt = pi as unknown as { amount_received?: number; amount_refunded?: number };
+      const amountReceived = typeof piAmt.amount_received === "number" ? piAmt.amount_received : 0;
+      const amountRefunded = typeof piAmt.amount_refunded === "number" ? piAmt.amount_refunded : 0;
+      if (amountRefunded < amountReceived) {
+        return NextResponse.json(
+          {
+            error:
+              "Stripe does not show a full refund on this PaymentIntent yet. Complete the refund in Stripe first, then retry. To override, send { force: true, resolvedManuallyReason: \"…\" }.",
+            paymentIntentId,
+            amountReceived,
+            amountRefunded,
+            remainingRefundableCents: Math.max(0, amountReceived - amountRefunded),
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const patch: Record<string, unknown> = {
       status: "resolved",
       resolvedAt: Timestamp.now(),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
-    });
+    };
+    if (input.force === true && input.resolvedManuallyReason) {
+      patch.resolvedManually = true;
+      patch.resolvedManuallyReason = input.resolvedManuallyReason;
+    }
+
+    await ref.update(patch);
     return NextResponse.json({ ok: true, id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

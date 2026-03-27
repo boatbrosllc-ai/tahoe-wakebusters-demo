@@ -12,6 +12,7 @@ import {
   postCompleteAfterPaymentWithTimeout,
 } from "@/lib/booking/complete-after-payment-client";
 import { SESSION_HOLD_ID_KEY, type ModalHoldRecoveryPayloadV1 } from "@/components/site/useHoldCreation";
+import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
 
 function receiptClaimForCompleteAfterPayment(receiptTokenFromUrl: string | null): string | null {
   const u = receiptTokenFromUrl?.trim();
@@ -445,6 +446,17 @@ function BookingSuccessContent() {
       setError("missing");
     }
   }, [sessionId, paymentIntentId, receiptTokenParam, fetchReceipt, redirectStatus]);
+
+  useEffect(() => {
+    if (loading || error || !data) return;
+    const bookingId = typeof data.bookingId === "string" && data.bookingId.trim() ? data.bookingId.trim() : null;
+    const rt =
+      (typeof data.receiptToken === "string" && data.receiptToken.trim()) ||
+      (storedReceiptToken && storedReceiptToken.trim()) ||
+      null;
+    if (!bookingId && !rt) return;
+    trackBookingCompletedOnce({ bookingId, receiptToken: rt });
+  }, [loading, error, data, storedReceiptToken]);
 
   if (loading) {
     return (

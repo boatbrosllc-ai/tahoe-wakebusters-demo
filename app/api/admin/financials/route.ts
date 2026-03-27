@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { QueryDocumentSnapshot, DocumentData } from "firebase-admin/firestore";
+import { FieldPath, type QueryDocumentSnapshot, type DocumentData } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
@@ -7,6 +7,7 @@ import type { Booking } from "@/lib/booking/types";
 import {
   bookingCountsTowardActiveRevenueTotals,
   totalSummaryAttributedRevenueCents,
+  EXPERIENCE_SUMMARY_DOC_PREFIX,
 } from "@/lib/booking/summary-revenue";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
@@ -18,18 +19,6 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
 const PAGE_SIZE = 100;
 const MAX_RECENT_PAGES = 20;
 
-/** Month keys `revenue_YYYY_MM` between two dates (inclusive of month boundaries). */
-function monthKeysBetween(from: Date, to: Date): string[] {
-  const keys: string[] = [];
-  const cur = new Date(from.getFullYear(), from.getMonth(), 1);
-  const end = new Date(to.getFullYear(), to.getMonth(), 1);
-  while (cur <= end) {
-    keys.push(`revenue_${cur.getFullYear()}_${String(cur.getMonth() + 1).padStart(2, "0")}`);
-    cur.setMonth(cur.getMonth() + 1);
-  }
-  return keys;
-}
-
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -39,7 +28,9 @@ export async function GET(request: NextRequest) {
     const { Timestamp } = getFirestoreExports();
     const fromParam = request.nextUrl.searchParams.get("from");
     const toParam = request.nextUrl.searchParams.get("to");
-    const experienceIdFilter = request.nextUrl.searchParams.get("experienceId") ?? undefined;
+    const experienceIdFilterRaw = request.nextUrl.searchParams.get("experienceId")?.trim();
+    const experienceIdFilter = experienceIdFilterRaw || undefined;
+    const hasDateRange = Boolean(fromParam || toParam);
 
     const fromDateVal = fromParam ? new Date(fromParam) : null;
     const toDateVal = toParam ? new Date(toParam) : null;
@@ -64,17 +55,44 @@ export async function GET(request: NextRequest) {
       ? ((thisMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0)
       : 0;
 
+    type ByExpAgg = { revenueCents: number; bookingCount: number };
+    const byExperienceInRange = new Map<string, ByExpAgg>();
+
     let revenueInRangeCents: number | undefined;
-    if (!experienceIdFilter && (fromDateVal || toDateVal)) {
-      const fromD = fromDateVal ?? new Date(0);
-      const toD = toDateVal ?? new Date(8640000000000000);
-      const keys = monthKeysBetween(fromD, toD);
-      const monthSnaps = await Promise.all(keys.map((k) => db.collection("summaries").doc(k).get()));
+    if (fromDateVal || toDateVal) {
+      let sumQuery = db.collection("bookings").orderBy("createdAt", "desc");
+      if (experienceIdFilter) {
+        sumQuery = sumQuery.where("experienceId", "==", experienceIdFilter);
+      }
+      if (fromDateVal) {
+        sumQuery = sumQuery.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+      }
+      if (toDateVal) {
+        sumQuery = sumQuery.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
+      }
       revenueInRangeCents = 0;
-      for (const ms of monthSnaps) {
-        if (ms.exists) {
-          revenueInRangeCents += (ms.data() as { revenueCents?: number })?.revenueCents ?? 0;
+      let sumCursor: QueryDocumentSnapshot<DocumentData> | null = null;
+      for (;;) {
+        let q = sumQuery.limit(PAGE_SIZE);
+        if (sumCursor) q = q.startAfter(sumCursor);
+        const sumSnap = await q.get();
+        if (sumSnap.empty) break;
+        for (const d of sumSnap.docs) {
+          const b = d.data() as Booking;
+          if (bookingCountsTowardActiveRevenueTotals(b)) {
+            const attributed = totalSummaryAttributedRevenueCents(b);
+            revenueInRangeCents += attributed;
+            const eid = typeof b.experienceId === "string" ? b.experienceId.trim() : "";
+            if (eid) {
+              const cur = byExperienceInRange.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
+              cur.revenueCents += attributed;
+              cur.bookingCount += 1;
+              byExperienceInRange.set(eid, cur);
+            }
+          }
         }
+        if (sumSnap.size < PAGE_SIZE) break;
+        sumCursor = sumSnap.docs[sumSnap.docs.length - 1];
       }
     }
 
@@ -84,7 +102,6 @@ export async function GET(request: NextRequest) {
       if (toDateVal) baseQuery = baseQuery.where("createdAt", "<=", Timestamp.fromDate(toDateEndOfDay(toDateVal)));
     }
 
-    const byExperienceMap = new Map<string, { revenueCents: number; bookingCount: number }>();
     const experienceIds = new Set<string>();
     const recent: {
       id: string;
@@ -126,14 +143,6 @@ export async function GET(request: NextRequest) {
         const matchesExperience = !experienceIdFilter || b.experienceId === experienceIdFilter;
         const include = inRange && matchesExperience;
 
-        if (bookingCountsTowardActiveRevenueTotals(b) && include) {
-          const totalCentsForRevenue = totalSummaryAttributedRevenueCents(b);
-          const prev = byExperienceMap.get(eid) ?? { revenueCents: 0, bookingCount: 0 };
-          byExperienceMap.set(eid, {
-            revenueCents: prev.revenueCents + totalCentsForRevenue,
-            bookingCount: prev.bookingCount + 1,
-          });
-        }
         if (include) {
           recent.push({
             id: d.id,
@@ -169,16 +178,87 @@ export async function GET(request: NextRequest) {
         row.experienceName = experienceNamesFinal.get(row.experienceName) ?? row.experienceName;
       }
     });
-    const byExperience = Array.from(byExperienceMap.entries()).map(([experienceId, { revenueCents, bookingCount }]) => ({
-      experienceId,
-      experienceName: experienceNamesFinal.get(experienceId) ?? experienceId,
-      revenueCents,
-      bookingCount,
-    }));
 
-    if (experienceIdFilter && (fromDateVal || toDateVal)) {
-      revenueInRangeCents = byExperience.find((r) => r.experienceId === experienceIdFilter)?.revenueCents ?? 0;
+    let byExperience: {
+      experienceId: string;
+      experienceName: string;
+      revenueCents: number;
+      bookingCount: number;
+    }[];
+    /** Whether `byExperience` follows the active createdAt date filters or is all-time Firestore summaries. */
+    let byExperienceScope: "filtered" | "all_time";
+
+    if (fromDateVal || toDateVal) {
+      byExperienceScope = "filtered";
+      const expIdsForNames = Array.from(byExperienceInRange.keys());
+      await Promise.all(
+        expIdsForNames.map(async (id) => {
+          if (!experienceNamesFinal.has(id)) {
+            const exp = await db.collection("experiences").doc(id).get();
+            if (exp.exists) experienceNamesFinal.set(id, (exp.data() as { title?: string }).title ?? id);
+          }
+        })
+      );
+      byExperience = expIdsForNames
+        .map((experienceId) => {
+          const agg = byExperienceInRange.get(experienceId)!;
+          return {
+            experienceId,
+            experienceName: experienceNamesFinal.get(experienceId) ?? experienceId,
+            revenueCents: agg.revenueCents,
+            bookingCount: agg.bookingCount,
+          };
+        })
+        .sort((a, b) => b.revenueCents - a.revenueCents);
+    } else {
+      byExperienceScope = "all_time";
+      let expSummaryDocs: FirebaseFirestore.QueryDocumentSnapshot<DocumentData>[] = [];
+      try {
+        const expSummarySnap = await db
+          .collection("summaries")
+          .orderBy(FieldPath.documentId())
+          .startAt(EXPERIENCE_SUMMARY_DOC_PREFIX)
+          .endAt(`${EXPERIENCE_SUMMARY_DOC_PREFIX}\uf8ff`)
+          .get();
+        expSummaryDocs = expSummarySnap.docs;
+      } catch (e) {
+        console.warn("[financials] experience summary range query failed; returning empty byExperience", e);
+      }
+
+      const expSummaryIds = expSummaryDocs.map((doc) =>
+        doc.id.startsWith(EXPERIENCE_SUMMARY_DOC_PREFIX)
+          ? doc.id.slice(EXPERIENCE_SUMMARY_DOC_PREFIX.length)
+          : doc.id
+      );
+      await Promise.all(
+        expSummaryIds.map(async (id) => {
+          if (!experienceNamesFinal.has(id)) {
+            const exp = await db.collection("experiences").doc(id).get();
+            if (exp.exists) experienceNamesFinal.set(id, (exp.data() as { title?: string }).title ?? id);
+          }
+        })
+      );
+
+      byExperience = expSummaryDocs.map((doc) => {
+        const experienceId = doc.id.startsWith(EXPERIENCE_SUMMARY_DOC_PREFIX)
+          ? doc.id.slice(EXPERIENCE_SUMMARY_DOC_PREFIX.length)
+          : doc.id;
+        const data = doc.data() as { revenueCents?: number; bookingCount?: number };
+        return {
+          experienceId,
+          experienceName: experienceNamesFinal.get(experienceId) ?? experienceId,
+          revenueCents: data.revenueCents ?? 0,
+          bookingCount: data.bookingCount ?? 0,
+        };
+      });
     }
+
+    const sumByExperienceRevenue = byExperience.reduce((s, r) => s + r.revenueCents, 0);
+    const reconThreshold = Math.max(100, Math.floor(totalRevenueCents * 0.001));
+    const reconciliationWarning =
+      Math.abs(totalRevenueCents - sumByExperienceRevenue) > reconThreshold
+        ? `Sum of per-experience summary revenue (${sumByExperienceRevenue}¢) differs from global summaries/revenue total (${totalRevenueCents}¢) by more than the tolerance. Legacy bookings or manual adjustments may explain the gap.`
+        : undefined;
 
     let stripeData: {
       balanceAvailableCents: number;
@@ -187,6 +267,34 @@ export async function GET(request: NextRequest) {
       recentTransactions: { id: string; amount: number; net: number; fee: number; created: number; type: string; description?: string }[];
       stripeError?: string;
     } | null = null;
+
+    const finalDueMissingStripe: {
+      id: string;
+      customerEmail: string;
+      finalChargeAt: string | null;
+      missingFields: string[];
+    }[] = [];
+    try {
+      const fdSnap = await db.collection("bookings").where("status", "==", "final_due").limit(200).get();
+      for (const d of fdSnap.docs) {
+        const b = d.data() as Booking;
+        const customerId = b.stripe?.customerId?.trim();
+        const pmId = b.stripe?.paymentMethodId?.trim();
+        if (customerId && pmId) continue;
+        const missingFields: string[] = [];
+        if (!customerId) missingFields.push("stripe.customerId");
+        if (!pmId) missingFields.push("stripe.paymentMethodId");
+        const fc = b.finalChargeAt as { toDate?: () => Date } | undefined;
+        finalDueMissingStripe.push({
+          id: d.id,
+          customerEmail: b.customer?.email ?? "",
+          finalChargeAt: fc?.toDate?.()?.toISOString() ?? null,
+          missingFields,
+        });
+      }
+    } catch (e) {
+      console.error("[financials] final_due missing stripe scan failed", e);
+    }
 
     if (process.env.STRIPE_SECRET_KEY) {
       try {
@@ -234,10 +342,18 @@ export async function GET(request: NextRequest) {
       recentListTruncated: truncated,
       recentListMaxPages: MAX_RECENT_PAGES,
       ...(truncated && {
-        truncationWarning: `Booking list aggregation stopped after ${MAX_RECENT_PAGES} pages (${MAX_RECENT_PAGES * PAGE_SIZE} rows). Totals above use summary documents; narrow date filters for full detail.`,
+        truncationWarning: `Recent transactions list stopped after ${MAX_RECENT_PAGES} pages (${MAX_RECENT_PAGES * PAGE_SIZE} rows). Revenue in selected range still reflects every matching booking document; narrow date filters if you need the full recent list.`,
       }),
+      ...(hasDateRange &&
+        revenueInRangeCents !== undefined && {
+          revenueInRangeDataSourceDisclaimer:
+            "Attributed revenue in range sums payment-attributed amounts from booking documents whose createdAt falls strictly between your from/to dates (slot-taken statuses only), matching admin revenue summary rules (deposit + final when applicable).",
+        }),
       byExperience,
+      byExperienceScope,
+      ...(reconciliationWarning && { reconciliationWarning }),
       stripe: stripeData,
+      finalDueMissingStripe,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { bookingLookbackDaysFromMaxDuration, addCalendarDaysToDateStr, bookingIntervalMsFromSlotFields, intervalsOverlapMs } from "@/lib/booking/booking-interval";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 
 export type BlockConflict = { type: "hold" | "booking"; id: string };
 
@@ -17,8 +18,8 @@ export async function findBlockConflicts(params: {
   const boatId = typeof params.boatId === "string" && params.boatId.trim() ? params.boatId.trim() : null;
   const blockStartMs = blockStart.getTime();
   const blockEndMs = blockEnd.getTime();
-  const startDateStr = blockStart.toISOString().slice(0, 10);
-  const endDateStr = blockEnd.toISOString().slice(0, 10);
+  const startDateStr = getDateStrInSlotTimezone(blockStart);
+  const endDateStr = getDateStrInSlotTimezone(blockEnd);
   const lookbackDays = bookingLookbackDaysFromMaxDuration(24 * 14);
   const startDateLower = addCalendarDaysToDateStr(startDateStr, -lookbackDays);
   const startDateUpper = addCalendarDaysToDateStr(endDateStr, lookbackDays);

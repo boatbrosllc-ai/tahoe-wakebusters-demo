@@ -13,10 +13,17 @@ import {
   processNextPendingDiscountLimitExceeded,
   processNextPendingFinalChargeSuccess,
   processNextPendingWaiverInvite,
+  processNextPendingAmountIntegrityMismatchCustomer,
+  processNextPendingPaymentUnderManualReviewCustomer,
   processStaleClaims,
   alertOnStalledOutbox,
   getNotificationOutboxStats,
+  resetStaleDeadLetterBookingConfirmations,
 } from "@/lib/booking/notification-outbox";
+import {
+  alertOnStalePendingWaiverCreation,
+  processPendingWaiverCreationQueue,
+} from "@/lib/booking/pending-waiver-reconciliation";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { processStaleReconcilingPayments } from "@/lib/booking/reconciling-payments";
@@ -34,6 +41,9 @@ export async function POST(request: NextRequest) {
   const claimerId = randomUUID();
   const staleClaimsReset = await processStaleClaims(db, { currentClaimerId: claimerId });
   await alertOnStalledOutbox(db, STALLED_OUTBOX_ALERT_THRESHOLD_MINUTES);
+  const deadLetterResetCount = await resetStaleDeadLetterBookingConfirmations(db);
+  const pendingWaiverQueue = await processPendingWaiverCreationQueue(db);
+  await alertOnStalePendingWaiverCreation(db);
   const outboxStats = await getNotificationOutboxStats(db);
   const reconcilingPayments = await processStaleReconcilingPayments(db);
   const staleStripeEvents = await alertOnStripeEventsProcessingStale(db, STRIPE_EVENTS_PROCESSING_STALE_MINUTES);
@@ -92,10 +102,33 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (failedCount > 0 || finalChargeFailedCount > 0 || discountLimitFailedCount > 0 || waiverInviteFailedCount > 0) {
+  let holdNoticeSent = 0;
+  let holdNoticeFailed = 0;
+  for (let i = 0; i < MAX_PER_RUN; i++) {
+    const a = await processNextPendingAmountIntegrityMismatchCustomer(db, claimerId);
+    const b = await processNextPendingPaymentUnderManualReviewCustomer(db, claimerId);
+    for (const r of [a, b]) {
+      if (r === "sent") holdNoticeSent++;
+      else if (r === "failed" || r === "dead_letter") holdNoticeFailed++;
+    }
+    if (a === "none" && b === "none") break;
+  }
+
+  if (
+    failedCount > 0 ||
+    finalChargeFailedCount > 0 ||
+    discountLimitFailedCount > 0 ||
+    waiverInviteFailedCount > 0 ||
+    holdNoticeFailed > 0
+  ) {
     await writeOperationalAlert({
       type: "confirmation_outbox_cron_failures",
-      failedCount: failedCount + finalChargeFailedCount + discountLimitFailedCount + waiverInviteFailedCount,
+      failedCount:
+        failedCount +
+        finalChargeFailedCount +
+        discountLimitFailedCount +
+        waiverInviteFailedCount +
+        holdNoticeFailed,
       source: "process-confirmation-outbox",
     });
   }
@@ -103,6 +136,10 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     staleClaimsReset,
+    deadLetterResetCount,
+    pendingWaiverQueue,
+    holdNoticeSent,
+    holdNoticeFailed,
     sentCount,
     failedCount,
     noneCount,

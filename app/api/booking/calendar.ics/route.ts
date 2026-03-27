@@ -23,6 +23,21 @@ import { verifyReceiptToken } from "@/lib/booking/receiptToken";
 
 const TZ = "America/Chicago";
 
+function bookingIncludedInOperatorIcalFeed(status: string | undefined): boolean {
+  if (!status) return false;
+  if (BOOKING_STATUSES_SLOT_TAKEN.has(status as never)) return true;
+  return status === "final_failed" || status === "final_requires_action";
+}
+
+function icalSummaryForBooking(experienceName: string, b: Booking): string {
+  const paymentIssue = b.status === "final_failed" || b.status === "final_requires_action";
+  const namePart = escapeIcalText(b.customer?.name?.trim() || "Guest");
+  if (paymentIssue) {
+    return `${escapeIcalText(experienceName)} – [PAYMENT ISSUE] ${namePart}`;
+  }
+  return `${escapeIcalText(experienceName)} – ${namePart}`;
+}
+
 /** Format a Date in America/Chicago for iCal TZID (YYYYMMDDTHHmmSS). */
 function formatIcalLocal(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -73,7 +88,7 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Not found", { status: 404 });
     }
     const b = doc.data() as Booking;
-    if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) {
+    if (!bookingIncludedInOperatorIcalFeed(b.status)) {
       return new NextResponse("Not found", { status: 404 });
     }
     const expId = b.experienceId ?? "";
@@ -96,7 +111,7 @@ export async function GET(request: NextRequest) {
     } catch {
       return new NextResponse("Invalid slot times", { status: 400 });
     }
-    const summary = `${escapeIcalText(experienceName)} – ${escapeIcalText(b.customer?.name?.trim() || "Guest")}`;
+    const summary = icalSummaryForBooking(experienceName, b);
     const dtStart = formatIcalLocal(start);
     const dtEnd = formatIcalLocal(end);
     const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();
@@ -205,7 +220,7 @@ export async function GET(request: NextRequest) {
       if (seen.has(doc.id)) continue;
       seen.add(doc.id);
       const data = doc.data() as Booking;
-      if (!BOOKING_STATUSES_SLOT_TAKEN.has(data.status as never)) continue;
+      if (!bookingIncludedInOperatorIcalFeed(data.status)) continue;
       bookings.push({ id: doc.id, data });
     }
   }
@@ -233,7 +248,7 @@ export async function GET(request: NextRequest) {
         if (seen.has(doc.id)) continue;
         const data = doc.data() as Booking;
         if (data.startDateStr) continue;
-        if (!BOOKING_STATUSES_SLOT_TAKEN.has(data.status as never)) continue;
+        if (!bookingIncludedInOperatorIcalFeed(data.status)) continue;
         const parsed = parseSlotIdRelaxed(data.slotId ?? "");
         const dateStr = parsed?.dateStr ?? null;
         if (!dateStr || dateStr < fromStr || dateStr > toStr) continue;
@@ -289,7 +304,7 @@ export async function GET(request: NextRequest) {
     } catch {
       continue;
     }
-    const summary = `${escapeIcalText(experienceName)} – ${escapeIcalText(b.customer?.name?.trim() || "Guest")}`;
+    const summary = icalSummaryForBooking(experienceName, b);
     const dtStart = formatIcalLocal(start);
     const dtEnd = formatIcalLocal(end);
     const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();

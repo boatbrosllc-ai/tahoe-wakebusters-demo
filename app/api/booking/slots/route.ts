@@ -18,8 +18,10 @@ import {
   shouldUseWakeBoardCharterGrid,
 } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants, allowBoatTypeForSlug, inferSlugFromTitle, getSlugForBoatTypeFilter, isWatersportsSlug, inferSlugFromAssignedBoats, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
-import { sendStaffInternalEmail } from "@/lib/booking/brevo";
+import {
+  operationalAlertDedupeDocId,
+  writeOperationalAlertIfNewDocId,
+} from "@/lib/booking/operational-alerts";
 import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { Slot } from "@/lib/booking/types";
@@ -57,6 +59,11 @@ const NO_STORE_HEADERS = {
 
 const SLOTS_FIREBASE_HINT =
   "Slots require Firebase. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY (or FIREBASE_SERVICE_ACCOUNT_JSON_PATH) in your deployment environment.";
+
+/** Dedupe key for operationalAlerts from this route (stable per alert type + scope + UTC calendar day). */
+function slotsAlertDocId(alertType: string, scopeKey: string, utcDay: string): string {
+  return operationalAlertDedupeDocId([alertType, scopeKey, utcDay]);
+}
 
 function blockOverlapsWindowMs(
   blockStartMs: number,
@@ -185,10 +192,17 @@ async function getHoldSnapshotsOrdered(
   return combined;
 }
 
-/** Returns true if the slot date is within the experience's seasonal window (specific dates or month range). Pass slotDateStr (YYYY-MM-DD) when available so calendar date is used; otherwise slotStart is used. */
+/**
+ * GET is read-only on the normal path (happy calendar load): no Firestore writes to operationalAlerts,
+ * no staff email, no slot/hold mutations. Partial or degraded modes (e.g. blocks index missing, holds
+ * query failed) may call {@link writeOperationalAlertIfNewDocId} at most once per alert type per scope
+ * per UTC day (content-addressed doc id). Staff email for missing booking boatId is handled by cron
+ * POST /api/admin/cron/alert-missing-booking-boat-ids instead of this handler.
+ */
 export async function GET(request: NextRequest) {
   try {
     const generatedAtIso = new Date().toISOString();
+    const alertUtcDay = generatedAtIso.slice(0, 10);
     if (
       process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT === "true" &&
       process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT !== "true"
@@ -645,12 +659,15 @@ export async function GET(request: NextRequest) {
         );
         const blocksQueryFailed = blocksIncomplete;
         if (blocksIncomplete) {
-          void writeOperationalAlert({
-            type: "slots_blocks_query_incomplete",
-            source: "app/api/booking/slots",
-            experienceId,
-            hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
-          }).catch(() => {});
+          void writeOperationalAlertIfNewDocId(
+            slotsAlertDocId("slots_blocks_query_incomplete", experienceId, alertUtcDay),
+            {
+              type: "slots_blocks_query_incomplete",
+              source: "app/api/booking/slots",
+              experienceId,
+              hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
+            },
+          );
         }
         const tBlockRanges: { start: number; end: number }[] = [];
         const tBlockRangesSeen = new Set<string>();
@@ -726,19 +743,25 @@ export async function GET(request: NextRequest) {
         const ticketedPartial =
           legacyQueryHitLimit || holdsQueryFailed || blocksQueryFailed || legacyHoldsScanCapHit;
         if (holdsQueryFailed) {
-          void writeOperationalAlert({
-            type: "slots_ticketed_holds_query_failed",
-            source: "app/api/booking/slots",
-            experienceId,
-            hint: "Ticketed holds query or pagination failed; open slots marked blocked conservatively. Check Firestore indexes and holds collection health.",
-          }).catch(() => {});
+          void writeOperationalAlertIfNewDocId(
+            slotsAlertDocId("slots_ticketed_holds_query_failed", experienceId, alertUtcDay),
+            {
+              type: "slots_ticketed_holds_query_failed",
+              source: "app/api/booking/slots",
+              experienceId,
+              hint: "Ticketed holds query or pagination failed; open slots marked blocked conservatively. Check Firestore indexes and holds collection health.",
+            },
+          );
         } else if (legacyHoldsScanCapHit) {
-          void writeOperationalAlert({
-            type: "legacy_holds_scan_cap_hit",
-            source: "app/api/booking/slots",
-            experienceId,
-            hint: "Legacy holds scan hit LEGACY_BOOKING_SCAN_LIMIT; complete startDateStr backfill on holds.",
-          }).catch(() => {});
+          void writeOperationalAlertIfNewDocId(
+            slotsAlertDocId("legacy_holds_scan_cap_hit", experienceId, alertUtcDay),
+            {
+              type: "legacy_holds_scan_cap_hit",
+              source: "app/api/booking/slots",
+              experienceId,
+              hint: "Legacy holds scan hit LEGACY_BOOKING_SCAN_LIMIT; complete startDateStr backfill on holds.",
+            },
+          );
         }
         const ticketedHeaders = {
           ...NO_STORE_HEADERS,
@@ -782,12 +805,15 @@ export async function GET(request: NextRequest) {
         }
       }
       if (isWatersportsSlug(slugEffective) && boatIds.length === 0) {
-        void writeOperationalAlert({
-          type: "slots_watersports_no_eligible_boats",
-          source: "app/api/booking/slots",
-          experienceId,
-          hint: "No eligible wake boats linked. Ensure isListingBoat=true, boatType=wake, and experienceIds contains this experience id/alias.",
-        }).catch(() => {});
+        void writeOperationalAlertIfNewDocId(
+          slotsAlertDocId("slots_watersports_no_eligible_boats", experienceId, alertUtcDay),
+          {
+            type: "slots_watersports_no_eligible_boats",
+            source: "app/api/booking/slots",
+            experienceId,
+            hint: "No eligible wake boats linked. Ensure isListingBoat=true, boatType=wake, and experienceIds contains this experience id/alias.",
+          },
+        );
         return NextResponse.json(
           {
             slots: [],
@@ -997,15 +1023,22 @@ export async function GET(request: NextRequest) {
               cap: WINDOWED_BOOKINGS_MAX_DOCS,
               rawCount: snap.size,
             });
-            void writeOperationalAlert({
-              type: "slots_windowed_bookings_truncated",
-              source: "app/api/booking/slots",
-              experienceId,
-              variant: allExpIds[idx],
-              cap: WINDOWED_BOOKINGS_MAX_DOCS,
-              rawCount: snap.size,
-              hint: "Windowed bookings query returned too many docs; response is partial and open slots are marked conservatively.",
-            }).catch(() => {});
+            void writeOperationalAlertIfNewDocId(
+              slotsAlertDocId(
+                "slots_windowed_bookings_truncated",
+                `${experienceId}|${allExpIds[idx] ?? ""}|${WINDOWED_BOOKINGS_MAX_DOCS}`,
+                alertUtcDay,
+              ),
+              {
+                type: "slots_windowed_bookings_truncated",
+                source: "app/api/booking/slots",
+                experienceId,
+                variant: allExpIds[idx],
+                cap: WINDOWED_BOOKINGS_MAX_DOCS,
+                rawCount: snap.size,
+                hint: "Windowed bookings query returned too many docs; response is partial and open slots are marked conservatively.",
+              },
+            );
           }
           const docs = truncatedThis ? snap.docs.slice(0, WINDOWED_BOOKINGS_MAX_DOCS) : snap.docs;
           docs.forEach((doc) => {
@@ -1121,13 +1154,20 @@ export async function GET(request: NextRequest) {
                 console.warn("[slots] charter boat-scoped booking supplement hit limit; overlapping trips may be incomplete", {
                   experienceId,
                 });
-                void writeOperationalAlert({
-                  type: "slots_charter_boat_supplement_limit_hit",
-                  source: "app/api/booking/slots",
-                  experienceId,
-                  limit: BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT,
-                  hint: "Boat supplement scan hit cap and partial data mode is active; complete booking startDateStr/boatId backfill and set DISABLE_BOAT_SUPPLEMENT_SCAN=true.",
-                }).catch(() => {});
+                void writeOperationalAlertIfNewDocId(
+                  slotsAlertDocId(
+                    "slots_charter_boat_supplement_limit_hit",
+                    `${experienceId}|${BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT}`,
+                    alertUtcDay,
+                  ),
+                  {
+                    type: "slots_charter_boat_supplement_limit_hit",
+                    source: "app/api/booking/slots",
+                    experienceId,
+                    limit: BOAT_CHARTER_BOOKING_SUPPLEMENT_LIMIT,
+                    hint: "Boat supplement scan hit cap and partial data mode is active; complete booking startDateStr/boatId backfill and set DISABLE_BOAT_SUPPLEMENT_SCAN=true.",
+                  },
+                );
               }
               for (const doc of snap.docs) {
                 if (seenBookingIds.has(doc.id)) continue;
@@ -1176,24 +1216,16 @@ export async function GET(request: NextRequest) {
           bookingIds: uniqueUnresolved.slice(0, 100),
           experienceId,
         });
-        void writeOperationalAlert({
-          type: "slots_unresolved_booking_missing_boat_id",
-          source: "app/api/booking/slots",
-          experienceId,
-          count: uniqueUnresolved.length,
-          hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids with { applyUpdates: true }).",
-        }).catch(() => {});
-        void sendStaffInternalEmail({
-          subject: `[Alert] slots unresolved booking missing boatId (${uniqueUnresolved.length})`,
-          htmlContent: `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:16px;">
-<p><strong>Slots API unresolved booking(s) missing boatId</strong></p>
-<p><strong>Experience:</strong> ${(experienceId ?? "").replace(/</g, "&lt;")}</p>
-<p><strong>Count:</strong> ${String(uniqueUnresolved.length)}</p>
-<p><strong>Booking IDs (up to 25):</strong> ${uniqueUnresolved.slice(0, 25).map((id) => id.replace(/</g, "&lt;")).join(", ")}</p>
-<p>Run the booking boatId backfill until unresolved count reaches zero before multi-boat launch.</p>
-</body></html>`,
-          idempotencyKey: `slots_unresolved_booking_missing_boat_id_${experienceId ?? "unknown"}_${uniqueUnresolved.length}`,
-        }).catch(() => {});
+        void writeOperationalAlertIfNewDocId(
+          slotsAlertDocId("slots_unresolved_booking_missing_boat_id", experienceId, alertUtcDay),
+          {
+            type: "slots_unresolved_booking_missing_boat_id",
+            source: "app/api/booking/slots",
+            experienceId,
+            count: uniqueUnresolved.length,
+            hint: "Backfill boatId on legacy bookings (POST /api/admin/backfill-booking-boat-ids with { applyUpdates: true }). Staff email: cron POST /api/admin/cron/alert-missing-booking-boat-ids.",
+          },
+        );
       }
 
       /** Map (boatId:normalizedSlotId) -> booking doc id so slot docs can resolve correct bookingId when they store a different id (e.g. Stripe). */
@@ -1347,12 +1379,16 @@ export async function GET(request: NextRequest) {
       const blocksResult = await blocksResultPromise; // started in parallel with slot doc loads
       const charterBlocksQueryFailed = blocksResult.incomplete;
       if (blocksResult.incomplete) {
-        void writeOperationalAlert({
-          type: "slots_blocks_query_incomplete",
-          source: "app/api/booking/slots",
-          experienceId,
-          hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
-        }).catch(() => {});
+        void writeOperationalAlertIfNewDocId(
+          slotsAlertDocId("slots_blocks_query_incomplete_charter", experienceId, alertUtcDay),
+          {
+            type: "slots_blocks_query_incomplete",
+            source: "app/api/booking/slots",
+            experienceId,
+            branch: "charter",
+            hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
+          },
+        );
       }
       blocksResult.docs.forEach((doc) => {
         const b = doc.data() as { boatId?: string | null; startAt: { toDate(): Date }; endAt: { toDate(): Date } };
@@ -1479,12 +1515,15 @@ export async function GET(request: NextRequest) {
       slots.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.startAt.localeCompare(b.startAt));
       if (charterHeldHoldIdsResolved.length > 0) {
         if (charterHoldsResolutionFailed) {
-          void writeOperationalAlert({
-            type: "slots_charter_holds_batch_get_failed",
-            source: "app/api/booking/slots",
-            experienceId,
-            hint: "Firestore getAll for hold docs failed; charter held slots left as held with holdDataMissing (not shown as open).",
-          }).catch(() => {});
+          void writeOperationalAlertIfNewDocId(
+            slotsAlertDocId("slots_charter_holds_batch_get_failed", experienceId, alertUtcDay),
+            {
+              type: "slots_charter_holds_batch_get_failed",
+              source: "app/api/booking/slots",
+              experienceId,
+              hint: "Firestore getAll for hold docs failed; charter held slots left as held with holdDataMissing (not shown as open).",
+            },
+          );
           slots.forEach((s) => {
             if (s.status === "held") {
               (s as Record<string, unknown>).holdDataMissing = true;
@@ -1645,13 +1684,16 @@ export async function GET(request: NextRequest) {
       [boatId!],
     );
     if (legacyBlocksIncomplete) {
-      void writeOperationalAlert({
-        type: "slots_blocks_query_incomplete",
-        source: "app/api/booking/slots",
-        boatId: boatId ?? undefined,
-        branch: "legacy_boat_only",
-        hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
-      }).catch(() => {});
+      void writeOperationalAlertIfNewDocId(
+        slotsAlertDocId("slots_blocks_query_incomplete_legacy_boat", boatId ?? "unknown", alertUtcDay),
+        {
+          type: "slots_blocks_query_incomplete",
+          source: "app/api/booking/slots",
+          boatId: boatId ?? undefined,
+          branch: "legacy_boat_only",
+          hint: "Blocks composite index missing or building; deploy firestore.indexes.json and verify READY in Firebase console.",
+        },
+      );
     }
     const legacyBlockRanges: { start: number; end: number }[] = [];
     const legacyBoatIdNorm = typeof boatId === "string" ? boatId.trim() : "";

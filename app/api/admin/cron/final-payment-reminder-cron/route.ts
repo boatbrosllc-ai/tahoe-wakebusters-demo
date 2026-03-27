@@ -29,6 +29,7 @@ import { notifyFinalChargeSuccess } from "@/lib/booking/notify-final-charge-succ
 import { isDepositMode } from "@/lib/booking/deposit-mode";
 import {
   getFinalPaymentCronWindowDateStrs,
+  getHoursUntilTrip,
   in48hWindow,
   isBookingEligibleForFinalPaymentRequestRetry,
 } from "@/lib/booking/reminder-eligibility";
@@ -91,8 +92,13 @@ export async function POST(request: NextRequest) {
     try {
       const result = await notifyFinalChargeSuccess(db, bookingId, booking);
       if (result.ok) {
-        await markRetrySent(db, bookingId, templateKey, { providerMessageId: result.providerMessageId });
-        processed++;
+        if (result.suppressed) {
+          await markRetrySkipped(db, bookingId, templateKey, "retry_ineligible_after_recheck");
+          skipped++;
+        } else {
+          await markRetrySent(db, bookingId, templateKey, { providerMessageId: result.providerMessageId });
+          processed++;
+        }
       } else {
         failed++;
       }
@@ -119,8 +125,10 @@ export async function POST(request: NextRequest) {
     const parsed = parseSlotId(slotId.trim());
     if (!parsed) continue;
     const tripStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours ?? 2, parsed.startMinute ?? 0).start;
+    const tripStartMsRetry = tripStart.getTime();
     const tripDateStr = tripStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
     const startTimeStr = tripStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
+    const hoursUntilTripRetry = getHoursUntilTrip(tripStartMsRetry, nowMs);
     const toEmail = booking.customer?.email?.trim();
     const customerName = booking.customer?.name?.trim() ?? "Guest";
     if (!toEmail) continue;
@@ -137,7 +145,16 @@ export async function POST(request: NextRequest) {
     if (!claimed) continue;
     try {
       const { providerMessageId } = await sendFinalPaymentRequestEmail(
-        { to: toEmail, customerName, experienceName, tripDate: tripDateStr, startTime: startTimeStr, amountFormatted: formatMoney(finalCents), payLink },
+        {
+          to: toEmail,
+          customerName,
+          experienceName,
+          tripDate: tripDateStr,
+          startTime: startTimeStr,
+          amountFormatted: formatMoney(finalCents),
+          payLink,
+          hoursUntilTrip: hoursUntilTripRetry,
+        },
         { idempotencyKey: `${bookingId}_final_payment_request` }
       );
       await markClaimSent(db, bookingId, templateKey, { providerMessageId });
@@ -217,6 +234,7 @@ export async function POST(request: NextRequest) {
         parsed.startMinute ?? 0,
       ).start;
       const tripStartMs = tripStart.getTime();
+      const hoursUntilTrip = getHoursUntilTrip(tripStartMs, nowMs);
 
       if (!in48hWindow(tripStartMs, nowMs)) {
         skipped++;
@@ -275,6 +293,7 @@ export async function POST(request: NextRequest) {
             startTime: startTimeStr,
             amountFormatted: formatMoney(finalCents),
             payLink,
+            hoursUntilTrip,
           },
           { idempotencyKey: `${doc.id}_final_payment_request` }
         );

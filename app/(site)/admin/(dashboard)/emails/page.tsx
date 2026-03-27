@@ -47,6 +47,7 @@ export default function AdminEmailsPage() {
       { pending: number; sent: number; deadLetter: number; skipped: number; lastErrorSnippet?: string }
     >;
     staleClaimCountsByTemplate?: Record<string, number>;
+    reminderRetryDeadLetterTotal?: number;
   } | null>(null);
   const [outboxStatsLoading, setOutboxStatsLoading] = useState(true);
 
@@ -95,6 +96,8 @@ export default function AdminEmailsPage() {
         byType: data.byType,
         reminderRetryQueue: data.reminderRetryQueue,
         staleClaimCountsByTemplate: data.staleClaimCountsByTemplate,
+        reminderRetryDeadLetterTotal:
+          typeof data.reminderRetryDeadLetterTotal === "number" ? data.reminderRetryDeadLetterTotal : undefined,
       });
     } catch {
       setOutboxStats(null);
@@ -218,6 +221,13 @@ export default function AdminEmailsPage() {
                 </div>
               </div>
             </div>
+
+            {typeof outboxStats.reminderRetryDeadLetterTotal === "number" && (
+              <p className="text-sm text-brand-dark">
+                <strong>Reminder retries dead-lettered (all templates, count):</strong>{" "}
+                <span className="tabular-nums font-mono">{outboxStats.reminderRetryDeadLetterTotal}</span>
+              </p>
+            )}
 
             {outboxStats.reminderRetryQueue && Object.keys(outboxStats.reminderRetryQueue).length > 0 && (
               <div>

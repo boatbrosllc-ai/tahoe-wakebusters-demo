@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type { Booking, Experience } from "@/lib/booking/types";
-import { BOOKING_STATUSES_SLOT_TAKEN, bookingRequiresBoatIdForOccupancyAlert } from "@/lib/booking/types";
+import {
+  BOOKING_STATUSES_SLOT_TAKEN,
+  bookingRequiresBoatIdForOccupancyAlert,
+} from "@/lib/booking/types";
 import { parseSlotId, getSlotStartEnd, getDateStrInSlotTimezone } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
-import { countMissingStartDateStr } from "@/lib/booking/backfill-start-date-str-status";
 import { getNotificationOutboxStats } from "@/lib/booking/notification-outbox";
+
+export const maxDuration = 26;
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
@@ -14,8 +18,8 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   return null;
 }
 
-function formatTimeLabel(dateStr: string, startHour: number, durationHours: number): string {
-  const { start } = getSlotStartEnd(dateStr, startHour, durationHours);
+function formatTimeLabel(dateStr: string, startHour: number, durationHours: number, startMinute = 0): string {
+  const { start } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
   return formatBookingTime(start);
 }
 
@@ -32,21 +36,26 @@ export async function GET(request: NextRequest) {
     in7Days.setDate(in7Days.getDate() + 6);
     const in7DaysStr = getDateStrInSlotTimezone(in7Days);
 
-    const REVENUE_STATUSES = ["paid", "deposit_paid", "final_due", "final_processing", "final_paid"] as const;
-    const [upcomingSnap, experiencesSnap, recentBookingsSnap, missingBookingStartDateStrCount, missingHoldsStartDateStrCount] = await Promise.all([
+    const [upcomingSnap, experiencesSnap, recentBookingsSnap, backfillStatusSnap] = await Promise.all([
       db
         .collection("bookings")
-        .where("status", "in", REVENUE_STATUSES)
+        .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
         .where("startDateStr", ">=", todayStr)
         .where("startDateStr", "<=", in7DaysStr)
-        .orderBy("startDateStr", "desc")
+        .orderBy("startDateStr", "asc")
         .limit(500)
         .get(),
       db.collection("experiences").get(),
       db.collection("bookings").orderBy("createdAt", "desc").limit(10).get(),
-      countMissingStartDateStr("bookings"),
-      countMissingStartDateStr("holds"),
+      db.collection("summaries").doc("backfillStatus").get(),
     ]);
+    const backfillStatus = backfillStatusSnap.exists
+      ? (backfillStatusSnap.data() as {
+          startDateStr?: { bookingMissingCountEstimate?: number; holdsMissingCountEstimate?: number };
+        })
+      : null;
+    const missingBookingStartDateStrCount = backfillStatus?.startDateStr?.bookingMissingCountEstimate ?? 0;
+    const missingHoldsStartDateStrCount = backfillStatus?.startDateStr?.holdsMissingCountEstimate ?? 0;
 
     const experienceNames = new Map<string, string>();
     /** Doc id and slug → pricingType so bookings stored with either key resolve correctly. */
@@ -74,7 +83,16 @@ export async function GET(request: NextRequest) {
 
     const summary = summarySnap.exists ? (summarySnap.data() as { totalRevenueCents?: number; bookingCount?: number }) : null;
     const totalRevenueCents = summary?.totalRevenueCents ?? 0;
-    const bookingCountTotal = summary?.bookingCount ?? 0;
+    /** Incremented with summary revenue (deposit/final attribution); not the same as Firestore booking-document volume. */
+    const summaryIncrementedBookingCount = summary?.bookingCount ?? 0;
+    const slotTakenStatuses = Array.from(BOOKING_STATUSES_SLOT_TAKEN);
+    let slotTakenBookingsCount = 0;
+    try {
+      const agg = await db.collection("bookings").where("status", "in", slotTakenStatuses).count().get();
+      slotTakenBookingsCount = agg.data().count;
+    } catch (countErr) {
+      console.warn("[dashboard] slot-taken bookings count() failed", countErr);
+    }
     const uniqueCustomerEmails = new Set<string>();
     let recentBookingsMissingBoatId = 0;
     allBookingsForUnique.docs.forEach((d) => {
@@ -99,7 +117,17 @@ export async function GET(request: NextRequest) {
     const revenueLastMonthCents = lastMonthSnap.exists ? ((lastMonthSnap.data() as { revenueCents?: number })?.revenueCents ?? 0) : 0;
 
     type RecentRow = { id: string; createdAt: string; customerEmail: string; customerName: string; totalCents: number; status: string; experienceName: string };
-    type UpcomingRow = { id: string; tripDateStr: string; timeLabel: string; experienceName: string; customerName: string; customerEmail: string; totalCents: number };
+    type UpcomingRow = {
+      id: string;
+      tripDateStr: string;
+      timeLabel: string;
+      experienceName: string;
+      customerName: string;
+      customerEmail: string;
+      totalCents: number;
+      /** Slot start instant (America/Chicago grid); used server-side for sort only — omitted from JSON. */
+      slotStartMs: number;
+    };
     const recentBookings: RecentRow[] = [];
     const upcomingBookings: UpcomingRow[] = [];
 
@@ -118,6 +146,7 @@ export async function GET(request: NextRequest) {
       });
     });
 
+    // Firestore returns recent rows by createdAt desc, but map order is not guaranteed — keep newest-first for the UI.
     recentBookings.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
     upcomingSnap.docs.forEach((d) => {
@@ -125,22 +154,23 @@ export async function GET(request: NextRequest) {
       const parsed = parseSlotId(b.slotId);
       if (!parsed) return;
       const { dateStr } = parsed;
+      const { start } = getSlotStartEnd(dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute);
       const expName = b.experienceId ? experienceNames.get(b.experienceId) ?? "—" : "—";
       upcomingBookings.push({
         id: d.id,
         tripDateStr: dateStr,
-        timeLabel: formatTimeLabel(dateStr, parsed.startHour, parsed.durationHours),
+        timeLabel: formatTimeLabel(dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute),
         experienceName: expName,
         customerName: b.customer?.name ?? "",
         customerEmail: b.customer?.email ?? "",
         totalCents: (b.stripe?.totalAmountCents ?? b.pricing?.totalCents) ?? 0,
+        slotStartMs: start.getTime(),
       });
     });
 
-    recentBookings.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     upcomingBookings.sort((a, b) => {
       if (a.tripDateStr !== b.tripDateStr) return a.tripDateStr.localeCompare(b.tripDateStr);
-      return a.timeLabel.localeCompare(b.timeLabel);
+      return a.slotStartMs - b.slotStartMs;
     });
 
     const [deadLetterSnap, notificationOutboxStats] = await Promise.all([
@@ -152,11 +182,17 @@ export async function GET(request: NextRequest) {
       ? Math.max(1, finalFailedReleaseSlaHoursRaw)
       : 6;
     const finalFailedCutoff = new Date(Date.now() - finalFailedReleaseSlaHours * 60 * 60 * 1000);
-    const finalFailedOldSnap = await db
-      .collection("bookings")
-      .where("status", "==", "final_failed")
-      .limit(500)
-      .get();
+    const { Timestamp } = getFirestoreExports();
+    const cancelSummaryAlertCutoff = new Date();
+    cancelSummaryAlertCutoff.setDate(cancelSummaryAlertCutoff.getDate() - 30);
+    const [finalFailedOldSnap, cancelSummarySkipSnap] = await Promise.all([
+      db.collection("bookings").where("status", "==", "final_failed").limit(500).get(),
+      db
+        .collection("operationalAlerts")
+        .where("type", "==", "admin_cancel_summary_adjustment_skipped")
+        .where("createdAt", ">=", Timestamp.fromDate(cancelSummaryAlertCutoff))
+        .get(),
+    ]);
     let finalFailedBeyondGraceCount = 0;
     finalFailedOldSnap.docs.forEach((d) => {
       const b = d.data() as Booking & { finalChargeAt?: { toDate?: () => Date; seconds?: number } };
@@ -173,11 +209,23 @@ export async function GET(request: NextRequest) {
       totalRevenueCents,
       revenueThisMonthCents,
       revenueLastMonthCents,
-      bookingCountTotal,
+      slotTakenBookingsCount,
+      slotTakenBookingStatuses: slotTakenStatuses,
+      summaryIncrementedBookingCount,
       uniqueCustomerCount,
       listingCount: experiencesSnap.size,
       recentBookings,
-      upcomingBookings: upcomingBookings.slice(0, 14),
+      upcomingBookings: upcomingBookings.slice(0, 14).map(
+        ({ id, tripDateStr, timeLabel, experienceName, customerName, customerEmail, totalCents }) => ({
+          id,
+          tripDateStr,
+          timeLabel,
+          experienceName,
+          customerName,
+          customerEmail,
+          totalCents,
+        })
+      ),
       confirmationDeadLetterCount,
       /** Among the last 500 bookings (by createdAt): slot-taken rows missing boatId where per-boat occupancy applies (excludes shared ticketed inventory). */
       recentBookingsMissingBoatId,
@@ -185,6 +233,8 @@ export async function GET(request: NextRequest) {
       finalFailedReleaseSlaHours,
       missingBookingStartDateStrCount,
       missingHoldsStartDateStrCount,
+      /** Recent operational alerts: legacy cancels where summary revenue was not decremented (investigate in Firestore operationalAlerts). */
+      adminCancelSummaryAdjustmentSkippedCount: cancelSummarySkipSnap.size,
       notificationOutboxStats: {
         byType: notificationOutboxStats.byType,
         staleClaimCountsByTemplate: notificationOutboxStats.staleClaimCountsByTemplate,

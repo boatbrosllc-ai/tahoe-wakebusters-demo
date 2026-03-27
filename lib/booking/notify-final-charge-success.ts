@@ -23,7 +23,7 @@ export type NotifyFinalChargeSuccessOptions = {
 };
 
 export type NotifyFinalChargeSuccessResult =
-  | { ok: true; providerMessageId?: string; duplicate?: boolean }
+  | { ok: true; providerMessageId?: string; duplicate?: boolean; suppressed?: boolean }
   | { ok: false };
 
 /** Returns ok on success or duplicate skip (claim already sent). */
@@ -34,6 +34,10 @@ export async function notifyFinalChargeSuccess(
   options?: NotifyFinalChargeSuccessOptions
 ): Promise<NotifyFinalChargeSuccessResult> {
   if (!isDepositMode(booking)) return { ok: true };
+
+  if (booking.status !== "final_paid") {
+    return { ok: true, suppressed: true };
+  }
 
   const claimed = await tryClaimSend(db, bookingId, TEMPLATE_KEY);
   if (!claimed) return { ok: true, duplicate: true };

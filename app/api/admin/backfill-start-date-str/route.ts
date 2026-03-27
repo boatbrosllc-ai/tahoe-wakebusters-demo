@@ -18,8 +18,10 @@ import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 const PAGE_SIZE = 200;
+const RUN_UNTIL_DONE_MAX_PAGES = 5;
 
 type CollectionId = "bookings" | "holds";
 
@@ -45,7 +47,7 @@ async function runBackfill(
   }
 
   const snap = await query.get();
-  const missing: { id: string; slotId?: string; startDateStr?: string }[] = [];
+  const missing: { id: string; slotId?: string; beforeStartDateStr?: string; afterStartDateStr?: string }[] = [];
 
   for (const doc of snap.docs) {
     const d = doc.data() as { slotId?: string; slot_id?: string; startDateStr?: string };
@@ -56,14 +58,14 @@ async function runBackfill(
     const parsed = parseSlotId(slotId.trim());
     const inferred = parsed?.dateStr ?? (slotId.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(slotId) ? slotId.slice(0, 10) : undefined);
     if (!inferred) continue;
-    missing.push({ id: doc.id, slotId: slotId.trim(), startDateStr: inferred });
+    missing.push({ id: doc.id, slotId: slotId.trim(), beforeStartDateStr: startDateStr, afterStartDateStr: inferred });
   }
 
   const updatedIds: string[] = [];
   if (!dryRun && missing.length > 0) {
     const batch = db.batch();
-    for (const { id, startDateStr } of missing) {
-      if (startDateStr) batch.update(col.doc(id), { startDateStr });
+    for (const { id, afterStartDateStr } of missing) {
+      if (afterStartDateStr) batch.update(col.doc(id), { startDateStr: afterStartDateStr });
     }
     await batch.commit();
     missing.forEach((m) => updatedIds.push(m.id));
@@ -77,6 +79,11 @@ async function runBackfill(
       docIds: updatedIds.slice(0, 20),
       at: new Date().toISOString(),
     });
+    void writeAdminAuditLog("backfill_start_date_str", {
+      collection: collectionId,
+      updatedCount: updatedIds.length,
+      docIds: updatedIds.slice(0, 20),
+    });
   }
 
   const lastDoc = snap.docs[snap.docs.length - 1];
@@ -88,7 +95,15 @@ async function runBackfill(
     let totalMissing = missing.length;
     let next: string | null = nextCursor;
     let pages = 1;
-    const maxPages = Math.max(1, options.maxPages ?? 50);
+      const maxPages = options.maxPages ?? 0;
+      if (maxPages < 1 || maxPages > RUN_UNTIL_DONE_MAX_PAGES) {
+        return NextResponse.json(
+          {
+            error: `runUntilDone requires explicit maxPages between 1 and ${RUN_UNTIL_DONE_MAX_PAGES}.`,
+          },
+          { status: 400 }
+        );
+      }
     while (next && pages < maxPages) {
       pages++;
       let q =
@@ -99,7 +114,7 @@ async function runBackfill(
       if (cSnap.exists) q = q.startAfter(cSnap);
       const p = await q.get();
       totalScanned += p.size;
-      const pageMissing: { id: string; slotId?: string; startDateStr?: string }[] = [];
+      const pageMissing: { id: string; slotId?: string; beforeStartDateStr?: string; afterStartDateStr?: string }[] = [];
       for (const doc of p.docs) {
         const d = doc.data() as { slotId?: string; slot_id?: string; startDateStr?: string };
         const startDateStr = typeof d.startDateStr === "string" ? d.startDateStr.trim() : undefined;
@@ -109,13 +124,13 @@ async function runBackfill(
         const parsed = parseSlotId(slotId.trim());
         const inferred = parsed?.dateStr ?? (slotId.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(slotId) ? slotId.slice(0, 10) : undefined);
         if (!inferred) continue;
-        pageMissing.push({ id: doc.id, slotId: slotId.trim(), startDateStr: inferred });
+        pageMissing.push({ id: doc.id, slotId: slotId.trim(), beforeStartDateStr: startDateStr, afterStartDateStr: inferred });
       }
       totalMissing += pageMissing.length;
       if (pageMissing.length > 0) {
         const b = db.batch();
         for (const m of pageMissing) {
-          if (m.startDateStr) b.update(col.doc(m.id), { startDateStr: m.startDateStr });
+          if (m.afterStartDateStr) b.update(col.doc(m.id), { startDateStr: m.afterStartDateStr });
         }
         await b.commit();
         totalUpdated += pageMissing.length;
@@ -152,7 +167,13 @@ async function runBackfill(
     missingCount: missing.length,
     updatedCount: updatedIds.length,
     nextCursor,
-    results: missing.slice(0, 50).map((m) => ({ id: m.id, slotId: m.slotId, startDateStr: m.startDateStr })),
+    results: missing.slice(0, 50).map((m) => ({
+      id: m.id,
+      slotId: m.slotId,
+      beforeStartDateStr: m.beforeStartDateStr ?? null,
+      afterStartDateStr: m.afterStartDateStr ?? null,
+      outcome: !dryRun && updatedIds.includes(m.id) ? "updated" : dryRun ? "proposed" : "skipped",
+    })),
     hint:
       missing.length === 0 && !nextCursor
         ? "No docs in this collection (or no more pages)."
@@ -180,22 +201,43 @@ export async function POST(request: NextRequest) {
   if (unauthorized) return unauthorized;
   const body = await request.json().catch(() => ({})) as {
     applyUpdates?: boolean;
+    verifyOnly?: boolean;
     collection?: string;
     cursor?: string;
     runUntilDone?: boolean;
     maxPages?: number;
   };
-  const applyUpdates = body.applyUpdates === true;
+  const verifyOnly = body.verifyOnly === true;
+  const applyUpdates = body.applyUpdates === true && !verifyOnly;
   const collection = (body.collection === "holds" ? "holds" : "bookings") as CollectionId;
   const cursor = body.cursor ?? null;
-  if (!applyUpdates) {
+  if (!applyUpdates && !verifyOnly) {
     return NextResponse.json(
-      { error: "Actual updates require POST with body { applyUpdates: true, collection?: \"bookings\" | \"holds\", cursor?: string }. Use GET for dry-run." },
+      { error: "Use POST { verifyOnly: true } for preview or POST { applyUpdates: true } to write updates." },
       { status: 400 }
     );
   }
-  return runBackfill(false, collection, request, cursor, {
-    runUntilDone: body.runUntilDone === true,
+  const response = await runBackfill(!applyUpdates, collection, request, cursor, {
+    runUntilDone: applyUpdates && body.runUntilDone === true,
     maxPages: body.maxPages,
   });
+  try {
+    const payload = await response.clone().json() as { missingCount?: number; updatedCount?: number };
+    const db = getDb();
+    await db.collection("summaries").doc("backfillStatus").set(
+      {
+        startDateStr: {
+          bookingMissingCountEstimate: collection === "bookings" ? (payload.missingCount ?? null) : null,
+          holdsMissingCountEstimate: collection === "holds" ? (payload.missingCount ?? null) : null,
+          lastRunAt: new Date().toISOString(),
+          lastMode: applyUpdates ? "apply" : "verify",
+          lastUpdatedCount: payload.updatedCount ?? 0,
+        },
+      },
+      { merge: true }
+    );
+  } catch {
+    // Best-effort dashboard summary update.
+  }
+  return response;
 }

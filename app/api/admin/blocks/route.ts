@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { getAdminEmailFromSessionCookie, requireAdminSession } from "@/lib/admin-auth-firebase";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
@@ -168,6 +169,8 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
+
     const doc = await db.collection("blocks").add({
       // Invariant: store both canonical id and slug so display/enforcement paths can query either key.
       experienceId,
@@ -180,7 +183,16 @@ export async function POST(request: NextRequest) {
       note: note ?? null,
       slotId: slotId ?? null,
       createdAt: FieldValue.serverTimestamp(),
-      createdBy: null,
+      createdBy: adminEmail ?? null,
+    });
+
+    void writeAdminAuditLog("block_create", {
+      blockId: doc.id,
+      experienceId,
+      boatId: boatId ?? null,
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+      adminEmail,
     });
 
     return NextResponse.json({

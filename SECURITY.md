@@ -27,6 +27,16 @@
 2. Redeploy so all new admin logins receive cookies signed with the new secret.
 3. Existing admin sessions (old cookies) will fail verification until users sign in again; no data migration is required.
 
+### Rotating BLOCK_SECRET
+
+`BLOCK_SECRET` authorizes automation for `/api/admin/blocks/*` routes.
+
+1. Generate and set a new `BLOCK_SECRET` in your deployment environment.
+2. Redeploy all environments that expose block endpoints.
+3. Revoke old automation credentials and update any callers to the new bearer token.
+
+Rotation requires redeploy because running functions read env vars at runtime boot.
+
 ### Pre-commit hook
 
 A pre-commit hook blocks commits that add or modify `.env.local` or other secret-bearing files (e.g. `*service*account*.json`, `*.pem`, `*.key`). Install with:
@@ -48,7 +58,7 @@ Required composite indexes for the booking APIs are defined in `firestore.indexe
    firebase deploy --only firestore:indexes --project boat-bros-app
    ```
 2. **Confirm in Firebase Console:** Firestore → Indexes. Every index from `firestore.indexes.json` should show status **Enabled** (not Building — building can take several minutes). CI runs `npm run verify-firestore-blocks-index` so the repo always defines the blocks triple-field composite; after deploy, verify **blocks** indexes are READY before accepting booking traffic.
-3. **Disable legacy fallback in production:** Set `DISABLE_LEGACY_BOOKING_FALLBACK=true` and `DISABLE_LEGACY_HOLDS_FALLBACK=true` in Netlify → Site → Environment variables **from day one** (required; `npm run check-env` fails in production if unset). This enables fast indexed queries and disables O(n) legacy Firestore scans. If you have existing bookings/holds without `startDateStr`, run the startDateStr backfill (e.g. `/api/admin/backfill-booking-boat-ids` dry-run) and then set these vars before or immediately after first deployment.
+3. **Disable legacy fallback only after `startDateStr` backfill:** Run `POST /api/admin/backfill-start-date-str` (bookings + holds) until no documents remain with `startDateStr == null` (verify with the probe logic in `lib/booking/booking-readiness-response.ts`). **Do not** set `DISABLE_LEGACY_BOOKING_FALLBACK=true` or `DISABLE_LEGACY_HOLDS_FALLBACK=true` in production until that count is zero: with both flags enabled, `startDateStrBackfillReadinessResponse` returns **503** on booking endpoints until the backfill probes pass, and `assertSlotAvailable` fails closed (503) when legacy scans are disabled. After backfill is confirmed, set both vars in Netlify → Site → Environment variables alongside production `check-env` requirements.
 4. **`ENABLE_BLOCK_CHECK_FAIL_OPEN`:** Do **not** set this in production or staging. It is obsolete (ignored); block overlap checks always fail closed when the Firestore blocks query cannot complete. We cannot read Netlify env from the repo — operators must confirm this flag is unset in each environment.
 
 ---

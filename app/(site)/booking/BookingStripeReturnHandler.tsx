@@ -6,8 +6,10 @@ import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { invalidateBookingCaches } from "@/lib/booking/booking-data-cache";
 import { releaseHoldFromModalSessionStorage } from "@/components/site/useBookingPayment";
+import { clearModalHoldRecoverySession } from "@/components/site/useHoldCreation";
 import { completeAfterPaymentWithPolling } from "@/lib/booking/complete-after-payment-client";
 import { readModalSessionHoldId, readModalSessionReceiptClaimToken } from "@/lib/booking/modal-hold-session";
+import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
 
 export function BookingStripeReturnHandler({
   paymentIntentId,
@@ -161,7 +163,11 @@ export function BookingStripeReturnHandler({
           if (typeof data.experienceId === "string" && data.experienceId) {
             invalidateBookingCaches(data.experienceId);
           }
+          clearModalHoldRecoverySession();
           const claim = data.receiptClaimToken ?? data.receiptToken ?? null;
+          const bid = typeof data.bookingId === "string" && data.bookingId.trim() ? data.bookingId.trim() : null;
+          const rt = typeof claim === "string" && claim.trim() ? claim.trim() : null;
+          trackBookingCompletedOnce({ bookingId: bid, receiptToken: rt });
           if (claim) {
             router.replace(
               `/booking/success?receipt_token=${encodeURIComponent(claim)}&payment_intent_id=${encodeURIComponent(paymentIntentId)}`,

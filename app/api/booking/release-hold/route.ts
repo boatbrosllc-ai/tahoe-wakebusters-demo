@@ -15,7 +15,8 @@ import {
 } from "@/lib/booking/releaseToken";
 import { verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { clearHoldReleaseCookie, getHoldReleaseTokenFromCookie } from "@/lib/booking/hold-release-cookie";
-import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireAdminSession, getAdminEmailFromSessionCookie } from "@/lib/admin-auth-firebase";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
 import { checkRateLimitPostPayment, getClientKey, getManageRateLimitKey } from "@/lib/booking/rate-limit";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
@@ -170,7 +171,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const result = await executeReleaseHoldTransaction(db, holdId);
+    const releaseContext =
+      hasToken && !hasReceiptClaimPlaceholder
+        ? "api/booking/release-hold:user-release-token"
+        : hasReceiptClaimPlaceholder
+          ? "api/booking/release-hold:receipt-claim"
+          : "api/booking/release-hold:admin-or-internal";
+    const result = await executeReleaseHoldTransaction(db, holdId, { releaseContext });
+    if (!hasToken && result.released) {
+      const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
+      void writeAdminAuditLog("release_hold_admin", { holdId, adminEmail: adminEmail ?? undefined });
+    }
     const res = NextResponse.json(result);
     if (hasToken && !hasReceiptClaimPlaceholder) {
       clearHoldReleaseCookie(res);

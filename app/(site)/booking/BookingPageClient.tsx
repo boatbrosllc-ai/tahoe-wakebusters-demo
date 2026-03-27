@@ -267,11 +267,14 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
           msg = "Availability is taking a moment to load. Please try again.";
         }
         setSlotsLoadError(apiBody?.hint && (err as { name?: string })?.name !== "TimeoutError" ? `${msg}. ${apiBody.hint}` : msg);
-        const MAX_AUTO_RETRIES = 2;
+        const MAX_AUTO_RETRIES = 1;
         if (slotsAutoRetryCountRef.current < MAX_AUTO_RETRIES) {
           slotsAutoRetryCountRef.current += 1;
           const delayMs = 1500 * 2 ** (slotsAutoRetryCountRef.current - 1);
-          retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), delayMs);
+          retryTimer = setTimeout(() => {
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            setSlotsRetryTrigger((t) => t + 1);
+          }, delayMs);
         }
       })
       .finally(() => {

@@ -30,7 +30,8 @@ import { departureTimesMatch } from "@/lib/booking/departure-match";
 import type { CreateHoldInput, CreateHoldResponse, Discount } from "@/lib/booking/types";
 import type { Rate, Addon, Slot, Hold } from "@/lib/booking/types";
 import type { Experience, ExperienceRate, ExperienceAddon, ListingBoat, BoatRate } from "@/lib/booking/types";
-import { signReleaseToken } from "@/lib/booking/releaseToken";
+import { signReleaseToken, verifyReleaseToken } from "@/lib/booking/releaseToken";
+import { getStripe } from "@/lib/booking/stripe-client";
 import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
 import { parseCreateHoldBody } from "@/lib/booking/create-hold-validation";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -122,6 +123,42 @@ function jsonHoldCreated(response: CreateHoldResponse): NextResponse {
     attachHoldReleaseCookie(res, response.releaseToken, response.expiresAt);
   }
   return res;
+}
+
+/** After resume clears PI fields on the hold, cancel orphaned Stripe intents (mirror create-payment-intent `cancelOppositeStripeIntent`). */
+async function cancelStalePaymentIntentsAfterHoldResume(ids: string[]): Promise<void> {
+  const unique = Array.from(new Set(ids.map((s) => String(s).trim()).filter(Boolean)));
+  if (unique.length === 0) return;
+  let stripe: ReturnType<typeof getStripe>;
+  try {
+    stripe = getStripe();
+  } catch {
+    return;
+  }
+  for (const id of unique) {
+    try {
+      const pi = await stripe.paymentIntents.retrieve(id);
+      if (pi.status !== "succeeded" && pi.status !== "canceled") {
+        try {
+          await stripe.paymentIntents.cancel(id);
+        } catch (cancelErr) {
+          await writeOperationalAlert({
+            type: "cancel_resume_cleared_stripe_intent_failed",
+            source: "create-hold-resume",
+            otherPaymentIntentId: id,
+            lastError: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
+          });
+        }
+      }
+    } catch (oppErr) {
+      await writeOperationalAlert({
+        type: "cancel_resume_cleared_stripe_intent_retrieve_failed",
+        source: "create-hold-resume",
+        otherPaymentIntentId: id,
+        lastError: oppErr instanceof Error ? oppErr.message : String(oppErr),
+      });
+    }
+  }
 }
 
 function slotDocIntervalMatchesParsed(
@@ -676,6 +713,7 @@ export async function POST(request: NextRequest) {
     if (input.experienceId) holdPayload.experienceId = input.experienceId;
     if (input.boatId) holdPayload.boatId = input.boatId;
     if (experienceForPricing?.pricingType) holdPayload.pricingType = experienceForPricing.pricingType;
+    holdPayload.allowDeposit = experienceForPricing?.allowDeposit ?? false;
     if (input.bookingMode) holdPayload.bookingMode = input.bookingMode;
     if (input.holdRequestId) holdPayload.clientHoldRequestId = input.holdRequestId;
     if (tipCents > 0) holdPayload.tipCents = tipCents;
@@ -728,18 +766,22 @@ export async function POST(request: NextRequest) {
       let effectiveExpiresAt!: Date;
       const sharedDiscountOut = { cents: discountCents };
       const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
+      let sharedResumePiIdsToCancel: string[] = [];
       await db.runTransaction(async (tx) => {
+        sharedResumePiIdsToCancel = [];
         const now = new Date();
         const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
         effectiveExpiresAt = expiresAt;
         let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
         /** When the hold-request claim doc does not exist yet, defer its first write until all reads complete (Firestore rule). */
         let pendingClaimInitialWrite = false;
+        let holdRequestClaimSnapShared: import("firebase-admin").firestore.DocumentSnapshot | null = null;
         let resumeTargetId: string | null =
           input.resumeHoldId && input.resumeHoldId.trim() ? input.resumeHoldId.trim() : null;
         if (input.holdRequestId && holdRequestFingerprint) {
           claimRef = db.collection(HOLD_REQUEST_CLAIMS_COLLECTION).doc(input.holdRequestId);
           const claimSnap = await tx.get(claimRef);
+          holdRequestClaimSnapShared = claimSnap;
           if (claimSnap.exists) {
             const c = claimSnap.data() as { requestFingerprint?: string; holdId?: string };
             if (c.requestFingerprint !== holdRequestFingerprint) {
@@ -865,6 +907,29 @@ export async function POST(request: NextRequest) {
             if (isActive && sameExperience && sameSlot && sameMode) {
               resumeTargetId = d.id;
               break;
+            }
+          }
+        }
+
+        if (
+          input.resumeHoldId?.trim() &&
+          resumeTargetId === input.resumeHoldId.trim()
+        ) {
+          const c = holdRequestClaimSnapShared?.exists
+            ? (holdRequestClaimSnapShared.data() as { requestFingerprint?: string; holdId?: string })
+            : null;
+          const claimProves =
+            !!input.holdRequestId &&
+            !!holdRequestFingerprint &&
+            !!c &&
+            c.requestFingerprint === holdRequestFingerprint &&
+            typeof c.holdId === "string" &&
+            c.holdId.trim() === resumeTargetId;
+          if (!claimProves) {
+            const rt = typeof input.release_token === "string" ? input.release_token.trim() : "";
+            const verified = rt ? verifyReleaseToken(rt) : null;
+            if (!verified || verified.holdId !== resumeTargetId) {
+              throw new Error("HOLD_REQUEST_RESUME_MISMATCH");
             }
           }
         }
@@ -1027,6 +1092,17 @@ export async function POST(request: NextRequest) {
                   { merge: true }
                 );
               }
+              {
+                const depPi =
+                  typeof existingHold.depositPaymentIntentId === "string"
+                    ? existingHold.depositPaymentIntentId.trim()
+                    : "";
+                const fullPi =
+                  typeof existingHold.fullPaymentIntentId === "string"
+                    ? existingHold.fullPaymentIntentId.trim()
+                    : "";
+                sharedResumePiIdsToCancel = [depPi, fullPi].filter(Boolean);
+              }
               return;
             }
           }
@@ -1101,6 +1177,17 @@ export async function POST(request: NextRequest) {
         ...(discountCodeApplied ? { discountCents: sharedDiscountOut.cents, discountCode: discountCodeApplied } : {}),
       };
       bookingLog("create-hold", "shared ticketed hold created", { holdId: effectiveHoldId, expiresAt: effectiveExpiresAt.toISOString(), reused: effectiveHoldId !== holdId });
+      void writeOperationalAlert({
+        type: "hold_created",
+        holdId: effectiveHoldId,
+        experienceId: expIdForCapacity,
+        slotId: input.slotId,
+        bookingMode: input.bookingMode,
+        partySize: input.partySize,
+        isResume: effectiveHoldId !== holdId,
+        source: "api/booking/create-hold",
+      }).catch(() => {});
+      void cancelStalePaymentIntentsAfterHoldResume(sharedResumePiIdsToCancel);
       return jsonHoldCreated(response);
     }
 
@@ -1123,17 +1210,21 @@ export async function POST(request: NextRequest) {
     bookingLog("create-hold", "charter/legacy: starting transaction (slot hold + hold doc)");
     const charterDiscountOut = { cents: discountCents };
     let charterExpiresAt!: Date;
+    let charterResumePiIdsToCancel: string[] = [];
     await db.runTransaction(async (tx) => {
+      charterResumePiIdsToCancel = [];
       const now = new Date();
       const expiresAt = new Date(now.getTime() + HOLD_EXPIRY_MINUTES * 60 * 1000);
       charterExpiresAt = expiresAt;
       let claimRef: import("firebase-admin").firestore.DocumentReference | null = null;
       let pendingClaimInitialWrite = false;
+      let charterHoldRequestClaimSnap: import("firebase-admin").firestore.DocumentSnapshot | null = null;
       let effectiveResumeHoldId: string | null =
         input.resumeHoldId && input.resumeHoldId.trim() ? input.resumeHoldId.trim() : null;
       if (input.holdRequestId && holdRequestFingerprint) {
         claimRef = db.collection(HOLD_REQUEST_CLAIMS_COLLECTION).doc(input.holdRequestId);
         const claimSnap = await tx.get(claimRef);
+        charterHoldRequestClaimSnap = claimSnap;
         if (claimSnap.exists) {
           const c = claimSnap.data() as { requestFingerprint?: string; holdId?: string };
           if (c.requestFingerprint !== holdRequestFingerprint) {
@@ -1406,6 +1497,36 @@ export async function POST(request: NextRequest) {
                     shouldIncrementNewDiscountCharter = true;
                   }
                 }
+                if (
+                  input.resumeHoldId?.trim() &&
+                  slot.holdId === input.resumeHoldId.trim()
+                ) {
+                  const c = charterHoldRequestClaimSnap?.exists
+                    ? (charterHoldRequestClaimSnap.data() as { requestFingerprint?: string; holdId?: string })
+                    : null;
+                  const claimProves =
+                    !!input.holdRequestId &&
+                    !!holdRequestFingerprint &&
+                    !!c &&
+                    c.requestFingerprint === holdRequestFingerprint &&
+                    typeof c.holdId === "string" &&
+                    c.holdId.trim() === slot.holdId;
+                  if (!claimProves) {
+                    const rt = typeof input.release_token === "string" ? input.release_token.trim() : "";
+                    const verified = rt ? verifyReleaseToken(rt) : null;
+                    if (!verified || verified.holdId !== slot.holdId) {
+                      throw new Error("HOLD_REQUEST_RESUME_MISMATCH");
+                    }
+                  }
+                }
+                {
+                  const hPi = existingHoldForCharter as Hold;
+                  const depPi =
+                    typeof hPi.depositPaymentIntentId === "string" ? hPi.depositPaymentIntentId.trim() : "";
+                  const fullPi =
+                    typeof hPi.fullPaymentIntentId === "string" ? hPi.fullPaymentIntentId.trim() : "";
+                  charterResumePiIdsToCancel = [depPi, fullPi].filter(Boolean);
+                }
                 // Keep both mutations in the same Firestore transaction callback.
                 // If this transaction aborts, neither counter change is committed.
                 applyDiscountCounterSwapInTransaction(tx, {
@@ -1601,11 +1722,26 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    void cancelStalePaymentIntentsAfterHoldResume(charterResumePiIdsToCancel);
+
     bookingLog("create-hold", "transaction completed", {
       holdId,
       reusedHoldId,
       expiresAt: (reusedHoldId != null && reusedExpiresAt != null ? reusedExpiresAt : charterExpiresAt).toISOString(),
     });
+    {
+      const effectiveCharterHoldId = reusedHoldId ?? holdId;
+      void writeOperationalAlert({
+        type: "hold_created",
+        holdId: effectiveCharterHoldId,
+        experienceId: input.experienceId ?? null,
+        slotId: input.slotId,
+        bookingMode: input.bookingMode,
+        partySize: input.partySize,
+        isResume: reusedHoldId != null,
+        source: "api/booking/create-hold",
+      }).catch(() => {});
+    }
     const responsePricing = {
       ...pricing,
       totalCents: totalCentsWithTip,

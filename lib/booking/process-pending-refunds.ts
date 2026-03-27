@@ -20,6 +20,17 @@ import {
 } from "@/lib/booking/stripe-refund-status";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 
+/** After this grace from first seen, PI-mismatch `requiresReview` rows are processed automatically (with alert). */
+const REQUIRES_REVIEW_PI_MISMATCH_GRACE_MS = (() => {
+  const hours = parseInt(process.env.PENDING_REFUND_REQUIRES_REVIEW_GRACE_HOURS ?? "48", 10);
+  return Number.isFinite(hours) && hours >= 1 ? Math.min(hours, 24 * 14) * 60 * 60 * 1000 : 48 * 60 * 60 * 1000;
+})();
+
+const REQUIRES_REVIEW_PI_MISMATCH_REASONS = new Set([
+  "pi_mismatch_propagation_exhausted",
+  "pi_mismatch_in_complete_after_payment",
+]);
+
 const PAGE_SIZE = PENDING_REFUND_PROCESSOR_PAGE_SIZE;
 const PER_RUN_BUDGET = PENDING_REFUND_PROCESSOR_RUN_BUDGET;
 
@@ -157,8 +168,31 @@ export async function processPendingRefundsBatch(
       stalePendingCount++;
     }
     if (data.requiresReview === true && data.reason !== "amount_integrity_mismatch") {
-      skipped++;
-      return;
+      const reason = typeof data.reason === "string" ? data.reason : "";
+      const inPiMismatchSet = REQUIRES_REVIEW_PI_MISMATCH_REASONS.has(reason);
+      const firstSeen =
+        data.firstSeenAt?.toDate?.() ?? data.createdAt?.toDate?.() ?? null;
+      const pastGrace =
+        inPiMismatchSet &&
+        firstSeen != null &&
+        now.getTime() - firstSeen.getTime() >= REQUIRES_REVIEW_PI_MISMATCH_GRACE_MS;
+      if (!pastGrace) {
+        skipped++;
+        return;
+      }
+      try {
+        await writeOperationalAlert({
+          type: "pending_refund_requires_review_auto_processing_after_grace",
+          source: "process-pending-refunds",
+          pendingRefundId: doc.id,
+          paymentIntentId: (data.paymentIntentId || data.duplicatePaymentIntentId)?.trim(),
+          reason,
+          graceHours: REQUIRES_REVIEW_PI_MISMATCH_GRACE_MS / (60 * 60 * 1000),
+        });
+        await doc.ref.update({ requiresReview: FieldValue.delete() });
+      } catch {
+        /* non-fatal */
+      }
     }
     const piId = (data.paymentIntentId || data.duplicatePaymentIntentId)?.trim();
     if (!piId) {

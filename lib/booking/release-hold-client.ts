@@ -33,13 +33,24 @@ export async function releaseHoldFromModalSessionStorage(): Promise<void> {
 
   if (token) {
     try {
-      await fetch("/api/booking/release-hold", {
+      const res = await fetch("/api/booking/release-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ release_token: token }),
+        body: JSON.stringify({ holdId, release_token: token }),
       });
+      if (!res.ok) {
+        await fetch("/api/booking/alert-stuck-modal-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId, release_token: token }),
+        }).catch(() => {});
+      }
     } catch {
-      /* ignore */
+      await fetch("/api/booking/alert-stuck-modal-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId, release_token: token }),
+      }).catch(() => {});
     } finally {
       clearModalHoldRecoverySession();
     }
@@ -48,28 +59,30 @@ export async function releaseHoldFromModalSessionStorage(): Promise<void> {
 
   if (receiptClaim) {
     try {
-      await fetch("/api/booking/release-hold", {
+      const res = await fetch("/api/booking/release-hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ receipt_claim_token: receiptClaim }),
+        body: JSON.stringify({ holdId, receipt_claim_token: receiptClaim }),
       });
+      if (!res.ok) {
+        await fetch("/api/booking/alert-stuck-modal-hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdId, receipt_claim_token: receiptClaim }),
+        }).catch(() => {});
+      }
     } catch {
-      /* ignore */
+      await fetch("/api/booking/alert-stuck-modal-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdId, receipt_claim_token: receiptClaim }),
+      }).catch(() => {});
     } finally {
       clearModalHoldRecoverySession();
     }
     return;
   }
 
-  try {
-    await fetch("/api/booking/alert-stuck-modal-hold", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ holdId }),
-    });
-  } catch {
-    /* ignore */
-  } finally {
-    clearModalHoldRecoverySession();
-  }
+  // No token: cannot prove hold possession — do not call alert-stuck-modal-hold (it requires a token to set rollbackPending).
+  clearModalHoldRecoverySession();
 }

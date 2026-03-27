@@ -19,6 +19,7 @@ import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/b
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
 import { isBookingBlockedByOperatorError } from "@/lib/booking/convert-hold-to-booking";
+import { bookingError, bookingWarn } from "@/lib/booking/debug";
 
 export { getCleanupHoldSlotAction };
 
@@ -57,7 +58,7 @@ async function expireHoldAndReleaseSlotInTransaction(
   const experienceId = hold.experienceId as string | undefined;
   const slotId = hold.slotId as string;
   if (!slotId || (!boatId && !experienceId)) {
-    console.warn("[cleanup-holds] skipped hold missing slotId or boat/experience", { holdId: holdRef.id });
+    bookingWarn("cleanup-holds", "skipped hold missing slotId or boat/experience", { holdId: holdRef.id });
     return false;
   }
 
@@ -151,8 +152,8 @@ export async function runExpiredHoldReleaseTransaction(
   holdRef: DocumentReference
 ): Promise<"processed" | "skipped" | "failed"> {
   try {
-    let result: "processed" | "skipped" = "skipped";
     /** Firestore callback assignments are not flow-narrowed on `let`; use a mutable ref for TS + runtime. */
+    const outcome = { state: "skipped" as "processed" | "skipped" };
     const paymentIntentCleanupDeferAlert = { holdId: null as string | null };
 
     await db.runTransaction(async (tx) => {
@@ -170,6 +171,13 @@ export async function runExpiredHoldReleaseTransaction(
       const hasPaymentIntentRecorded =
         (typeof fullPi === "string" && fullPi.trim().length > 0) ||
         (typeof depPi === "string" && depPi.trim().length > 0);
+      const rollbackPendingNoPi =
+        (hold as { rollbackPending?: boolean }).rollbackPending === true && !hasPaymentIntentRecorded;
+      if (rollbackPendingNoPi) {
+        const releasedOk = await expireHoldAndReleaseSlotInTransaction(tx, db, FieldValue, holdRef, hold);
+        if (releasedOk) outcome.state = "processed";
+        return;
+      }
       const expiresAtRaw = (hold as { expiresAt?: { toDate?: () => Date } }).expiresAt;
       const expiresAtDate = expiresAtRaw?.toDate?.();
       if (hasPaymentIntentRecorded && expiresAtDate && expiresAtDate.getTime() < Date.now()) {
@@ -192,12 +200,12 @@ export async function runExpiredHoldReleaseTransaction(
             updatedAt: FieldValue.serverTimestamp(),
           });
         }
-        result = "processed";
+        outcome.state = "processed";
         return;
       }
 
       const expiredOk = await expireHoldAndReleaseSlotInTransaction(tx, db, FieldValue, holdRef, hold);
-      if (expiredOk) result = "processed";
+      if (expiredOk) outcome.state = "processed";
     });
 
     if (paymentIntentCleanupDeferAlert.holdId) {
@@ -210,10 +218,32 @@ export async function runExpiredHoldReleaseTransaction(
       });
     }
 
-    return result;
+    if (outcome.state === "processed") {
+      try {
+        const post = await holdRef.get();
+        const h = post.exists ? (post.data() as Record<string, unknown>) : null;
+        const sid = (h?.slotId as string | undefined) ?? "";
+        const eid = (h?.experienceId as string | undefined) ?? "";
+        bookingWarn("cleanup-holds", "expired hold released (slot/capacity)", {
+          holdId: holdRef.id,
+          slotId: sid,
+          experienceId: eid,
+          source: "cleanup-holds-cron",
+        });
+      } catch {
+        bookingWarn("cleanup-holds", "expired hold released (slot/capacity)", {
+          holdId: holdRef.id,
+          slotId: "",
+          experienceId: "",
+          source: "cleanup-holds-cron",
+        });
+      }
+    }
+
+    return outcome.state;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[cleanup-holds] transaction failed", { holdId: holdRef.id, error: message }, err);
+    bookingError("cleanup-holds", "transaction failed", err, { holdId: holdRef.id, error: message });
     return "failed";
   }
 }
@@ -363,10 +393,9 @@ export async function runRollbackPendingAutoResolveTransaction(
               );
             }
           } catch (refundFlagErr) {
-            console.error("[rollback-pending-reconcile] upsertPendingRefundRecord failed", {
+            bookingError("reconcile-rollback", "upsertPendingRefundRecord failed", refundFlagErr, {
               holdId: holdRef.id,
               paymentIntentId: piId,
-              error: refundFlagErr instanceof Error ? refundFlagErr.message : String(refundFlagErr),
             });
           }
 
@@ -378,15 +407,16 @@ export async function runRollbackPendingAutoResolveTransaction(
             lastError: errMsg.slice(0, 500),
           });
 
+          // Slot release must run even when upsertPendingRefundRecord failed above.
           const releasedOk = await releaseSlot();
           return releasedOk ? "released" : "skipped";
         }
       } catch (piErr) {
         const msg = piErr instanceof Error ? piErr.message : String(piErr);
-        console.warn("[rollback-pending-reconcile] payment_intent retrieve failed; skipping PI", {
+        bookingWarn("reconcile-rollback", "payment_intent retrieve failed; skipping PI", {
           holdId: holdRef.id,
-          piId,
-          msg: msg.slice(0, 200),
+          paymentIntentId: piId,
+          msg,
         });
         continue;
       }
@@ -405,7 +435,7 @@ export async function runRollbackPendingAutoResolveTransaction(
     return releasedOk ? "released" : "skipped";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[rollback-pending-reconcile] transaction failed", { holdId: holdRef.id, error: message }, err);
+    bookingError("reconcile-rollback", "transaction failed", err, { holdId: holdRef.id, error: message });
     return "failed";
   }
 }

@@ -41,11 +41,19 @@
 
 **Location:** `app/api/admin/bookings/route.ts` — POST handler.
 
-**Issue:** Admin-created bookings set `startDateStr`, create/update a **slot** doc, and check overlap via existing slots + bookings. They do **not** set `bookingMode` or update `departureInventory`. If an admin adds a manual booking for a **ticketed** experience/date, capacity in `departureInventory` is unchanged; only slot docs (charter path) are used.
+**Update (2026-03):** For `pricingType === "ticketed"` and `bookingMode === "shared"` (send `bookingMode: "shared"` in the JSON body), the handler runs the same `reserveCapacity` / `departureInventory` logic as customer `create-hold` inside the booking transaction, and persists `bookingMode`, `pricingType`, and `startDateStr` on the booking document for parity with automated bookings. Ticketed **charter** manual bookings remain unsupported via this endpoint (400 — use the customer flow).
 
-**Impact:** If “Add booking” is used for ticketed experiences, total sold can exceed capacity (no reserve/release in departure inventory). In practice this flow may be charter-only; worth documenting or restricting.
+**Historical note:** Earlier versions blocked all ticketed admin creates or skipped inventory; that allowed overbooking for shared ticketed departures.
 
-**Recommendation:** Either document that admin create is charter-only, or add shared-departure capacity handling when the experience is ticketed (e.g. decrement available / update inventory when creating the booking).
+---
+
+### 3.1a Cron `cleanup-holds` and client slot cache
+
+**Location:** `app/api/booking/cleanup-holds/route.ts`.
+
+**Observation:** Expired holds are released server-side without calling client `bumpSlotCacheVersion()` (that helper is browser-only). The cleanup route sets response header `X-Slots-Invalidated: true` when `processed > 0` so an edge/cron wrapper can trigger a broadcast or refetch if desired.
+
+**Maximum desync:** Public slot responses are also gated by `NEXT_PUBLIC_SLOTS_REFETCH_ON_MOUNT_MS` (default ~12s in `BOOKING_AVAILABILITY.md` / app env). After cron-driven hold releases, other tabs may show stale availability until that TTL elaps unless the client refetches for another reason. Lower the env value if tighter consistency is required.
 
 ---
 

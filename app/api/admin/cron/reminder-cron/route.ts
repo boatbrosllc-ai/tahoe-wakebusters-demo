@@ -188,6 +188,7 @@ export async function POST(request: NextRequest) {
         experienceName,
         tripDate: tripDateStr,
         customerName,
+        customerEmail: booking.customer?.email?.trim(),
       });
 
       processed++;
@@ -375,6 +376,7 @@ export async function POST(request: NextRequest) {
             experienceName,
             tripDate: tripDateStr,
             customerName,
+            customerEmail: booking.customer?.email?.trim(),
           });
 
           processed++;

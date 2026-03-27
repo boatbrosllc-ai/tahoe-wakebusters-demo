@@ -38,7 +38,8 @@ async function runBackfill(
     if (cursorSnap.exists) q = q.startAfter(cursorSnap);
   }
   const snap = await q.get();
-  const updates: Array<{ id: string; from: string; to: string }> = [];
+  const last = snap.docs[snap.docs.length - 1];
+  const updates: Array<{ id: string; from: string; to: string; outcome?: "updated" | "skipped" | "failed"; error?: string }> = [];
   for (const doc of snap.docs) {
     const row = doc.data() as { experienceId?: string };
     const raw = typeof row.experienceId === "string" ? row.experienceId.trim() : "";
@@ -49,18 +50,52 @@ async function runBackfill(
     }
   }
   if (apply && updates.length > 0) {
+    const distinctTargets = Array.from(new Set(updates.map((u) => u.to)));
+    const targetChecks = await Promise.all(
+      distinctTargets.map(async (id) => ({ id, exists: (await db.collection("experiences").doc(id).get()).exists }))
+    );
+    const missingTargets = targetChecks.filter((x) => !x.exists).map((x) => x.id);
+    if (missingTargets.length > 0) {
+      return {
+        collection: collectionId,
+        scanned: snap.size,
+        updated: 0,
+        candidates: updates.slice(0, 100),
+        nextCursor: last?.id ?? null,
+        pageSize: PAGE_SIZE,
+        error: "Canonical experience targets missing",
+        missingTargetExperienceIds: missingTargets,
+      };
+    }
     const batch = db.batch();
     for (const u of updates) {
       batch.update(db.collection(collectionId).doc(u.id), { experienceId: u.to });
+      u.outcome = "updated";
     }
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      for (const u of updates) {
+        u.outcome = "failed";
+        u.error = message;
+      }
+    }
+  } else {
+    for (const u of updates) u.outcome = "skipped";
   }
-  const last = snap.docs[snap.docs.length - 1];
   return {
     collection: collectionId,
     scanned: snap.size,
-    updated: apply ? updates.length : 0,
+    updated: updates.filter((u) => u.outcome === "updated").length,
     candidates: updates.slice(0, 100),
+    outcomes: updates.slice(0, 100).map((u) => ({
+      id: u.id,
+      from: u.from,
+      to: u.to,
+      outcome: u.outcome ?? "skipped",
+      ...(u.error ? { error: u.error } : {}),
+    })),
     nextCursor: last?.id ?? null,
     pageSize: PAGE_SIZE,
   };
@@ -84,14 +119,17 @@ export async function POST(request: NextRequest) {
     collection?: TargetCollection;
     cursor?: string;
     applyUpdates?: boolean;
+    verifyOnly?: boolean;
   };
-  if (body.applyUpdates !== true) {
-    return NextResponse.json({ error: "set applyUpdates=true to execute updates" }, { status: 400 });
+  const verifyOnly = body.verifyOnly === true;
+  const applyUpdates = body.applyUpdates === true && !verifyOnly;
+  if (!applyUpdates && !verifyOnly) {
+    return NextResponse.json({ error: "set verifyOnly=true to preview or applyUpdates=true to execute updates" }, { status: 400 });
   }
   const collection = body.collection ?? "bookings";
   if (collection !== "bookings" && collection !== "holds") {
     return NextResponse.json({ error: "collection must be 'bookings' or 'holds'" }, { status: 400 });
   }
-  return NextResponse.json(await runBackfill(collection, true, body.cursor ?? null));
+  return NextResponse.json(await runBackfill(collection, applyUpdates, body.cursor ?? null));
 }
 

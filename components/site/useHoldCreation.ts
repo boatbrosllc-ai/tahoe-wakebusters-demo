@@ -526,6 +526,12 @@ export function useHoldCreation(
           bookingMode: isTicketed ? bookingMode : "charter",
           resumeHoldId: lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId ?? undefined : undefined,
           holdRequestId,
+          ...(() => {
+            const rid =
+              lastHoldRef.current?.slotId === selectedSlot.id ? lastHoldRef.current.holdId : undefined;
+            const tok = opts.releaseTokenRef.current?.trim();
+            return rid && tok ? { releaseToken: tok } : {};
+          })(),
         },
         { persistHoldForResume: lastHoldRef }
       );

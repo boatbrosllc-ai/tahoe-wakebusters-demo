@@ -22,6 +22,7 @@ import {
 } from "./reminder-emails";
 import type { Booking } from "./types";
 import { signReceiptToken } from "./receiptToken";
+import { DEPOSIT_FRACTION } from "./constants";
 
 const BREVO_API_BASE = "https://api.brevo.com/v3";
 
@@ -97,7 +98,7 @@ export interface BookingEmailContext {
   durationHours: number;
   locationText: string;
   cancellationPolicyText: string;
-  /** True when 50% deposit was paid; remaining charged at T-48h. */
+  /** True when deposit (see DEPOSIT_FRACTION) was paid; remaining charged at T-48h. */
   isDeposit?: boolean;
   /** When true, remaining balance was already charged (e.g. resend for final_paid); use "was charged" not "will be charged". */
   remainingAlreadyCharged?: boolean;
@@ -190,7 +191,8 @@ export async function sendBookingConfirmationEmail(
   const totalPaid = formatMoney(totalAmountCents);
   const depositPaidFormatted = formatMoney(depositPaidCents);
   const remainingFormatted = formatMoney(remainingCents);
-  /** Amount paid in this transaction: deposit when 50/50, full total when full payment. Use this in templates for "You paid X" to avoid showing full total for deposit. */
+  const depositPct = Math.round(DEPOSIT_FRACTION * 100);
+  /** Amount paid in this transaction: deposit when partial deposit flow, full total when full payment. Use this in templates for "You paid X" to avoid showing full total for deposit. */
   const amountPaidNowFormatted = isDepositForTemplate ? depositPaidFormatted : totalPaid;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
 
@@ -223,6 +225,7 @@ export async function sendBookingConfirmationEmail(
           amountPaidNowFormatted,
           depositPaidFormatted,
           remainingFormatted,
+          depositPct,
           cancellationPolicy,
           locationText,
           isDeposit: isDepositForTemplate,
@@ -314,6 +317,39 @@ export async function sendAmountIntegrityMismatchCustomerEmail(params: {
       htmlContent: html,
     } as Record<string, unknown>,
     { idempotencyKey: `amount_integrity_notice_${holdId}` }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+}
+
+/** Guest email when payment stage required manual review before conversion (rollback path). */
+export async function sendPaymentUnderManualReviewCustomerEmail(params: {
+  to: string;
+  customerName: string;
+  holdId: string;
+}): Promise<void> {
+  const { to, customerName, holdId } = params;
+  const subject = "We received your payment — manual review – Boat Bros ATX";
+  const html = `
+<!DOCTYPE html>
+<html><body style="font-family: sans-serif; padding: 24px;">
+  <p>Hi ${customerName.replace(/</g, "&lt;")},</p>
+  <p>We received your payment. Your reservation is under review while we confirm a few details with our payment partner.</p>
+  <p><strong>You do not need to pay again.</strong> We will contact you within <strong>one business day</strong> with an update. If you have urgent questions, reply to this email or call us.</p>
+  <p style="font-size: 12px; color: #666;">Reference: hold ${holdId.replace(/</g, "&lt;")}</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
+</body></html>`;
+  const res = await sendWithRetry(
+    `${BREVO_API_BASE}/smtp/email`,
+    {
+      sender: getSender(),
+      to: [{ email: to.trim(), name: customerName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>,
+    { idempotencyKey: `manual_review_notice_${holdId}` }
   );
   if (!res.ok) {
     const text = await res.text();
@@ -493,18 +529,25 @@ export async function sendPendingRefundPermanentFailureAlert(params: {
  * Send a copy of the booking confirmation to the business (boatbrosllc@gmail.com) so they know they have a new booking.
  * Same HTML as customer; subject indicates new booking. Throws on transport failure (outbox caller records operational alert).
  */
-export async function sendBookingConfirmationCopyToBusiness(booking: Booking, context: BookingEmailContext): Promise<void> {
+export async function sendBookingConfirmationCopyToBusiness(
+  booking: Booking,
+  context: BookingEmailContext,
+  opts?: { idempotencyKey?: string }
+): Promise<void> {
   const html = renderBookingConfirmationHtml(booking, context);
   const customerName = booking.customer?.name?.trim() ?? "Guest";
   const { boatName, startAt } = context;
   const subject = `New booking: ${boatName} – ${startAt} – ${customerName}`;
   const bookingIdForIdem = (booking as { id?: string }).id?.trim();
+  const idempotencyKey =
+    opts?.idempotencyKey ??
+    (bookingIdForIdem ? `${bookingIdForIdem}_booking_confirmation_business_copy` : undefined);
   const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
     sender: getSender(),
     to: [{ email: BUSINESS_EMAIL }],
     subject,
     htmlContent: html,
-  } as Record<string, unknown>, { idempotencyKey: bookingIdForIdem ? `${bookingIdForIdem}_booking_confirmation_business_copy` : undefined });
+  } as Record<string, unknown>, { idempotencyKey });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Brevo business copy send failed: ${res.status} ${text}`);
@@ -608,11 +651,33 @@ export async function sendFinalChargeSuccessEmail(
   return { providerMessageId: await parseBrevoProviderMessageId(res) };
 }
 
+export interface FinalChargeFailedEmailTripDetails {
+  experienceName?: string;
+  tripDate?: string;
+  startTime?: string;
+}
+
+function finalChargeFailedTripDetailsHtml(trip?: FinalChargeFailedEmailTripDetails): string {
+  if (!trip) return "";
+  const exp = trip.experienceName?.trim();
+  const td = trip.tripDate?.trim();
+  const st = trip.startTime?.trim();
+  if (!exp && !td && !st) return "";
+  const esc = (s: string) => s.replace(/</g, "&lt;");
+  const strong = exp ? `<strong>${esc(exp)}</strong>` : "";
+  const when = td && st ? `${esc(td)} at ${esc(st)}` : td ? esc(td) : st ? esc(st) : "";
+  if (strong && when) return `<p>${strong}<br />${when}</p>`;
+  if (strong) return `<p>${strong}</p>`;
+  if (when) return `<p>${when}</p>`;
+  return "";
+}
+
 export async function sendFinalChargeFailedEmail(
   toEmail: string,
   toName: string,
   manageLink: string | undefined,
-  requiresAction: boolean
+  requiresAction: boolean,
+  tripDetails?: FinalChargeFailedEmailTripDetails
 ): Promise<void> {
   const subject = requiresAction
     ? "Action needed to complete your booking – Boat Bros ATX"
@@ -624,11 +689,13 @@ export async function sendFinalChargeFailedEmail(
     manageLink
       ? `<p style="margin-top: 24px;"><a href="${manageLink.replace(/"/g, "&quot;")}" style="display: inline-block; background: #0d9488; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">Update your card and pay now</a></p>`
       : "";
+  const tripHtml = finalChargeFailedTripDetailsHtml(tripDetails);
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">
   <p>Hi ${toName.replace(/</g, "&lt;")},</p>
   <p>${body.replace(/</g, "&lt;")}</p>
+  ${tripHtml}
   ${ctaHtml}
   <p style="margin-top: 24px; font-size: 12px; color: #666;">— Boat Bros ATX</p>
 </body></html>`;
@@ -705,22 +772,65 @@ export async function sendBookingCancellationEmail(params: {
   refundPending?: boolean;
   /** Optional amount for pending refund(s); when set with refundPending, "refund of $X is being processed". */
   pendingRefundAmount?: string;
+  /** Aligns body copy with SMS and actual cancel/refund result. */
+  refundOutcome?: "succeeded" | "pending" | "failed" | "skipped";
 }): Promise<void> {
-  const { to, customerName, experienceName, tripDate, refundAmount, refundPending, pendingRefundAmount } = params;
+  const {
+    to,
+    customerName,
+    experienceName,
+    tripDate,
+    refundAmount,
+    refundPending,
+    pendingRefundAmount,
+    refundOutcome,
+  } = params;
   const subject = "Booking canceled – Boat Bros ATX";
   const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
-  const parts: string[] = [];
-  if (refundAmount) {
-    parts.push(`<p><strong>Refund amount:</strong> ${refundAmount.replace(/</g, "&lt;")}</p>`);
-  }
-  if (refundPending) {
+  let refundLine = "";
+  if (refundOutcome === "skipped") {
+    refundLine =
+      "<p><strong>Refund:</strong> No refund is being issued for this cancellation.</p>";
+  } else if (refundOutcome === "failed") {
+    refundLine =
+      "<p><strong>Refund:</strong> We were unable to complete your refund automatically. Please reply to this email and we&apos;ll help you as soon as possible.</p>";
+  } else if (refundOutcome === "succeeded") {
+    const parts: string[] = [];
+    if (refundAmount) {
+      parts.push(`<p><strong>Refund amount:</strong> ${refundAmount.replace(/</g, "&lt;")}</p>`);
+    }
     parts.push(
-      pendingRefundAmount != null && pendingRefundAmount !== ""
-        ? `<p><strong>Refund in progress:</strong> A refund of ${pendingRefundAmount.replace(/</g, "&lt;")} is being processed and will be credited to your original payment method once complete.</p>`
-        : `<p><strong>Refund in progress:</strong> Your refund is being processed and will be credited to your original payment method once the refund is complete.</p>`
+      "<p>Your refund will be credited to your original payment method. Timing depends on your bank or card issuer.</p>"
     );
+    refundLine = parts.join("");
+  } else if (refundOutcome === "pending") {
+    const parts: string[] = [];
+    if (refundPending) {
+      parts.push(
+        pendingRefundAmount != null && pendingRefundAmount !== ""
+          ? `<p><strong>Refund in progress:</strong> A refund of ${pendingRefundAmount.replace(/</g, "&lt;")} is being processed and will be credited to your original payment method once complete.</p>`
+          : `<p><strong>Refund in progress:</strong> Your refund is being processed and will be credited to your original payment method once the refund is complete.</p>`
+      );
+    } else {
+      parts.push(
+        "<p><strong>Refund in progress:</strong> Your refund is being processed and will be credited to your original payment method once complete.</p>"
+      );
+    }
+    refundLine = parts.join("");
+  } else {
+    const parts: string[] = [];
+    if (refundAmount) {
+      parts.push(`<p><strong>Refund amount:</strong> ${refundAmount.replace(/</g, "&lt;")}</p>`);
+    }
+    if (refundPending) {
+      parts.push(
+        pendingRefundAmount != null && pendingRefundAmount !== ""
+          ? `<p><strong>Refund in progress:</strong> A refund of ${pendingRefundAmount.replace(/</g, "&lt;")} is being processed and will be credited to your original payment method once complete.</p>`
+          : `<p><strong>Refund in progress:</strong> Your refund is being processed and will be credited to your original payment method once the refund is complete.</p>`
+      );
+    }
+    refundLine = parts.join("");
   }
-  const refundLine = parts.join("");
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">

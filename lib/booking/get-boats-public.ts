@@ -116,8 +116,19 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
     .limit(1)
     .get();
 
-  if (snap.empty) return null;
-  const doc = snap.docs[0];
+  let doc = snap.empty ? null : snap.docs[0];
+  if (!doc) {
+    const fallbackSnap = await db
+      .collection("boats")
+      .where("isListingBoat", "==", true)
+      .where("active", "==", true)
+      .where("previousSlugs", "array-contains", normalizedSlug)
+      .limit(1)
+      .get();
+    if (fallbackSnap.empty) return null;
+    doc = fallbackSnap.docs[0];
+  }
+  if (!doc) return null;
   const boat = doc.data() as ListingBoat;
   const experienceIds = Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [];
 

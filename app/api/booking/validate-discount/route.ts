@@ -37,7 +37,6 @@ export async function POST(request: NextRequest) {
       { status: 429, headers: { "Retry-After": String(retryAfter) } }
     );
   }
-  const startTime = Date.now();
   try {
     const body = await request.json().catch(() => ({}));
     const codeRaw = typeof body.code === "string" ? body.code.trim() : "";
@@ -129,7 +128,7 @@ export async function POST(request: NextRequest) {
         codeLength: code.length,
         hasDoc: !!discountDoc,
       });
-      await new Promise((r) => setTimeout(r, Math.max(0, INVALID_RESPONSE_DELAY_MS - (Date.now() - startTime))));
+      await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
       return NextResponse.json({ valid: false, error: result.error }, { status: 422 });
     }
 

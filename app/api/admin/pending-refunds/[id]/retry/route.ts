@@ -24,6 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       processorAttempts: 0,
       nextRetryAt: Timestamp.now(),
       lastProcessorError: FieldValue.delete(),
+      requiresReview: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     return NextResponse.json({ ok: true, id });

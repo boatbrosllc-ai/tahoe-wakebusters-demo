@@ -251,11 +251,27 @@ export interface FinalPaymentRequestParams {
   amountFormatted: string;
   /** Full URL to pay (manage booking page with token). */
   payLink: string;
+  /**
+   * Fractional hours until trip start. When set, header/body use the nearest hour so copy matches the ~46–50h send window.
+   */
+  hoursUntilTrip?: number;
 }
 
 const FINAL_PAYMENT_SUBJECT = "Complete your payment – Boat Bros ATX";
 
 export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams): string {
+  const hoursRounded =
+    typeof params.hoursUntilTrip === "number" && Number.isFinite(params.hoursUntilTrip)
+      ? Math.round(params.hoursUntilTrip)
+      : null;
+  const headerSubtitle =
+    hoursRounded != null
+      ? `Final payment due — about ${hoursRounded} hours until your trip`
+      : "Final payment due soon — your trip is coming up";
+  const tripTimingLead =
+    hoursRounded != null
+      ? `Your <strong style="color:${DARK};">${escapeHtml(params.experienceName)}</strong> is in about ${hoursRounded} hours—<strong style="color:${DARK};">${escapeHtml(params.tripDate)}</strong> at <strong style="color:${DARK};">${escapeHtml(params.startTime)}</strong>. Please complete your remaining balance so you&apos;re all set.`
+      : `Your <strong style="color:${DARK};">${escapeHtml(params.experienceName)}</strong> is coming up soon—<strong style="color:${DARK};">${escapeHtml(params.tripDate)}</strong> at <strong style="color:${DARK};">${escapeHtml(params.startTime)}</strong>. Please complete your remaining balance so you&apos;re all set.`;
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -264,12 +280,12 @@ export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams):
   <div style="padding: 24px 16px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="${CONTAINER}">
       <tr>
-        ${reminderHeaderHtml("Final payment due – 48 hours until your trip")}
+        ${reminderHeaderHtml(headerSubtitle)}
       </tr>
       <tr>
         <td style="padding: 28px;">
           <p style="margin:0 0 16px;font-size:16px;color:${DARK};line-height:1.5;">Hi ${escapeHtml(params.customerName)},</p>
-          <p style="margin:0 0 16px;font-size:15px;color:${MUTED};line-height:1.6;">Your <strong style="color:${DARK};">${escapeHtml(params.experienceName)}</strong> is in 48 hours—<strong style="color:${DARK};">${escapeHtml(params.tripDate)}</strong> at <strong style="color:${DARK};">${escapeHtml(params.startTime)}</strong>. Please complete your remaining balance so you&apos;re all set.</p>
+          <p style="margin:0 0 16px;font-size:15px;color:${MUTED};line-height:1.6;">${tripTimingLead}</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f0fdf4; border-radius: 12px; margin: 20px 0; border: 1px solid rgba(34,197,94,0.3);">
             <tr>
               <td style="padding: 20px 24px;">

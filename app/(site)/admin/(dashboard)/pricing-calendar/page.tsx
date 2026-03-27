@@ -48,6 +48,7 @@ export default function PricingCalendarPage() {
   const [customDollars, setCustomDollars] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
 
@@ -130,19 +131,38 @@ export default function PricingCalendarPage() {
     if (!boatType || selectedDates.size === 0) return;
     setSaving(true);
     setError(null);
+    setWarning(null);
     try {
-      const res = await fetch("/api/admin/pricing-calendar", {
+      const payload = {
+        boatType,
+        dates: Array.from(selectedDates),
+        hourlyRateCents,
+      };
+      let res = await fetch("/api/admin/pricing-calendar", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          boatType,
-          dates: Array.from(selectedDates),
-          hourlyRateCents,
-        }),
+        body: JSON.stringify(payload),
       });
-      const data = await res.json().catch(() => ({}));
+      let data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.forceRequired && Number(data.activeHoldsOnAffectedDates) > 0) {
+        const confirmed = window.confirm(
+          `${data.warning ?? "Active holds exist on affected dates."}\n\nAffected active holds: ${data.activeHoldsOnAffectedDates}.\n\nContinue and apply this change anyway?`
+        );
+        if (confirmed) {
+          res = await fetch("/api/admin/pricing-calendar", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, acknowledgeActiveHolds: true }),
+          });
+          data = await res.json().catch(() => ({}));
+        }
+      }
       if (!res.ok) throw new Error(data.error || "Failed to save");
+      if (typeof data.warning === "string") {
+        setWarning(`${data.warning}${typeof data.activeHoldsOnAffectedDates === "number" ? ` (active holds: ${data.activeHoldsOnAffectedDates})` : ""}`);
+      }
       await fetchOverrides();
       setSelectedDates(new Set());
       setPopupOpen(false);
@@ -158,15 +178,34 @@ export default function PricingCalendarPage() {
     if (!boatType || selectedDates.size === 0) return;
     setSaving(true);
     setError(null);
+    setWarning(null);
     try {
-      const res = await fetch("/api/admin/pricing-calendar", {
+      const payload = { boatType, dates: Array.from(selectedDates), reset: true };
+      let res = await fetch("/api/admin/pricing-calendar", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boatType, dates: Array.from(selectedDates), reset: true }),
+        body: JSON.stringify(payload),
       });
-      const data = await res.json().catch(() => ({}));
+      let data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.forceRequired && Number(data.activeHoldsOnAffectedDates) > 0) {
+        const confirmed = window.confirm(
+          `${data.warning ?? "Active holds exist on affected dates."}\n\nAffected active holds: ${data.activeHoldsOnAffectedDates}.\n\nContinue and reset anyway?`
+        );
+        if (confirmed) {
+          res = await fetch("/api/admin/pricing-calendar", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, acknowledgeActiveHolds: true }),
+          });
+          data = await res.json().catch(() => ({}));
+        }
+      }
       if (!res.ok) throw new Error(data.error || "Failed to reset");
+      if (typeof data.warning === "string") {
+        setWarning(`${data.warning}${typeof data.activeHoldsOnAffectedDates === "number" ? ` (active holds: ${data.activeHoldsOnAffectedDates})` : ""}`);
+      }
       await fetchOverrides();
       setSelectedDates(new Set());
       setPopupOpen(false);
@@ -238,6 +277,11 @@ export default function PricingCalendarPage() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {error}
+        </div>
+      )}
+      {warning && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+          {warning}
         </div>
       )}
 

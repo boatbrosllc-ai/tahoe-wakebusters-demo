@@ -12,29 +12,85 @@ type CustomerItem = {
   totalSpentCents: number;
 };
 
+type CustomersApiResponse = {
+  customers: CustomerItem[];
+  nextCursor: string | null;
+  pageSize?: number;
+  pageBookingDocs?: number;
+};
+
+function mergeCustomerPage(prev: CustomerItem[], batch: CustomerItem[]): CustomerItem[] {
+  const m = new Map(prev.map((x) => [x.email, { ...x }]));
+  for (const c of batch) {
+    const e = m.get(c.email);
+    if (!e) {
+      m.set(c.email, { ...c });
+      continue;
+    }
+    const cNewer = Boolean(c.lastBookingAt && (!e.lastBookingAt || c.lastBookingAt > e.lastBookingAt));
+    const last =
+      !e.lastBookingAt ? c.lastBookingAt
+      : !c.lastBookingAt ? e.lastBookingAt
+      : e.lastBookingAt > c.lastBookingAt ? e.lastBookingAt : c.lastBookingAt;
+    m.set(c.email, {
+      email: e.email,
+      name: cNewer ? c.name : e.name,
+      phone: cNewer ? c.phone : e.phone,
+      bookingCount: e.bookingCount + c.bookingCount,
+      totalSpentCents: e.totalSpentCents + c.totalSpentCents,
+      lastBookingAt: last,
+    });
+  }
+  return Array.from(m.values()).sort((a, b) => (b.lastBookingAt ?? "").localeCompare(a.lastBookingAt ?? ""));
+}
+
 export default function AdminCustomersPage() {
   const [list, setList] = useState<CustomerItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [pagesLoaded, setPagesLoaded] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
-  const loadCustomers = useCallback(async () => {
-    setLoading(true);
+  const parsePayload = (data: unknown): CustomersApiResponse => {
+    const d = data as CustomersApiResponse & { error?: string };
+    const customers = Array.isArray(d.customers) ? d.customers : [];
+    const nc = d.nextCursor === null || typeof d.nextCursor === "string" ? d.nextCursor : null;
+    return { customers, nextCursor: nc, pageSize: d.pageSize, pageBookingDocs: d.pageBookingDocs };
+  };
+
+  const loadCustomers = useCallback(async (opts?: { append: boolean; cursor: string | null }) => {
+    const append = opts?.append ?? false;
+    const cursor = opts?.cursor ?? null;
+    if (append) setLoadingMore(true);
+    else {
+      setLoading(true);
+      setNextCursor(null);
+      setPagesLoaded(0);
+    }
     setError(null);
     try {
-      const res = await fetch("/api/admin/customers", { credentials: "include" });
+      const qs = new URLSearchParams();
+      if (cursor) qs.set("cursor", cursor);
+      const url = qs.toString() ? `/api/admin/customers?${qs}` : "/api/admin/customers";
+      const res = await fetch(url, { credentials: "include" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const msg = data.error ?? "Failed to load";
-        const hint = data.hint;
+        const msg = (data as { error?: string }).error ?? "Failed to load";
+        const hint = (data as { hint?: string }).hint;
         throw new Error(hint ? `${msg} ${hint}` : msg);
       }
-      const rows = Array.isArray(data) ? data : Array.isArray(data.customers) ? data.customers : [];
-      setList(rows as CustomerItem[]);
+      const { customers, nextCursor: nc } = parsePayload(data);
+      setList((prev) => (append ? mergeCustomerPage(prev, customers) : customers));
+      setNextCursor(nc);
+      setPagesLoaded((p) => (append ? p + 1 : 1));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
+      if (!append) setList([]);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
@@ -63,10 +119,13 @@ export default function AdminCustomersPage() {
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Customers</h1>
-        <p className="mt-1 text-sm text-brand-muted">People who have booked. Search by name or email.</p>
+        <p className="mt-1 text-sm text-brand-muted">
+          People who have booked. Each &quot;Load more&quot; fetches another page of booking documents and merges counts
+          into this list (newest pages first).
+        </p>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-end gap-3">
         <input
           type="search"
           placeholder="Search by name or email…"
@@ -75,7 +134,23 @@ export default function AdminCustomersPage() {
           className="min-h-[44px] w-full max-w-sm rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           aria-label="Search customers"
         />
+        {!loading && nextCursor != null && (
+          <button
+            type="button"
+            disabled={loadingMore}
+            onClick={() => void loadCustomers({ append: true, cursor: nextCursor })}
+            className="min-h-[44px] rounded-lg border border-brand-dark/20 bg-white px-4 py-2.5 text-sm font-medium text-brand-dark hover:bg-brand-bg disabled:opacity-60"
+          >
+            {loadingMore ? "Loading…" : "Load more (older bookings)"}
+          </button>
+        )}
       </div>
+      {pagesLoaded > 0 && !loading && (
+        <p className="text-xs text-brand-muted">
+          Loaded {pagesLoaded} booking page{pagesLoaded !== 1 ? "s" : ""}
+          {nextCursor == null ? " — reached end of booking history for this merge." : "."}
+        </p>
+      )}
 
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
         {loading && <div className="p-6 sm:p-8 text-center text-brand-muted text-sm">Loading…</div>}

@@ -40,6 +40,8 @@ export interface BoatPriceOverride {
 export interface ListingBoat {
   name: string;
   slug?: string;
+  /** Historical slugs for redirect/fallback lookup. */
+  previousSlugs?: string[];
   description?: string;
   /** Photo URLs for gallery/booking picker */
   photos: string[];
@@ -317,6 +319,8 @@ export interface Hold {
   experienceId?: string;
   /** Mirrors experience.pricingType at hold creation — used by checkout to build correct Stripe line items. */
   pricingType?: "charter" | "ticketed";
+  /** Mirrors experience.allowDeposit at hold creation so payment eligibility is immutable. */
+  allowDeposit?: boolean;
   bookingMode?: "shared" | "charter";
   slotId: string;
   rateId: string;
@@ -500,6 +504,8 @@ export interface BookingStripe {
 export interface Booking {
   boatId?: string;
   experienceId?: string;
+  /** Mirrors experience `pricingType` when known (shared ticketed admin bookings, hold conversion). */
+  pricingType?: "charter" | "ticketed";
   bookingMode?: "shared" | "charter";
   /** Source hold ID when booking was created from a hold; used for receipt claim-token resolution. */
   holdId?: string;
@@ -514,10 +520,20 @@ export interface Booking {
   /** Special requests / notes from Stripe Checkout custom field (optional). */
   specialNotes?: string;
   pricing: BookingPricing;
+  /** Cancellation policy snapshot at booking creation time. */
+  cancellationPolicy?: ExperienceCancellationPolicy;
   status: BookingStatus;
   stripe: BookingStripe;
   /** Trip date YYYY-MM-DD from slotId; used for admin calendar query by trip date range */
   startDateStr?: string;
+  /** Revenue summary month key at booking creation (e.g. revenue_2026_03). */
+  summaryMonthKey?: string;
+  /** Customer notification pipeline exhausted retries or dead-lettered (ops triage / filters). */
+  notificationFailed?: boolean;
+  notificationFailedAt?: FirestoreTimestamp;
+  notificationFailureDetail?: string;
+  /** Set when admin cancel could not resolve a slot path; cron retries release. */
+  slotResetPending?: boolean;
   /** Discount code applied at checkout (if any). */
   discountCode?: string;
   /** Discount amount in cents (if any). */
@@ -617,6 +633,8 @@ export interface CreateHoldInput {
   resumeHoldId?: string;
   /** Optional client-generated idempotency key (shared ticketed holds: reuse active hold for same key). */
   holdRequestId?: string;
+  /** Proves ownership of `resumeHoldId` when hold-request claim does not (signed `RELEASE_TOKEN_SECRET`). */
+  release_token?: string;
 }
 
 export interface CreateHoldResponse {
@@ -678,7 +696,13 @@ export type NotificationOutboxStatus = "pending" | "claimed" | "sent" | "failed"
 
 export interface NotificationOutboxEntry {
   bookingId: string;
-  type: "booking_confirmation" | "final_charge_success" | "discount_limit_exceeded_notification" | "waiver_invite_send";
+  type:
+    | "booking_confirmation"
+    | "final_charge_success"
+    | "discount_limit_exceeded_notification"
+    | "waiver_invite_send"
+    | "amount_integrity_mismatch_customer"
+    | "payment_under_manual_review_customer";
   payload: Record<string, unknown>;
   status: NotificationOutboxStatus;
   attemptCount: number;

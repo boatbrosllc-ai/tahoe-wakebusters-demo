@@ -9,20 +9,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
-import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { getAdminEmailFromSessionCookie, requireAdminSession } from "@/lib/admin-auth-firebase";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
+import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
-async function isAllowed(request: NextRequest): Promise<boolean> {
+async function resolveBlockSlotAuth(
+  request: NextRequest
+): Promise<{ ok: boolean; adminEmail: string | null; actorType: "admin_session" | "block_secret_automation" }> {
   const secret = process.env.BLOCK_SECRET?.trim();
   const auth = request.headers.get("authorization") ?? "";
-  if (secret && timingSafeStringEqual(auth, `Bearer ${secret}`)) return true;
+  if (secret && timingSafeStringEqual(auth, `Bearer ${secret}`)) {
+    return { ok: true, adminEmail: null, actorType: "block_secret_automation" };
+  }
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
-  return unauthorized === null;
+  if (unauthorized) return { ok: false, adminEmail: null, actorType: "admin_session" };
+  const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
+  return { ok: true, adminEmail, actorType: "admin_session" };
 }
 
 export async function POST(request: NextRequest) {
   try {
-    if (!(await isAllowed(request))) {
+    const auth = await resolveBlockSlotAuth(request);
+    if (!auth.ok) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const body = await request.json();
@@ -47,6 +56,20 @@ export async function POST(request: NextRequest) {
           : "")
       : "";
     const experienceIdVariants = getExperienceIdVariants(experienceId, experienceSlug);
+    const conflicts = await findBlockConflicts({
+      db,
+      variantIds: experienceIdVariants,
+      blockStart: start,
+      blockEnd: end,
+      boatId,
+      now: new Date(),
+    });
+    if (conflicts.length > 0) {
+      return NextResponse.json(
+        { error: "Block overlaps active holds or bookings", conflicts },
+        { status: 409 }
+      );
+    }
 
     if (boatId) {
       const boatRef = db.collection("boats").doc(boatId);
@@ -60,22 +83,28 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create one block per (experienceId variant) so lookups by slug/doc-id both work.
-    const writeRefs = experienceIdVariants.map((expIdVariant) =>
-      db.collection("blocks").add({
-        experienceId: expIdVariant,
-        experienceCanonicalId: experienceId,
-        experienceSlug: experienceSlug || null,
-        boatId: boatId ?? null,
-        startAt: Timestamp.fromDate(start),
-        endAt: Timestamp.fromDate(end),
-        note: null,
-        slotId,
-        createdAt: FieldValue.serverTimestamp(),
-        createdBy: null,
-      })
-    );
-    const [firstRef] = await Promise.all(writeRefs);
+    const firstRef = await db.collection("blocks").add({
+      experienceId,
+      experienceCanonicalId: experienceId,
+      experienceSlug: experienceSlug || null,
+      slugVariants: experienceIdVariants,
+      boatId: boatId ?? null,
+      startAt: Timestamp.fromDate(start),
+      endAt: Timestamp.fromDate(end),
+      note: null,
+      slotId,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: auth.actorType === "admin_session" ? auth.adminEmail ?? null : null,
+    });
+    void writeAdminAuditLog("block_slot", {
+      action: "block",
+      experienceId,
+      slotId,
+      boatId,
+      blockId: firstRef.id,
+      adminEmail: auth.adminEmail,
+      actorType: auth.actorType,
+    });
     return NextResponse.json({ ok: true, blockId: firstRef.id, slotId, boatId });
   } catch (err) {
     console.error("[admin/blocks/block-slot]", err);

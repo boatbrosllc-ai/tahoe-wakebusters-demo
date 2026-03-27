@@ -35,18 +35,21 @@ export function operationalAlertDedupeDocId(parts: string[]): string {
   return `oa_${h.slice(0, 48)}`;
 }
 
-/** Writes only once per `docId` — use with {@link operationalAlertDedupeDocId} for stable keys. */
-export async function writeOperationalAlertIfNewDocId(docId: string, alert: OperationalAlertInput): Promise<void> {
+/** Writes only once per `docId` — use with {@link operationalAlertDedupeDocId} for stable keys. Returns true if this call created the document. */
+export async function writeOperationalAlertIfNewDocId(docId: string, alert: OperationalAlertInput): Promise<boolean> {
   try {
     const db = getDb();
     const { Timestamp } = getFirestoreExports();
     const ref = db.collection("operationalAlerts").doc(docId);
-    await db.runTransaction(async (tx) => {
+    const inserted = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      if (snap.exists) return;
+      if (snap.exists) return false;
       tx.set(ref, { ...alert, createdAt: Timestamp.now() });
+      return true;
     });
+    return inserted === true;
   } catch (e) {
     console.error("[operational-alerts] writeOperationalAlertIfNewDocId failed", e);
+    return false;
   }
 }

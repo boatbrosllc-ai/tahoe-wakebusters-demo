@@ -49,6 +49,7 @@ import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { TrustLine } from "@/components/site/TrustLine";
 import { loadConfetti } from "@/lib/client/load-confetti";
 import { analytics } from "@/lib/analytics";
+import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
 import { location } from "@/content/location";
 import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
@@ -91,6 +92,15 @@ import {
   BOOKING_MODAL_SESSION_SUCCESS_KEY as SESSION_SUCCESS_KEY,
   BOOKING_MODAL_SESSION_SUCCESS_MAX_AGE_MS as SESSION_SUCCESS_MAX_AGE_MS,
 } from "@/lib/booking/booking-modal-session-keys";
+
+let bookingModalStripePromise: ReturnType<typeof loadStripe> | null = null;
+function getBookingModalStripePromise() {
+  if (!stripePublishableKey) return null;
+  if (bookingModalStripePromise == null) {
+    bookingModalStripePromise = loadStripe(stripePublishableKey);
+  }
+  return bookingModalStripePromise;
+}
 
 /** Default view month when reinitializing the calendar — matches America/Chicago used for slots and dates. */
 function viewMonthFromChicagoToday(): { year: number; month: number } {
@@ -145,14 +155,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [bookingState, dispatchBooking] = useReducer(bookingModalReducer, BOOKING_MODAL_INITIAL_STATE);
   const step = bookingState.step;
   const paymentPhase = bookingState.paymentPhase as BookingModalPaymentPhase;
-  /** Load Stripe.js only when the card form mounts — avoids competing with slots/date-prices for ticketed flows. */
-  const stripePromise = useMemo(
-    () =>
-      stripePublishableKey && paymentPhase === "stripe"
-        ? loadStripe(stripePublishableKey)
-        : null,
-    [stripePublishableKey, paymentPhase],
-  );
+  const stripePromise =
+    paymentPhase === "stripe" ? getBookingModalStripePromise() : null;
   const setStep = useCallback((s: 1 | 2 | 3 | 4) => dispatchBooking({ type: "SET_STEP", step: s }), []);
   const setPaymentPhase = useCallback(
     (p: BookingModalPaymentPhase) => dispatchBooking({ type: "SET_PAYMENT_PHASE", paymentPhase: p }),
@@ -1292,7 +1296,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       void runCompleteAfterPaymentForModal();
     }, 4000);
     const interval = window.setInterval(() => {
-      void runCompleteAfterPaymentForModal();
+      if (!completeAfterRetryInFlightRef.current) {
+        void runCompleteAfterPaymentForModal();
+      }
     }, 12_000);
     return () => {
       clearTimeout(first);
@@ -1459,11 +1465,16 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     );
                     return;
                   }
-                  const qs = new URLSearchParams({
-                    holdId: parsed.holdId,
-                    release_token: releaseForSummary,
+                  const summaryRes = await fetch("/api/booking/hold-summary", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    cache: "no-store",
+                    body: JSON.stringify({
+                      holdId: parsed.holdId,
+                      release_token: releaseForSummary,
+                      receipt_claim_token: parsed.receiptClaimToken?.trim() ?? null,
+                    }),
                   });
-                  const summaryRes = await fetch(`/api/booking/hold-summary?${qs}`, { cache: "no-store" });
                   const summary = (await summaryRes.json().catch(() => ({}))) as {
                     holdId?: string;
                     expiresAt?: string | null;
@@ -1616,10 +1627,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     ? AbortSignal.any([timeoutSigRecover, acRecover.signal])
                     : acRecover.signal;
                 try {
+                  const safeReceiptClaimToken = parsed.receiptClaimToken?.trim() ?? null;
                   const preOutcome = await completeAfterPaymentWithPolling({
                     paymentIntentId: parsed.paymentIntentId.trim(),
                     holdId: parsed.holdId,
-                    receiptClaimToken: parsed.receiptClaimToken.trim(),
+                    receiptClaimToken: safeReceiptClaimToken,
                     signal: pollSignalRecover,
                     onEnteredProcessing: () => setStripePaymentProcessing(true),
                   });
@@ -1948,6 +1960,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 setPaymentPhase("stripe");
               };
               try {
+                const safeReceiptClaimToken = parsed.receiptClaimToken?.trim() ?? null;
                 if (cancelled) {
                   cancelAc();
                   return;
@@ -1955,10 +1968,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 let outcome = await completeAfterPaymentWithPolling({
                   paymentIntentId: parsed.paymentIntentId.trim(),
                   holdId: parsed.holdId,
-                  receiptClaimToken:
-                    typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
-                      ? parsed.receiptClaimToken.trim()
-                      : null,
+                  receiptClaimToken: safeReceiptClaimToken,
                   signal: pollSignal,
                   onEnteredProcessing: () => setStripePaymentProcessing(true),
                 });
@@ -2011,10 +2021,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   outcome = await completeAfterPaymentWithPolling({
                     paymentIntentId: parsed.paymentIntentId.trim(),
                     holdId: parsed.holdId,
-                    receiptClaimToken:
-                      typeof parsed.receiptClaimToken === "string" && parsed.receiptClaimToken.trim()
-                        ? parsed.receiptClaimToken.trim()
-                        : null,
+                    receiptClaimToken: safeReceiptClaimToken,
                     signal: longSig,
                     onEnteredProcessing: () => setStripePaymentProcessing(true),
                   });
@@ -2246,8 +2253,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [step, paymentPhase]);
 
   useEffect(() => {
-    if (paymentPhase === "success") analytics.bookingCompleted();
-  }, [paymentPhase]);
+    if (paymentPhase !== "success") return;
+    trackBookingCompletedOnce({
+      bookingId: completedBookingId,
+      receiptToken: completedReceiptToken,
+    });
+  }, [paymentPhase, completedBookingId, completedReceiptToken]);
 
   useEffect(() => {
     if (paymentPhase !== "reconciliationPending") return;

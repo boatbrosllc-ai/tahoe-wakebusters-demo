@@ -10,12 +10,12 @@ import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import {
   addCalendarDaysToDateStr,
   bookingLookbackDaysFromMaxDuration,
-  intervalsOverlapMs,
 } from "@/lib/booking/booking-interval";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
-import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { DEFAULT_EXPERIENCE_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { applyExperienceRevenueDelta } from "@/lib/booking/summary-revenue";
 import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
-import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 import { computePricing } from "@/lib/booking/pricing";
 import { TAX_RATE } from "@/lib/booking/constants";
@@ -25,6 +25,15 @@ import {
   transactionGetQueryOrDoc,
   SlotConflictError,
 } from "@/lib/booking/slot-availability";
+import { departureTimesMatch } from "@/lib/booking/departure-match";
+import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import {
+  getDepartureInventoryRef,
+  reserveCapacity,
+  getReservedSeats,
+} from "@/lib/booking/shared-departure-inventory";
+import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
+import type { Hold } from "@/lib/booking/types";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -42,6 +51,135 @@ function normalizeTripDateStr(s: string | null | undefined): string | null {
   return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
 }
 
+/** Shared ticketed: reserve departure inventory inside the same Firestore txn as the booking write (mirrors create-hold). */
+async function reserveSharedTicketedCapacityAdminTx(
+  tx: import("firebase-admin").firestore.Transaction,
+  db: import("firebase-admin").firestore.Firestore,
+  Timestamp: typeof import("firebase-admin").firestore.Timestamp,
+  args: {
+    experienceId: string;
+    exp: Experience;
+    slotId: string;
+    partySize: number;
+  }
+): Promise<void> {
+  const { experienceId, exp, slotId, partySize } = args;
+  const parsed = parseSlotIdRelaxed(slotId) ?? parseSlotId(slotId);
+  if (!parsed) throw new Error("Invalid slotId for ticketed departure");
+  const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
+  const slugVariantsList = getExperienceIdVariants(experienceId, expSlug);
+  const dateStr = parsed.dateStr;
+  const inventoryRef = getDepartureInventoryRef(db, experienceId, dateStr);
+  const { start: slotStartForBlock, end: slotEndForBlock } = getSlotStartEnd(
+    dateStr,
+    parsed.startHour,
+    parsed.durationHours,
+    parsed.startMinute ?? 0
+  );
+  const blocked = await hasOverlappingBlock({
+    db,
+    Timestamp,
+    experienceId,
+    experienceIdVariants: slugVariantsList,
+    boatId: undefined,
+    slotStart: slotStartForBlock,
+    slotEnd: slotEndForBlock,
+    get: (q) => tx.get(q),
+  });
+  if (blocked) {
+    throw Object.assign(new Error("This slot is blocked by an operator block."), { code: "BLOCK_CONFLICT" });
+  }
+
+  const LEGACY_BOOKING_SCAN_LIMIT = getLegacyBookingScanLimit();
+  const bookingQueries: Promise<import("firebase-admin").firestore.QuerySnapshot>[] = [
+    tx.get(db.collection("bookings").where("experienceId", "==", experienceId).where("startDateStr", "==", dateStr)),
+    ...slugVariantsList.map((v) =>
+      tx.get(db.collection("bookings").where("experienceId", "==", v).where("startDateStr", "==", dateStr))
+    ),
+  ];
+  const bookSnaps = await Promise.all(bookingQueries);
+  const seenBIds = new Set<string>();
+  let sold = 0;
+  for (const snap of bookSnaps) {
+    for (const doc of snap.docs) {
+      if (seenBIds.has(doc.id)) continue;
+      seenBIds.add(doc.id);
+      const b = doc.data() as { partySize?: number; status?: string; bookingMode?: string };
+      if (typeof b.partySize !== "number") continue;
+      if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+      if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
+      sold += b.partySize;
+    }
+  }
+
+  if (process.env.DISABLE_LEGACY_BOOKING_FALLBACK !== "true") {
+    const legacyBookingSnaps = await Promise.all(
+      slugVariantsList.map((v) =>
+        tx.get(
+          db
+            .collection("bookings")
+            .where("experienceId", "==", v)
+            .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+            .limit(LEGACY_BOOKING_SCAN_LIMIT)
+        )
+      )
+    );
+    const legacyLimitHit = legacyBookingSnaps.some((snap) => snap.docs.length >= LEGACY_BOOKING_SCAN_LIMIT);
+    if (legacyLimitHit) {
+      throw new Error("LEGACY_BOOKING_SCAN_LIMIT_REACHED");
+    }
+    for (const snap of legacyBookingSnaps) {
+      for (const doc of snap.docs) {
+        if (seenBIds.has(doc.id)) continue;
+        const b = doc.data() as {
+          partySize?: number;
+          status?: string;
+          bookingMode?: string;
+          startDateStr?: string;
+          slotId?: string;
+          slot_id?: string;
+        };
+        if (b.startDateStr) continue;
+        if (typeof b.partySize !== "number") continue;
+        if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
+        const slotRaw = b.slotId ?? b.slot_id;
+        if (!slotRaw) continue;
+        const parsedLegacy = parseSlotIdRelaxed(slotRaw);
+        if (!parsedLegacy || parsedLegacy.dateStr !== dateStr) continue;
+        seenBIds.add(doc.id);
+        if (b.bookingMode === "charter") throw new Error("This departure is reserved as a private charter");
+        sold += b.partySize;
+      }
+    }
+  }
+
+  const now = new Date();
+  const oppositeModeHoldSnaps = await Promise.all(
+    slugVariantsList.map((v) =>
+      tx.get(db.collection("holds").where("experienceId", "==", v).where("startDateStr", "==", dateStr))
+    )
+  );
+  for (const snap of oppositeModeHoldSnaps) {
+    for (const d of snap.docs) {
+      const h = d.data() as Hold & { expiresAt?: { toDate?: () => Date; seconds?: number } };
+      if (h.status !== "active") continue;
+      const hex = h.expiresAt;
+      const expiryDate =
+        hex?.toDate?.() ?? (typeof hex?.seconds === "number" ? new Date(hex.seconds * 1000) : new Date(0));
+      if (expiryDate <= now) continue;
+      if (h.bookingMode !== "charter") continue;
+      if (!departureTimesMatch(h.slotId, parsed)) continue;
+      throw new Error("This departure is reserved as a private charter");
+    }
+  }
+
+  const sharedCapacityLimit = getMaxGuestsForExperience(exp);
+  const inventoryReservedBeforeHold = await getReservedSeats(tx, inventoryRef);
+  await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, partySize, sold, {
+    preReadReservedSeats: inventoryReservedBeforeHold,
+  });
+}
+
 /** Addon with display name for admin list/detail */
 export type AddonWithName = { addonId: string; name: string; qty: number };
 
@@ -51,6 +189,79 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDb();
+    const requiresManualReview = request.nextUrl.searchParams.get("requiresManualReview") === "true";
+    if (requiresManualReview) {
+      const prSnap = await db.collection("pendingRefunds").where("requiresReview", "==", true).limit(200).get();
+      const pendingDocs = prSnap.docs.filter((d) => {
+        const st = (d.data() as { status?: string }).status;
+        return st === "pending" || st === "failed";
+      });
+      const bookingIdSet = new Set<string>();
+      for (const d of pendingDocs) {
+        const bid = (d.data() as { bookingId?: string }).bookingId;
+        if (typeof bid === "string" && bid.trim()) bookingIdSet.add(bid.trim());
+      }
+      const ids = Array.from(bookingIdSet).slice(0, 50);
+      const snaps = await Promise.all(ids.map((id) => db.collection("bookings").doc(id).get()));
+      const experienceIds = new Set<string>();
+      const boatIds = new Set<string>();
+      snaps.forEach((d) => {
+        if (!d.exists) return;
+        const b = d.data() as Booking;
+        if (b.experienceId) experienceIds.add(b.experienceId);
+        if (b.boatId) boatIds.add(b.boatId);
+      });
+      const experienceNames = new Map<string, string>();
+      await Promise.all(
+        Array.from(experienceIds).map(async (id) => {
+          const expSnap = await db.collection("experiences").doc(id).get();
+          if (expSnap.exists) experienceNames.set(id, (expSnap.data() as { title?: string }).title ?? id);
+        })
+      );
+      const boatNames = new Map<string, string>();
+      await Promise.all(
+        Array.from(boatIds).map(async (id) => {
+          const boatSnap = await db.collection("boats").doc(id).get();
+          if (boatSnap.exists) boatNames.set(id, (boatSnap.data() as { name?: string }).name ?? id);
+        })
+      );
+      const list = snaps
+        .filter((d) => d.exists)
+        .map((d) => {
+          const b = d.data() as Booking & { startDateStr?: string };
+          const createdAt = b.createdAt ? toDate(b.createdAt as { seconds?: number; toDate?: () => Date }) : null;
+          const parsed = parseSlotIdRelaxed(b.slotId ?? "");
+          const rawTripDate = b.startDateStr ?? parsed?.dateStr ?? null;
+          const startDate = normalizeTripDateStr(rawTripDate);
+          return {
+            id: d.id,
+            experienceId: b.experienceId,
+            experienceName: b.experienceId ? experienceNames.get(b.experienceId) ?? "—" : "—",
+            boatId: b.boatId ?? null,
+            boatName: b.boatId ? boatNames.get(b.boatId) ?? b.boatId : null,
+            customer: b.customer,
+            partySize: b.partySize ?? null,
+            petsCount: b.petsCount ?? 0,
+            specialNotes: b.specialNotes ?? null,
+            answers: b.answers ?? {},
+            addonSelections: b.addonSelections ?? [],
+            addonsWithNames: [] as AddonWithName[],
+            durationHours: parsed?.durationHours ?? null,
+            slotId: b.slotId ?? null,
+            rateId: b.rateId ?? null,
+            pricing: b.pricing,
+            status: b.status,
+            stripe: b.stripe ?? undefined,
+            createdAt,
+            startDate,
+            startTime: null as string | null,
+            endTime: null as string | null,
+            requiresManualReviewPendingRefund: true as const,
+          };
+        });
+      return NextResponse.json({ bookings: list, nextCursor: null, requiresManualReviewSource: "pendingRefunds" });
+    }
+
     const limit = Math.min(parseInt(request.nextUrl.searchParams.get("limit") ?? "50", 10) || 50, 200);
     const cursorParam = request.nextUrl.searchParams.get("cursor");
     const statusFilter = request.nextUrl.searchParams.get("status"); // paid | canceled | refunded
@@ -248,6 +459,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ bookings: list, nextCursor }, { headers });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (message === "EXPERIENCE_NOT_FOUND") return NextResponse.json({ error: "Experience not found" }, { status: 404 });
+    if (message === "MANUAL_BOOKING_TICKETED_CONFLICT") {
+      return NextResponse.json(
+        {
+          error:
+            "Manual bookings are currently disabled for ticketed experiences. Use the customer booking flow instead so availability and departure inventory stay in sync.",
+        },
+        { status: 409 }
+      );
+    }
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(
       { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
@@ -290,6 +511,7 @@ export async function POST(request: NextRequest) {
     const externalReference = typeof body.externalReference === "string" ? body.externalReference.trim() : "";
     const specialNotes = typeof body.specialNotes === "string" ? body.specialNotes.trim() : "";
     let boatId: string | undefined = typeof body.boatId === "string" ? body.boatId.trim() || undefined : undefined;
+    const adminBookingMode: "shared" | "charter" = body.bookingMode === "shared" ? "shared" : "charter";
 
     const billingAddress = body.billingAddress && typeof body.billingAddress === "object"
       ? {
@@ -355,42 +577,58 @@ export async function POST(request: NextRequest) {
     if (!expSnap.exists) return NextResponse.json({ error: "Experience not found" }, { status: 404 });
     const exp = expSnap.data() as Experience;
 
-    if (exp.pricingType === "ticketed") {
+    if (exp.pricingType === "ticketed" && adminBookingMode === "charter") {
       return NextResponse.json(
         {
           error:
-            "Manual bookings are currently disabled for ticketed experiences. Use the customer booking flow instead so availability and departure inventory stay in sync.",
+            "Manual admin bookings cannot create private charter reservations for ticketed experiences. Use the customer booking flow for ticketed charters, or set bookingMode: \"shared\" for per-seat ticketed departures.",
         },
         { status: 400 }
       );
     }
 
     const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
-    const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, experienceId, expSlug);
-    const listingBoatIds = listingBoatDocs.map((d) => d.id);
+    const isAdminSharedTicketed = exp.pricingType === "ticketed" && adminBookingMode === "shared";
 
-    if (listingBoatIds.length === 1) {
-      boatId = listingBoatIds[0];
-    } else if (listingBoatIds.length > 1) {
-      const chosen = typeof body.boatId === "string" ? body.boatId.trim() : "";
-      if (!chosen || !listingBoatIds.includes(chosen)) {
-        return NextResponse.json(
-          {
-            error:
-              "This experience has multiple listing boats. Choose which boat this booking is for and send a valid boatId (admin UI: required boat selection).",
-          },
-          { status: 400 }
-        );
+    if (!isAdminSharedTicketed) {
+      const { docs: listingBoatDocs } = await fetchListingBoatsForExperience(db, experienceId, expSlug);
+      const listingBoatIds = listingBoatDocs.map((d) => d.id);
+
+      if (listingBoatIds.length === 1) {
+        boatId = listingBoatIds[0];
+      } else if (listingBoatIds.length > 1) {
+        const chosen = typeof body.boatId === "string" ? body.boatId.trim() : "";
+        if (!chosen || !listingBoatIds.includes(chosen)) {
+          return NextResponse.json(
+            {
+              error:
+                "This experience has multiple listing boats. Choose which boat this booking is for and send a valid boatId (admin UI: required boat selection).",
+            },
+            { status: 400 }
+          );
+        }
+        boatId = chosen;
+      } else if (boatId) {
+        const boatSnap = await db.collection("boats").doc(boatId).get();
+        const boatData = boatSnap.data() as { experienceIds?: string[] } | undefined;
+        const assigned = boatData?.experienceIds?.includes(experienceId);
+        if (!boatSnap.exists || !assigned) boatId = undefined;
       }
-      boatId = chosen;
-    } else if (boatId) {
-      const boatSnap = await db.collection("boats").doc(boatId).get();
-      const boatData = boatSnap.data() as { experienceIds?: string[] } | undefined;
-      const assigned = boatData?.experienceIds?.includes(experienceId);
-      if (!boatSnap.exists || !assigned) boatId = undefined;
+    } else {
+      boatId = undefined;
     }
 
     const partySizeNum = Number.isInteger(partySize) && partySize > 0 ? partySize : 1;
+
+    if (isAdminSharedTicketed) {
+      const cap = getMaxGuestsForExperience(exp);
+      if (partySizeNum < 1 || partySizeNum > cap) {
+        return NextResponse.json(
+          { error: `Ticket quantity must be between 1 and ${cap} for this experience.` },
+          { status: 400 }
+        );
+      }
+    }
 
     const ratesSnap = await db.collection("experiences").doc(experienceId).collection("rates").orderBy("durationHours").limit(1).get();
     const firstRate = ratesSnap.docs[0];
@@ -422,6 +660,8 @@ export async function POST(request: NextRequest) {
     } = {
       ...(boatId && { boatId }),
       experienceId,
+      bookingMode: adminBookingMode,
+      ...(exp.pricingType ? { pricingType: exp.pricingType } : {}),
       slotId,
       startDateStr: tripDate,
       rateId,
@@ -434,163 +674,79 @@ export async function POST(request: NextRequest) {
       pricing,
       status: "paid",
       stripe: {},
+      cancellationPolicy: exp.cancellationPolicy ?? DEFAULT_EXPERIENCE_CANCELLATION_POLICY,
       ...(pricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),
       ...(hasBilling && billingAddress && { billingAddress }),
       ...(hasCard && cardDisplay && { card: cardDisplay }),
       createdAt: Timestamp.now(),
     };
+    if (typeof (booking.createdAt as { toDate?: () => Date }).toDate === "function") {
+      const createdAtDate = (booking.createdAt as { toDate: () => Date }).toDate();
+      booking.summaryMonthKey = `revenue_${createdAtDate.getFullYear()}_${String(createdAtDate.getMonth() + 1).padStart(2, "0")}`;
+    }
 
     const bookingId = db.collection("bookings").doc().id;
     const bookingRef = db.collection("bookings").doc(bookingId);
-    const slotRef = boatId
-      ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
-      : db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
+    const slotRef =
+      isAdminSharedTicketed
+        ? db.collection("experiences").doc(experienceId).collection("slots").doc(slotId)
+        : boatId
+          ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
+          : db.collection("experiences").doc(experienceId).collection("slots").doc(slotId);
     const { start: slotStart, end: slotEnd } = getSlotStartEnd(tripDate, startHour, durationHours, 0);
-    const slotStartMs = slotStart.getTime();
-    const slotEndMs = slotEnd.getTime();
-    const { dayStart, dayEnd } = getCentralCalendarDayBounds(tripDate);
     const now = new Date();
-    const experienceIdVariantsForBlocks = getExperienceIdVariants(
-      experienceId,
-      typeof exp.slug === "string" ? exp.slug.trim() : ""
-    );
 
     await db.runTransaction(async (tx) => {
-      const blocked = await hasOverlappingBlock({
-        db,
-        Timestamp,
-        experienceId,
-        experienceIdVariants: experienceIdVariantsForBlocks,
-        boatId: boatId ?? undefined,
-        slotStart,
-        slotEnd,
-        get: (q) => tx.get(q),
-      });
-      if (blocked) {
-        throw Object.assign(
-          new Error(
-            "This time falls within an admin-blocked period. Remove the block in Admin → Calendars (or Blocks) first, or pick another time."
-          ),
-          { code: "BLOCK_CONFLICT" }
-        );
-      }
-      const slotsRef = boatId
-        ? db.collection("boats").doc(boatId).collection("slots")
-        : db.collection("experiences").doc(experienceId).collection("slots");
-      const sameDaySnap = await tx.get(
-        slotsRef
-          .where("startAt", ">=", Timestamp.fromDate(dayStart))
-          .where("startAt", "<=", Timestamp.fromDate(dayEnd))
-      );
-      const sameDayDocs = sameDaySnap.docs;
-      const heldDocs = sameDayDocs.filter((d) => {
-        const s = d.data() as Slot;
-        return s.status === "held" && s.holdId;
-      });
-      const bookedDocs = sameDayDocs.filter((d) => {
-        const s = d.data() as Slot;
-        return s.status === "booked" && s.bookingId;
-      });
-      const [holdSnaps, bookingSnaps] = await Promise.all([
-        heldDocs.length
-          ? Promise.all(heldDocs.map((d) => tx.get(db.collection("holds").doc((d.data() as Slot).holdId as string))))
-          : Promise.resolve([] as import("firebase-admin/firestore").DocumentSnapshot[]),
-        bookedDocs.length
-          ? Promise.all(bookedDocs.map((d) => tx.get(db.collection("bookings").doc((d.data() as Slot).bookingId as string))))
-          : Promise.resolve([] as import("firebase-admin/firestore").DocumentSnapshot[]),
-      ]);
-      const holdsById = new Map(heldDocs.map((d, i) => [(d.data() as Slot).holdId as string, holdSnaps[i]]));
-      const bookingsById = new Map(bookedDocs.map((d, i) => [(d.data() as Slot).bookingId as string, bookingSnaps[i]]));
+      const expInTx = await tx.get(db.collection("experiences").doc(experienceId));
+      if (!expInTx.exists) throw new Error("EXPERIENCE_NOT_FOUND");
+      const expTx = expInTx.data() as Experience;
+      const sharedTicketedInTx = expTx.pricingType === "ticketed" && adminBookingMode === "shared";
 
-      for (const doc of sameDayDocs) {
-        const data = doc.data() as Slot;
-        if (data.status === "open") continue;
-        if (data.status === "held") {
-          if (!data.holdId) continue;
-          const hSnap = holdsById.get(data.holdId);
-          if (!hSnap?.exists) continue;
-          const hold = hSnap.data() as { status?: string; expiresAt?: { toDate(): Date } };
-          if (hold?.status !== "active") continue;
-          const exp = hold?.expiresAt?.toDate?.();
-          if (exp && exp <= now) continue;
-        } else if (data.status === "booked") {
-          if (!data.bookingId) continue;
-          const bSnap = bookingsById.get(data.bookingId);
-          if (!bSnap?.exists) continue;
-          const b = bSnap.data() as { status?: string };
-          if (!(b.status && BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never))) continue;
-        }
-        const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
-        const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
-          throw Object.assign(new Error("This time slot overlaps an existing booking or hold"), { code: "SLOT_CONFLICT" });
-        }
-      }
+      if (sharedTicketedInTx) {
+        await reserveSharedTicketedCapacityAdminTx(tx, db, Timestamp, {
+          experienceId,
+          exp: expTx,
+          slotId,
+          partySize: partySizeNum,
+        });
+      } else {
+        if (expTx.pricingType === "ticketed") throw new Error("MANUAL_BOOKING_TICKETED_CONFLICT");
 
-      const slugVariantsForOverlap = getExperienceIdVariants(experienceId, exp.slug ?? "");
-      const parsedForOverlap = parseSlotIdRelaxed(slotId);
-      if (parsedForOverlap) {
-        await assertNoOverlappingActiveSameDaySlots({
-          db,
-          Timestamp,
-          get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
-          experienceId,
-          boatId,
-          useBoatSlots: !!boatId,
-          parsed: parsedForOverlap,
-          slotStart,
-          slotEnd,
-          now,
-        });
-        await assertSlotAvailable({
-          db,
-          Timestamp,
-          get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
-          experienceId,
-          experienceIdVariants: slugVariantsForOverlap,
-          parsed: parsedForOverlap,
-          slotStart,
-          slotEnd,
-          boatId,
-          useBoatSlots: !!boatId,
-          runSameDaySlotScan: false,
-          experienceSlug: typeof exp.slug === "string" ? exp.slug.trim() : undefined,
-          ignoreSlotDocIds: [slotId],
-        });
-      }
-      const lookbackDays = bookingLookbackDaysFromMaxDuration(durationHours);
-      const startDateLower = addCalendarDaysToDateStr(tripDate, -lookbackDays);
-      const startDateUpper = addCalendarDaysToDateStr(tripDate, lookbackDays);
-      const paidBookingSnaps = await Promise.all(
-        slugVariantsForOverlap.map((v) =>
-          tx.get(
-            db
-              .collection("bookings")
-              .where("experienceId", "==", v)
-              .where("startDateStr", ">=", startDateLower)
-              .where("startDateStr", "<=", startDateUpper)
-          )
-        )
-      );
-      const seenBookingIds = new Set<string>();
-      for (const snap of paidBookingSnaps) {
-        for (const doc of snap.docs) {
-          if (seenBookingIds.has(doc.id)) continue;
-          seenBookingIds.add(doc.id);
-          const b = doc.data() as { slotId?: string; boatId?: string; status?: string };
-          if (boatId && b.boatId !== boatId) continue;
-          if (!BOOKING_STATUSES_SLOT_TAKEN.has(b.status as never)) continue;
-          const p = b.slotId ? parseSlotId(b.slotId) : null;
-          if (!p) continue;
-          const { start: exStart, end: exEnd } = getSlotStartEnd(p.dateStr, p.startHour, p.durationHours, p.startMinute ?? 0);
-          if (intervalsOverlapMs(slotStartMs, slotEndMs, exStart.getTime(), exEnd.getTime())) {
-            throw Object.assign(new Error("This time slot overlaps an existing booking"), { code: "SLOT_CONFLICT" });
-          }
+        const slugVariantsForOverlap = getExperienceIdVariants(experienceId, exp.slug ?? "");
+        const parsedForOverlap = parseSlotIdRelaxed(slotId);
+        if (parsedForOverlap) {
+          await assertNoOverlappingActiveSameDaySlots({
+            db,
+            Timestamp,
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+            experienceId,
+            boatId,
+            useBoatSlots: !!boatId,
+            parsed: parsedForOverlap,
+            slotStart,
+            slotEnd,
+            now,
+          });
+          await assertSlotAvailable({
+            db,
+            Timestamp,
+            get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
+            experienceId,
+            experienceIdVariants: slugVariantsForOverlap,
+            parsed: parsedForOverlap,
+            slotStart,
+            slotEnd,
+            boatId,
+            useBoatSlots: !!boatId,
+            runSameDaySlotScan: true,
+            experienceSlug: typeof exp.slug === "string" ? exp.slug.trim() : undefined,
+            ignoreSlotDocIds: [slotId],
+          });
         }
       }
 
       const slotSnapBeforeWrite = await tx.get(slotRef);
-      if (slotSnapBeforeWrite.exists) {
+      if (!sharedTicketedInTx && slotSnapBeforeWrite.exists) {
         const slotStatus = (slotSnapBeforeWrite.data() as { status?: string }).status;
         if (slotStatus === "held") {
           throw Object.assign(
@@ -614,8 +770,7 @@ export async function POST(request: NextRequest) {
           },
           { merge: true }
         );
-        const now = new Date();
-        const monthKey = `revenue_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const monthKey = booking.summaryMonthKey as string;
         tx.set(
           db.collection("summaries").doc(monthKey),
           {
@@ -624,6 +779,7 @@ export async function POST(request: NextRequest) {
           },
           { merge: true }
         );
+        applyExperienceRevenueDelta(tx, db, FieldValue, experienceId, pricing.totalCents, 1);
       }
       tx.set(slotRef, {
         status: "booked",
@@ -666,6 +822,22 @@ export async function POST(request: NextRequest) {
         { error: "Unable to verify admin blocks. Deploy Firestore indexes and try again." },
         { status: 503 }
       );
+    }
+    if (message === "LEGACY_BOOKING_SCAN_LIMIT_REACHED") {
+      return NextResponse.json(
+        {
+          error:
+            "Availability verification hit a legacy-booking scan cap. Run backfill-start-date-str or try again shortly.",
+        },
+        { status: 503 }
+      );
+    }
+    if (
+      message === "This date is sold out." ||
+      message.startsWith("Only ") ||
+      message === "This departure is reserved as a private charter"
+    ) {
+      return NextResponse.json({ error: message }, { status: 409 });
     }
     if (err instanceof SlotConflictError) {
       return NextResponse.json(

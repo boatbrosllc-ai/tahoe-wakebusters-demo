@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { getAdminEmailFromSessionCookie, requireAdminSession } from "@/lib/admin-auth-firebase";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
@@ -77,6 +78,15 @@ export async function PATCH(
       note: note ?? null,
       updatedAt: FieldValue.serverTimestamp(),
     });
+    const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
+    void writeAdminAuditLog("block_update", {
+      blockId: id,
+      experienceId,
+      boatId: typeof current.boatId === "string" ? current.boatId.trim() || null : null,
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+      adminEmail,
+    });
     const updated = (await ref.get()).data() as {
       experienceId?: string;
       boatId?: string | null;
@@ -118,7 +128,22 @@ export async function DELETE(
     if (!snap.exists) {
       return NextResponse.json({ error: "Block not found" }, { status: 404 });
     }
+    const pre = snap.data() as {
+      experienceId?: string;
+      boatId?: string | null;
+      startAt?: { toDate?: () => Date };
+      endAt?: { toDate?: () => Date };
+    };
+    const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
     await db.collection("blocks").doc(id).delete();
+    void writeAdminAuditLog("block_delete", {
+      blockId: id,
+      experienceId: typeof pre.experienceId === "string" ? pre.experienceId : null,
+      boatId: typeof pre.boatId === "string" ? pre.boatId.trim() || null : pre.boatId ?? null,
+      startAt: pre.startAt?.toDate?.()?.toISOString() ?? null,
+      endAt: pre.endAt?.toDate?.()?.toISOString() ?? null,
+      adminEmail,
+    });
     return NextResponse.json({ ok: true, id });
   } catch (err) {
     console.error("[admin/blocks DELETE]", err);

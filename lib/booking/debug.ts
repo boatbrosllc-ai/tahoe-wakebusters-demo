@@ -2,26 +2,42 @@
  * Centralized debug logging for the booking flow.
  * All messages use the [booking:step] prefix so logs can be filtered (e.g. grep "[booking]").
  * Safe to call from both server and client; avoid logging full PII (use redacted summaries).
+ *
+ * Log tiers (BOOKING_LOG_LEVEL):
+ * - (default) bookingError always; bookingWarn on; bookingLog off
+ * - quiet: bookingWarn suppressed (errors only)
+ * - verbose: bookingLog on
+ *
+ * Client-only verbose UI debug: NEXT_PUBLIC_BOOKING_DEBUG=1 → bookingDebugLog
  */
 
 const PREFIX = "[booking]";
 
-/** True when debug logs should run: development, or NEXT_PUBLIC_BOOKING_DEBUG=1 in env. */
+/** True when client/debug UI logs should run (NEXT_PUBLIC_BOOKING_DEBUG only — not tied to NODE_ENV). */
 export function isBookingDebugEnabled(): boolean {
   if (typeof process === "undefined") return false;
-  const env = process.env as { NODE_ENV?: string; NEXT_PUBLIC_BOOKING_DEBUG?: string };
-  return env.NODE_ENV === "development" || env.NEXT_PUBLIC_BOOKING_DEBUG === "1";
+  const env = process.env as { NEXT_PUBLIC_BOOKING_DEBUG?: string };
+  return env.NEXT_PUBLIC_BOOKING_DEBUG === "1";
 }
 
-/** True when bookingLog/bookingWarn should emit in production (verbose logging). Increases log volume and PCI-DSS scope. */
-function isBookingVerboseLogEnabled(): boolean {
-  if (typeof process === "undefined") return false;
-  const env = process.env as { NODE_ENV?: string; BOOKING_LOG_LEVEL?: string };
-  return env.NODE_ENV !== "production" || env.BOOKING_LOG_LEVEL === "verbose";
+function bookingLogLevel(): string {
+  if (typeof process === "undefined") return "";
+  const v = (process.env as { BOOKING_LOG_LEVEL?: string }).BOOKING_LOG_LEVEL?.trim().toLowerCase() ?? "";
+  return v;
+}
+
+/** bookingWarn suppressed only when BOOKING_LOG_LEVEL=quiet */
+function isBookingWarnEnabled(): boolean {
+  return bookingLogLevel() !== "quiet";
+}
+
+/** bookingLog only when BOOKING_LOG_LEVEL=verbose */
+function isBookingInfoVerboseEnabled(): boolean {
+  return bookingLogLevel() === "verbose";
 }
 
 /**
- * Verbose debug log for dev console. Only logs when isBookingDebugEnabled() is true.
+ * Verbose debug log for dev console. Only logs when NEXT_PUBLIC_BOOKING_DEBUG=1.
  * Use for slots fetch, month change, date selection, etc. Filter in console by "[booking:client:debug]".
  */
 export function bookingDebugLog(
@@ -47,18 +63,23 @@ export type BookingLogStep =
   | "convert-hold"
   | "stripe-webhook"
   | "run-final-charges"
+  | "cleanup-holds"
+  | "reconcile-rollback"
+  | "transition-booking-status"
+  | "release-hold"
   | "client"
+  | "manage-pay-remaining"
   | "slot-availability"
   | "receipt"
   | "stripe-customer-index";
 
-/** Log an info-level booking step. Suppressed in production unless BOOKING_LOG_LEVEL=verbose. */
+/** Log an info-level booking step. Emitted only when BOOKING_LOG_LEVEL=verbose. */
 export function bookingLog(
   step: BookingLogStep,
   message: string,
   data?: Record<string, unknown> | null
 ): void {
-  if (!isBookingVerboseLogEnabled()) return;
+  if (!isBookingInfoVerboseEnabled()) return;
   const tag = `${PREFIX}:${step}`;
   if (data != null && Object.keys(data).length > 0) {
     console.log(`${tag} ${message}`, data);
@@ -67,13 +88,13 @@ export function bookingLog(
   }
 }
 
-/** Log a warning (e.g. recoverable or unexpected but handled). Suppressed in production unless BOOKING_LOG_LEVEL=verbose. */
+/** Log a warning (e.g. recoverable or unexpected but handled). Suppressed when BOOKING_LOG_LEVEL=quiet. */
 export function bookingWarn(
   step: BookingLogStep,
   message: string,
   data?: Record<string, unknown> | null
 ): void {
-  if (!isBookingVerboseLogEnabled()) return;
+  if (!isBookingWarnEnabled()) return;
   const tag = `${PREFIX}:${step}`;
   if (data != null && Object.keys(data).length > 0) {
     console.warn(`${tag} ${message}`, data);

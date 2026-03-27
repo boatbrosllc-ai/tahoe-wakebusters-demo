@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import type {
   Experience,
   ExperienceRate,
@@ -9,6 +9,11 @@ import type {
   ExperienceCancellationPolicy,
   ExperienceSeasonal,
 } from "@/lib/booking/types";
+import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
 
@@ -278,18 +283,166 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
   const parsed = parseBody(body);
+  const force = body != null && typeof body === "object" && (body as { force?: unknown }).force === true;
   if (!parsed) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
   try {
     const db = getDb();
+    const { FieldValue } = getFirestoreExports();
     const expRef = db.collection("experiences").doc(id);
     const expSnap = await expRef.get();
     if (!expSnap.exists) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const storedPricingType = expSnap.data()?.pricingType as string | undefined;
+    const expData = expSnap.data() as Experience;
+    const storedPricingType = expData?.pricingType as string | undefined;
+    const currentSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
+    const experienceIdVariants = getExperienceIdVariants(id, currentSlug);
+
+    if (typeof parsed.slug === "string" && parsed.slug.trim() !== currentSlug) {
+      const slugChangeBlockingBooking = await db
+        .collection("bookings")
+        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+        .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+        .limit(1)
+        .get();
+      if (!slugChangeBlockingBooking.empty) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change slug while active bookings exist. Existing bookings still reference this listing by its current slug. Migrate booking/hold/slot experienceId values first, then rename.",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    if (parsed.pricingType && parsed.pricingType !== storedPricingType) {
+      const [bookingConflict, holdConflict] = await Promise.all([
+        db
+          .collection("bookings")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+          .limit(1)
+          .get(),
+        db
+          .collection("holds")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "==", "active")
+          .limit(1)
+          .get(),
+      ]);
+      if (!bookingConflict.empty || !holdConflict.empty) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change pricingType while active bookings or holds exist. Cancel/release reservations and migrate inventory first.",
+            migrationHint:
+              "For ticketed -> charter, clean up stale departure inventory after reservations are fully cleared.",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const effectivePricingType = parsed.pricingType ?? storedPricingType;
+    const departureConfigChanged =
+      effectivePricingType === "ticketed" &&
+      ((typeof parsed.departureHour === "number" && parsed.departureHour !== expData.departureHour) ||
+        (typeof parsed.departureMinute === "number" && parsed.departureMinute !== expData.departureMinute) ||
+        (typeof parsed.tripDurationHours === "number" && parsed.tripDurationHours !== expData.tripDurationHours));
+    if (departureConfigChanged) {
+      const [bookingSnap, holdsSnap] = await Promise.all([
+        db
+          .collection("bookings")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+          .limit(25)
+          .get(),
+        db
+          .collection("holds")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "==", "active")
+          .limit(25)
+          .get(),
+      ]);
+      if (!bookingSnap.empty || !holdsSnap.empty) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change departure time or trip duration while active bookings/holds exist. Cancel or reschedule reservations first.",
+            bookingIds: bookingSnap.docs.map((d) => d.id),
+            holdIds: holdsSnap.docs.map((d) => d.id),
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const pricingDayConfigChanged =
+      (Array.isArray(parsed.holidayDates) &&
+        JSON.stringify(parsed.holidayDates) !== JSON.stringify(expData.holidayDates ?? [])) ||
+      (Array.isArray(parsed.weekendDays) &&
+        JSON.stringify(parsed.weekendDays) !== JSON.stringify(expData.weekendDays ?? [])) ||
+      (Array.isArray(parsed.friSunDays) &&
+        JSON.stringify(parsed.friSunDays) !== JSON.stringify(expData.friSunDays ?? []));
+    if (pricingDayConfigChanged) {
+      const holdsSnap = await db
+        .collection("holds")
+        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+        .where("status", "==", "active")
+        .limit(25)
+        .get();
+      if (!holdsSnap.empty) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change holiday/weekend pricing-day settings while active holds exist. Re-submit with { force: true } to release active holds first.",
+            holdIds: holdsSnap.docs.map((d) => d.id),
+            forceRequired: true,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    if (parsed.seasonal) {
+      const oldSeasonal = expData.seasonal;
+      const newSeasonal = parsed.seasonal;
+      const oldStart = typeof oldSeasonal?.startDate === "string" ? oldSeasonal.startDate : null;
+      const oldEnd = typeof oldSeasonal?.endDate === "string" ? oldSeasonal.endDate : null;
+      const newStart = typeof newSeasonal.startDate === "string" ? newSeasonal.startDate : oldStart;
+      const newEnd = typeof newSeasonal.endDate === "string" ? newSeasonal.endDate : oldEnd;
+      const narrowsWindow =
+        (oldSeasonal?.enabled !== true && newSeasonal.enabled === true) ||
+        (oldStart != null && newStart != null && newStart > oldStart) ||
+        (oldEnd != null && newEnd != null && newEnd < oldEnd);
+      if (narrowsWindow && newStart && newEnd) {
+        const holdsSnap = await db
+          .collection("holds")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "==", "active")
+          .get();
+        const affectedHoldIds = holdsSnap.docs
+          .filter((d) => {
+            const s = (d.data() as { startDateStr?: string }).startDateStr;
+            return typeof s === "string" && (s < newStart || s > newEnd);
+          })
+          .map((d) => d.id);
+        if (affectedHoldIds.length > 0) {
+          return NextResponse.json(
+            {
+              error:
+                "Cannot narrow seasonal availability while active holds exist outside the new date window. Cancel/release those holds first.",
+              holdIds: affectedHoldIds,
+            },
+            { status: 409 }
+          );
+        }
+      }
+    }
     const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType);
     const { rates, addons } = parsed;
     const ratesRef = expRef.collection("rates");
@@ -311,17 +464,124 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (Array.isArray(rates) && existingRatesSnap) {
       let minPriceCents: number | null = null;
-      for (const d of existingRatesSnap.docs) batch.delete(d.ref);
+      const existingByDuration = new Map<number, FirebaseFirestore.QueryDocumentSnapshot>();
+      for (const d of existingRatesSnap.docs) {
+        const duration = (d.data() as { durationHours?: number }).durationHours;
+        if (typeof duration === "number") existingByDuration.set(duration, d);
+      }
+      const incomingDurations = new Set<number>();
       for (const r of rates) {
-        batch.set(ratesRef.doc(), { ...stripUndefined(r as Record<string, unknown>), active: true });
+        const duration = r.durationHours;
+        incomingDurations.add(duration);
+        const payload = { ...stripUndefined(r as Record<string, unknown>), active: true };
+        const existing = existingByDuration.get(duration);
+        if (existing) {
+          batch.set(existing.ref, payload, { merge: true });
+        } else {
+          batch.set(ratesRef.doc(), payload);
+        }
         if (typeof r.priceCents === "number" && (minPriceCents === null || r.priceCents < minPriceCents)) {
           minPriceCents = r.priceCents;
+        }
+      }
+      const rateIdsToDelete: string[] = [];
+      for (const d of existingRatesSnap.docs) {
+        const duration = (d.data() as { durationHours?: number }).durationHours;
+        if (typeof duration === "number" && !incomingDurations.has(duration)) {
+          rateIdsToDelete.push(d.id);
+        }
+      }
+      if (rateIdsToDelete.length > 0) {
+        const bookingSnap = await db
+          .collection("bookings")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+          .get();
+        const blockingBookingIds: string[] = [];
+        for (const doc of bookingSnap.docs) {
+          const rateId = (doc.data() as { rateId?: string }).rateId;
+          if (typeof rateId === "string" && rateIdsToDelete.includes(rateId)) {
+            blockingBookingIds.push(doc.id);
+          }
+        }
+        if (blockingBookingIds.length > 0) {
+          return NextResponse.json(
+            {
+              error: "Cannot remove rate durations referenced by active bookings.",
+              bookingIds: blockingBookingIds,
+              rateIds: rateIdsToDelete,
+            },
+            { status: 409 }
+          );
+        }
+        const activeHoldsSnap = await db
+          .collection("holds")
+          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("status", "==", "active")
+          .get();
+        const rateIdSet = new Set(rateIdsToDelete);
+        const blockingHoldIds = activeHoldsSnap.docs
+          .filter((doc) => {
+            const holdRateId = (doc.data() as { rateId?: string }).rateId;
+            return typeof holdRateId === "string" && rateIdSet.has(holdRateId);
+          })
+          .map((doc) => doc.id);
+        if (blockingHoldIds.length > 0) {
+          return NextResponse.json(
+            {
+              error:
+                "Cannot remove rate durations referenced by active holds. Wait for holds to expire before deleting this duration option.",
+              holdIds: blockingHoldIds,
+              rateIds: rateIdsToDelete,
+              holdExpiryMinutes: HOLD_EXPIRY_MINUTES,
+            },
+            { status: 409 }
+          );
+        }
+        for (const d of existingRatesSnap.docs) {
+          if (rateIdsToDelete.includes(d.id)) batch.delete(d.ref);
         }
       }
       expUpdate.fromPriceCents = minPriceCents ?? null;
     }
 
     if (Array.isArray(addons) && existingAddonsSnap) {
+      const existingAddonIds = new Set(existingAddonsSnap.docs.map((d) => d.id));
+      const activeHoldsSnap = await db
+        .collection("holds")
+        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+        .where("status", "==", "active")
+        .get();
+      const blockingAddonsHoldIds = activeHoldsSnap.docs
+        .filter((doc) => {
+          const hold = doc.data() as {
+            addonSelections?: { addonId?: string }[];
+            pricing?: { subtotalCents?: number; taxCents?: number; feesCents?: number; totalCents?: number };
+          };
+          const referencesOldAddon =
+            Array.isArray(hold.addonSelections) &&
+            hold.addonSelections.some((s) => typeof s.addonId === "string" && existingAddonIds.has(s.addonId));
+          if (!referencesOldAddon) return false;
+          const p = hold.pricing;
+          const hasCompletePricingSnapshot =
+            p != null &&
+            typeof p.subtotalCents === "number" &&
+            typeof p.taxCents === "number" &&
+            typeof p.feesCents === "number" &&
+            typeof p.totalCents === "number";
+          return !hasCompletePricingSnapshot;
+        })
+        .map((doc) => doc.id);
+      if (blockingAddonsHoldIds.length > 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot replace addons while active holds reference current addon IDs without a complete pricing snapshot.",
+            holdIds: blockingAddonsHoldIds,
+          },
+          { status: 409 }
+        );
+      }
       for (const d of existingAddonsSnap.docs) batch.delete(d.ref);
       for (const a of addons) {
         batch.set(addonsRef.doc(), { ...stripUndefined(a as Record<string, unknown>), active: true });
@@ -332,8 +592,75 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       batch.update(expRef, expUpdate as Partial<Experience>);
     }
 
+    const isDeactivatingExperience = parsed.active === false && expData.active === true;
+    if (isDeactivatingExperience) {
+      const activeHoldsSnap = await db
+        .collection("holds")
+        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+        .where("status", "==", "active")
+        .limit(50)
+        .get();
+      if (!force && !activeHoldsSnap.empty) {
+        return NextResponse.json(
+          {
+            error:
+              "Deactivating this experience would release active customer holds. Re-submit with { force: true } to confirm hold release.",
+            activeHoldCount: activeHoldsSnap.size,
+            holdIds: activeHoldsSnap.docs.map((d) => d.id),
+            forceRequired: true,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     await batch.commit();
-    return NextResponse.json({ id });
+    let holdRelease:
+      | {
+          attempted: number;
+          processed: string[];
+          skipped: string[];
+          failed: Array<{ holdId: string; error?: string }>;
+          partialFailure: boolean;
+        }
+      | undefined;
+    if (isDeactivatingExperience && force) {
+      const activeHoldsSnap = await db
+        .collection("holds")
+        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+        .where("status", "==", "active")
+        .get();
+      const processed: string[] = [];
+      const skipped: string[] = [];
+      const failed: Array<{ holdId: string; error?: string }> = [];
+      for (const holdDoc of activeHoldsSnap.docs) {
+        try {
+          const releaseResult = await runExpiredHoldReleaseTransaction(db, FieldValue, holdDoc.ref);
+          if (releaseResult === "processed") processed.push(holdDoc.id);
+          else if (releaseResult === "skipped") skipped.push(holdDoc.id);
+          else failed.push({ holdId: holdDoc.id });
+          await writeAdminAuditLog("experience_deactivate_release_hold", {
+            experienceId: id,
+            holdId: holdDoc.id,
+            releaseResult,
+          });
+        } catch (releaseErr) {
+          failed.push({
+            holdId: holdDoc.id,
+            error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+          });
+        }
+      }
+      holdRelease = {
+        attempted: activeHoldsSnap.size,
+        processed,
+        skipped,
+        failed,
+        partialFailure: failed.length > 0,
+      };
+      console.log("[admin/experiences/:id] deactivate release holds", { experienceId: id, ...holdRelease });
+    }
+    return NextResponse.json({ id, ...(holdRelease ? { holdRelease } : {}) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

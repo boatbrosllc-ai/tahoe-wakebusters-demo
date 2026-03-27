@@ -81,6 +81,61 @@ export async function GET(
 
     const bWaiver = (b as { waiver?: { requestId: string; status: string; templateId: string; templateVersion: number } }).waiver;
 
+    const bNotify = b as {
+      notificationFailed?: boolean;
+      notificationFailureDetail?: string;
+      notificationFailedAt?: { toDate?: () => Date; seconds?: number };
+      slotResetPending?: boolean;
+    };
+    let notificationFailedAt: string | null = null;
+    if (bNotify.notificationFailedAt) {
+      if (typeof bNotify.notificationFailedAt.toDate === "function") {
+        notificationFailedAt = bNotify.notificationFailedAt.toDate().toISOString();
+      } else if (typeof (bNotify.notificationFailedAt as { seconds?: number }).seconds === "number") {
+        notificationFailedAt = new Date(
+          (bNotify.notificationFailedAt as { seconds: number }).seconds * 1000
+        ).toISOString();
+      }
+    }
+
+    let auditLogEntries: { id: string; action: string; payload: unknown; createdAt: string | null }[] = [];
+    try {
+      const auditSnap = await db.collection("adminAuditLog").orderBy("createdAt", "desc").limit(120).get();
+      auditLogEntries = auditSnap.docs
+        .map((ad) => {
+          const ax = ad.data() as { action?: string; payload?: unknown; createdAt?: { toDate?: () => Date } };
+          return {
+            id: ad.id,
+            action: ax.action ?? "",
+            payload: ax.payload ?? {},
+            createdAt: ax.createdAt?.toDate?.()?.toISOString() ?? null,
+          };
+        })
+        .filter((row) => {
+          const p = row.payload as { bookingId?: string };
+          return p?.bookingId === id;
+        })
+        .slice(0, 40);
+    } catch {
+      auditLogEntries = [];
+    }
+
+    let operationalAlertsForBooking: { id: string; type?: string; createdAt: string | null; [k: string]: unknown }[] = [];
+    try {
+      const opSnap = await db.collection("operationalAlerts").where("bookingId", "==", id).limit(30).get();
+      operationalAlertsForBooking = opSnap.docs.map((od) => {
+        const ox = od.data() as Record<string, unknown>;
+        const ts = ox.createdAt as { toDate?: () => Date } | undefined;
+        return {
+          id: od.id,
+          ...ox,
+          createdAt: ts?.toDate?.()?.toISOString() ?? null,
+        };
+      });
+    } catch {
+      operationalAlertsForBooking = [];
+    }
+
     const bConf = b as { confirmationSentAt?: { toDate?: () => Date; seconds?: number } };
     let confirmationSentAt: string | null = null;
     if (bConf.confirmationSentAt) {
@@ -118,6 +173,12 @@ export async function GET(
       endTime,
       waiver: bWaiver ?? undefined,
       confirmationSentAt,
+      notificationFailed: bNotify.notificationFailed === true,
+      notificationFailedAt,
+      notificationFailureDetail: bNotify.notificationFailureDetail ?? null,
+      slotResetPending: bNotify.slotResetPending === true,
+      auditLogEntries,
+      operationalAlertsForBooking,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

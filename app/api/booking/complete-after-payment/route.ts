@@ -23,7 +23,11 @@ import {
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
 import { ResolveAndConvertPaymentError, resolveAndConvertPayment } from "@/lib/booking/resolve-and-convert-payment";
-import { signReceiptClaimToken, verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
+import {
+  signReceiptClaimToken,
+  verifyReceiptClaimToken,
+  verifyReceiptClaimTokenIgnoreExpiry,
+} from "@/lib/booking/receiptToken";
 import { bookingLog, bookingWarn, bookingError } from "@/lib/booking/debug";
 import {
   operationalAlertDedupeDocId,
@@ -241,7 +245,7 @@ async function trySuccessResponseIfBookingExistsForSucceededPi(
   bookingLog("complete-after-payment", logTag, {
     holdId,
     recoveredBookingId,
-    paymentIntentIdPrefix: paymentIntentId.slice(0, 12),
+    paymentIntentId,
   });
 
   const ciRecover = await buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
@@ -344,19 +348,62 @@ export async function POST(request: NextRequest) {
 
     let holdId: string;
     if (input.receiptClaimToken) {
-      const claimPayload = verifyReceiptClaimToken(input.receiptClaimToken);
-      if (!claimPayload) {
-        bookingLog("complete-after-payment", "invalid or expired receipt_claim_token");
-        return NextResponse.json({ error: "Invalid or expired receipt claim token" }, { status: 401 });
-      }
-      holdId = claimPayload.holdId;
-      if (input.holdId && input.holdId.trim() !== holdId) {
-        return NextResponse.json({ error: "receipt_claim_token does not match holdId" }, { status: 400 });
-      }
-      const metadataHoldId = pi.metadata?.holdId as string | undefined;
-      if (metadataHoldId != null && metadataHoldId !== holdId) {
-        bookingLog("complete-after-payment", "PI metadata holdId does not match receipt claim");
-        return NextResponse.json({ error: "Payment intent does not match this hold" }, { status: 400 });
+      const claimPayloadStrict = verifyReceiptClaimToken(input.receiptClaimToken);
+      if (claimPayloadStrict) {
+        holdId = claimPayloadStrict.holdId;
+        if (input.holdId && input.holdId.trim() !== holdId) {
+          return NextResponse.json({ error: "receipt_claim_token does not match holdId" }, { status: 400 });
+        }
+        const metadataHoldIdStrict =
+          typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
+        if (metadataHoldIdStrict && metadataHoldIdStrict !== holdId) {
+          bookingLog("complete-after-payment", "PI metadata holdId does not match receipt claim");
+          return NextResponse.json({ error: "Payment intent does not match this hold" }, { status: 400 });
+        }
+      } else {
+        const laxPayload = verifyReceiptClaimTokenIgnoreExpiry(input.receiptClaimToken);
+        const metadataHoldId =
+          typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
+        if (laxPayload) {
+          if (metadataHoldId && metadataHoldId !== laxPayload.holdId) {
+            bookingLog("complete-after-payment", "signed receipt claim holdId does not match PI metadata (possible hijack)");
+            return NextResponse.json({ error: "Payment intent does not match this receipt claim" }, { status: 401 });
+          }
+          if (metadataHoldId) {
+            if (input.holdId?.trim() && input.holdId.trim() !== metadataHoldId) {
+              return NextResponse.json({ error: "holdId does not match this payment" }, { status: 400 });
+            }
+            holdId = metadataHoldId;
+          } else {
+            bookingLog("complete-after-payment", "expired/edge receipt_claim_token — PI missing holdId metadata, reconciliation pending");
+            await logReconcilingPending(db, null, input.paymentIntentId, "pi_missing_hold_metadata");
+            return NextResponse.json(
+              {
+                reconciliationPending: true,
+                message:
+                  "Your payment was received. We are confirming your booking; you will receive a confirmation email shortly.",
+              },
+              { status: 200 }
+            );
+          }
+        } else {
+          if (!metadataHoldId) {
+            bookingLog("complete-after-payment", "invalid receipt_claim_token; PI missing holdId — reconciliation pending");
+            await logReconcilingPending(db, null, input.paymentIntentId, "pi_missing_hold_metadata");
+            return NextResponse.json(
+              {
+                reconciliationPending: true,
+                message:
+                  "Your payment was received. We are confirming your booking; you will receive a confirmation email shortly.",
+              },
+              { status: 200 }
+            );
+          }
+          if (input.holdId?.trim() && input.holdId.trim() !== metadataHoldId) {
+            return NextResponse.json({ error: "holdId does not match this payment" }, { status: 400 });
+          }
+          holdId = metadataHoldId;
+        }
       }
     } else {
       const metaHold = typeof pi.metadata?.holdId === "string" ? pi.metadata.holdId.trim() : "";
@@ -379,7 +426,7 @@ export async function POST(request: NextRequest) {
     }
     bookingLog("complete-after-payment", "parsed input", {
       holdId,
-      paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24) + "...",
+      paymentIntentId: input.paymentIntentId,
     });
     const rlHold = await checkRateLimitPostPayment(getHoldRateLimitKey(holdId));
     if (!rlHold.allowed) {
@@ -467,7 +514,7 @@ export async function POST(request: NextRequest) {
     if (!holdSnap.exists) {
       bookingWarn("complete-after-payment", "hold not found; reconciling by payment intent / checkout session", {
         holdId,
-        paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
+        paymentIntentId: input.paymentIntentId,
       });
       let recoveredBookingId: string | null = null;
       try {
@@ -673,8 +720,8 @@ export async function POST(request: NextRequest) {
     if (holdCustomerId && piCustomerId && holdCustomerId !== piCustomerId) {
       bookingError("complete-after-payment", "payment intent customer does not match hold", null, {
         holdId,
-        holdCustomerIdPrefix: holdCustomerId.slice(0, 8),
-        piCustomerIdPrefix: piCustomerId.slice(0, 8),
+        holdCustomerId,
+        piCustomerId,
       });
       await new Promise((r) => setTimeout(r, PI_MISMATCH_DELAY_MS));
       return NextResponse.json({ error: "Payment intent does not match this reservation" }, { status: 400 });
@@ -720,7 +767,7 @@ export async function POST(request: NextRequest) {
       }
       bookingError("complete-after-payment", "payment intent not recorded on hold", null, {
         holdId,
-        paymentIntentIdPrefix: input.paymentIntentId.slice(0, 24),
+        paymentIntentId: input.paymentIntentId,
       });
       await new Promise((r) => setTimeout(r, PI_MISMATCH_DELAY_MS));
       const holdRow = holdSnap.data() as Hold;
@@ -909,7 +956,7 @@ export async function POST(request: NextRequest) {
       if (!resolvedBookingId) {
         bookingWarn("complete-after-payment", "alreadyConverted:no_resolvable_booking", {
           holdId,
-          paymentIntentIdPrefix: input.paymentIntentId.slice(0, 12),
+          paymentIntentId: input.paymentIntentId,
         });
         await writeOperationalAlert({
           type: "complete_after_payment_already_converted_no_booking",

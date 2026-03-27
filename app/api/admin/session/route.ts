@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHmac } from "crypto";
 import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE } from "@/lib/admin-auth-constants";
 import {
   createAdminSessionCookie,
@@ -203,6 +204,17 @@ export async function POST(request: NextRequest) {
       maxAge: COOKIE_MAX_AGE,
       path: "/",
     });
+    const cookieSecret = process.env.ADMIN_COOKIE_SECRET?.trim();
+    if (cookieSecret) {
+      const sig = createHmac("sha256", cookieSecret).update(sessionCookie).digest("hex");
+      res.cookies.set("admin_session_sig", sig, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: COOKIE_MAX_AGE,
+        path: "/",
+      });
+    }
     return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

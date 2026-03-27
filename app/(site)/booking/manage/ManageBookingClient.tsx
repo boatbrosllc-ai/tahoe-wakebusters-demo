@@ -269,6 +269,7 @@ export function ManageBookingClient() {
   const [pendingStripeReturnVerify, setPendingStripeReturnVerify] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const payRemainingInFlightRef = useRef(false);
 
   useEffect(() => {
     const redirectStatus = searchParams.get("redirect_status");
@@ -403,11 +404,13 @@ export function ManageBookingClient() {
 
   const requestPayRemaining = useCallback(
     async (skipSavedPaymentMethod: boolean) => {
-      if (!token) return;
-      setPayError(null);
-      setPayProcessingMessage(null);
-      setPayLoading(true);
+      if (payRemainingInFlightRef.current) return;
+      payRemainingInFlightRef.current = true;
       try {
+        if (!token) return;
+        setPayError(null);
+        setPayProcessingMessage(null);
+        setPayLoading(true);
         if (!manageCustomerEmail) return;
         const res = await fetch("/api/booking/manage/pay-remaining", {
           method: "POST",
@@ -445,6 +448,7 @@ export function ManageBookingClient() {
       } catch (e) {
         setPayError(e instanceof Error ? e.message : "Failed");
       } finally {
+        payRemainingInFlightRef.current = false;
         setPayLoading(false);
       }
     },

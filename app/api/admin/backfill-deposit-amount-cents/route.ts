@@ -14,6 +14,7 @@ import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
 import type { Booking } from "@/lib/booking/types";
+import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 
 const DEPOSIT_STATUSES = [
   "final_due",
@@ -94,6 +95,10 @@ async function runBackfill(dryRun: boolean, request: NextRequest | undefined, cu
       updatedCount: results.filter((r) => r.depositAmountCents != null).length,
       docIds: results.filter((r) => r.depositAmountCents != null).map((r) => r.id).slice(0, 30),
       at: new Date().toISOString(),
+    });
+    void writeAdminAuditLog("backfill_deposit_amount_cents", {
+      updatedCount: results.filter((r) => r.depositAmountCents != null).length,
+      docIds: results.filter((r) => r.depositAmountCents != null).map((r) => r.id).slice(0, 30),
     });
   }
 

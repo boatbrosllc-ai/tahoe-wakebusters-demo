@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { BookingStatus } from "@/lib/booking/types";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { bookingWarn } from "@/lib/booking/debug";
 
 type AllowedFrom = BookingStatus | BookingStatus[];
 
@@ -38,8 +39,12 @@ export async function transitionBookingStatus(
 
   let result: { ok: true } | { ok: false; reason: "not_found" | "unexpected_from" | "illegal_transition"; currentStatus?: BookingStatus } =
     { ok: false, reason: "not_found" };
+  const transitionLogRef: {
+    from?: BookingStatus;
+  } = {};
 
   await db.runTransaction(async (tx) => {
+    transitionLogRef.from = undefined;
     const bookingRef = db.collection("bookings").doc(bookingId);
     const snap = await tx.get(bookingRef);
     if (!snap.exists) {
@@ -55,13 +60,24 @@ export async function transitionBookingStatus(
       result = { ok: false, reason: "illegal_transition", currentStatus };
       return;
     }
+    transitionLogRef.from = currentStatus;
     tx.update(bookingRef, {
       status: to,
       ...payload,
+      ...(transitionSource ? { transitionSource } : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
     result = { ok: true };
   });
+
+  if (transitionLogRef.from !== undefined) {
+    bookingWarn("transition-booking-status", "status transitioned", {
+      bookingId,
+      from: transitionLogRef.from,
+      to,
+      transitionSource: transitionSource ?? null,
+    });
+  }
 
   return result;
 }

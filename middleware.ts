@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { isAdminPublicPath } from "@/lib/admin-public-paths";
+import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
 
 function isAdminProtectedPath(pathname: string): boolean {
   return (pathname.startsWith("/admin") || pathname.startsWith("/api/admin")) && !isAdminPublicPath(pathname);
@@ -9,6 +10,11 @@ function isAdminProtectedPath(pathname: string): boolean {
 /** Cron endpoints under /api/admin/cron/* allow Bearer CRON_SECRET so Netlify Scheduled Functions can invoke them without a session. */
 function isAdminCronPath(pathname: string): boolean {
   return pathname.startsWith("/api/admin/cron/");
+}
+
+/** Block automation endpoints can use Bearer BLOCK_SECRET without admin cookie. */
+function isBlockSecretPath(pathname: string): boolean {
+  return pathname === "/api/admin/blocks/block-slot" || pathname === "/api/admin/blocks/block-date";
 }
 
 async function isCronAuthorized(request: NextRequest): Promise<boolean> {
@@ -22,6 +28,49 @@ async function isCronAuthorized(request: NextRequest): Promise<boolean> {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+async function isBlockSecretAuthorized(request: NextRequest): Promise<boolean> {
+  const secret = process.env.BLOCK_SECRET?.trim();
+  if (!secret) return false;
+  const expected = `Bearer ${secret}`;
+  const auth = request.headers.get("authorization") ?? "";
+  const enc = new TextEncoder();
+  const a = enc.encode(expected);
+  const b = enc.encode(auth);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+function extractCookie(cookieHeader: string | null, name: string): string | null {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return match?.[1]?.trim() ?? null;
+}
+
+async function verifyAdminCookieSignature(request: NextRequest): Promise<boolean> {
+  const secret = process.env.ADMIN_COOKIE_SECRET?.trim();
+  if (!secret) return false;
+  const cookieHeader = request.headers.get("cookie");
+  const sessionValue = extractCookie(cookieHeader, ADMIN_SESSION_COOKIE_NAME);
+  const signature = extractCookie(cookieHeader, "admin_session_sig");
+  if (!sessionValue || !signature || !/^[0-9a-fA-F]{64}$/.test(signature)) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sigBytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(sessionValue)));
+  const provided = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) provided[i] = parseInt(signature.slice(i * 2, i * 2 + 2), 16);
+  if (sigBytes.length !== provided.length) return false;
+  let diff = 0;
+  for (let i = 0; i < sigBytes.length; i++) diff |= sigBytes[i] ^ provided[i];
   return diff === 0;
 }
 
@@ -50,11 +99,15 @@ export async function middleware(request: NextRequest) {
       }
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    /**
-     * Admin pages and /api/admin/* rely on the Firebase session cookie (layout + requireAdminSession).
-     * We do not gate here with ADMIN_EDGE_SECRET / admin_edge: Edge build vs server env mismatches on
-     * hosts like Netlify broke login even when Firebase was configured correctly.
-     */
+    if (isBlockSecretPath(pathname) && (await isBlockSecretAuthorized(request))) {
+      const res = NextResponse.next({ request: { headers: requestHeaders } });
+      res.headers.set("Content-Security-Policy", csp);
+      return res;
+    }
+    if (pathname.startsWith("/api/admin/")) {
+      const ok = await verifyAdminCookieSignature(request);
+      if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });

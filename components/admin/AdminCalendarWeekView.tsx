@@ -164,6 +164,9 @@ export function AdminCalendarWeekView({
   const [selectedBlock, setSelectedBlock] = useState<CalendarEvent | null>(null);
   const [editBlockSaving, setEditBlockSaving] = useState(false);
   const [blockError, setBlockError] = useState<string | null>(null);
+  const [newBlockConfirmStep, setNewBlockConfirmStep] = useState(false);
+  const [undoCreatedBlockId, setUndoCreatedBlockId] = useState<string | null>(null);
+  const undoBlockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
@@ -215,8 +218,18 @@ export function AdminCalendarWeekView({
   }, [hasSingleExperienceContext, resolvedExperienceIds, newBlockExperienceId]);
 
   useEffect(() => {
+    return () => {
+      if (undoBlockTimeoutRef.current) clearTimeout(undoBlockTimeoutRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     fetchEvents();
-    const intervalId = setInterval(() => fetchEvents(), 30_000);
+    /** Poll while tab visible only; 2 min cadence — booking data changes rarely; use Refresh for immediate load. */
+    const intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      fetchEvents();
+    }, 120_000);
     return () => clearInterval(intervalId);
   }, [fetchEvents]);
 
@@ -283,6 +296,7 @@ export function AdminCalendarWeekView({
     }
     const dateStr = weekDayKeys[dayIndex] ?? isoToChicagoDateStr(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + dayIndex, 12, 0, 0).toISOString());
     const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, hour, 1, 0);
+    if (slotStart < new Date()) return;
     setNewBlockStart(toCentralDatetimeLocal(slotStart));
     setNewBlockEnd(toCentralDatetimeLocal(slotEnd));
     setNewBlockBoatId(boatList[0]?.id ?? "");
@@ -290,6 +304,7 @@ export function AdminCalendarWeekView({
     setBlockError(null);
     setBlockNotice(null);
     if (resolvedExperienceIds.length > 1) setNewBlockExperienceId("");
+    setNewBlockConfirmStep(false);
     setNewBlockOpen(true);
   };
 
@@ -318,11 +333,24 @@ export function AdminCalendarWeekView({
           note: newBlockNote.trim() || undefined,
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      const data = (await res.json().catch(() => ({}))) as { error?: string; id?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      const created = data;
       const experienceLabel =
         experienceNamesById[newBlockExperienceId] ?? newBlockExperienceId;
       setBlockNotice(`Blocked time for ${experienceLabel}.`);
       setNewBlockOpen(false);
+      setNewBlockConfirmStep(false);
+      if (undoBlockTimeoutRef.current) clearTimeout(undoBlockTimeoutRef.current);
+      if (typeof created.id === "string" && created.id.length > 0) {
+        setUndoCreatedBlockId(created.id);
+        undoBlockTimeoutRef.current = setTimeout(() => {
+          undoBlockTimeoutRef.current = null;
+          setUndoCreatedBlockId(null);
+        }, 8000);
+      } else {
+        setUndoCreatedBlockId(null);
+      }
       fetchEvents();
       onRefresh();
     } catch (e) {
@@ -432,6 +460,9 @@ export function AdminCalendarWeekView({
           <span className="hidden sm:inline text-xs text-brand-muted">
             Click a slot to add a block
           </span>
+          <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => fetchEvents()}>
+            Refresh
+          </Button>
         </div>
       </div>
 
@@ -443,6 +474,33 @@ export function AdminCalendarWeekView({
       {blockNotice && (
         <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-sm text-emerald-800">
           {blockNotice}
+        </div>
+      )}
+      {undoCreatedBlockId && (
+        <div className="px-4 py-2 flex flex-wrap items-center justify-between gap-2 bg-brand-dark text-white text-sm border-b border-white/10">
+          <span>Block created. Undo will remove it.</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="border-white/40 text-white hover:bg-white/10"
+            onClick={() => {
+              const id = undoCreatedBlockId;
+              if (undoBlockTimeoutRef.current) clearTimeout(undoBlockTimeoutRef.current);
+              undoBlockTimeoutRef.current = null;
+              setUndoCreatedBlockId(null);
+              void fetch(`/api/admin/blocks/${id}`, { method: "DELETE", credentials: "include" })
+                .then((r) => {
+                  if (!r.ok) throw new Error("Undo failed");
+                  fetchEvents();
+                  onRefresh();
+                  setBlockNotice("Block removed.");
+                })
+                .catch(() => setBlockError("Could not undo block. Remove it from the block list if needed."));
+            }}
+          >
+            Undo
+          </Button>
         </div>
       )}
 
@@ -618,13 +676,21 @@ export function AdminCalendarWeekView({
         open={newBlockOpen}
         onOpenChange={(open) => {
           setNewBlockOpen(open);
-          if (!open) setBlockError(null);
+          if (!open) {
+            setBlockError(null);
+            setNewBlockConfirmStep(false);
+          }
         }}
         title="New block"
         description="Block this time slot so it's not bookable."
         fullScreenOnMobile
       >
         <div className="space-y-4">
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+            Creating this block will prevent customers from booking this time slot. This takes effect immediately.
+          </p>
+          {!newBlockConfirmStep ? (
+            <>
           <label className="block">
             <span className="text-xs font-medium text-brand-muted">Start</span>
             <input
@@ -693,17 +759,43 @@ export function AdminCalendarWeekView({
             </Button>
             <Button
               size="sm"
-              onClick={createBlock}
+              type="button"
+              onClick={() => setNewBlockConfirmStep(true)}
               disabled={
-                newBlockSaving ||
                 !newBlockStart ||
                 !newBlockEnd ||
                 (resolvedExperienceIds.length > 1 && !newBlockExperienceId)
               }
             >
-              {newBlockSaving ? "Saving…" : "Create block"}
+              Continue
             </Button>
           </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-brand-dark">
+                Are you sure you want to block this time? Customers will not be able to book it until the block is removed.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" size="sm" type="button" onClick={() => setNewBlockConfirmStep(false)}>
+                  Back
+                </Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={() => void createBlock()}
+                  disabled={
+                    newBlockSaving ||
+                    !newBlockStart ||
+                    !newBlockEnd ||
+                    (resolvedExperienceIds.length > 1 && !newBlockExperienceId)
+                  }
+                >
+                  {newBlockSaving ? "Saving…" : "Create block and make unavailable"}
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Dialog>
 

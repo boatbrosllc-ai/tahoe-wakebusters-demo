@@ -16,6 +16,7 @@ import { assertCronPostAuthorized } from "@/lib/booking/cron-auth";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import { bookingError } from "@/lib/booking/debug";
 
 const PAGE_SIZE = 50;
 const BATCH_SIZE = 5;
@@ -164,9 +165,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const RECONCILE_ROLLBACK_FAILURE_ALERT_THRESHOLD = (() => {
+      const n = parseInt(process.env.RECONCILE_ROLLBACK_FAILURE_ALERT_THRESHOLD ?? "3", 10);
+      return Number.isFinite(n) && n >= 1 ? Math.min(n, 100) : 3;
+    })();
+    if (failed >= RECONCILE_ROLLBACK_FAILURE_ALERT_THRESHOLD) {
+      await writeOperationalAlert({
+        type: "reconcile_rollback_pending_holds_high_failure_count",
+        source: "reconcile-rollback-pending-holds",
+        failed,
+        matched,
+        released,
+        skipped,
+        threshold: RECONCILE_ROLLBACK_FAILURE_ALERT_THRESHOLD,
+      }).catch(() => {});
+    }
+
     return NextResponse.json({ ok: true, matched, released, skipped, failed, inventoryReconciled });
   } catch (err) {
-    console.error("[admin/cron/reconcile-rollback-pending-holds]", err);
+    bookingError("reconcile-rollback", "reconcile-rollback-pending-holds failed", err);
     return NextResponse.json({ error: "Reconcile failed" }, { status: 500 });
   }
 }

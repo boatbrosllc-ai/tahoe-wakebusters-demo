@@ -35,31 +35,26 @@ export default function AdminExperiencesPage() {
   }, [fetchList]);
 
   async function moveItem(index: number, direction: "up" | "down") {
+    if (movingId !== null) return;
     const item = list[index];
     const swapIndex = direction === "up" ? index - 1 : index + 1;
     if (swapIndex < 0 || swapIndex >= list.length) return;
     const swapItem = list[swapIndex];
     setMovingId(item.id);
     try {
-      const itemOrder = item.sortOrder ?? 999;
-      const swapOrder = swapItem.sortOrder ?? 999;
-      const newItemOrder = direction === "up" ? Math.max(0, swapOrder - 1) : swapOrder + 1;
-      const newSwapOrder = direction === "up" ? itemOrder : itemOrder + 1;
-      await Promise.all([
-        fetch(`/api/admin/experiences/${item.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ sortOrder: newItemOrder }),
-        }),
-        fetch(`/api/admin/experiences/${swapItem.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ sortOrder: newSwapOrder }),
-        }),
-      ]);
+      const res = await fetch("/api/admin/experiences/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ experienceIdA: item.id, experienceIdB: swapItem.id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to reorder");
+      }
       await fetchList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reorder");
     } finally {
       setMovingId(null);
     }

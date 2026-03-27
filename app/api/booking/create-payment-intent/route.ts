@@ -480,7 +480,11 @@ export async function POST(request: NextRequest) {
       payFullAmount = true;
     } else if (hold.experienceId && experienceForPolicy) {
       // Charter: allowDeposit gates whether deposit is offered; when true, honor client payFullAmount (default deposit).
-      if (experienceForPolicy.allowDeposit === true) {
+      const holdAllowDeposit =
+        typeof (hold as { allowDeposit?: boolean }).allowDeposit === "boolean"
+          ? (hold as { allowDeposit?: boolean }).allowDeposit
+          : experienceForPolicy.allowDeposit === true;
+      if (holdAllowDeposit === true) {
         payFullAmount = input.clientPayFullAmount;
       } else {
         payFullAmount = true;
@@ -716,7 +720,7 @@ export async function POST(request: NextRequest) {
         try {
           bookingLog("create-payment-intent", "checking existing PI", {
             holdId: input.holdId,
-            existingPiIdPrefix: existingPiId.slice(0, 8),
+            existingPaymentIntentId: existingPiId,
             payFullAmount,
           });
           const existing = await stripe.paymentIntents.retrieve(existingPiId);
@@ -775,7 +779,7 @@ export async function POST(request: NextRequest) {
                 if (existingAmount === chargeCents && existing.client_secret) {
                   bookingLog("create-payment-intent", "reusing existing PI", {
                     holdId: input.holdId,
-                    paymentIntentIdPrefix: existing.id.slice(0, 8),
+                    paymentIntentId: existing.id,
                   });
                   const mergeReuse = await runHoldExtensionTransaction(null);
                   if (!mergeReuse.ok) {
@@ -853,7 +857,7 @@ export async function POST(request: NextRequest) {
         } catch (piErr) {
           bookingWarn("create-payment-intent", "failed to retrieve existing PI, creating new one", {
             holdId: input.holdId,
-            existingPiIdPrefix: existingPiId.slice(0, 8),
+            existingPaymentIntentId: existingPiId,
             err: piErr,
           });
         }
@@ -871,8 +875,27 @@ export async function POST(request: NextRequest) {
       };
       if (hold.experienceId) metadata.experienceId = hold.experienceId;
       if (hold.boatId) metadata.boatId = hold.boatId;
-      if (!metadata.payment_stage || (metadata.payment_stage !== "full" && metadata.payment_stage !== "deposit")) {
-        throw new Error("PaymentIntent metadata invariant failed: payment_stage must be set");
+      if (metadata.payment_stage !== "full" && metadata.payment_stage !== "deposit") {
+        const incidentCode = generateIncidentCode();
+        await writeOperationalAlert({
+          type: "payment_intent_missing_payment_stage",
+          source: "create-payment-intent",
+          holdId: input.holdId,
+          incidentCode,
+        });
+        bookingError(
+          "create-payment-intent",
+          "PaymentIntent metadata invariant failed: payment_stage must be full or deposit before create",
+          null,
+          { holdId: input.holdId, incidentCode }
+        );
+        return NextResponse.json(
+          {
+            error: "Payment could not be started due to an internal metadata error. Please try again or contact support.",
+            incidentCode,
+          },
+          { status: 500 }
+        );
       }
 
       const idempotencyKey = buildPaymentIntentIdempotencyKey({
@@ -892,10 +915,34 @@ export async function POST(request: NextRequest) {
         metadata,
         ...buildBookingPaymentIntentMethodParams({ payFullAmount, experience: experienceForPolicy }),
       };
+      const stage = paymentIntentParams.metadata?.payment_stage;
+      if (stage !== "full" && stage !== "deposit") {
+        const incidentCode = generateIncidentCode();
+        await writeOperationalAlert({
+          type: "payment_intent_missing_payment_stage",
+          source: "create-payment-intent",
+          holdId: input.holdId,
+          incidentCode,
+          stage: stage ?? null,
+        });
+        bookingError(
+          "create-payment-intent",
+          "Refusing stripe.paymentIntents.create: metadata.payment_stage must be full or deposit",
+          null,
+          { holdId: input.holdId, incidentCode }
+        );
+        return NextResponse.json(
+          {
+            error: "Payment could not be started due to an internal metadata error. Please try again or contact support.",
+            incidentCode,
+          },
+          { status: 500 }
+        );
+      }
       const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams, { idempotencyKey });
       if (!paymentIntent.client_secret) {
         bookingError("create-payment-intent", "PaymentIntent missing client secret", null, {
-          paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
+          paymentIntentId: paymentIntent.id,
         });
         return NextResponse.json({ error: "PaymentIntent missing client secret" }, { status: 500 });
       }
@@ -942,7 +989,7 @@ export async function POST(request: NextRequest) {
       }
       bookingLog("create-payment-intent", "PaymentIntent created and persisted", {
         holdId: input.holdId,
-        paymentIntentIdPrefix: paymentIntent.id.slice(0, 8),
+        paymentIntentId: paymentIntent.id,
         payFullAmount,
       });
       const rtFieldNew = releaseTokenFieldForResponse(input.holdId, mergeNew.effectiveExpiresAt);
