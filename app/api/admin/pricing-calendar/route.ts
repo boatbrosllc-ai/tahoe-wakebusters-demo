@@ -12,7 +12,7 @@ import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
 
 const COLLECTION = "pricingCalendar";
 
-export async function applyPricingCalendarDateUpdates(input: {
+async function applyPricingCalendarDateUpdates(input: {
   boatType: string;
   dates: string[];
   reset: boolean;
