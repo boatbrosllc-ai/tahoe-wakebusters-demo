@@ -860,6 +860,8 @@ export async function GET(request: NextRequest) {
         bookingDurationHours?: number;
         unresolvedBoatId?: boolean;
       };
+      /** Canonical duration per booking id from booking.slotId parsing. */
+      const bookingDurationHoursByBookingId = new Map<string, number>();
       const existingByBoatAndKey = new Map<string, SlotRow>();
       /** Firestore slot docs may store holdId for server-side hold expiry resolution; never expose to clients (response uses holdId: null). */
       const charterSlotHoldIdByKey = new Map<string, string>();
@@ -905,6 +907,7 @@ export async function GET(request: NextRequest) {
         }
         if (!intervalOverlapsRequestWindow(slotStart.getTime(), slotEnd.getTime(), winStart, winEnd)) return;
         const slotIdNorm = buildSlotId(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+        bookingDurationHoursByBookingId.set(doc.id, parsed.durationHours);
         const bidRaw = typeof b.boatId === "string" ? b.boatId.trim() || undefined : undefined;
         const bid = bidRaw && boatIds.includes(bidRaw) ? bidRaw : undefined;
         if (!bid) {
@@ -928,6 +931,7 @@ export async function GET(request: NextRequest) {
               updatedAt: null,
               boatId: blockBid,
               experienceId,
+              bookingDurationHours: parsed.durationHours,
               unresolvedBoatId: true,
             });
           }
@@ -945,6 +949,7 @@ export async function GET(request: NextRequest) {
           updatedAt: null,
           boatId: bid,
           experienceId,
+          bookingDurationHours: parsed.durationHours,
         });
       };
 
@@ -1402,15 +1407,7 @@ export async function GET(request: NextRequest) {
 
           let bookingDurationHours: number | undefined = undefined;
           if (rowStatus === "booked" && rowBookingId) {
-            const canonicalRow = Array.from(existingByBoatAndKey.values()).find((r) => {
-              if (r.boatId !== bid || r.status !== "booked" || r.bookingId !== rowBookingId) return false;
-              const cp = parseSlotIdRelaxed(r.id);
-              return cp != null && cp.durationHours !== durationHours;
-            });
-            if (canonicalRow) {
-              const cp = parseSlotIdRelaxed(canonicalRow.id);
-              if (cp) bookingDurationHours = cp.durationHours;
-            }
+            bookingDurationHours = bookingDurationHoursByBookingId.get(rowBookingId);
           }
 
           const openSlotDocRow = existing?.status === "open" ? existing : null;
