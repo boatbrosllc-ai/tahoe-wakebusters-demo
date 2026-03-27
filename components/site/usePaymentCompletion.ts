@@ -39,10 +39,15 @@ export function usePaymentCompletion(options: UsePaymentCompletionOptions) {
 
     if ((!resolvedHoldId || !resolvedPiId) && o.receiptClaimToken?.trim()) {
       try {
+        const piForReceipt =
+          (resolvedIds?.paymentIntentId ?? o.paymentIntentIdOverride ?? o.paymentIntentId)?.trim() || null;
         const res = await fetch("/api/booking/receipt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ receipt_token: o.receiptClaimToken.trim() }),
+          body: JSON.stringify({
+            receipt_token: o.receiptClaimToken.trim(),
+            ...(piForReceipt ? { payment_intent_id: piForReceipt } : {}),
+          }),
         });
         const data = (res.ok ? await res.json().catch(() => null) : null) as { bookingId?: string } | null;
         if (data?.bookingId) {

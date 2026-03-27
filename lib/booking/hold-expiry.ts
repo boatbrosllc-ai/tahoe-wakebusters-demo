@@ -6,6 +6,13 @@ import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
  */
 export const HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS = 900_000;
 
+/**
+ * If a PaymentIntent for this hold has already succeeded, allow conversion up to this long after
+ * `expiresAt` so paid customers are not stranded when checkout overruns the hold clock (async methods,
+ * delays, or reconciliation). Beyond this window we still reject to limit stale inventory risk.
+ */
+export const HOLD_SUCCEEDED_CONVERSION_MAX_PAST_EXPIRY_MS = 48 * 60 * 60 * 1000;
+
 /** Extra minutes when starting checkout (hosted or embedded session) so payment can complete. */
 export const HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES = 30;
 

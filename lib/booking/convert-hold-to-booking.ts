@@ -44,7 +44,10 @@ import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { rollbackCheckoutSession } from "@/lib/booking/checkout-session-helpers";
 import { sendAmountIntegrityMismatchCustomerEmail, sendAmountIntegrityMismatchOpsEmail } from "@/lib/booking/brevo";
 import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
-import { HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS } from "@/lib/booking/hold-expiry";
+import {
+  HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS,
+  HOLD_SUCCEEDED_CONVERSION_MAX_PAST_EXPIRY_MS,
+} from "@/lib/booking/hold-expiry";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { computeFinalChargeAtUtc } from "@/lib/booking/final-charge-at";
@@ -212,14 +215,32 @@ export async function convertHoldToBooking(
 
   let graceVerifiedForConversion = false;
   const piIdForGrace = typeof input.paymentIntentId === "string" ? input.paymentIntentId.trim() : "";
-  if (piIdForGrace) {
+  const metaHoldFromPi =
+    typeof piForTransactionalMatch.metadata?.holdId === "string"
+      ? piForTransactionalMatch.metadata.holdId.trim()
+      : "";
+  if (
+    piIdForGrace &&
+    metaHoldFromPi === holdId &&
+    piForTransactionalMatch.status === "succeeded"
+  ) {
+    const agePastExpiryMs = Date.now() - expiresAtDate.getTime();
+    if (agePastExpiryMs <= HOLD_SUCCEEDED_CONVERSION_MAX_PAST_EXPIRY_MS) {
+      graceVerifiedForConversion = true;
+      bookingLog("convert-hold", "succeeded PaymentIntent for this hold — allow conversion past hold expiry (paid path)", {
+        holdId,
+        agePastExpiryMs,
+      });
+    }
+  }
+  if (!graceVerifiedForConversion && piIdForGrace) {
     const ageMs = Date.now() - expiresAtDate.getTime();
     if (ageMs > 0 && ageMs <= HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS) {
       try {
         const piGrace = await getStripe().paymentIntents.retrieve(piIdForGrace);
         graceVerifiedForConversion = piGrace.status === "succeeded";
         if (graceVerifiedForConversion) {
-          bookingLog("convert-hold", "hold past expiresAt but PI succeeded within grace — allowing conversion", {
+          bookingLog("convert-hold", "hold past expiresAt but PI succeeded within short grace — allowing conversion", {
             holdId,
             ageMs,
           });

@@ -289,7 +289,9 @@ export async function completeAfterPaymentWithPolling(options: {
   const shouldPollForConfirmation = isProcessing || isReconciliationPending;
 
   if (shouldPollForConfirmation) {
-    onEnteredProcessing?.();
+    if (isProcessing) {
+      onEnteredProcessing?.();
+    }
     if (isReconciliationPending && !isProcessing) {
       triggerRollbackPendingReconcileHint({
         paymentIntentId,

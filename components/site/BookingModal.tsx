@@ -3651,7 +3651,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     <>
                       <p className="text-sm font-medium text-brand-dark text-center">Your payment is processing</p>
                       <p className="text-xs text-brand-muted text-center max-w-[280px]">
-                        We&apos;ll send you a confirmation email shortly. No need to do anything else.
+                        We&apos;ll confirm your booking after your payment clears — you&apos;ll get an email when it&apos;s
+                        ready. Bank debits can take longer than cards; don&apos;t pay again.
                       </p>
                     </>
                   ) : (

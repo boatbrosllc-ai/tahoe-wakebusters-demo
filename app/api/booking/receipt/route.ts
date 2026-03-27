@@ -233,6 +233,26 @@ async function handleReceipt(
             const expiredByTime =
               expAt && typeof expAt.toDate === "function" ? expAt.toDate().getTime() <= Date.now() : false;
             if (expiredByStatus || expiredByTime) {
+              if (paymentIntentId) {
+                try {
+                  const stripe = getStripe();
+                  const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+                  if (pi.status === "succeeded") {
+                    return NextResponse.json(
+                      {
+                        pending: true,
+                        holdExpired: true,
+                        paymentReceived: true,
+                        message:
+                          "Your hold timed out, but your payment went through. We are confirming your booking — keep this page open or check your email.",
+                      },
+                      { status: 202 }
+                    );
+                  }
+                } catch {
+                  /* fall through to 410 */
+                }
+              }
               return NextResponse.json({ error: "Hold expired", holdExpired: true }, { status: 410 });
             }
             const holdExpiresAtIso =
