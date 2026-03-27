@@ -56,9 +56,7 @@
 
     { "collectionGroup": "notificationSendClaims", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "claimedAt", "order": "ASCENDING" }] },
 
-    { "collectionGroup": "stripeEvents", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "receivedAt", "order": "DESCENDING" }] },
-
-    { "collectionGroup": "operationalAlerts", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] }
+    { "collectionGroup": "stripeEvents", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "receivedAt", "order": "DESCENDING" }] }
   ],
   "fieldOverrides": [
     {

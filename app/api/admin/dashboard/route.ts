@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
-import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking, Experience } from "@/lib/booking/types";
 import {
   BOOKING_STATUSES_SLOT_TAKEN,
@@ -21,6 +21,17 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
 function formatTimeLabel(dateStr: string, startHour: number, durationHours: number, startMinute = 0): string {
   const { start } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
   return formatBookingTime(start);
+}
+
+/** Firestore Timestamp-shaped value on operationalAlerts documents. */
+function operationalAlertCreatedAtMs(data: {
+  createdAt?: { toDate?: () => Date; seconds?: number };
+}): number | null {
+  const ca = data.createdAt;
+  if (!ca) return null;
+  if (typeof ca.toDate === "function") return ca.toDate().getTime();
+  if (typeof ca.seconds === "number") return ca.seconds * 1000;
+  return null;
 }
 
 export async function GET(request: NextRequest) {
@@ -182,17 +193,24 @@ export async function GET(request: NextRequest) {
       ? Math.max(1, finalFailedReleaseSlaHoursRaw)
       : 6;
     const finalFailedCutoff = new Date(Date.now() - finalFailedReleaseSlaHours * 60 * 60 * 1000);
-    const { Timestamp } = getFirestoreExports();
     const cancelSummaryAlertCutoff = new Date();
     cancelSummaryAlertCutoff.setDate(cancelSummaryAlertCutoff.getDate() - 30);
-    const [finalFailedOldSnap, cancelSummarySkipSnap] = await Promise.all([
+    const cancelSummaryAlertCutoffMs = cancelSummaryAlertCutoff.getTime();
+    const [finalFailedOldSnap, cancelSummaryAlertsSnap] = await Promise.all([
       db.collection("bookings").where("status", "==", "final_failed").limit(500).get(),
+      // Single equality on `type` only — avoids a composite index (type + createdAt range).
+      // Filter last 30 days in memory; cap fetch for rare high-volume edge cases.
       db
         .collection("operationalAlerts")
         .where("type", "==", "admin_cancel_summary_adjustment_skipped")
-        .where("createdAt", ">=", Timestamp.fromDate(cancelSummaryAlertCutoff))
+        .limit(500)
         .get(),
     ]);
+    let adminCancelSummaryAdjustmentSkippedCount = 0;
+    for (const d of cancelSummaryAlertsSnap.docs) {
+      const ms = operationalAlertCreatedAtMs(d.data() as { createdAt?: { toDate?: () => Date; seconds?: number } });
+      if (ms != null && ms >= cancelSummaryAlertCutoffMs) adminCancelSummaryAdjustmentSkippedCount++;
+    }
     let finalFailedBeyondGraceCount = 0;
     finalFailedOldSnap.docs.forEach((d) => {
       const b = d.data() as Booking & { finalChargeAt?: { toDate?: () => Date; seconds?: number } };
@@ -234,7 +252,7 @@ export async function GET(request: NextRequest) {
       missingBookingStartDateStrCount,
       missingHoldsStartDateStrCount,
       /** Recent operational alerts: legacy cancels where summary revenue was not decremented (investigate in Firestore operationalAlerts). */
-      adminCancelSummaryAdjustmentSkippedCount: cancelSummarySkipSnap.size,
+      adminCancelSummaryAdjustmentSkippedCount,
       notificationOutboxStats: {
         byType: notificationOutboxStats.byType,
         staleClaimCountsByTemplate: notificationOutboxStats.staleClaimCountsByTemplate,
