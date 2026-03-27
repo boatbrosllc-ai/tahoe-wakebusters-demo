@@ -127,17 +127,6 @@ export function boatAvailabilitySetsForSelectedCharterSlot(
   for (const s of monthSlots) {
     const boatKey = s.boatId && s.boatId.trim() ? s.boatId.trim() : isTicketed ? "_ticketed" : null;
     if (boatKey == null) continue;
-    const sStart = new Date(s.startAt).getTime();
-    const eRaw = s.endAt != null && String(s.endAt).trim() !== "" ? new Date(s.endAt).getTime() : NaN;
-    const sdur = (parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))?.durationHours ?? null;
-    const sEnd =
-      Number.isFinite(eRaw) && !Number.isNaN(eRaw)
-        ? eRaw
-        : sdur != null && Number.isFinite(sStart)
-          ? sStart + sdur * 3600000
-          : NaN;
-    if (!Number.isFinite(sStart) || !Number.isFinite(sEnd) || sEnd <= sStart) continue;
-    if (!intervalsOverlapMs(selStart, selEnd, sStart, sEnd)) continue;
     const list = byBoat.get(boatKey) ?? [];
     list.push(s);
     byBoat.set(boatKey, list);
@@ -150,17 +139,49 @@ export function boatAvailabilitySetsForSelectedCharterSlot(
   const blocked = new Set<string>();
 
   byBoat.forEach((rows, boatKey) => {
-    const nonOpen = rows.filter((r) => r.status !== "open");
-    const openExact = rows.some((r) => r.id === selectedSlot.id && r.status === "open");
-    if (nonOpen.length > 0) {
-      unavailable.add(boatKey);
-      if (nonOpen.some((r) => r.status === "booked")) booked.add(boatKey);
-      else if (nonOpen.some((r) => r.status === "held")) {
-        const hasMissingHoldData = nonOpen.some((r) => r.status === "held" && r.holdDataMissing === true);
-        if (!hasMissingHoldData) held.add(boatKey);
+    // Treat /api/booking/slots as authoritative for conflict-expanded rows:
+    // classify by the exact selected slot row first (id + boat).
+    const exactRows = rows.filter((r) => r.id === selectedSlot.id);
+    if (exactRows.length > 0) {
+      const nonOpenExact = exactRows.filter((r) => r.status !== "open");
+      if (nonOpenExact.length > 0) {
+        unavailable.add(boatKey);
+        if (nonOpenExact.some((r) => r.status === "booked")) booked.add(boatKey);
+        else if (nonOpenExact.some((r) => r.status === "held")) {
+          const hasMissingHoldData = nonOpenExact.some((r) => r.status === "held" && r.holdDataMissing === true);
+          if (!hasMissingHoldData) held.add(boatKey);
+        } else blocked.add(boatKey);
+      } else if (exactRows.some((r) => r.status === "open")) {
+        // Never let non-exact synthetic overlaps override an exact open row.
+        available.add(boatKey);
       }
-      else blocked.add(boatKey);
-    } else if (openExact) {
+      return;
+    }
+
+    // Guarded fallback for missing exact rows only.
+    const nonOpenOverlaps = rows.filter((r) => {
+      if (r.status === "open") return false;
+      const sStart = new Date(r.startAt).getTime();
+      const eRaw = r.endAt != null && String(r.endAt).trim() !== "" ? new Date(r.endAt).getTime() : NaN;
+      const sdur = (parseSlotIdRelaxed(r.id) ?? parseSlotId(r.id))?.durationHours ?? null;
+      const sEnd =
+        Number.isFinite(eRaw) && !Number.isNaN(eRaw)
+          ? eRaw
+          : sdur != null && Number.isFinite(sStart)
+            ? sStart + sdur * 3600000
+            : NaN;
+      if (!Number.isFinite(sStart) || !Number.isFinite(sEnd) || sEnd <= sStart) return false;
+      return intervalsOverlapMs(selStart, selEnd, sStart, sEnd);
+    });
+
+    if (nonOpenOverlaps.length > 0) {
+      unavailable.add(boatKey);
+      if (nonOpenOverlaps.some((r) => r.status === "booked")) booked.add(boatKey);
+      else if (nonOpenOverlaps.some((r) => r.status === "held")) {
+        const hasMissingHoldData = nonOpenOverlaps.some((r) => r.status === "held" && r.holdDataMissing === true);
+        if (!hasMissingHoldData) held.add(boatKey);
+      } else blocked.add(boatKey);
+    } else {
       available.add(boatKey);
     }
   });
