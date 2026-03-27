@@ -107,6 +107,103 @@ describe(
         (err: unknown) => err instanceof SlotConflictError
       );
     });
+
+    it("existing slot doc + mismatched slot/rate returns 400 and leaves slot/holds unchanged", async () => {
+      const { getDb, getFirestoreExports } = await import("../lib/booking/firebase-admin");
+      const { POST: createHoldPost } = await import("../app/api/booking/create-hold/route");
+      const { NextRequest } = await import("next/server");
+
+      const db = getDb();
+      const { FieldValue, Timestamp } = getFirestoreExports();
+      const uid = `mismatch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const experienceId = `exp_${uid}`;
+      const boatId = `boat_${uid}`;
+      const dateStr = "2030-09-10";
+      const slotId = `${dateStr}-10-3`;
+      const parsed = parseSlotId(slotId);
+      assert.ok(parsed);
+      const { start: slotStart, end: slotEnd } = getSlotStartEnd(
+        parsed.dateStr,
+        parsed.startHour,
+        parsed.durationHours,
+        parsed.startMinute ?? 0
+      );
+
+      await db.collection("experiences").doc(experienceId).set({
+        slug: "charter-slot-rate-mismatch",
+        title: "Mismatch Regression",
+        pricingType: "charter",
+        active: true,
+        seasonal: { enabled: false },
+        maxGuests: 12,
+        petsMax: 0,
+        heroMedia: { type: "image", url: "https://example.com/x.jpg" },
+        gallery: [],
+        location: { title: "Lake Austin", addressText: "Lake Austin, TX" },
+        included: [],
+        whatToBring: [],
+        rules: [],
+        cancellationPolicy: {
+          freeCancelDays: 2,
+          partialRefundDaysStart: 1,
+          partialRefundDaysEnd: 0,
+          noRefundWithinDays: 0,
+          fullText: "",
+        },
+        faqs: [],
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      await db.collection("experiences").doc(experienceId).collection("rates").doc("rate2").set({
+        durationHours: 2,
+        displayName: "2h",
+        priceCents: 25000,
+        active: true,
+      });
+      await db.collection("boats").doc(boatId).set({
+        isListingBoat: true,
+        active: true,
+        experienceIds: [experienceId],
+        boatType: "pontoon",
+      });
+      await db.collection("boats").doc(boatId).collection("slots").doc(slotId).set({
+        startAt: Timestamp.fromDate(slotStart),
+        endAt: Timestamp.fromDate(slotEnd),
+        status: "open",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      const res = await createHoldPost(
+        new NextRequest("http://localhost/api/booking/create-hold", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-real-ip": "127.0.0.1" },
+          body: JSON.stringify({
+            experienceId,
+            boatId,
+            slotId,
+            rateId: "rate2",
+            partySize: 4,
+            bookingMode: "charter",
+            customerDraft: { name: "Mismatch", email: "mismatch@example.com", phone: "+15125550077" },
+            addonSelections: [],
+          }),
+        })
+      );
+      assert.strictEqual(res.status, 400, await res.text());
+
+      const holdsSnap = await db
+        .collection("holds")
+        .where("experienceId", "==", experienceId)
+        .where("slotId", "==", slotId)
+        .get();
+      assert.strictEqual(holdsSnap.size, 0, "mismatch path must not create a hold");
+
+      const slotAfter = await db.collection("boats").doc(boatId).collection("slots").doc(slotId).get();
+      assert.strictEqual(slotAfter.exists, true);
+      const slotData = slotAfter.data() as { status?: string; holdId?: string; bookingId?: string | null };
+      assert.strictEqual(slotData.status, "open", "slot state must not be mutated on mismatch");
+      assert.strictEqual(typeof slotData.holdId, "undefined", "slot must not be assigned a hold");
+      assert.strictEqual(typeof slotData.bookingId, "undefined", "slot must not be assigned a booking");
+    });
   }
 );
 

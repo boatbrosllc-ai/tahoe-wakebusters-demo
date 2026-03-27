@@ -862,6 +862,8 @@ export async function GET(request: NextRequest) {
       };
       /** Canonical duration per booking id from booking.slotId parsing. */
       const bookingDurationHoursByBookingId = new Map<string, number>();
+      /** Fallback canonical duration inference from already-merged booked rows keyed by bookingId. */
+      const inferredBookingDurationHoursByBookingId = new Map<string, number>();
       const existingByBoatAndKey = new Map<string, SlotRow>();
       /** Firestore slot docs may store holdId for server-side hold expiry resolution; never expose to clients (response uses holdId: null). */
       const charterSlotHoldIdByKey = new Map<string, string>();
@@ -1151,6 +1153,22 @@ export async function GET(request: NextRequest) {
       // When we had 0 boats we loaded bookings by experience (doc id or slug); merge those too so deposit/final_due bookings always show.
       bookingsFromFallback.forEach((doc) => mergeBookingSlot(doc));
 
+      // Backfill canonical duration by scanning merged booked rows. This protects UI duration accuracy
+      // when booking docs are partially unavailable and booked rows come from fallback slot-doc merges.
+      for (const row of existingByBoatAndKey.values()) {
+        if (row.status !== "booked" || !row.bookingId) continue;
+        const parsedRow = parseSlotIdRelaxed(row.id);
+        const rowDuration =
+          parsedRow && typeof parsedRow.durationHours === "number" && parsedRow.durationHours > 0
+            ? parsedRow.durationHours
+            : undefined;
+        if (rowDuration == null) continue;
+        const prev = inferredBookingDurationHoursByBookingId.get(row.bookingId);
+        if (prev == null || rowDuration < prev) {
+          inferredBookingDurationHoursByBookingId.set(row.bookingId, rowDuration);
+        }
+      }
+
       if (unresolvedBookingIds.length > 0) {
         const uniqueUnresolved = Array.from(new Set(unresolvedBookingIds));
         console.warn("[slots] unresolved_booking_no_boat_id telemetry", {
@@ -1373,6 +1391,12 @@ export async function GET(request: NextRequest) {
           const key = `${bid}:${slotId}`;
           const existing = existingByBoatAndKey.get(key);
           if (existing && existing.status !== "open") {
+            if (existing.status === "booked" && existing.bookingId && existing.bookingDurationHours == null) {
+              const canonicalDuration =
+                bookingDurationHoursByBookingId.get(existing.bookingId) ??
+                inferredBookingDurationHoursByBookingId.get(existing.bookingId);
+              if (canonicalDuration != null) existing.bookingDurationHours = canonicalDuration;
+            }
             slots.push(existing);
             continue;
           }
@@ -1407,7 +1431,9 @@ export async function GET(request: NextRequest) {
 
           let bookingDurationHours: number | undefined = undefined;
           if (rowStatus === "booked" && rowBookingId) {
-            bookingDurationHours = bookingDurationHoursByBookingId.get(rowBookingId);
+            bookingDurationHours =
+              bookingDurationHoursByBookingId.get(rowBookingId) ??
+              inferredBookingDurationHoursByBookingId.get(rowBookingId);
           }
 
           const openSlotDocRow = existing?.status === "open" ? existing : null;

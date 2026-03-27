@@ -124,6 +124,24 @@ function jsonHoldCreated(response: CreateHoldResponse): NextResponse {
   return res;
 }
 
+function slotDocIntervalMatchesParsed(
+  slotData: Slot,
+  parsed: NonNullable<ReturnType<typeof parseSlotId>>
+): boolean {
+  const startAtRaw = slotData.startAt as { toDate?: () => Date } | undefined;
+  const endAtRaw = slotData.endAt as { toDate?: () => Date } | undefined;
+  const startAt = startAtRaw?.toDate?.();
+  const endAt = endAtRaw?.toDate?.();
+  if (!startAt || !endAt) return false;
+  const { start, end } = getSlotStartEnd(
+    parsed.dateStr,
+    parsed.startHour,
+    parsed.durationHours,
+    parsed.startMinute ?? 0
+  );
+  return startAt.getTime() === start.getTime() && endAt.getTime() === end.getTime();
+}
+
 export async function POST(request: NextRequest) {
   try {
     bookingLog("create-hold", "request started");
@@ -250,6 +268,10 @@ export async function POST(request: NextRequest) {
     }
     const resolvedInput = { ...parsedInput, boatId: resolvedBoatId };
     const input = resolvedInput;
+    const parsedSlotId = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
+    if (!parsedSlotId) {
+      return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
+    }
     if (input.experienceId) {
       assertCanonicalExperienceId(input.experienceId);
     }
@@ -327,14 +349,13 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
+      if (!isSharedTicketed && rate.durationHours !== parsedSlotId.durationHours) {
+        return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+      }
       {
-        const parsedForValidation = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-        if (!parsedForValidation) {
-          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-        }
         if (isSharedTicketed || isCharterTicketed) {
           const errResp = validateTicketedSlotId(
-            parsedForValidation,
+            parsedSlotId,
             experience,
             rate as ExperienceRate,
             ratesSnap.docs,
@@ -345,10 +366,10 @@ export async function POST(request: NextRequest) {
         } else if (
           !isListingBoatCharterStartTimeAllowed(
             boat,
-            parsedForValidation.dateStr,
-            parsedForValidation.startHour,
-            parsedForValidation.startMinute,
-            parsedForValidation.durationHours,
+            parsedSlotId.dateStr,
+            parsedSlotId.startHour,
+            parsedSlotId.startMinute,
+            parsedSlotId.durationHours,
             isWatersportsSlug(effectiveSlug)
           )
         ) {
@@ -363,15 +384,11 @@ export async function POST(request: NextRequest) {
         calendarRatesForListingBoat = boatTypeForCalendar
           ? await fetchMergedPricingCalendarRatesForBoatTypes(db, [boatTypeForCalendar])
           : undefined;
-        const parsedShared = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-        if (!parsedShared) {
-          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-        }
         const { start, end } = getSlotStartEnd(
-          parsedShared.dateStr,
-          parsedShared.startHour,
-          parsedShared.durationHours,
-          parsedShared.startMinute ?? 0
+          parsedSlotId.dateStr,
+          parsedSlotId.startHour,
+          parsedSlotId.durationHours,
+          parsedSlotId.startMinute ?? 0
         );
         slotStart = start;
         slotStartForBlock = start;
@@ -389,24 +406,31 @@ export async function POST(request: NextRequest) {
         calendarRatesForListingBoat = calMerged;
         if (slotDoc.exists) {
           const slotData = slotDoc.data() as Slot;
-          slotStart = (slotData.startAt as { toDate(): Date }).toDate();
-          slotStartForBlock = slotStart;
-          slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
+          if (!slotDocIntervalMatchesParsed(slotData, parsedSlotId)) {
+            return NextResponse.json({ error: "Slot timing does not match requested slotId" }, { status: 400 });
+          }
+          const { start, end } = getSlotStartEnd(
+            parsedSlotId.dateStr,
+            parsedSlotId.startHour,
+            parsedSlotId.durationHours,
+            parsedSlotId.startMinute ?? 0
+          );
+          slotStart = start;
+          slotStartForBlock = start;
+          slotEndForBlock = end;
         } else {
-          const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-          if (!parsed) {
-            return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-          }
-          if (rate.durationHours !== parsed.durationHours) {
-            return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
-          }
-          const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          const { start, end } = getSlotStartEnd(
+            parsedSlotId.dateStr,
+            parsedSlotId.startHour,
+            parsedSlotId.durationHours,
+            parsedSlotId.startMinute ?? 0
+          );
           slotStart = start;
           slotStartForBlock = start;
           slotEndForBlock = end;
         }
       }
-      const slotDateStrForSeasonal = (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))?.dateStr;
+      const slotDateStrForSeasonal = parsedSlotId.dateStr;
       if (!isSeasonalAllowed(experience.seasonal, slotStart, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
@@ -449,14 +473,13 @@ export async function POST(request: NextRequest) {
       if (!rate.active) {
         return NextResponse.json({ error: "Rate not available" }, { status: 400 });
       }
+      if (!isSharedTicketed && rate.durationHours !== parsedSlotId.durationHours) {
+        return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
+      }
       {
-        const parsedForValidation = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-        if (!parsedForValidation) {
-          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-        }
         if (isSharedTicketed || isCharterTicketed) {
           const errResp = validateTicketedSlotId(
-            parsedForValidation,
+            parsedSlotId,
             experience,
             rate as ExperienceRate,
             ratesSnapExp.docs,
@@ -464,22 +487,18 @@ export async function POST(request: NextRequest) {
             expId
           );
           if (errResp) return errResp;
-        } else if (!isAllowedSlotTime(parsedForValidation.startHour, parsedForValidation.startMinute, parsedForValidation.durationHours)) {
+        } else if (!isAllowedSlotTime(parsedSlotId.startHour, parsedSlotId.startMinute, parsedSlotId.durationHours)) {
           return NextResponse.json({ error: "Slot is outside the allowed booking window" }, { status: 400 });
         }
       }
       slotsRef = db.collection("experiences").doc(expId).collection("slots");
       let slotStartExp: Date;
       if (isSharedTicketed) {
-        const parsedShared = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-        if (!parsedShared) {
-          return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-        }
         const { start, end } = getSlotStartEnd(
-          parsedShared.dateStr,
-          parsedShared.startHour,
-          parsedShared.durationHours,
-          parsedShared.startMinute ?? 0
+          parsedSlotId.dateStr,
+          parsedSlotId.startHour,
+          parsedSlotId.durationHours,
+          parsedSlotId.startMinute ?? 0
         );
         slotStartExp = start;
         slotStartForBlock = start;
@@ -491,26 +510,31 @@ export async function POST(request: NextRequest) {
         const slotDocExp = await slotRef.get();
         if (slotDocExp.exists) {
           const slotData = slotDocExp.data() as Slot;
-          slotStartExp = (slotData.startAt as { toDate(): Date }).toDate();
-          slotStartForBlock = slotStartExp;
-          slotEndForBlock = (slotData.endAt as { toDate(): Date }).toDate();
+          if (!slotDocIntervalMatchesParsed(slotData, parsedSlotId)) {
+            return NextResponse.json({ error: "Slot timing does not match requested slotId" }, { status: 400 });
+          }
+          const { start, end } = getSlotStartEnd(
+            parsedSlotId.dateStr,
+            parsedSlotId.startHour,
+            parsedSlotId.durationHours,
+            parsedSlotId.startMinute ?? 0
+          );
+          slotStartExp = start;
+          slotStartForBlock = start;
+          slotEndForBlock = end;
         } else {
-          const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-          if (!parsed) {
-            return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
-          }
-          // rateDoc already fetched in parallel above — no need to re-fetch
-          const rateData = rateDoc.exists ? (rateDoc.data() as ExperienceRate) : null;
-          if (!rateData || rateData.durationHours !== parsed.durationHours) {
-            return NextResponse.json({ error: "Slot duration does not match rate" }, { status: 400 });
-          }
-          const { start, end } = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours, parsed.startMinute ?? 0);
+          const { start, end } = getSlotStartEnd(
+            parsedSlotId.dateStr,
+            parsedSlotId.startHour,
+            parsedSlotId.durationHours,
+            parsedSlotId.startMinute ?? 0
+          );
           slotStartExp = start;
           slotStartForBlock = start;
           slotEndForBlock = end;
         }
       }
-      const slotDateStrForSeasonal = (parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId))?.dateStr;
+      const slotDateStrForSeasonal = parsedSlotId.dateStr;
       if (!isSeasonalAllowed(experience.seasonal, slotStartExp, slotDateStrForSeasonal)) {
         return NextResponse.json({ error: "This experience is only available during its seasonal window" }, { status: 400 });
       }
@@ -616,7 +640,7 @@ export async function POST(request: NextRequest) {
     const holdId = db.collection("holds").doc().id;
     const holdRequestFingerprint = input.holdRequestId ? computeHoldRequestFingerprint(input) : null;
 
-    const parsedSlotForHold = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
+    const parsedSlotForHold = parsedSlotId;
     const addonSelectionsSnapshot = input.addonSelections.map((s) => {
       const addon = addonsById.get(s.addonId);
       const priceCents =
@@ -1273,11 +1297,21 @@ export async function POST(request: NextRequest) {
           .doc(parsedSlotForHold.dateStr);
         await tx.get(charterDayLockRef);
       }
+      const {
+        start: canonicalSlotStartDate,
+        end: canonicalSlotEndDate,
+      } = getSlotStartEnd(
+        parsedSlotForHold.dateStr,
+        parsedSlotForHold.startHour,
+        parsedSlotForHold.durationHours,
+        parsedSlotForHold.startMinute ?? 0
+      );
       const slotSnap = await tx.get(slotRef);
       if (slotSnap.exists) {
         const slot = slotSnap.data() as Slot;
-        const slotStartDate = (slot.startAt as { toDate(): Date }).toDate();
-        const slotEndDate = (slot.endAt as { toDate(): Date }).toDate();
+        if (!slotDocIntervalMatchesParsed(slot, parsedSlotForHold)) {
+          throw new Error("Slot timing does not match requested slotId");
+        }
         if (slot.status !== "open") {
           if (slot.status === "held" && slot.holdId) {
             const existingHoldSnap = await tx.get(db.collection("holds").doc(slot.holdId));
@@ -1305,8 +1339,8 @@ export async function POST(request: NextRequest) {
                     boatId: input.boatId,
                     useBoatSlots: isListingBoatFlow,
                     parsed: parsedSlotForHold,
-                    slotStart: slotStartDate,
-                    slotEnd: slotEndDate,
+                    slotStart: canonicalSlotStartDate,
+                    slotEnd: canonicalSlotEndDate,
                     now,
                     ignoreSlotDocIds: [input.slotId],
                   });
@@ -1317,8 +1351,8 @@ export async function POST(request: NextRequest) {
                     experienceId: input.experienceId,
                     experienceIdVariants: experienceIdVariantsForAssert,
                     parsed: parsedSlotForHold,
-                    slotStart: slotStartDate,
-                    slotEnd: slotEndDate,
+                    slotStart: canonicalSlotStartDate,
+                    slotEnd: canonicalSlotEndDate,
                     boatId: input.boatId,
                     useBoatSlots: isListingBoatFlow,
                     runSameDaySlotScan: true,
@@ -1461,8 +1495,8 @@ export async function POST(request: NextRequest) {
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             parsed: parsedSlotForHold,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
+            slotStart: canonicalSlotStartDate,
+            slotEnd: canonicalSlotEndDate,
             now,
           });
           await assertSlotAvailable({
@@ -1472,8 +1506,8 @@ export async function POST(request: NextRequest) {
             experienceId: input.experienceId,
             experienceIdVariants: experienceIdVariantsForAssert,
             parsed: parsedSlotForHold,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
+            slotStart: canonicalSlotStartDate,
+            slotEnd: canonicalSlotEndDate,
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
@@ -1492,14 +1526,6 @@ export async function POST(request: NextRequest) {
         }
       } else {
         if (!isExperienceOnly && !isListingBoatFlow) throw new Error("Slot not found");
-        const parsed = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
-        if (!parsed) throw new Error("Invalid slot");
-        const { start: slotStartDate, end: slotEndDate } = getSlotStartEnd(
-          parsed.dateStr,
-          parsed.startHour,
-          parsed.durationHours,
-          parsed.startMinute ?? 0
-        );
         if (isListingBoatFlow && input.boatId && input.experienceId) {
           await assertNoOverlappingActiveSameDaySlots({
             db,
@@ -1508,9 +1534,9 @@ export async function POST(request: NextRequest) {
             experienceId: input.experienceId,
             boatId: input.boatId,
             useBoatSlots: true,
-            parsed,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
+            parsed: parsedSlotForHold,
+            slotStart: canonicalSlotStartDate,
+            slotEnd: canonicalSlotEndDate,
             now,
           });
         } else if (isExperienceOnly && input.experienceId) {
@@ -1520,22 +1546,22 @@ export async function POST(request: NextRequest) {
             get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             useBoatSlots: false,
-            parsed,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
+            parsed: parsedSlotForHold,
+            slotStart: canonicalSlotStartDate,
+            slotEnd: canonicalSlotEndDate,
             now,
           });
         }
-        if (input.experienceId && parsed) {
+        if (input.experienceId) {
           await assertSlotAvailable({
             db,
             Timestamp,
             get: (refOrQuery) => transactionGetQueryOrDoc(tx, refOrQuery),
             experienceId: input.experienceId,
             experienceIdVariants: experienceIdVariantsForAssert,
-            parsed,
-            slotStart: slotStartDate,
-            slotEnd: slotEndDate,
+            parsed: parsedSlotForHold,
+            slotStart: canonicalSlotStartDate,
+            slotEnd: canonicalSlotEndDate,
             boatId: input.boatId,
             useBoatSlots: isListingBoatFlow,
             runSameDaySlotScan: false,
@@ -1544,8 +1570,8 @@ export async function POST(request: NextRequest) {
         }
         await applyCharterDiscountForNewHold();
         tx.set(slotRef, {
-          startAt: Timestamp.fromDate(slotStartDate),
-          endAt: Timestamp.fromDate(slotEndDate),
+          startAt: Timestamp.fromDate(canonicalSlotStartDate),
+          endAt: Timestamp.fromDate(canonicalSlotEndDate),
           status: "held",
           holdId,
           bookingId: null,
@@ -1656,6 +1682,7 @@ export async function POST(request: NextRequest) {
       err instanceof SlotConflictError ||
       message === "Slot not found" ||
       message === "Slot no longer available" ||
+      message === "Slot timing does not match requested slotId" ||
       message === "This slot is blocked" ||
       message === "This departure is reserved as a private charter" ||
       message === "Shared tickets have already been sold for this departure" ||
@@ -1675,6 +1702,8 @@ export async function POST(request: NextRequest) {
             ? "slot_not_found"
             : message === "Slot no longer available"
               ? "slot_unavailable"
+              : message === "Slot timing does not match requested slotId"
+                ? "slot_unavailable"
               : message === "This slot is blocked"
                 ? "slot_blocked"
                 : message === "This departure is reserved as a private charter"

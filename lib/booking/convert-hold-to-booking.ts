@@ -1095,9 +1095,9 @@ export async function convertHoldToBooking(
     }
   }
 
-  void tryImmediateConfirmationSendForBooking(db, bookingId);
+  await tryImmediateConfirmationSendForBooking(db, bookingId);
   if (enqueueWaiverInviteOutbox) {
-    void tryImmediateWaiverInviteSendForBooking(db, bookingId);
+    await tryImmediateWaiverInviteSendForBooking(db, bookingId);
   }
   if (hold.marketingOptIn) {
     const listId = bookingEnv.brevoMarketingListId;
