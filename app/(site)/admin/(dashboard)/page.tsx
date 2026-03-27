@@ -127,6 +127,7 @@ export default function AdminHomePage() {
   const [error, setError] = useState<string | null>(null);
   const [healthResult, setHealthResult] = useState<Record<string, unknown> | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [headerNow, setHeaderNow] = useState<Date | null>(null);
   const checkBookingHealth = useCallback(() => {
     setHealthLoading(true);
     setHealthResult(null);
@@ -152,6 +153,11 @@ export default function AdminHomePage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    // Avoid SSR/CSR hydration mismatches from locale/timezone-dependent date rendering.
+    setHeaderNow(new Date());
+  }, []);
+
   function formatCents(cents: number) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
   }
@@ -165,12 +171,19 @@ export default function AdminHomePage() {
   }
 
   const greeting = (() => {
-    const h = new Date().getHours();
+    if (!headerNow) return "Welcome back";
+    const h = headerNow.getHours();
     if (h < 12) return "Good morning";
     if (h < 18) return "Good afternoon";
     return "Good evening";
   })();
-  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+  const dateLabel =
+    headerNow?.toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }) ?? "Today";
 
   return (
     <div className="space-y-8 sm:space-y-10">
