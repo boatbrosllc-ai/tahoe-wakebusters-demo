@@ -34,7 +34,9 @@ export const handler = schedule("*/2 * * * *", async () => {
     const body = await res.json().catch(() => ({}));
     console.log(`[process-confirmation-outbox] Response status: ${res.status}`, body);
 
-    if (!res.ok) {
+    // API must return 200 so this scheduled run is healthy and Netlify reports success.
+    if (res.status !== 200) {
+      console.error(`[process-confirmation-outbox] Expected 200 from cron route, got ${res.status}`);
       return { statusCode: 500 };
     }
     return { statusCode: 200 };

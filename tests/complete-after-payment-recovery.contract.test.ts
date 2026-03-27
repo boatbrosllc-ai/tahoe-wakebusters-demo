@@ -5,7 +5,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import type { ModalHoldRecoveryPayloadV1 } from "../components/site/useHoldCreation";
 import type { ExperienceItem, SlotDto } from "../lib/booking/booking-modal-types";
 
@@ -57,19 +60,24 @@ describe("ModalHoldRecoveryPayloadV1 (refresh recovery)", () => {
 });
 
 describe("complete-after-payment hold expired response (contract for BookingStripeReturnHandler)", () => {
-  it("409 JSON includes holdExpired: true for convert Hold has expired error path", () => {
+  it("200 JSON includes reconciliationPending + holdExpired for convert Hold has expired error path", () => {
     const body = {
-      error:
-        "We've received your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+      success: false,
+      reconciliationPending: true,
+      bookingConfirmed: false,
       holdExpired: true,
+      message:
+        "We've received your payment. We are confirming your reservation; you should get a confirmation email shortly.",
     };
     assert.strictEqual(body.holdExpired, true);
-    assert.strictEqual(typeof body.error, "string");
+    assert.strictEqual(body.reconciliationPending, true);
+    assert.strictEqual(typeof body.message, "string");
   });
 
-  it("route flags pendingRefunds with hold_expired_after_payment when hold expires after payment", () => {
+  it("route enqueues reconcilingPayments + pendingRefunds when hold expires after payment", () => {
     const src = readFileSync(join(__dirname, "../app/api/booking/complete-after-payment/route.ts"), "utf8");
     assert.match(src, /hold_expired_after_payment/);
     assert.match(src, /holdExpired:\s*true/);
+    assert.match(src, /logReconcilingPending\([\s\S]*hold_expired_after_payment/);
   });
 });

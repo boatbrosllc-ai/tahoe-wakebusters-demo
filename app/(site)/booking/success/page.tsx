@@ -269,13 +269,21 @@ function BookingSuccessContent() {
           );
           const completeJson = (await completeRes.json().catch(() => ({}))) as {
             holdExpired?: boolean;
+            reconciliationPending?: boolean;
+            message?: string;
             error?: string;
             receiptClaimToken?: string;
             receiptToken?: string;
           };
-          if (completeRes.status === 409 && completeJson.holdExpired) {
+          const holdExpiredRecoverable =
+            completeJson.holdExpired === true &&
+            (completeRes.status === 409 ||
+              (completeRes.status === 200 && completeJson.reconciliationPending === true));
+          if (holdExpiredRecoverable) {
             setError(
-              completeJson.error ??
+              (typeof completeJson.message === "string" && completeJson.message.trim()
+                ? completeJson.message
+                : completeJson.error) ??
                 "We've received your payment. If you do not receive a confirmation email within 15 minutes, please contact us."
             );
             setData(null);

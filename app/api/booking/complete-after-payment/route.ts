@@ -552,7 +552,7 @@ export async function POST(request: NextRequest) {
           }).ok;
         }
         if (!piMatchesHold) {
-          bookingLog("complete-after-payment", "returning 202 — hold paymentAttemptVersion>=1 and PI not matched after server retries", {
+          bookingLog("complete-after-payment", "PI not matched after propagation retries — reconciliation queue + terminal client state", {
             holdId,
           });
           await writeOperationalAlertIfNewDocId(
@@ -569,13 +569,38 @@ export async function POST(request: NextRequest) {
               source: "complete-after-payment",
             }
           );
+          try {
+            const holdRowMismatch = holdSnap.data() as Hold;
+            await upsertPendingRefundRecord(
+              db,
+              {
+                reason: "pi_mismatch_propagation_exhausted",
+                holdId,
+                paymentIntentId: input.paymentIntentId,
+              },
+              {
+                holdId,
+                paymentIntentId: input.paymentIntentId,
+                holdDepositPaymentIntentId: holdStripeIds.depositPaymentIntentId ?? null,
+                holdFullPaymentIntentId: holdStripeIds.fullPaymentIntentId ?? null,
+                ...(holdRowMismatch.customerDraft?.email && { customerEmail: holdRowMismatch.customerDraft.email }),
+                requiresReview: true,
+              }
+            );
+          } catch (prErr) {
+            console.error("[complete-after-payment] pendingRefunds pi mismatch propagation exhausted", prErr);
+          }
+          await logReconcilingPending(db, holdId, input.paymentIntentId, "pi_mismatch_propagation_exhausted");
           return NextResponse.json(
             {
-              processing: true,
-              message: "Payment is being confirmed. Your booking will be finalized shortly.",
-              pollHardTimeoutMs: 30_000,
+              success: false,
+              reconciliationPending: true,
+              bookingConfirmed: false,
+              paymentAttemptVersionMismatchExhausted: true,
+              message:
+                "We are confirming your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
             },
-            { status: 202 }
+            { status: 200 }
           );
         }
       }
@@ -1010,10 +1035,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (isTransientFirestoreFailure(err) && holdIdForAlert && paymentIntentIdForAlert) {
-      bookingWarn("complete-after-payment", "transient failure after conversion retries; client should poll", {
+      bookingWarn("complete-after-payment", "transient failure after conversion retries; reconciling + client processing state", {
         holdId: holdIdForAlert,
         message,
       });
+      await logReconcilingPending(getDb(), holdIdForAlert, paymentIntentIdForAlert, "transient_firestore_after_conversion_retries");
       return NextResponse.json(
         {
           processing: true,
@@ -1065,13 +1091,19 @@ export async function POST(request: NextRequest) {
       } catch {
         // non-fatal
       }
+      if (paymentIntentIdForAlert) {
+        await logReconcilingPending(getDb(), holdIdForAlert, paymentIntentIdForAlert, "hold_expired_after_payment");
+      }
       return NextResponse.json(
         {
-          error:
-            "We've received your payment. If you do not receive a confirmation email within 15 minutes, please contact us.",
+          success: false,
+          reconciliationPending: true,
+          bookingConfirmed: false,
           holdExpired: true,
+          message:
+            "We've received your payment. We are confirming your reservation; you should get a confirmation email shortly. If you do not see it within 15 minutes, check spam or contact us with the email you used to book.",
         },
-        { status: 409 }
+        { status: 200 }
       );
     }
     const isConfigError =

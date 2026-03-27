@@ -4,7 +4,7 @@ import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
  * After `expiresAt`, still allow `convertHoldToBooking` if Stripe confirms the PaymentIntent
  * succeeded within this window (race with hold cleanup / clock skew).
  */
-export const HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS = 60_000;
+export const HOLD_EXPIRY_GRACE_AFTER_PAYMENT_MS = 900_000;
 
 /** Extra minutes when starting checkout (hosted or embedded session) so payment can complete. */
 export const HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES = 30;
