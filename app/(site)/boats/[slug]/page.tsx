@@ -3,12 +3,13 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import Image from "next/image";
-import { ChevronRight, ChevronLeft, Calendar } from "lucide-react";
+import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getBoatBySlug } from "@/lib/booking/get-boats-public";
 import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { brand } from "@/content/brand";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
+import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 
@@ -257,24 +258,8 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 {boat.heroSubtitle?.trim() || `Lake Austin ${typeLabel.toLowerCase()} rental · Captain included · No license required`}
               </p>
               {boat.experiences.length > 0 && (
-                <div className="mt-6 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-                  {boat.experiences.map((exp) => (
-                    <div key={exp.id} className="flex flex-wrap items-center justify-center gap-2">
-                      <Link
-                        href={`/booking?experience=${encodeURIComponent(exp.slug)}`}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-brand-primary px-5 py-2.5 text-sm font-semibold text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                      >
-                        <Calendar className="h-4 w-4" aria-hidden />
-                        Book now
-                      </Link>
-                      <Link
-                        href={`/experiences/${exp.slug}`}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-white/30 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                      >
-                        Details
-                      </Link>
-                    </div>
-                  ))}
+                <div className="mt-6 flex justify-center">
+                  <BoatBookNowButton className="rounded-full bg-brand-primary px-6 py-2.5 text-sm font-semibold text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark" />
                 </div>
               )}
             </div>
@@ -351,26 +336,18 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 Available experiences
               </h2>
               <p className="mt-2 text-brand-muted text-sm sm:text-base">
-                All include a licensed captain. Choose an experience to see times and pricing.
+                All include a licensed captain. Tap an experience for full details and pricing.
               </p>
               <ul className="mt-5 space-y-2">
                 {boat.experiences.map((exp) => (
                   <li key={exp.id}>
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-3.5">
-                      <Link
-                        href={`/experiences/${exp.slug}`}
-                        className="group flex items-center justify-between gap-3 flex-1 min-w-0 text-brand-dark hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded-lg"
-                      >
-                        <span className="font-medium">{exp.title}</span>
-                        <ChevronRight className="h-5 w-5 shrink-0 text-brand-muted group-hover:text-brand-primary group-hover:translate-x-0.5 transition-all" aria-hidden />
-                      </Link>
-                      <Link
-                        href={`/booking?experience=${encodeURIComponent(exp.slug)}`}
-                        className="inline-flex items-center justify-center shrink-0 rounded-full min-h-[40px] px-4 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
-                      >
-                        Book now
-                      </Link>
-                    </div>
+                    <Link
+                      href={`/experiences/${exp.slug}`}
+                      className="group flex items-center justify-between gap-3 rounded-xl border border-brand-dark/10 bg-brand-bg/50 px-4 py-3.5 text-brand-dark hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                    >
+                      <span className="font-medium">{exp.title}</span>
+                      <ChevronRight className="h-5 w-5 shrink-0 text-brand-muted group-hover:text-brand-primary group-hover:translate-x-0.5 transition-all" aria-hidden />
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -401,32 +378,12 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
               Captain included · Choose your experience and check availability
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-              {boat.experiences.length > 0 ? (
-                boat.experiences.map((exp) => (
-                  <div key={exp.id} className="flex flex-wrap items-center justify-center gap-2">
-                    <Link
-                      href={`/booking?experience=${encodeURIComponent(exp.slug)}`}
-                      className="inline-flex items-center gap-2 rounded-full bg-brand-primary px-6 py-3 text-sm font-semibold text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                    >
-                      <Calendar className="h-4 w-4" aria-hidden />
-                      Book now
-                    </Link>
-                    <Link
-                      href={`/experiences/${exp.slug}`}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/30 px-5 py-3 text-sm font-medium text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                    >
-                      {exp.title}
-                    </Link>
-                  </div>
-                ))
-              ) : (
-                <Link
-                  href="/experiences"
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-primary px-6 py-3 text-sm font-semibold text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                >
-                  View experiences & book
-                </Link>
-              )}
+              <Link
+                href="/experiences"
+                className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-medium text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+              >
+                All experiences
+              </Link>
               <Link
                 href="/boats"
                 className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"

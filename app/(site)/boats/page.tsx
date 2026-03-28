@@ -6,6 +6,7 @@ import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { brand } from "@/content/brand";
 import { ChevronRight } from "lucide-react";
+import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 const canonical = `${baseUrl}/boats`;
@@ -105,12 +106,10 @@ export default async function BoatsHubPage() {
                     </Link>
                     {boat.firstLinkedExperienceSlug && (
                       <div className="flex flex-wrap items-center justify-end gap-2 p-3 sm:p-4 pt-3 border-t border-white/10 bg-brand-dark/95 rounded-b-xl">
-                        <Link
-                          href={`/booking?experience=${encodeURIComponent(boat.firstLinkedExperienceSlug)}`}
+                        <BoatBookNowButton
+                          showCalendarIcon={false}
                           className="inline-flex items-center justify-center rounded-full min-h-[44px] px-5 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                        >
-                          Book now
-                        </Link>
+                        />
                       </div>
                     )}
                   </div>
