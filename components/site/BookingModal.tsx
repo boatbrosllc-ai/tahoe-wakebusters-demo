@@ -252,6 +252,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [holdReleaseWarning, setHoldReleaseWarning] = useState<string | null>(null);
   /** One-shot ref to prevent duplicate release calls from concurrent close triggers (Dialog overlay + cleanup). */
   const releaseOnCloseDoneRef = useRef(false);
+  /**
+   * After the user leaves step 4 (checkout) via Back, the effect that auto-jumps to step 4 for
+   * calendar-first + pre-selected slot must not run — it would snap them back to payment and feel broken.
+   * Cleared whenever the modal opens fresh (sync reset).
+   */
+  const skipAutoAdvanceToStep4FromInitialSlotRef = useRef(false);
   /** Captured when user clicks "Proceed to payment": true if they had selected deposit (payFullAmount was false). Used to show notice when server returns full payment. */
   const userChoseDepositRef = useRef(false);
   /** Refs for cleanup effect to see current hold/payment state when modal unmounts (updated synchronously each render). */
@@ -1119,6 +1125,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     (ctx: HoldConflictContext) => {
       resetCharterHoldRequestId();
       invalidateAfterConflict();
+      skipAutoAdvanceToStep4FromInitialSlotRef.current = true;
       if (ctx.isTicketed) setPartySize(1);
       else if (ctx.boats.length > 1) {
         setStep(3);
@@ -1326,6 +1333,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     pendingRecoveryBoatIdRef.current = null;
 
     const applyModalOpenSyncReset = () => {
+      skipAutoAdvanceToStep4FromInitialSlotRef.current = false;
       if (initialSelection?.date) {
         const isTicketedPreselect = isTicketedExperienceForBooking({
           pricingType: initialSelection.pricingType,
@@ -2178,6 +2186,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   // - Ticketed (no boat needed) → go directly to step 4 once departureHour is known (avoid create-hold before experience-detail loads)
   // - Charter without boatId → stay at step 3 so user picks boat
   useEffect(() => {
+    if (skipAutoAdvanceToStep4FromInitialSlotRef.current) return;
     if (!open || !initialSelection?.slotId || !selectedSlot || !selectedRateId) return;
     if (!initialSelection?.boatId && !isTicketed) return;
     if (isTicketed && selectedExperience?.departureHour == null && boatsLoading) return; // wait for experience-detail so slot validation has correct departure
@@ -2316,6 +2325,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
     } else if (step === 4) {
       const navigateFromStep4 = () => {
+        skipAutoAdvanceToStep4FromInitialSlotRef.current = true;
         // Keep date, duration, and time slot when leaving checkout so "Back" does not blank step 2 / break step 3.
         if (isTicketed) {
           if (isCalendarFirstFlow) {
@@ -2568,6 +2578,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       if (target === "close") {
         onOpenChange(false);
       } else {
+        skipAutoAdvanceToStep4FromInitialSlotRef.current = true;
         setStep(target);
       }
       setIsHoldExpired(false);
@@ -3983,6 +3994,31 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   </div>
                 </div>
               )}
+              {/* Stripe phase but summary deps not ready yet, or Stripe not configured — avoid empty step 4 */}
+              {paymentPhase === "stripe" &&
+                !(stripePromise && selectedExperience && selectedSlot && selectedRate) && (
+                  <div
+                    className="flex flex-1 min-h-[min(52dvh,420px)] flex-col items-center justify-center gap-3 px-4 py-10"
+                    role="status"
+                  >
+                    {!isStripeCheckoutReady || !stripePromise ? (
+                      <>
+                        <p className="text-sm font-semibold text-amber-900 text-center">Payment unavailable</p>
+                        <p className="text-sm text-amber-800 text-center max-w-sm">{STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE}</p>
+                      </>
+                    ) : (
+                      <>
+                        <div
+                          className="h-10 w-10 animate-spin rounded-full border-2 border-brand-primary border-t-transparent"
+                          aria-hidden
+                        />
+                        <p className="text-sm text-brand-muted text-center max-w-[280px]">
+                          Loading checkout… If this lasts more than a few seconds, go back and try again.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
             </div>
           </div>
         </div>
