@@ -28,7 +28,10 @@ import {
 import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
 import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import {
+  getDepartureInventoryRef,
+  releaseCapacityWithPreRead,
+} from "@/lib/booking/shared-departure-inventory";
 
 const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
 
@@ -231,6 +234,20 @@ export async function POST(
       });
     }
 
+    const expPricingTypeForCancel = expSnapForName?.exists
+      ? ((expSnapForName.data() as { pricingType?: string })?.pricingType ?? "")
+      : "";
+
+    const cancelTxOutcome = {
+      concurrentCanceled: false,
+      slotReleased: false,
+      heldSlotsReleased: 0,
+      distinctIds: getDistinctStripePaymentIntentIds(booking),
+      shouldAdjustSummary: false,
+      slotResetPending: false,
+      noSlotRefForBooking: false,
+    };
+
     let slotReleased = false;
     let heldSlotsReleased = 0;
     let distinctIds: string[] = getDistinctStripePaymentIntentIds(booking);
@@ -244,12 +261,12 @@ export async function POST(
         if (!snap.exists) return;
         const b = snap.data() as Booking;
         if (b.status === "canceled" || b.status === "refunded") {
-          concurrentCanceled = true;
+          cancelTxOutcome.concurrentCanceled = true;
           return;
         }
 
         const revenueCents = totalSummaryAttributedRevenueCents(b);
-        shouldAdjustSummary = shouldAdjustSummaryForCancel(b);
+        cancelTxOutcome.shouldAdjustSummary = shouldAdjustSummaryForCancel(b);
 
         const createdAt = (b as { createdAt?: { toDate?: () => Date } }).createdAt;
         const createdDate = createdAt?.toDate?.();
@@ -260,11 +277,15 @@ export async function POST(
             ? `revenue_${createdDate.getFullYear()}_${String(createdDate.getMonth() + 1).padStart(2, "0")}`
             : null;
 
-        distinctIds = getDistinctStripePaymentIntentIds(b);
+        cancelTxOutcome.distinctIds = getDistinctStripePaymentIntentIds(b);
 
         const bExpId = typeof b.experienceId === "string" ? b.experienceId.trim() : "";
         const bBoatId = typeof b.boatId === "string" ? b.boatId.trim() : "";
-        const slotResetPending = !!(slotId && !bExpId && !bBoatId);
+        cancelTxOutcome.slotResetPending = !!(slotId && !bExpId && !bBoatId);
+
+        const departureInventoryPreRead = {
+          current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
+        };
 
         if (slotId && bExpId) {
           const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
@@ -275,82 +296,71 @@ export async function POST(
             bookingForReset,
             expResolved?.slug ?? "",
             {
-              onHeldReleased: () => {
-                heldSlotsReleased++;
+              betweenReadsAndWrites: async (innerTx) => {
+                if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed") {
+                  const oldDateStr = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+                  if (oldDateStr) {
+                    const invRef = getDepartureInventoryRef(db, bExpId, oldDateStr);
+                    const invSnap = await innerTx.get(invRef);
+                    const reserved = invSnap.exists
+                      ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                      : 0;
+                    departureInventoryPreRead.current = { ref: invRef, reserved };
+                  }
+                }
               },
             }
           );
-          if (releasedCount > 0) slotReleased = true;
-          const expPricingType = expSnapForName?.exists
-            ? ((expSnapForName.data() as { pricingType?: string })?.pricingType ?? "")
-            : "";
-          if (b.bookingMode === "shared" && expPricingType === "ticketed") {
-            const oldDateStr = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
-            if (oldDateStr) {
-              await releaseCapacity(
-                tx,
-                getDepartureInventoryRef(db, bExpId, oldDateStr),
-                b.partySize
-              );
-            }
+          if (releasedCount.updated > 0) cancelTxOutcome.slotReleased = true;
+          cancelTxOutcome.heldSlotsReleased += releasedCount.heldSlotsReleased;
+          if (departureInventoryPreRead.current) {
+            const inv = departureInventoryPreRead.current;
+            releaseCapacityWithPreRead(tx, inv.ref, b.partySize, inv.reserved);
           }
         } else if (slotId && bBoatId) {
           const releasedBoatOnly = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, "", {
-            onHeldReleased: () => {
-              heldSlotsReleased++;
+            betweenReadsAndWrites: async (innerTx) => {
+              if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && bExpId) {
+                const oldDateStrBoat = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+                if (oldDateStrBoat) {
+                  const invRef = getDepartureInventoryRef(db, bExpId, oldDateStrBoat);
+                  const invSnap = await innerTx.get(invRef);
+                  const reserved = invSnap.exists
+                    ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                    : 0;
+                  departureInventoryPreRead.current = { ref: invRef, reserved };
+                }
+              }
             },
           });
-          if (releasedBoatOnly > 0) slotReleased = true;
-          const expPricingTypeBoat = expSnapForName?.exists
-            ? ((expSnapForName.data() as { pricingType?: string })?.pricingType ?? "")
-            : "";
-          if (b.bookingMode === "shared" && expPricingTypeBoat === "ticketed" && bExpId) {
-            const oldDateStrBoat = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
-            if (oldDateStrBoat) {
-              await releaseCapacity(
-                tx,
-                getDepartureInventoryRef(db, bExpId, oldDateStrBoat),
-                b.partySize
-              );
-            }
+          if (releasedBoatOnly.updated > 0) cancelTxOutcome.slotReleased = true;
+          cancelTxOutcome.heldSlotsReleased += releasedBoatOnly.heldSlotsReleased;
+          if (departureInventoryPreRead.current) {
+            const inv = departureInventoryPreRead.current;
+            releaseCapacityWithPreRead(tx, inv.ref, b.partySize, inv.reserved);
           }
         } else if (slotId) {
-          console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
-            bookingId,
-            experienceId,
-            boatId,
-            slotId,
-          });
-          void writeOperationalAlert({
-            type: "admin_cancel_no_slot_ref",
-            source: "admin-cancel",
-            bookingId,
-            experienceId: experienceId ?? null,
-            boatId: boatId ?? null,
-            slotId,
-            hint: "Could not resolve Firestore path for slot document; investigate and backfill boatId/experienceId on booking.",
-          }).catch(() => {});
+          cancelTxOutcome.noSlotRefForBooking = true;
         }
 
         const cancellationRefund = !body.refund
           ? ({
               status: "skipped" as const,
-              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
+              ...(cancelTxOutcome.shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
             })
           : ({
               status: "pending" as const,
-              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
+              ...(cancelTxOutcome.shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
             });
 
-        if (body.refund !== false && distinctIds.length > 0) {
-          for (const piId of distinctIds) {
+        if (body.refund !== false && cancelTxOutcome.distinctIds.length > 0) {
+          for (const piId of cancelTxOutcome.distinctIds) {
             const prId = pendingRefundDocumentId({
               reason: "admin_cancel_refund_pending",
               bookingId,
               paymentIntentId: piId,
             });
             const prRef = db.collection("pendingRefunds").doc(prId);
-            pendingRefundIds.push(prId);
             tx.set(
               prRef,
               {
@@ -374,10 +384,10 @@ export async function POST(
           status: "canceled",
           updatedAt: FieldValue.serverTimestamp(),
           cancellationRefund,
-          ...(slotResetPending ? { slotResetPending: true } : {}),
+          ...(cancelTxOutcome.slotResetPending ? { slotResetPending: true } : {}),
         });
 
-        if (shouldAdjustSummary) {
+        if (cancelTxOutcome.shouldAdjustSummary) {
           const summaryRef = db.collection("summaries").doc("revenue");
           tx.set(summaryRef, {
             totalRevenueCents: FieldValue.increment(-revenueCents),
@@ -396,6 +406,41 @@ export async function POST(
         }
 
       });
+      slotReleased = cancelTxOutcome.slotReleased;
+      heldSlotsReleased = cancelTxOutcome.heldSlotsReleased;
+      distinctIds = cancelTxOutcome.distinctIds;
+      shouldAdjustSummary = cancelTxOutcome.shouldAdjustSummary;
+      concurrentCanceled = cancelTxOutcome.concurrentCanceled;
+      if (body.refund !== false && cancelTxOutcome.distinctIds.length > 0) {
+        pendingRefundIds = Array.from(
+          new Set(
+            cancelTxOutcome.distinctIds.map((piId) =>
+              pendingRefundDocumentId({
+                reason: "admin_cancel_refund_pending",
+                bookingId,
+                paymentIntentId: piId,
+              })
+            )
+          )
+        );
+      }
+      if (cancelTxOutcome.noSlotRefForBooking) {
+        console.warn("[admin/cancel] no slot ref for booking — possible missing boatId/experienceId; backfill may be needed", {
+          bookingId,
+          experienceId,
+          boatId,
+          slotId,
+        });
+        void writeOperationalAlert({
+          type: "admin_cancel_no_slot_ref",
+          source: "admin-cancel",
+          bookingId,
+          experienceId: experienceId ?? null,
+          boatId: boatId ?? null,
+          slotId,
+          hint: "Could not resolve Firestore path for slot document; investigate and backfill boatId/experienceId on booking.",
+        }).catch(() => {});
+      }
     } else {
       distinctIds = getDistinctStripePaymentIntentIds(booking);
       shouldAdjustSummary = !!booking.cancellationRefund?.summaryAppliedAt;
@@ -412,7 +457,6 @@ export async function POST(
             paymentIntentId: piId,
           });
           const prRef = db.collection("pendingRefunds").doc(prId);
-          pendingRefundIds.push(prId);
           tx.set(
             prRef,
             {
@@ -427,6 +471,19 @@ export async function POST(
           );
         }
       });
+      if (body.refund !== false && distinctIds.length > 0) {
+        pendingRefundIds = Array.from(
+          new Set(
+            distinctIds.map((piId) =>
+              pendingRefundDocumentId({
+                reason: "admin_cancel_refund_pending",
+                bookingId,
+                paymentIntentId: piId,
+              })
+            )
+          )
+        );
+      }
     }
 
     if (!isResume) {

@@ -82,6 +82,29 @@ export async function releaseCapacity(
 }
 
 /**
+ * Write-only release using pre-read `reservedSeats` (no `tx.get`). Use when all transaction reads
+ * must happen before any writes (e.g. after slot docs were already written in the same transaction).
+ * Callers may run `alertNegativeReservedSeats` after commit if they need operational alerts.
+ */
+export function releaseCapacityWithPreRead(
+  tx: Transaction,
+  inventoryRef: DocumentReference,
+  partySize: number,
+  preReadReservedSeats: number
+): void {
+  const { FieldValue } = getFirestoreExports();
+  const next = Math.max(0, preReadReservedSeats - partySize);
+  tx.set(
+    inventoryRef,
+    {
+      reservedSeats: next,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+/**
  * Apply a net change to reserved seats using pre-read state (read-before-write).
  * Use this when resizing a hold: read reservedSeats once, then apply delta in a single write.
  * For delta > 0 validates that sold + currentReserved + delta <= capacity.

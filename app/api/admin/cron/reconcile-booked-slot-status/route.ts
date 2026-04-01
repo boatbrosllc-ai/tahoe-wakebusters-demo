@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
         const pendingBookingId = doc.id;
         try {
           const released = await db.runTransaction(async (tx) => {
-            const n = await resetBookingSlotsToOpenInTransaction(db, tx, pendingBookingId, b, "");
+            const n = (await resetBookingSlotsToOpenInTransaction(db, tx, pendingBookingId, b, "")).updated;
             if (n > 0) {
               tx.update(doc.ref, {
                 slotResetPending: FieldValue.delete(),

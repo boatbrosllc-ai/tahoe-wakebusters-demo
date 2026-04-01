@@ -20,7 +20,11 @@ import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { getAdminEmailFromSessionCookie } from "@/lib/admin-auth-firebase";
 import { applyExperienceRevenueDelta, totalSummaryAttributedRevenueCents } from "@/lib/booking/summary-revenue";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
-import { getDepartureInventoryRef, releaseCapacity, reserveCapacity } from "@/lib/booking/shared-departure-inventory";
+import {
+  getDepartureInventoryRef,
+  releaseCapacityWithPreRead,
+  reserveCapacity,
+} from "@/lib/booking/shared-departure-inventory";
 
 type RescheduleBody = {
   slotId?: string;
@@ -233,12 +237,8 @@ export async function POST(
         excludeBookingId: bookingId,
       });
 
-      await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug);
+      let soldOnNewDate = 0;
       if (booking.bookingMode === "shared" && exp.pricingType === "ticketed") {
-        const oldDateStr = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";
-        if (oldDateStr) {
-          await releaseCapacity(tx, getDepartureInventoryRef(db, experienceId, oldDateStr), booking.partySize);
-        }
         const soldSnaps = await Promise.all(
           variants.map((v) =>
             tx.get(
@@ -247,7 +247,6 @@ export async function POST(
           )
         );
         const seen = new Set<string>();
-        let soldOnNewDate = 0;
         for (const soldSnap of soldSnaps) {
           for (const doc of soldSnap.docs) {
             if (seen.has(doc.id) || doc.id === bookingId) continue;
@@ -258,14 +257,58 @@ export async function POST(
             soldOnNewDate += typeof b.partySize === "number" ? b.partySize : 0;
           }
         }
+      }
+
+      const departureInvOld = {
+        current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
+      };
+      const departureInvNew = {
+        current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
+      };
+
+      await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug, {
+        betweenReadsAndWrites: async (innerTx) => {
+          if (booking.bookingMode !== "shared" || exp.pricingType !== "ticketed") return;
+          const oldDateStr = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";
+          if (oldDateStr) {
+            const oldRef = getDepartureInventoryRef(db, experienceId, oldDateStr);
+            const oldSnap = await innerTx.get(oldRef);
+            departureInvOld.current = {
+              ref: oldRef,
+              reserved: oldSnap.exists
+                ? ((oldSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                : 0,
+            };
+          }
+          const newRef = getDepartureInventoryRef(db, experienceId, parsedNew.dateStr);
+          const newSnap = await innerTx.get(newRef);
+          departureInvNew.current = {
+            ref: newRef,
+            reserved: newSnap.exists
+              ? ((newSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+              : 0,
+          };
+        },
+      });
+
+      if (booking.bookingMode === "shared" && exp.pricingType === "ticketed") {
+        const oldDateStr = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";
+        if (oldDateStr && departureInvOld.current) {
+          const o = departureInvOld.current;
+          releaseCapacityWithPreRead(tx, o.ref, booking.partySize, o.reserved);
+        }
         const capacity = exp.maxCapacity ?? getMaxGuestsForExperience(exp as never);
-        await reserveCapacity(
-          tx,
-          getDepartureInventoryRef(db, experienceId, parsedNew.dateStr),
-          capacity,
-          booking.partySize,
-          soldOnNewDate
-        );
+        if (departureInvNew.current) {
+          const n = departureInvNew.current;
+          await reserveCapacity(
+            tx,
+            n.ref,
+            capacity,
+            booking.partySize,
+            soldOnNewDate,
+            { preReadReservedSeats: n.reserved }
+          );
+        }
       }
 
       const newSlotRefs = new Map<string, FirebaseFirestore.DocumentReference>();

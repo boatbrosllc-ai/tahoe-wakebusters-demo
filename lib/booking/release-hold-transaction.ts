@@ -3,7 +3,7 @@
  * Used by POST /api/booking/release-hold and cron/tooling.
  */
 
-import { getDepartureInventoryRef, releaseCapacity } from "@/lib/booking/shared-departure-inventory";
+import { getDepartureInventoryRef, releaseCapacityWithPreRead } from "@/lib/booking/shared-departure-inventory";
 import { parseSlotId, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import type { Booking, Hold, Slot } from "@/lib/booking/types";
 import type { DocumentReference, Firestore } from "firebase-admin/firestore";
@@ -240,6 +240,25 @@ export async function executeFinalFailedBookingReleaseTransaction(
       ? db.collection("boats").doc(boatId).collection("slots").doc(slotId)
       : db.collection("experiences").doc(experienceId!).collection("slots").doc(slotId);
     const slotSnap = await tx.get(slotRef);
+    const expSnap = experienceId ? await tx.get(db.collection("experiences").doc(experienceId)) : null;
+    const pricingType = expSnap?.exists ? ((expSnap.data() as { pricingType?: string }).pricingType ?? "") : "";
+    let departureInventoryPreRead: { ref: ReturnType<typeof getDepartureInventoryRef>; reserved: number } | null = null;
+    if (pricingType === "ticketed" && experienceId) {
+      const startDateStr =
+        booking.startDateStr?.trim() ||
+        parseSlotId(slotId)?.dateStr ||
+        parseSlotIdRelaxed(slotId)?.dateStr ||
+        "";
+      if (startDateStr) {
+        const inventoryRef = getDepartureInventoryRef(db, experienceId, startDateStr);
+        const invSnap = await tx.get(inventoryRef);
+        const reserved = invSnap.exists
+          ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+          : 0;
+        departureInventoryPreRead = { ref: inventoryRef, reserved };
+      }
+    }
+
     if (slotSnap.exists) {
       const slot = slotSnap.data() as Slot;
       const slotBookingId = typeof slot.bookingId === "string" ? slot.bookingId : "";
@@ -253,18 +272,13 @@ export async function executeFinalFailedBookingReleaseTransaction(
       }
     }
 
-    const expSnap = experienceId ? await tx.get(db.collection("experiences").doc(experienceId)) : null;
-    const pricingType = expSnap?.exists ? ((expSnap.data() as { pricingType?: string }).pricingType ?? "") : "";
-    if (pricingType === "ticketed" && experienceId) {
-      const startDateStr =
-        booking.startDateStr?.trim() ||
-        parseSlotId(slotId)?.dateStr ||
-        parseSlotIdRelaxed(slotId)?.dateStr ||
-        "";
-      if (startDateStr) {
-        const inventoryRef = getDepartureInventoryRef(db, experienceId, startDateStr);
-        await releaseCapacity(tx, inventoryRef, Math.max(0, booking.partySize ?? 0));
-      }
+    if (departureInventoryPreRead) {
+      releaseCapacityWithPreRead(
+        tx,
+        departureInventoryPreRead.ref,
+        Math.max(0, booking.partySize ?? 0),
+        departureInventoryPreRead.reserved
+      );
     }
 
     tx.update(bookingRef, {

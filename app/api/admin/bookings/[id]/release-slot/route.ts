@@ -24,11 +24,25 @@ export async function POST(
     let alreadyCanceled = false;
     let mustCancelFirst = false;
     let slotBookingMismatch = false;
+
+    const bookingSnapOuter = await bookingRef.get();
+    if (!bookingSnapOuter.exists) {
+      return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    }
+    const bookingOuter = bookingSnapOuter.data() as Booking;
+    slotId = typeof bookingOuter.slotId === "string" ? bookingOuter.slotId : null;
+    if (!slotId) {
+      return NextResponse.json({ error: "Booking is missing slot metadata" }, { status: 400 });
+    }
+    if (bookingOuter.status !== "canceled") {
+      return NextResponse.json({ error: "Booking status does not require slot release" }, { status: 409 });
+    }
+    const expResolvedOuter = await resolveExperienceDocAndSlug(db, bookingOuter.experienceId);
+
     await db.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
       if (!bookingSnap.exists) throw new Error("BOOKING_NOT_FOUND");
       const booking = bookingSnap.data() as Booking;
-      slotId = typeof booking.slotId === "string" ? booking.slotId : null;
       if (!slotId) throw new Error("BOOKING_MISSING_SLOT");
       if (booking.status !== "canceled") {
         mustCancelFirst = true;
@@ -52,17 +66,17 @@ export async function POST(
         slotBookingMismatch = true;
         return;
       }
-      const expResolved = await resolveExperienceDocAndSlug(db, booking.experienceId);
-      const bookingForReset = expResolved
-        ? ({ ...booking, experienceId: expResolved.docId } as Booking)
+      const bookingForReset = expResolvedOuter
+        ? ({ ...booking, experienceId: expResolvedOuter.docId } as Booking)
         : booking;
-      updated = await resetBookingSlotsToOpenInTransaction(
+      const resetResult = await resetBookingSlotsToOpenInTransaction(
         db,
         tx,
         bookingId,
         bookingForReset,
-        expResolved?.slug ?? ""
+        expResolvedOuter?.slug ?? ""
       );
+      updated = resetResult.updated;
     });
     if (mustCancelFirst) {
       return NextResponse.json({ error: "Booking status does not require slot release" }, { status: 409 });

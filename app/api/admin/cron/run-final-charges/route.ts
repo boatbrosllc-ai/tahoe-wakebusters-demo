@@ -988,7 +988,6 @@ export async function POST(request: NextRequest) {
             const cId = fresh.stripe?.customerId?.trim();
             const pId = fresh.stripe?.paymentMethodId?.trim();
             if (cId && pId) return;
-            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
             const expResolved = await resolveExperienceDocAndSlug(db, fresh.experienceId);
             const bookingForReset = expResolved ? ({ ...fresh, experienceId: expResolved.docId } as Booking) : fresh;
             await resetBookingSlotsToOpenInTransaction(
@@ -998,6 +997,7 @@ export async function POST(request: NextRequest) {
               bookingForReset,
               expResolved?.slug ?? ""
             );
+            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
           });
           const depPi = typeof b.stripe?.depositPaymentIntentId === "string" ? b.stripe.depositPaymentIntentId.trim() : "";
           const fullPi = typeof b.stripe?.paymentIntentId === "string" ? b.stripe.paymentIntentId.trim() : "";
@@ -1123,7 +1123,6 @@ export async function POST(request: NextRequest) {
             if (!snap.exists) return;
             const fresh = snap.data() as Booking;
             if (fresh.status !== "final_failed") return;
-            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
             const expResolved = await resolveExperienceDocAndSlug(db, fresh.experienceId);
             const bookingForReset = expResolved ? ({ ...fresh, experienceId: expResolved.docId } as Booking) : fresh;
             await resetBookingSlotsToOpenInTransaction(
@@ -1133,6 +1132,7 @@ export async function POST(request: NextRequest) {
               bookingForReset,
               expResolved?.slug ?? ""
             );
+            tx.update(ref, { status: "canceled", updatedAt: FieldValue.serverTimestamp() });
           });
           const depPiFf = typeof b.stripe?.depositPaymentIntentId === "string" ? b.stripe.depositPaymentIntentId.trim() : "";
           const fullPiFf = typeof b.stripe?.paymentIntentId === "string" ? b.stripe.paymentIntentId.trim() : "";
