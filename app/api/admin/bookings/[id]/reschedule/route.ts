@@ -266,30 +266,30 @@ export async function POST(
         current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
       };
 
-      await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug, {
-        betweenReadsAndWrites: async (innerTx) => {
-          if (booking.bookingMode !== "shared" || exp.pricingType !== "ticketed") return;
-          const oldDateStr = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";
-          if (oldDateStr) {
-            const oldRef = getDepartureInventoryRef(db, experienceId, oldDateStr);
-            const oldSnap = await innerTx.get(oldRef);
-            departureInvOld.current = {
-              ref: oldRef,
-              reserved: oldSnap.exists
-                ? ((oldSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-                : 0,
-            };
-          }
-          const newRef = getDepartureInventoryRef(db, experienceId, parsedNew.dateStr);
-          const newSnap = await innerTx.get(newRef);
-          departureInvNew.current = {
-            ref: newRef,
-            reserved: newSnap.exists
-              ? ((newSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+      /** Read departure inventory before slot reads/writes — not between slot reads and slot writes. */
+      if (booking.bookingMode === "shared" && exp.pricingType === "ticketed") {
+        const oldDateStrInv = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";
+        if (oldDateStrInv) {
+          const oldRef = getDepartureInventoryRef(db, experienceId, oldDateStrInv);
+          const oldSnap = await tx.get(oldRef);
+          departureInvOld.current = {
+            ref: oldRef,
+            reserved: oldSnap.exists
+              ? ((oldSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
               : 0,
           };
-        },
-      });
+        }
+        const newRef = getDepartureInventoryRef(db, experienceId, parsedNew.dateStr);
+        const newSnap = await tx.get(newRef);
+        departureInvNew.current = {
+          ref: newRef,
+          reserved: newSnap.exists
+            ? ((newSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+            : 0,
+        };
+      }
+
+      await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, booking, expSlug);
 
       if (booking.bookingMode === "shared" && exp.pricingType === "ticketed") {
         const oldDateStr = typeof booking.startDateStr === "string" ? booking.startDateStr.trim() : "";

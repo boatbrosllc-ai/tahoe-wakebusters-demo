@@ -287,6 +287,22 @@ export async function POST(
           current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
         };
 
+        /** Inventory must be read with booking — not between slot reads and slot writes (Firestore read-before-write rule). */
+        const expIdForInventory = (expResolved?.docId?.trim() || bExpId || "").trim();
+        if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && expIdForInventory) {
+          const oldDateStrInv = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+          if (oldDateStrInv) {
+            const invRef = getDepartureInventoryRef(db, expIdForInventory, oldDateStrInv);
+            const invSnap = await tx.get(invRef);
+            departureInventoryPreRead.current = {
+              ref: invRef,
+              reserved: invSnap.exists
+                ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                : 0,
+            };
+          }
+        }
+
         if (slotId && bExpId) {
           const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
           const releasedCount = await resetBookingSlotsToOpenInTransaction(
@@ -294,22 +310,7 @@ export async function POST(
             tx,
             bookingId,
             bookingForReset,
-            expResolved?.slug ?? "",
-            {
-              betweenReadsAndWrites: async (innerTx) => {
-                if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed") {
-                  const oldDateStr = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
-                  if (oldDateStr) {
-                    const invRef = getDepartureInventoryRef(db, bExpId, oldDateStr);
-                    const invSnap = await innerTx.get(invRef);
-                    const reserved = invSnap.exists
-                      ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-                      : 0;
-                    departureInventoryPreRead.current = { ref: invRef, reserved };
-                  }
-                }
-              },
-            }
+            expResolved?.slug ?? ""
           );
           if (releasedCount.updated > 0) cancelTxOutcome.slotReleased = true;
           cancelTxOutcome.heldSlotsReleased += releasedCount.heldSlotsReleased;
@@ -318,21 +319,7 @@ export async function POST(
             releaseCapacityWithPreRead(tx, inv.ref, b.partySize, inv.reserved);
           }
         } else if (slotId && bBoatId) {
-          const releasedBoatOnly = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, "", {
-            betweenReadsAndWrites: async (innerTx) => {
-              if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && bExpId) {
-                const oldDateStrBoat = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
-                if (oldDateStrBoat) {
-                  const invRef = getDepartureInventoryRef(db, bExpId, oldDateStrBoat);
-                  const invSnap = await innerTx.get(invRef);
-                  const reserved = invSnap.exists
-                    ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-                    : 0;
-                  departureInventoryPreRead.current = { ref: invRef, reserved };
-                }
-              }
-            },
-          });
+          const releasedBoatOnly = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, "");
           if (releasedBoatOnly.updated > 0) cancelTxOutcome.slotReleased = true;
           cancelTxOutcome.heldSlotsReleased += releasedBoatOnly.heldSlotsReleased;
           if (departureInventoryPreRead.current) {

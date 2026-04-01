@@ -17,13 +17,14 @@ function firestoreEnabled(): boolean {
 }
 
 describe("POST /api/admin/bookings/[id]/cancel (source wiring)", () => {
-  it("uses releaseCapacityWithPreRead and betweenReadsAndWrites for shared ticketed inventory", () => {
+  it("pre-reads departure inventory then slot batch, and uses releaseCapacityWithPreRead for shared ticketed", () => {
     const src = readFileSync(
       join(__dirname, "../app/api/admin/bookings/[id]/cancel/route.ts"),
       "utf8"
     );
     assert.match(src, /releaseCapacityWithPreRead/);
-    assert.match(src, /betweenReadsAndWrites/);
+    assert.match(src, /expIdForInventory/);
+    assert.match(src, /Firestore read-before-write rule/);
   });
 });
 
@@ -142,6 +143,13 @@ describe(
       };
 
       await db.runTransaction(async (tx) => {
+        const invSnapPre = await tx.get(invRef);
+        departureInventoryPreRead.current = {
+          ref: invRef,
+          reserved: invSnapPre.exists
+            ? ((invSnapPre.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+            : 0,
+        };
         await resetBookingSlotsToOpenInTransaction(
           db,
           tx,
@@ -156,16 +164,7 @@ describe(
             status: "paid",
             pricing: { totalCents: 100, currency: "usd" },
           } as import("../lib/booking/types").Booking,
-          `shared-${uid}`,
-          {
-            betweenReadsAndWrites: async (innerTx) => {
-              const snap = await innerTx.get(invRef);
-              const reserved = snap.exists
-                ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-                : 0;
-              departureInventoryPreRead.current = { ref: invRef, reserved };
-            },
-          }
+          `shared-${uid}`
         );
         if (departureInventoryPreRead.current) {
           const inv = departureInventoryPreRead.current;
