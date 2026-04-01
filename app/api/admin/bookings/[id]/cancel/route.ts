@@ -213,7 +213,7 @@ export async function POST(
 
     tripDateStr = booking.startDateStr ?? parseSlotId(slotId ?? "")?.dateStr;
     expSnapForName = experienceId ? await db.collection("experiences").doc(experienceId).get() : null;
-
+    const expResolved = await resolveExperienceDocAndSlug(db, booking.experienceId);
 
     /** Must match increments in convert-hold (deposit + optional final), webhook/cron final, and admin POST. */
     const revenueCentsPre = totalSummaryAttributedRevenueCents(booking);
@@ -262,75 +262,11 @@ export async function POST(
 
         distinctIds = getDistinctStripePaymentIntentIds(b);
 
-        const cancellationRefund = !body.refund
-          ? ({
-              status: "skipped" as const,
-              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
-            })
-          : ({
-              status: "pending" as const,
-              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
-            });
-
-        if (body.refund !== false && distinctIds.length > 0) {
-          for (const piId of distinctIds) {
-            const prId = pendingRefundDocumentId({
-              reason: "admin_cancel_refund_pending",
-              bookingId,
-              paymentIntentId: piId,
-            });
-            const prRef = db.collection("pendingRefunds").doc(prId);
-            pendingRefundIds.push(prId);
-            tx.set(
-              prRef,
-              {
-                bookingId,
-                paymentIntentId: piId,
-                reason: "admin_cancel_refund_pending",
-                status: "pending",
-                createdAt: Timestamp.now(),
-                firstSeenAt: Timestamp.now(),
-                lastSeenAt: Timestamp.now(),
-                occurrences: 1,
-                nextRetryAt: Timestamp.now(),
-                processorAttempts: 0,
-              },
-              { merge: true }
-            );
-          }
-        }
-
         const bExpId = typeof b.experienceId === "string" ? b.experienceId.trim() : "";
         const bBoatId = typeof b.boatId === "string" ? b.boatId.trim() : "";
         const slotResetPending = !!(slotId && !bExpId && !bBoatId);
 
-        tx.update(bookingRef, {
-          status: "canceled",
-          updatedAt: FieldValue.serverTimestamp(),
-          cancellationRefund,
-          ...(slotResetPending ? { slotResetPending: true } : {}),
-        });
-
-        if (shouldAdjustSummary) {
-          const summaryRef = db.collection("summaries").doc("revenue");
-          tx.set(summaryRef, {
-            totalRevenueCents: FieldValue.increment(-revenueCents),
-            bookingCount: FieldValue.increment(-1),
-          }, { merge: true });
-          if (monthKey) {
-            const monthRef = db.collection("summaries").doc(monthKey);
-            tx.set(monthRef, {
-              revenueCents: FieldValue.increment(-revenueCents),
-              bookingCount: FieldValue.increment(-1),
-            }, { merge: true });
-          }
-          if (bExpId) {
-            applyExperienceRevenueDelta(tx, db, FieldValue, bExpId, -revenueCents, -1);
-          }
-        }
-
         if (slotId && bExpId) {
-          const expResolved = await resolveExperienceDocAndSlug(db, b.experienceId);
           const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
           const releasedCount = await resetBookingSlotsToOpenInTransaction(
             db,
@@ -339,9 +275,9 @@ export async function POST(
             bookingForReset,
             expResolved?.slug ?? "",
             {
-            onHeldReleased: () => {
-              heldSlotsReleased++;
-            },
+              onHeldReleased: () => {
+                heldSlotsReleased++;
+              },
             }
           );
           if (releasedCount > 0) slotReleased = true;
@@ -394,6 +330,69 @@ export async function POST(
             slotId,
             hint: "Could not resolve Firestore path for slot document; investigate and backfill boatId/experienceId on booking.",
           }).catch(() => {});
+        }
+
+        const cancellationRefund = !body.refund
+          ? ({
+              status: "skipped" as const,
+              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
+            })
+          : ({
+              status: "pending" as const,
+              ...(shouldAdjustSummary ? { summaryAppliedAt: Timestamp.now() } : {}),
+            });
+
+        if (body.refund !== false && distinctIds.length > 0) {
+          for (const piId of distinctIds) {
+            const prId = pendingRefundDocumentId({
+              reason: "admin_cancel_refund_pending",
+              bookingId,
+              paymentIntentId: piId,
+            });
+            const prRef = db.collection("pendingRefunds").doc(prId);
+            pendingRefundIds.push(prId);
+            tx.set(
+              prRef,
+              {
+                bookingId,
+                paymentIntentId: piId,
+                reason: "admin_cancel_refund_pending",
+                status: "pending",
+                createdAt: Timestamp.now(),
+                firstSeenAt: Timestamp.now(),
+                lastSeenAt: Timestamp.now(),
+                occurrences: 1,
+                nextRetryAt: Timestamp.now(),
+                processorAttempts: 0,
+              },
+              { merge: true }
+            );
+          }
+        }
+
+        tx.update(bookingRef, {
+          status: "canceled",
+          updatedAt: FieldValue.serverTimestamp(),
+          cancellationRefund,
+          ...(slotResetPending ? { slotResetPending: true } : {}),
+        });
+
+        if (shouldAdjustSummary) {
+          const summaryRef = db.collection("summaries").doc("revenue");
+          tx.set(summaryRef, {
+            totalRevenueCents: FieldValue.increment(-revenueCents),
+            bookingCount: FieldValue.increment(-1),
+          }, { merge: true });
+          if (monthKey) {
+            const monthRef = db.collection("summaries").doc(monthKey);
+            tx.set(monthRef, {
+              revenueCents: FieldValue.increment(-revenueCents),
+              bookingCount: FieldValue.increment(-1),
+            }, { merge: true });
+          }
+          if (bExpId) {
+            applyExperienceRevenueDelta(tx, db, FieldValue, bExpId, -revenueCents, -1);
+          }
         }
 
       });
