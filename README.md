@@ -142,6 +142,16 @@ Page views are tracked on App Router navigation by `components/providers/GaPageV
 
 Implementation: `lib/analytics.ts` logs via `window.gtag('event', ...)` when GA is loaded, and also pushes the same payload to `window.dataLayer` for inspection/debugging.
 
+### Google Ads — contact conversion
+
+**Recommended:** In Google Ads, open **Goals → Conversions →** your contact action **→ Tag setup**, use the **Event snippet**, and copy the full **`send_to`** value (format **`AW-123456789/YourLabel`**). Set **`NEXT_PUBLIC_GOOGLE_ADS_CONVERSION_SEND_TO`** to that string. A successful **`/contact`** submit then runs **`gtag('event', 'conversion', { send_to: '…' })`**, which matches Google’s documented pattern.
+
+**Optional:** Set **`NEXT_PUBLIC_GOOGLE_ADS_ID=AW-…`** only if your Google tag setup also asks for **`gtag('config', 'AW-…')`** after GA4 (`app/layout.tsx` wires that).
+
+**Alternate:** If Google’s UI only gives a **named** conversion event (no `send_to` in the snippet you use), set **`NEXT_PUBLIC_GOOGLE_ADS_ID`** and optionally **`NEXT_PUBLIC_GOOGLE_ADS_CONTACT_EVENT`** (default **`ads_conversion_Contact_Us_1`**).
+
+Without **`NEXT_PUBLIC_GOOGLE_ADS_CONVERSION_SEND_TO`** or **`NEXT_PUBLIC_GOOGLE_ADS_ID`**, only GA4 + **`contact_submit`** run. Rebuild after changing any **`NEXT_PUBLIC_*`** variable. Details: **`lib/google-ads-id.ts`**.
+
 ### If GA4 says “Data collection isn’t active” / “No data received”
 
 That banner is GA’s way of saying it has **not seen hits on this stream yet** (or not in 48+ hours). Your stream details (**Measurement ID** `G-…`) must match `GET /api/health` → `ga4.measurementId`. After deploy, use **Chrome with extensions off** (or Tag Assistant) and confirm **Network** requests to `google-analytics.com` / `googletagmanager.com` (e.g. `collect` / `g/collect`) return **200/204**. In **Admin → Data streams → your web stream → Configure tag settings**, ensure nothing is pausing the tag. Internal-traffic **data filters** can hide you from Realtime even when data arrives.

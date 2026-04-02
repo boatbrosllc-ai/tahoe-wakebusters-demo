@@ -1,4 +1,10 @@
 import { sendGaFallbackEvent } from "@/lib/ga-fallback-client";
+import {
+  getGoogleAdsContactConversionEventName,
+  getGoogleAdsConversionSendTo,
+  isGoogleAdsContactConversionConfigured,
+  googleAdsContactUsesNamedEvent,
+} from "@/lib/google-ads-id";
 
 /**
  * Client-side analytics: GA4 when `gtag.js` is loaded (see `app/layout.tsx` + `lib/ga-measurement-id.ts`),
@@ -54,6 +60,19 @@ export const analytics = {
   },
   contactSubmit(source: string) {
     logEvent({ name: "contact_submit", payload: { source } });
+    if (!isGoogleAdsContactConversionConfigured() || typeof window === "undefined") return;
+    const w = window as Window & { gtag?: GtagFn };
+    if (typeof w.gtag !== "function") return;
+    const sendTo = getGoogleAdsConversionSendTo();
+    try {
+      if (sendTo) {
+        w.gtag("event", "conversion", { send_to: sendTo });
+      } else if (googleAdsContactUsesNamedEvent()) {
+        w.gtag("event", getGoogleAdsContactConversionEventName(), {});
+      }
+    } catch {
+      /* non-fatal */
+    }
   },
   bookingStep1CategorySelected() {
     logEvent({ name: "booking_step_1_category_selected", payload: {} });

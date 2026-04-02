@@ -3,7 +3,13 @@ import { isValidGoogleTagId } from "@/lib/ga-tag-id";
 export type GtagInlineBootstrapOptions = {
   /** When true, GA4 labels hits as debug (see GA4 Admin → DebugView). Set via NEXT_PUBLIC_GA_DEBUG=1 while testing. */
   debugMode?: boolean;
+  /** Optional Google Ads `AW-…` ID — adds `gtag('config', awId)` after GA4 config for Ads conversions. */
+  googleAdsId?: string | null;
 };
+
+function escapeForSingleQuotedJs(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
 
 function assertMeasurementId(measurementId: string): void {
   if (!isValidGoogleTagId(measurementId)) {
@@ -19,13 +25,19 @@ export function getGtagInlineBootstrapJs(measurementId: string, options?: GtagIn
   assertMeasurementId(measurementId);
   const configExtra =
     options?.debugMode === true ? ",{debug_mode:true,send_page_view:true}" : "";
+  const adsId = options?.googleAdsId?.trim();
+  const adsConfig =
+    adsId && isValidGoogleTagId(adsId)
+      ? `window.gtag('config','${escapeForSingleQuotedJs(adsId)}');`
+      : "";
   return (
     "window.dataLayer=window.dataLayer||[];" +
     "if(typeof window.gtag!=='function'){" +
     "window.gtag=function(){window.dataLayer.push(arguments);};" +
     "}" +
     "window.gtag('js',new Date());" +
-    `window.gtag('config','${measurementId}'${configExtra});`
+    `window.gtag('config','${escapeForSingleQuotedJs(measurementId)}'${configExtra});` +
+    adsConfig
   );
 }
 
@@ -38,7 +50,12 @@ export function getGtagFullBootstrapJs(measurementId: string, options?: GtagInli
   assertMeasurementId(measurementId);
   const configExtra =
     options?.debugMode === true ? ",{debug_mode:true,send_page_view:true}" : "";
-  const libUrl = "https://www.googletagmanager.com/gtag/js?id=" + measurementId;
+  const adsId = options?.googleAdsId?.trim();
+  const adsConfig =
+    adsId && isValidGoogleTagId(adsId)
+      ? "window.gtag('config','" + escapeForSingleQuotedJs(adsId) + "');"
+      : "";
+  const libUrl = "https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(measurementId);
   return (
     "window.dataLayer=window.dataLayer||[];" +
     "if(typeof window.gtag!=='function'){" +
@@ -46,14 +63,15 @@ export function getGtagFullBootstrapJs(measurementId: string, options?: GtagInli
     "}" +
     "window.gtag('js',new Date());" +
     "window.gtag('config','" +
-    measurementId +
+    escapeForSingleQuotedJs(measurementId) +
     "'" +
     configExtra +
     ");" +
+    adsConfig +
     "var _ga4s=document.createElement('script');" +
     "_ga4s.async=true;" +
     "_ga4s.src='" +
-    libUrl +
+    libUrl.replace(/\\/g, "\\\\").replace(/'/g, "\\'") +
     "';" +
     "(document.head||document.documentElement).appendChild(_ga4s);"
   );

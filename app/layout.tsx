@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Syne } from "next/font/google";
 import { headers } from "next/headers";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
+import { getGoogleAdsId } from "@/lib/google-ads-id";
 import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
@@ -46,6 +47,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const gaMeasurementId = getGaMeasurementId();
+  const googleAdsId = getGoogleAdsId();
   const gaDebugMode = isGaClientDebugEnabled();
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
@@ -86,7 +88,10 @@ export default async function RootLayout({
               nonce={nonce}
               suppressHydrationWarning
               dangerouslySetInnerHTML={{
-                __html: getGtagInlineBootstrapJs(gaMeasurementId, { debugMode: gaDebugMode }),
+                __html: getGtagInlineBootstrapJs(gaMeasurementId, {
+                  debugMode: gaDebugMode,
+                  googleAdsId,
+                }),
               }}
             />
           </>
