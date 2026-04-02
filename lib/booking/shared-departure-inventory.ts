@@ -93,7 +93,12 @@ export function releaseCapacityWithPreRead(
   preReadReservedSeats: number
 ): void {
   const { FieldValue } = getFirestoreExports();
-  const next = Math.max(0, preReadReservedSeats - partySize);
+  const ps = typeof partySize === "number" && Number.isFinite(partySize) ? Math.max(0, Math.floor(partySize)) : 0;
+  const cur =
+    typeof preReadReservedSeats === "number" && Number.isFinite(preReadReservedSeats)
+      ? Math.max(0, Math.floor(preReadReservedSeats))
+      : 0;
+  const next = Math.max(0, cur - ps);
   tx.set(
     inventoryRef,
     {

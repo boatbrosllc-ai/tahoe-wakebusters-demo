@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { collectAllActiveHoldDocsForBoat } from "@/lib/booking/admin-active-holds-query";
 import { BOOKING_STATUSES_SLOT_TAKEN, type ListingBoat } from "@/lib/booking/types";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
 
@@ -135,29 +136,24 @@ export async function PATCH(
         }
       | null = null;
     if (isDeactivatingBoat) {
-      const activeHoldsSnap = await db
-        .collection("holds")
-        .where("boatId", "==", id)
-        .where("status", "==", "active")
-        .limit(100)
-        .get();
-      if (!force && !activeHoldsSnap.empty) {
+      const activeHoldDocs = await collectAllActiveHoldDocsForBoat(db, id);
+      if (!force && activeHoldDocs.length > 0) {
         return NextResponse.json(
           {
             error:
               "Deactivating this boat would release active customer holds. Re-submit with { force: true } to confirm hold release.",
-            activeHoldCount: activeHoldsSnap.size,
-            holdIds: activeHoldsSnap.docs.map((d) => d.id),
+            activeHoldCount: activeHoldDocs.length,
+            holdIds: activeHoldDocs.map((d) => d.id),
             forceRequired: true,
           },
           { status: 409 }
         );
       }
-      if (force && !activeHoldsSnap.empty) {
+      if (force && activeHoldDocs.length > 0) {
         const processed: string[] = [];
         const skipped: string[] = [];
         const failed: Array<{ holdId: string; error?: string }> = [];
-        for (const holdDoc of activeHoldsSnap.docs) {
+        for (const holdDoc of activeHoldDocs) {
           try {
             const releaseResult = await runExpiredHoldReleaseTransaction(db, FieldValue, holdDoc.ref);
             if (releaseResult === "processed") processed.push(holdDoc.id);
@@ -171,7 +167,7 @@ export async function PATCH(
           }
         }
         holdReleaseSummary = {
-          attempted: activeHoldsSnap.size,
+          attempted: activeHoldDocs.length,
           processed,
           skipped,
           failed,

@@ -11,15 +11,15 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("resetBookingSlotsToOpenInTransaction (source ordering)", () => {
-  it("reads all slot snapshots before betweenReadsAndWrites and before any tx.set", () => {
+  it("reads slots sequentially before betweenReadsAndWrites and before applyBookingSlotOpensFromSnapshots writes", () => {
     const src = readFileSync(join(__dirname, "../slot-reset.ts"), "utf8");
-    const snapshotsIdx = src.indexOf("const snapshots = await Promise.all(refList.map((ref) => tx.get(ref)))");
-    const betweenIdx = src.indexOf("await opts?.betweenReadsAndWrites?.(tx)");
-    const firstSetInLoop = src.indexOf("tx.set(");
-    assert.ok(snapshotsIdx >= 0, "expected snapshot batch read");
-    assert.ok(betweenIdx >= 0, "expected betweenReadsAndWrites hook");
-    assert.ok(firstSetInLoop >= 0, "expected tx.set writes");
-    assert.ok(snapshotsIdx < betweenIdx, "snapshots must be read before betweenReadsAndWrites");
-    assert.ok(betweenIdx < firstSetInLoop, "betweenReadsAndWrites must run before first tx.set");
+    const resetStart = src.indexOf("export async function resetBookingSlotsToOpenInTransaction");
+    assert.ok(resetStart >= 0);
+    const resetSlice = src.slice(resetStart, resetStart + 2200);
+    const forIdx = resetSlice.indexOf("for (const ref of refList)");
+    const betweenIdx = resetSlice.indexOf("await opts?.betweenReadsAndWrites?.(tx)");
+    const retIdx = resetSlice.indexOf("return applyBookingSlotOpensFromSnapshots");
+    assert.ok(forIdx >= 0 && betweenIdx >= 0 && retIdx >= 0);
+    assert.ok(forIdx < betweenIdx && betweenIdx < retIdx, "read loop → optional hook → apply writes");
   });
 });

@@ -1,4 +1,4 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
+import type { DocumentSnapshot, Firestore, Transaction } from "firebase-admin/firestore";
 import type { Booking } from "@/lib/booking/types";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
@@ -10,28 +10,18 @@ export type ResetBookingSlotsResult = {
 };
 
 /**
- * Clears booking/held state on all slot doc variants. Uses a two-phase transaction
- * pattern: all `tx.get` reads for candidate slots, then all `tx.set` writes, so
- * Firestore does not see reads after writes.
- *
- * @param betweenReadsAndWrites Optional hook after all slot reads and before any
- *   slot writes (e.g. read shared departure inventory in the same transaction).
+ * Slot doc refs to clear for this booking (boat + experience + slug variants).
+ * Exported so callers can run all `tx.get` reads in one explicit phase before any writes.
  */
-export async function resetBookingSlotsToOpenInTransaction(
+export function buildBookingSlotResetRefs(
   db: Firestore,
-  tx: Transaction,
-  bookingId: string,
   booking: Booking,
-  experienceSlug?: string,
-  opts?: {
-    betweenReadsAndWrites?: (tx: Transaction) => void | Promise<void>;
-  }
-): Promise<ResetBookingSlotsResult> {
-  const { FieldValue } = getFirestoreExports();
+  experienceSlug?: string
+): FirebaseFirestore.DocumentReference[] {
   const slotId = booking.slotId;
   const experienceId = booking.experienceId;
   const boatId = booking.boatId;
-  if (!slotId) return { updated: 0, heldSlotsReleased: 0 };
+  if (!slotId) return [];
   const refs = new Map<string, FirebaseFirestore.DocumentReference>();
   if (boatId) refs.set(`boats/${boatId}/slots/${slotId}`, db.collection("boats").doc(boatId).collection("slots").doc(slotId));
   if (experienceId) refs.set(`experiences/${experienceId}/slots/${slotId}`, db.collection("experiences").doc(experienceId).collection("slots").doc(slotId));
@@ -41,15 +31,24 @@ export async function resetBookingSlotsToOpenInTransaction(
       refs.set(`experiences/${v}/slots/${slotId}`, db.collection("experiences").doc(v).collection("slots").doc(slotId));
     }
   }
+  return Array.from(refs.values());
+}
 
-  const refList = Array.from(refs.values());
-  const snapshots = await Promise.all(refList.map((ref) => tx.get(ref)));
-
-  await opts?.betweenReadsAndWrites?.(tx);
-
+/**
+ * Write-only: open slots from pre-read snapshots (no `tx.get`). Pair with `buildBookingSlotResetRefs` + reads.
+ */
+export function applyBookingSlotOpensFromSnapshots(
+  tx: Transaction,
+  bookingId: string,
+  _booking: Booking,
+  refList: FirebaseFirestore.DocumentReference[],
+  snapshots: DocumentSnapshot[]
+): ResetBookingSlotsResult {
+  const { FieldValue } = getFirestoreExports();
   let updated = 0;
   let heldSlotsReleased = 0;
-  for (let i = 0; i < refList.length; i++) {
+  const n = Math.min(refList.length, snapshots.length);
+  for (let i = 0; i < n; i++) {
     const ref = refList[i]!;
     const snap = snapshots[i]!;
     if (!snap.exists) continue;
@@ -71,4 +70,33 @@ export async function resetBookingSlotsToOpenInTransaction(
     updated++;
   }
   return { updated, heldSlotsReleased };
+}
+
+/**
+ * Clears booking/held state on all slot doc variants. Uses a two-phase transaction
+ * pattern: all `tx.get` reads for candidate slots (sequential — avoids client read-order bugs),
+ * optional `betweenReadsAndWrites`, then all `tx.set` writes.
+ *
+ * @param betweenReadsAndWrites Optional hook after all slot reads and before any
+ *   slot writes (e.g. read shared departure inventory in the same transaction).
+ */
+export async function resetBookingSlotsToOpenInTransaction(
+  db: Firestore,
+  tx: Transaction,
+  bookingId: string,
+  booking: Booking,
+  experienceSlug?: string,
+  opts?: {
+    betweenReadsAndWrites?: (tx: Transaction) => void | Promise<void>;
+  }
+): Promise<ResetBookingSlotsResult> {
+  const refList = buildBookingSlotResetRefs(db, booking, experienceSlug);
+  const snapshots: DocumentSnapshot[] = [];
+  for (const ref of refList) {
+    snapshots.push(await tx.get(ref));
+  }
+
+  await opts?.betweenReadsAndWrites?.(tx);
+
+  return applyBookingSlotOpensFromSnapshots(tx, bookingId, booking, refList, snapshots);
 }

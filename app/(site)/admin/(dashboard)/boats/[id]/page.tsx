@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
+import { fetchAdminPatchWithForceRetry } from "@/lib/admin-dashboard-patch-with-force";
 import { BoatForm, boatFormDataFromApi } from "../BoatForm";
 import { Button } from "@/components/ui/button";
 
@@ -39,12 +40,7 @@ export default function EditBoatPage() {
   }, [id]);
 
   async function onSubmit(body: Record<string, unknown>) {
-    const res = await fetch(`/api/admin/boats/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(body),
-    });
+    const res = await fetchAdminPatchWithForceRetry(`/api/admin/boats/${id}`, body);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const msg = (data.error as string) || res.statusText;

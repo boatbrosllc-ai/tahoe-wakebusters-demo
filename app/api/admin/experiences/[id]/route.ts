@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { QuerySnapshot } from "firebase-admin/firestore";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { collectAllActiveHoldDocsForExperience } from "@/lib/booking/admin-active-holds-query";
 import type {
   Experience,
   ExperienceRate,
@@ -43,6 +45,54 @@ function stripUndefined<T>(obj: T): T {
           : v;
   }
   return out as T;
+}
+
+function normalizeRateForCompare(r: Record<string, unknown>) {
+  return {
+    durationHours: typeof r.durationHours === "number" ? r.durationHours : 0,
+    displayName: typeof r.displayName === "string" ? r.displayName : "",
+    priceCents: typeof r.priceCents === "number" ? r.priceCents : 0,
+    priceWeekendCents: typeof r.priceWeekendCents === "number" ? r.priceWeekendCents : undefined,
+    priceFriSunCents: typeof r.priceFriSunCents === "number" ? r.priceFriSunCents : undefined,
+    priceHolidayCents: typeof r.priceHolidayCents === "number" ? r.priceHolidayCents : undefined,
+  };
+}
+
+function ratesPayloadMatchesFirestore(
+  parsedRates: NonNullable<NonNullable<ReturnType<typeof parseBody>>["rates"]>,
+  existingRatesSnap: QuerySnapshot
+): boolean {
+  const fromParsed = [...parsedRates]
+    .map((r) => normalizeRateForCompare(r as Record<string, unknown>))
+    .sort((a, b) => a.durationHours - b.durationHours);
+  const fromDb = existingRatesSnap.docs
+    .map((d) => normalizeRateForCompare(d.data() as Record<string, unknown>))
+    .sort((a, b) => a.durationHours - b.durationHours);
+  return JSON.stringify(fromParsed) === JSON.stringify(fromDb);
+}
+
+function normalizeAddonForCompare(r: Record<string, unknown>) {
+  return {
+    name: typeof r.name === "string" ? r.name : "",
+    description: typeof r.description === "string" ? r.description : undefined,
+    priceCents: typeof r.priceCents === "number" ? r.priceCents : 0,
+    type: r.type === "quantity" || r.type === "tip" ? r.type : "toggle",
+    maxQty: typeof r.maxQty === "number" ? r.maxQty : undefined,
+    highlight: r.highlight === true,
+  };
+}
+
+function addonsPayloadMatchesFirestore(
+  parsedAddons: NonNullable<NonNullable<ReturnType<typeof parseBody>>["addons"]>,
+  existingAddonsSnap: QuerySnapshot
+): boolean {
+  const fromParsed = [...parsedAddons]
+    .map((a) => normalizeAddonForCompare(a as Record<string, unknown>))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const fromDb = existingAddonsSnap.docs
+    .map((d) => normalizeAddonForCompare(d.data() as Record<string, unknown>))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return JSON.stringify(fromParsed) === JSON.stringify(fromDb);
 }
 
 function parseBody(
@@ -388,23 +438,59 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         JSON.stringify(parsed.weekendDays) !== JSON.stringify(expData.weekendDays ?? [])) ||
       (Array.isArray(parsed.friSunDays) &&
         JSON.stringify(parsed.friSunDays) !== JSON.stringify(expData.friSunDays ?? []));
+    let pricingDayHoldRelease:
+      | {
+          attempted: number;
+          processed: string[];
+          skipped: string[];
+          failed: Array<{ holdId: string; error?: string }>;
+          partialFailure: boolean;
+        }
+      | undefined;
     if (pricingDayConfigChanged) {
-      const holdsSnap = await db
-        .collection("holds")
-        .where("experienceId", "in", experienceIdVariants.slice(0, 10))
-        .where("status", "==", "active")
-        .limit(25)
-        .get();
-      if (!holdsSnap.empty) {
+      const holdDocs = await collectAllActiveHoldDocsForExperience(db, experienceIdVariants);
+      if (holdDocs.length > 0 && !force) {
         return NextResponse.json(
           {
             error:
               "Cannot change holiday/weekend pricing-day settings while active holds exist. Re-submit with { force: true } to release active holds first.",
-            holdIds: holdsSnap.docs.map((d) => d.id),
+            holdIds: holdDocs.map((d) => d.id),
+            activeHoldCount: holdDocs.length,
             forceRequired: true,
           },
           { status: 409 }
         );
+      }
+      if (holdDocs.length > 0 && force) {
+        const processed: string[] = [];
+        const skipped: string[] = [];
+        const failed: Array<{ holdId: string; error?: string }> = [];
+        for (const holdDoc of holdDocs) {
+          try {
+            const releaseResult = await runExpiredHoldReleaseTransaction(db, FieldValue, holdDoc.ref);
+            if (releaseResult === "processed") processed.push(holdDoc.id);
+            else if (releaseResult === "skipped") skipped.push(holdDoc.id);
+            else failed.push({ holdId: holdDoc.id });
+            await writeAdminAuditLog("experience_pricing_day_release_hold", {
+              experienceId: id,
+              holdId: holdDoc.id,
+              releaseResult,
+            });
+          } catch (releaseErr) {
+            failed.push({
+              holdId: holdDoc.id,
+              error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+            });
+          }
+        }
+        pricingDayHoldRelease = {
+          attempted: holdDocs.length,
+          processed,
+          skipped,
+          failed,
+          partialFailure: failed.length > 0,
+        };
+        console.log("[admin/experiences/:id] pricing-day release holds", { experienceId: id, ...pricingDayHoldRelease });
       }
     }
 
@@ -443,16 +529,24 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         }
       }
     }
-    const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType);
-    const { rates, addons } = parsed;
     const ratesRef = expRef.collection("rates");
     const addonsRef = expRef.collection("addons");
-
-    // Fetch existing sub-collections only when we're replacing them, in parallel.
+    const wantsRatesArray = Array.isArray(parsed.rates);
+    const wantsAddonsArray = Array.isArray(parsed.addons);
     const [existingRatesSnap, existingAddonsSnap] = await Promise.all([
-      Array.isArray(rates) ? ratesRef.get() : Promise.resolve(null),
-      Array.isArray(addons) ? addonsRef.get() : Promise.resolve(null),
+      wantsRatesArray ? ratesRef.get() : Promise.resolve(null),
+      wantsAddonsArray ? addonsRef.get() : Promise.resolve(null),
     ]);
+    const rates =
+      wantsRatesArray && parsed.rates && existingRatesSnap && !ratesPayloadMatchesFirestore(parsed.rates, existingRatesSnap)
+        ? parsed.rates
+        : undefined;
+    const addons =
+      wantsAddonsArray && parsed.addons && existingAddonsSnap && !addonsPayloadMatchesFirestore(parsed.addons, existingAddonsSnap)
+        ? parsed.addons
+        : undefined;
+
+    const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType);
 
     // Accumulate all writes into a single batch for one round-trip.
     const batch = db.batch();
@@ -660,7 +754,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       };
       console.log("[admin/experiences/:id] deactivate release holds", { experienceId: id, ...holdRelease });
     }
-    return NextResponse.json({ id, ...(holdRelease ? { holdRelease } : {}) });
+    return NextResponse.json({
+      id,
+      ...(pricingDayHoldRelease ? { pricingDayHoldRelease } : {}),
+      ...(holdRelease ? { holdRelease } : {}),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

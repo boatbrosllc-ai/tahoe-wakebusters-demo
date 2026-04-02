@@ -25,13 +25,26 @@ import {
   classifyStripeRefundStatus,
   PENDING_STRIPE_REFUND_POLL_MS,
 } from "@/lib/booking/stripe-refund-status";
-import { resetBookingSlotsToOpenInTransaction } from "@/lib/booking/slot-reset";
+import {
+  applyBookingSlotOpensFromSnapshots,
+  buildBookingSlotResetRefs,
+} from "@/lib/booking/slot-reset";
 import { resolveExperienceDocAndSlug } from "@/lib/booking/listing-boat-resolution";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import {
   getDepartureInventoryRef,
   releaseCapacityWithPreRead,
 } from "@/lib/booking/shared-departure-inventory";
+
+function safePartySize(b: Booking): number {
+  const n = b.partySize;
+  return typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+function safeSummaryRevenueCents(b: Booking): number {
+  const n = totalSummaryAttributedRevenueCents(b);
+  return typeof n === "number" && Number.isFinite(n) ? Math.round(n) : 0;
+}
 
 const CANCELLATION_TEMPLATE_KEY = "booking_cancellation";
 
@@ -265,7 +278,7 @@ export async function POST(
           return;
         }
 
-        const revenueCents = totalSummaryAttributedRevenueCents(b);
+        const revenueCents = safeSummaryRevenueCents(b);
         cancelTxOutcome.shouldAdjustSummary = shouldAdjustSummaryForCancel(b);
 
         const createdAt = (b as { createdAt?: { toDate?: () => Date } }).createdAt;
@@ -287,44 +300,71 @@ export async function POST(
           current: null as { ref: FirebaseFirestore.DocumentReference; reserved: number } | null,
         };
 
-        /** Inventory must be read with booking — not between slot reads and slot writes (Firestore read-before-write rule). */
         const expIdForInventory = (expResolved?.docId?.trim() || bExpId || "").trim();
-        if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && expIdForInventory) {
-          const oldDateStrInv = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
-          if (oldDateStrInv) {
-            const invRef = getDepartureInventoryRef(db, expIdForInventory, oldDateStrInv);
-            const invSnap = await tx.get(invRef);
-            departureInventoryPreRead.current = {
-              ref: invRef,
-              reserved: invSnap.exists
-                ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
-                : 0,
-            };
-          }
-        }
+        const partySizeSafe = safePartySize(b);
 
+        /**
+         * Read phase order (all `tx.get` before any write): booking (above) → every slot candidate
+         * → departure inventory when shared ticketed. Then apply slot opens + inventory release writes.
+         */
         if (slotId && bExpId) {
           const bookingForReset = expResolved ? ({ ...b, experienceId: expResolved.docId } as Booking) : b;
-          const releasedCount = await resetBookingSlotsToOpenInTransaction(
-            db,
+          const refList = buildBookingSlotResetRefs(db, bookingForReset, expResolved?.slug ?? "");
+          const slotSnaps: DocumentSnapshot[] = [];
+          for (const ref of refList) {
+            slotSnaps.push(await tx.get(ref));
+          }
+          if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && expIdForInventory) {
+            const oldDateStrInv = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+            if (oldDateStrInv) {
+              const invRef = getDepartureInventoryRef(db, expIdForInventory, oldDateStrInv);
+              const invSnap = await tx.get(invRef);
+              departureInventoryPreRead.current = {
+                ref: invRef,
+                reserved: invSnap.exists
+                  ? ((invSnap.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                  : 0,
+              };
+            }
+          }
+          const releasedCount = applyBookingSlotOpensFromSnapshots(
             tx,
             bookingId,
             bookingForReset,
-            expResolved?.slug ?? ""
+            refList,
+            slotSnaps
           );
           if (releasedCount.updated > 0) cancelTxOutcome.slotReleased = true;
           cancelTxOutcome.heldSlotsReleased += releasedCount.heldSlotsReleased;
           if (departureInventoryPreRead.current) {
             const inv = departureInventoryPreRead.current;
-            releaseCapacityWithPreRead(tx, inv.ref, b.partySize, inv.reserved);
+            releaseCapacityWithPreRead(tx, inv.ref, partySizeSafe, inv.reserved);
           }
         } else if (slotId && bBoatId) {
-          const releasedBoatOnly = await resetBookingSlotsToOpenInTransaction(db, tx, bookingId, b, "");
+          const refListBoat = buildBookingSlotResetRefs(db, b, "");
+          const slotSnapsBoat: DocumentSnapshot[] = [];
+          for (const ref of refListBoat) {
+            slotSnapsBoat.push(await tx.get(ref));
+          }
+          if (b.bookingMode === "shared" && expPricingTypeForCancel === "ticketed" && expIdForInventory) {
+            const oldDateStrBoat = typeof b.startDateStr === "string" ? b.startDateStr.trim() : "";
+            if (oldDateStrBoat) {
+              const invRefBoat = getDepartureInventoryRef(db, expIdForInventory, oldDateStrBoat);
+              const invSnapBoat = await tx.get(invRefBoat);
+              departureInventoryPreRead.current = {
+                ref: invRefBoat,
+                reserved: invSnapBoat.exists
+                  ? ((invSnapBoat.data() as { reservedSeats?: number }).reservedSeats ?? 0)
+                  : 0,
+              };
+            }
+          }
+          const releasedBoatOnly = applyBookingSlotOpensFromSnapshots(tx, bookingId, b, refListBoat, slotSnapsBoat);
           if (releasedBoatOnly.updated > 0) cancelTxOutcome.slotReleased = true;
           cancelTxOutcome.heldSlotsReleased += releasedBoatOnly.heldSlotsReleased;
           if (departureInventoryPreRead.current) {
             const inv = departureInventoryPreRead.current;
-            releaseCapacityWithPreRead(tx, inv.ref, b.partySize, inv.reserved);
+            releaseCapacityWithPreRead(tx, inv.ref, partySizeSafe, inv.reserved);
           }
         } else if (slotId) {
           cancelTxOutcome.noSlotRefForBooking = true;
@@ -784,9 +824,20 @@ export async function POST(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error("[admin/cancel] request failed", bookingId, err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
+    const code =
+      err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "number"
+        ? (err as { code: number }).code
+        : err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string"
+          ? (err as { code: string }).code
+          : undefined;
     return NextResponse.json(
-      { error: message, ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }) },
+      {
+        error: message,
+        ...(code !== undefined && { code }),
+        ...(isFirebaseConfig && { hint: FIREBASE_SETUP_HINT }),
+      },
       { status: isFirebaseConfig ? 503 : 500 }
     );
   }

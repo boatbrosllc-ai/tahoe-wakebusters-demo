@@ -254,6 +254,36 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
   };
 }
 
+function deepEqualJson(a: unknown, b: unknown): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+/** Sends only fields that differ from initial load. Deactivation-only saves send `{ active: false }` (plus `force` from the admin page retry). */
+function buildMinimalExperiencePatchBody(data: ExperienceFormData, initial: ExperienceFormData): Record<string, unknown> {
+  const full = formDataToBody(data);
+  const baseline = formDataToBody(initial);
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(full)) {
+    const k = key as keyof typeof full;
+    if (!deepEqualJson(full[k], baseline[k])) {
+      out[k] = full[k] as unknown;
+    }
+  }
+  const onlyDeactivating =
+    initial.active === true &&
+    data.active === false &&
+    Object.keys(out).length === 1 &&
+    out.active === false;
+  if (onlyDeactivating) {
+    return { active: false };
+  }
+  return out;
+}
+
 function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
   return {
     slug: d.slug,
@@ -508,7 +538,12 @@ export function ExperienceForm({
           }
         }
       }
-      const body = formDataToBody(data);
+      const body = buildMinimalExperiencePatchBody(data, initialDataSnapshot);
+      if (Object.keys(body).length === 0) {
+        setError("No changes to save.");
+        setLoading(false);
+        return;
+      }
       const result = await onSubmit(body);
       if (result.id) {
         window.location.href = experienceId ? `/admin/experiences` : `/admin/experiences/${result.id}`;

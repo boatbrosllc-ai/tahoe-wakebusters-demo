@@ -17,14 +17,15 @@ function firestoreEnabled(): boolean {
 }
 
 describe("POST /api/admin/bookings/[id]/cancel (source wiring)", () => {
-  it("pre-reads departure inventory then slot batch, and uses releaseCapacityWithPreRead for shared ticketed", () => {
+  it("uses explicit slot reads then inventory read then applyBookingSlotOpensFromSnapshots", () => {
     const src = readFileSync(
       join(__dirname, "../app/api/admin/bookings/[id]/cancel/route.ts"),
       "utf8"
     );
     assert.match(src, /releaseCapacityWithPreRead/);
-    assert.match(src, /expIdForInventory/);
-    assert.match(src, /Firestore read-before-write rule/);
+    assert.match(src, /buildBookingSlotResetRefs/);
+    assert.match(src, /applyBookingSlotOpensFromSnapshots/);
+    assert.match(src, /Read phase order/);
   });
 });
 

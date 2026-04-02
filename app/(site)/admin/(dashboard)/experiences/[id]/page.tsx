@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { fetchAdminPatchWithForceRetry } from "@/lib/admin-dashboard-patch-with-force";
 import { ExperienceForm, experienceFormDataFromApi } from "../ExperienceForm";
 
 export default function EditExperiencePage() {
@@ -33,12 +34,7 @@ export default function EditExperiencePage() {
   }, [id]);
 
   async function onSubmit(body: Record<string, unknown>) {
-    const res = await fetch(`/api/admin/experiences/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(body),
-    });
+    const res = await fetchAdminPatchWithForceRetry(`/api/admin/experiences/${id}`, body);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const msg = (data.error as string) || res.statusText;
@@ -70,7 +66,7 @@ export default function EditExperiencePage() {
     <div className="space-y-6 sm:space-y-8">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Edit listing</h1>
-        <p className="mt-1 text-sm text-brand-muted">Update listing and rates/add-ons. Submitting replaces all rates and add-ons with the form values.</p>
+        <p className="mt-1 text-sm text-brand-muted">Update listing and rates/add-ons. Only changed fields are sent; rates and add-ons are replaced only when you edit them.</p>
       </div>
       <ExperienceForm
         initialData={initialData}
