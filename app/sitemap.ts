@@ -1,8 +1,11 @@
 import type { MetadataRoute } from "next";
 import { blogPosts } from "@/content/blog";
-import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
+import { getListingBoatsForSitemap } from "@/lib/booking/get-boats-public";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+
+/** Regenerate sitemap periodically so new boat pillar URLs appear without a full redeploy. */
+export const revalidate = 3600;
 
 const staticPaths = [
   "",
@@ -41,7 +44,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   let boatEntries: MetadataRoute.Sitemap = [];
   try {
-    const boats = await getListingBoatsForPublic();
+    const boats = await getListingBoatsForSitemap();
     boatEntries = boats.map((boat) => ({
       url: `${baseUrl}/boats/${encodeURIComponent(boat.slug)}`,
       lastModified: new Date(),

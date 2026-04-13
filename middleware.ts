@@ -185,5 +185,6 @@ function buildCsp(nonce: string): string {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon\\.ico).*)"],
+  // Skip metadata routes: no CSP needed; avoids any edge interaction with XML/plain responses.
+  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|sitemap\\.xml|robots\\.txt).*)"],
 };

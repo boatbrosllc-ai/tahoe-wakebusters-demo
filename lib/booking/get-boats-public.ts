@@ -89,6 +89,14 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
 }
 
 /**
+ * Same boat list as {@link getListingBoatsForPublic} but without `unstable_cache`.
+ * Use from metadata routes (e.g. `app/sitemap.ts`) where the Data Cache can misbehave on some serverless runtimes.
+ */
+export async function getListingBoatsForSitemap(): Promise<PublicBoatListItem[]> {
+  return fetchListingBoatsForPublic();
+}
+
+/**
  * List all active listing boats that have a slug (so they can have a pillar page).
  * Used by: home page "Our Boats" section, /boats hub, sitemap. Photos and info come from backend (Firestore).
  * Cached 60s to speed up prefetch and repeat visits without hitting Firestore every time.
