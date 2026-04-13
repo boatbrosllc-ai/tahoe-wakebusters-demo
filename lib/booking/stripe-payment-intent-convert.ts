@@ -42,12 +42,16 @@ const DEPOSIT_RATIO_EPSILON = 0.02;
 
 export function isPlaceholderCheckoutEmail(email: string | undefined | null): boolean {
   if (!email || typeof email !== "string") return false;
-  return email.toLowerCase().endsWith(PLACEHOLDER_EMAIL_DOMAIN);
+  const e = email.trim().toLowerCase();
+  return e.endsWith(PLACEHOLDER_EMAIL_DOMAIN) || e === "checkout@pending.local";
 }
 
 /**
- * Merge Stripe billing / receipt email over hold draft so PI-first webhooks do not persist checkout+…@pending.internal.
- * Returns undefined when nothing improves the canonical email (still placeholder or empty).
+ * Merge Stripe billing / receipt details with the hold draft for PI-first conversion (webhook or complete-after-payment).
+ * When the hold already has a real guest email, that address wins: card billing / receipt_email often belongs to a
+ * company or account holder (e.g. Boat Bros) and must not replace the email the guest entered on the booking form.
+ * Stripe values still replace internal checkout placeholders (…@pending.internal, checkout@pending.local).
+ * Returns undefined when the resolved customer matches the hold draft (no override needed).
  */
 export function customerOverrideFromPaymentIntent(
   pi: Stripe.PaymentIntent,
@@ -60,15 +64,20 @@ export function customerOverrideFromPaymentIntent(
   const stripeName = billing?.name?.trim() || "";
   const stripePhone = billing?.phone?.trim() || "";
 
-  const email = stripeEmail || holdDraft.email;
+  const holdEmailTrimmed = (holdDraft.email ?? "").trim();
+  const email =
+    holdEmailTrimmed && !isPlaceholderCheckoutEmail(holdEmailTrimmed)
+      ? holdEmailTrimmed
+      : stripeEmail || holdEmailTrimmed;
   const name = stripeName || holdDraft.name || "Guest";
   const phone = stripePhone || holdDraft.phone;
 
   if (isPlaceholderCheckoutEmail(email)) return undefined;
 
+  const holdNameNorm = (holdDraft.name || "Guest").trim();
   if (
-    email === holdDraft.email &&
-    name === (holdDraft.name || "Guest") &&
+    email === holdEmailTrimmed &&
+    name === holdNameNorm &&
     phone === holdDraft.phone
   ) {
     return undefined;

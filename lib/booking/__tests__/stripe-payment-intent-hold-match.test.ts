@@ -6,6 +6,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkoutIncomingMismatchAgainstHold,
+  customerOverrideFromPaymentIntent,
+  isPlaceholderCheckoutEmail,
   paymentIntentMatchesHoldForConversion,
 } from "@/lib/booking/stripe-payment-intent-convert";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
@@ -150,5 +152,41 @@ describe("checkoutIncomingMismatchAgainstHold", () => {
     );
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.reason, "payment_intent_mismatch");
+  });
+});
+
+describe("customerOverrideFromPaymentIntent", () => {
+  it("prefers hold guest email over Stripe billing when both are non-placeholder", () => {
+    const holdDraft = { name: "Pat Guest", email: "pat@example.com", phone: "+15550001111" };
+    const pi = {
+      id: "pi_test",
+      payment_method: {
+        billing_details: { email: "boatbrosllc@gmail.com", name: "Boat Bros LLC", phone: "" },
+      },
+      receipt_email: "boatbrosllc@gmail.com",
+    };
+    const r = customerOverrideFromPaymentIntent(pi as never, holdDraft);
+    assert.ok(r);
+    assert.equal(r!.email, "pat@example.com");
+    assert.equal(r!.name, "Boat Bros LLC");
+  });
+
+  it("uses Stripe email when hold still has internal checkout placeholder", () => {
+    const holdDraft = { name: "Pat", email: "checkout+abc@pending.internal", phone: "+15550001111" };
+    const pi = {
+      id: "pi_test",
+      payment_method: {
+        billing_details: { email: "patreal@example.com", name: "Pat Guest", phone: "" },
+      },
+      receipt_email: null,
+    };
+    const r = customerOverrideFromPaymentIntent(pi as never, holdDraft);
+    assert.ok(r);
+    assert.equal(r!.email, "patreal@example.com");
+  });
+
+  it("treats checkout@pending.local as placeholder for hold email", () => {
+    assert.equal(isPlaceholderCheckoutEmail("checkout@pending.local"), true);
+    assert.equal(isPlaceholderCheckoutEmail("Checkout@Pending.Local"), true);
   });
 });
