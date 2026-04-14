@@ -25,12 +25,13 @@ import { bookingEnv } from "@/lib/booking/env";
 import { signReleaseToken, verifyReleaseToken, hasReleaseTokenSecret } from "@/lib/booking/releaseToken";
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
-import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { DEPOSIT_FRACTION, HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
 import { buildCheckoutSessionIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
 import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED_MS } from "@/lib/booking/hold-expiry";
 import type { Hold, Rate, ExperienceRate } from "@/lib/booking/types";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
+import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 
 function formatStripeError(e: unknown): Record<string, unknown> {
   const err = e as Record<string, unknown> | null | undefined;
@@ -71,6 +72,41 @@ function parseBody(body: unknown): { holdId: string; embedded?: boolean; release
   const embedded = o.embedded === true;
   const release_token = typeof o.release_token === "string" ? o.release_token.trim() : undefined;
   return { holdId, embedded, ...(release_token ? { release_token } : {}) };
+}
+
+async function resolveStripeCustomerForCheckoutSession(
+  db: ReturnType<typeof getDb>,
+  stripe: import("stripe").Stripe,
+  hold: Hold
+): Promise<string | null> {
+  const rawEmail = hold.customerDraft?.email;
+  if (typeof rawEmail !== "string") return null;
+  const email = rawEmail.trim().toLowerCase();
+  if (!email || email === "checkout@pending.local" || email.endsWith("@pending.internal")) {
+    return null;
+  }
+  const idxRef = db.collection("stripeCustomerIndex").doc(email);
+  const idxSnap = await idxRef.get();
+  const indexedId = idxSnap.exists ? (idxSnap.data() as { customerId?: string | null })?.customerId : undefined;
+  if (typeof indexedId === "string" && indexedId.trim()) {
+    const verified = await verifyIndexedStripeCustomerOrClear(
+      stripe,
+      idxRef,
+      email,
+      indexedId,
+      "create-checkout-session"
+    );
+    if (verified) return verified;
+  }
+  const existingList = await stripe.customers.list({ email, limit: 1 });
+  const existingId = existingList.data[0]?.id;
+  if (existingId) return existingId;
+  const created = await stripe.customers.create({
+    email,
+    name: hold.customerDraft?.name?.trim() || undefined,
+    phone: hold.customerDraft?.phone?.trim() || undefined,
+  });
+  return created.id;
 }
 
 export async function POST(request: NextRequest) {
@@ -281,11 +317,13 @@ export async function POST(request: NextRequest) {
     };
     if (hold.experienceId) metadata.experienceId = hold.experienceId;
     if (hold.boatId) metadata.boatId = hold.boatId;
+    const payFullAmount = true;
+    const paymentStage = payFullAmount ? "full" : "deposit";
     const paymentIntentMetadata: Record<string, string> = {
       holdId: input.holdId,
       slotId: hold.slotId,
       rateId: hold.rateId,
-      payment_stage: "full",
+      payment_stage: paymentStage,
       totalCents: String(Math.max(0, expectedPerHoldTotalCents)),
       ...versionMeta,
       ...(hold.experienceId && { experienceId: hold.experienceId }),
@@ -303,6 +341,9 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+    const totalChargeCents = Math.max(0, expectedPerHoldTotalCents);
+    const depositChargeCents = Math.round(totalChargeCents * DEPOSIT_FRACTION);
+    const isDepositCheckout = holdAllowDeposit && !payFullAmount && totalChargeCents === depositChargeCents;
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       payment_method_types: ["card"],
@@ -312,6 +353,16 @@ export async function POST(request: NextRequest) {
         hold.customerDraft.email === "checkout@pending.local" ? undefined : hold.customerDraft.email,
       metadata,
     };
+    if (isDepositCheckout) {
+      const customerId = await resolveStripeCustomerForCheckoutSession(db, stripe, hold);
+      if (customerId) {
+        sessionParams.customer = customerId;
+      }
+      sessionParams.payment_intent_data = {
+        ...(sessionParams.payment_intent_data ?? {}),
+        setup_future_usage: "off_session",
+      };
+    }
     const receiptClaimToken = signReceiptClaimToken(input.holdId);
     if (input.embedded) {
       (sessionParams as { ui_mode?: string }).ui_mode = "custom";
@@ -473,6 +524,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // This route only supports full-payment Checkout Sessions. Deposit checkout requires
+    // setup_future_usage: off_session and a Stripe customer on sessionParams.
+    if (paymentIntentMetadata.payment_stage !== "full") {
+      await writeOperationalAlert({
+        type: "checkout_session_deposit_not_supported",
+        holdId: input.holdId,
+        source: "create-checkout-session",
+        paymentStage: paymentIntentMetadata.payment_stage,
+      });
+      return NextResponse.json(
+        { error: "Checkout is temporarily unavailable. Please try again." },
+        { status: 500 }
+      );
+    }
+    if (
+      holdAllowDeposit &&
+      isDepositCheckout &&
+      (!sessionParams.customer || sessionParams.payment_intent_data?.setup_future_usage !== "off_session")
+    ) {
+      await writeOperationalAlert({
+        type: "checkout_session_deposit_missing_saved_payment_prereqs",
+        holdId: input.holdId,
+        source: "create-checkout-session",
+        hasCustomer: !!sessionParams.customer,
+        setupFutureUsage: sessionParams.payment_intent_data?.setup_future_usage ?? null,
+      });
+      return NextResponse.json(
+        { error: "Checkout is temporarily unavailable. Please try again." },
+        { status: 500 }
+      );
+    }
     const holdUpdateBase: Record<string, unknown> = { checkoutSessionMode };
     if (stripeCouponId && !holdStripeCouponId) holdUpdateBase.stripeCouponId = stripeCouponId;
     const created = await createStripeCheckoutSessionForHold(

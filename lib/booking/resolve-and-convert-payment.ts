@@ -83,6 +83,12 @@ export async function resolveAndConvertPayment(
       { expand: ["payment_method"] }
     );
   }
+  if (pi && typeof pi.payment_method === "string") {
+    pi = await (await import("@/lib/booking/stripe-client")).getStripe().paymentIntents.retrieve(
+      pi.id,
+      { expand: ["payment_method"] }
+    );
+  }
   if (!pi || pi.id !== context.paymentIntentId) {
     throw new ResolveAndConvertPaymentError("PI_MISMATCH", "Payment intent mismatch");
   }

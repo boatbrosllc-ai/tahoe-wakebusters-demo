@@ -6,13 +6,22 @@ import Link from "next/link";
 import { Plus, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-type ExperienceListItem = { id: string; slug: string; title: string; active: boolean; heroUrl?: string; sortOrder?: number };
+type ExperienceListItem = {
+  id: string;
+  slug: string;
+  title: string;
+  active: boolean;
+  heroUrl?: string;
+  sortOrder?: number;
+  updatedAt?: number | null;
+};
 
 export default function AdminExperiencesPage() {
   const [list, setList] = useState<ExperienceListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const fetchList = useCallback(() => {
     return fetch("/api/admin/experiences", { credentials: "include" })
@@ -57,6 +66,34 @@ export default function AdminExperiencesPage() {
       setError(e instanceof Error ? e.message : "Failed to reorder");
     } finally {
       setMovingId(null);
+    }
+  }
+
+  async function toggleActive(item: ExperienceListItem) {
+    if (togglingId !== null) return;
+    if (typeof item.updatedAt !== "number") {
+      setError("Cannot toggle status yet. Open this listing, save once, then try again.");
+      return;
+    }
+    setTogglingId(item.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/experiences/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          active: !item.active,
+          lastKnownUpdatedAt: item.updatedAt,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to update listing status");
+      await fetchList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update listing status");
+    } finally {
+      setTogglingId(null);
     }
   }
 
@@ -140,6 +177,16 @@ export default function AdminExperiencesPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    variant={item.active ? "outline" : "default"}
+                    size="sm"
+                    className="min-h-[40px] sm:min-h-0"
+                    onClick={() => toggleActive(item)}
+                    disabled={togglingId === item.id || movingId !== null}
+                  >
+                    {togglingId === item.id ? "Saving..." : item.active ? "Deactivate" : "Activate"}
+                  </Button>
                   <a href={`/experiences/${item.slug}`} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-primary hover:underline">View</a>
                   <Link href={`/admin/experiences/${item.id}`}>
                     <Button variant="outline" size="sm" className="min-h-[40px] sm:min-h-0">Edit</Button>

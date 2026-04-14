@@ -712,6 +712,28 @@ export async function convertHoldToBooking(
         ...(input.currency && { currency: input.currency }),
         ...(fullInput.checkoutSessionId && { checkoutSessionId: fullInput.checkoutSessionId }),
       };
+  if (isDeposit && !stripeBlock.customerId) {
+    bookingWarn("convert-hold", "deposit booking missing customerId", {
+      holdId,
+      paymentIntentId: input.paymentIntentId,
+    });
+    await writeOperationalAlert({
+      type: "deposit_booking_missing_customer_id",
+      holdId,
+      paymentIntentId: input.paymentIntentId,
+    });
+  }
+  if (isDeposit && !stripeBlock.paymentMethodId) {
+    bookingWarn("convert-hold", "deposit booking missing paymentMethodId", {
+      holdId,
+      paymentIntentId: input.paymentIntentId,
+    });
+    await writeOperationalAlert({
+      type: "deposit_booking_missing_payment_method",
+      holdId,
+      paymentIntentId: input.paymentIntentId,
+    });
+  }
 
   const booking: Omit<Booking, "createdAt"> & {
     createdAt: FirestoreTimestamp;

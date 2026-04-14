@@ -615,6 +615,91 @@ export async function POST(request: NextRequest) {
             details: { missingFields },
             source: "run-final-charges",
           });
+          if (!customerId || !paymentMethodId) {
+            const shouldSend = await tryBeginFinalFailureNotificationSend(
+              db,
+              bookingId,
+              booking.stripe?.finalPaymentIntentId
+            );
+            if (shouldSend) {
+              try {
+                let manageLink: string | undefined;
+                const custEmail = booking.customer?.email?.trim();
+                if (bookingEnv.manageBookingSecret && custEmail) {
+                  const token = signManageToken({
+                    bookingId,
+                    tripDateStr: booking.startDateStr,
+                  });
+                  if (token) manageLink = `${bookingEnv.appBaseUrl}/booking/manage?token=${encodeURIComponent(token)}`;
+                }
+                let experienceNameMissing = "Your trip";
+                if (booking.experienceId) {
+                  const exMissing = await db.collection("experiences").doc(booking.experienceId).get();
+                  if (exMissing.exists) {
+                    experienceNameMissing =
+                      (exMissing.data() as { title?: string }).title ?? experienceNameMissing;
+                  }
+                }
+                let tripDateMissing = booking.startDateStr ?? "";
+                let startTimeMissing = "";
+                if (booking.slotId) {
+                  const parsedMissing = parseSlotId(booking.slotId.trim());
+                  if (parsedMissing) {
+                    const tripStartMissing = getSlotStartEnd(
+                      parsedMissing.dateStr,
+                      parsedMissing.startHour,
+                      parsedMissing.durationHours ?? 2,
+                      parsedMissing.startMinute ?? 0
+                    ).start;
+                    tripDateMissing = tripStartMissing.toLocaleDateString("en-US", {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      timeZone: "America/Chicago",
+                    });
+                    startTimeMissing = tripStartMissing.toLocaleTimeString("en-US", {
+                      hour: "numeric",
+                      minute: "2-digit",
+                      timeZone: "America/Chicago",
+                    });
+                  }
+                }
+                await sendFinalChargeFailedEmail(
+                  booking.customer.email,
+                  booking.customer.name,
+                  manageLink,
+                  true,
+                  {
+                    experienceName: experienceNameMissing,
+                    tripDate: tripDateMissing,
+                    startTime: startTimeMissing,
+                  }
+                );
+                await logNotificationSent({
+                  channel: "email",
+                  to: booking.customer.email,
+                  toName: booking.customer.name,
+                  templateId: "final_charge_failed",
+                  subject: "Action needed: update your payment method to keep your booking",
+                  bookingId,
+                  eventSubtype: "final_charge_failed_missing_payment_method",
+                }).catch((logErr) =>
+                  bookingError("run-final-charges", "logNotificationSent failed", logErr, { bookingId })
+                );
+                await finalizeFinalFailureNotification(
+                  db,
+                  bookingId,
+                  booking.stripe?.finalPaymentIntentId
+                );
+              } catch (emailErr) {
+                bookingError("run-final-charges", "sendFinalChargeFailedEmail failed", emailErr, { bookingId });
+                await clearFinalFailureNotificationLease(db, bookingId).catch((clearErr) =>
+                  bookingError("run-final-charges", "clearFinalFailureNotificationLease failed", clearErr, { bookingId })
+                );
+              }
+            }
+          }
           errors.push(`${bookingId}: missing stripe data`);
           failed++;
           continue;

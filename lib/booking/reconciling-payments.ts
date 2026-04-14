@@ -127,7 +127,7 @@ export async function processStaleReconcilingPayments(db: Firestore): Promise<Re
 
       const piId = d.paymentIntentId ?? doc.id;
       try {
-        const pi = await stripe.paymentIntents.retrieve(piId);
+        const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["payment_method"] });
         if (pi.status !== "succeeded") {
           continue;
         }

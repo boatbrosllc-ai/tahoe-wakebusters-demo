@@ -234,6 +234,7 @@ export async function GET(request: NextRequest) {
         pricingType: data.pricingType === "ticketed" ? "ticketed" : undefined,
         heroUrl: typeof heroMedia === "string" ? heroMedia : undefined,
         sortOrder: typeof data.sortOrder === "number" ? data.sortOrder : undefined,
+        updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : null,
       };
     });
     list.sort((a, b) => {
