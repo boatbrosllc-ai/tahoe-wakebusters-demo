@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DynamicPricingEditor } from "@/components/admin/DynamicPricingEditor";
 import { PhotoUploader } from "@/components/admin/PhotoUploader";
+import { normalizePublicSlug } from "@/lib/booking/slug";
 
 const inputClass =
   "mt-1 block w-full min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0 sm:py-2";
@@ -87,6 +88,7 @@ export type ExperienceFormData = {
   allowDeposit: boolean;
   allowTipNow: boolean;
   allowTipLater: boolean;
+  updatedAt?: number | null;
 };
 
 function getDefaultFormData(): ExperienceFormData {
@@ -113,7 +115,7 @@ function getDefaultFormData(): ExperienceFormData {
     seasonalEndMonth: 12,
     seasonalStartDate: "",
     seasonalEndDate: "",
-    active: true,
+    active: false,
     timezone: "America/Chicago",
     rates: [],
     addons: [],
@@ -141,6 +143,7 @@ function getDefaultFormData(): ExperienceFormData {
     allowDeposit: false,
     allowTipNow: true,
     allowTipLater: true,
+    updatedAt: null,
   };
 }
 
@@ -251,6 +254,7 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     allowDeposit: api.allowDeposit === true,
     allowTipNow: api.allowTipNow !== false,
     allowTipLater: api.allowTipLater !== false,
+    updatedAt: typeof api.updatedAt === "number" ? api.updatedAt : null,
   };
 }
 
@@ -286,7 +290,7 @@ function buildMinimalExperiencePatchBody(data: ExperienceFormData, initial: Expe
 
 function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
   return {
-    slug: d.slug,
+    slug: normalizePublicSlug(d.slug),
     title: d.title,
     subtitle: d.subtitle,
     descriptionLong: d.descriptionLong,
@@ -373,6 +377,9 @@ export function ExperienceForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [heroUploadsActive, setHeroUploadsActive] = useState(false);
+  const [galleryUploadsActive, setGalleryUploadsActive] = useState(false);
+  const uploadsActive = heroUploadsActive || galleryUploadsActive;
   const initialDataSnapshot = initialData ?? getDefaultFormData();
   const toggleSection = (name: string) => setCollapsedSections((prev) => {
     const next = new Set(prev);
@@ -486,7 +493,36 @@ export function ExperienceForm({
       setLoading(false);
       return;
     }
+    if (uploadsActive) {
+      setError("Please wait for all photo uploads to finish before saving.");
+      setLoading(false);
+      return;
+    }
+    const invalidDurationRate = data.rates.find((r) => !(r.durationHours > 0));
+    if (invalidDurationRate) {
+      setError("Every rate must use a duration greater than 0 hours.");
+      setLoading(false);
+      return;
+    }
+    const durationSet = new Set<number>();
+    for (const rate of data.rates) {
+      if (durationSet.has(rate.durationHours)) {
+        setError("Duplicate duration entries are not allowed. Use one row per duration.");
+        setLoading(false);
+        return;
+      }
+      durationSet.add(rate.durationHours);
+    }
     try {
+      const normalizedSlug = normalizePublicSlug(data.slug);
+      if (!normalizedSlug) {
+        setError("Slug is required and must contain letters or numbers.");
+        setLoading(false);
+        return;
+      }
+      if (normalizedSlug !== data.slug) {
+        setData((prev) => ({ ...prev, slug: normalizedSlug }));
+      }
       const pricingChanged =
         JSON.stringify({
           rates: data.rates,
@@ -538,7 +574,13 @@ export function ExperienceForm({
           }
         }
       }
-      const body = buildMinimalExperiencePatchBody(data, initialDataSnapshot);
+      const nextData = normalizedSlug === data.slug ? data : { ...data, slug: normalizedSlug };
+      const body = experienceId
+        ? buildMinimalExperiencePatchBody(nextData, initialDataSnapshot)
+        : formDataToBody(nextData);
+      if (experienceId) {
+        body.lastKnownUpdatedAt = data.updatedAt ?? null;
+      }
       if (Object.keys(body).length === 0) {
         setError("No changes to save.");
         setLoading(false);
@@ -563,7 +605,12 @@ export function ExperienceForm({
         <Link href={backHref}>
           <Button type="button" variant="ghost" size="sm" className="min-h-[44px] sm:min-h-0">Back</Button>
         </Link>
-        <Button type="submit" disabled={loading} className="min-h-[44px] sm:min-h-0">{loading ? "Saving…" : submitLabel}</Button>
+        <Button type="submit" disabled={loading || uploadsActive} className="min-h-[44px] sm:min-h-0">
+          {loading ? "Saving…" : uploadsActive ? "Waiting for uploads…" : submitLabel}
+        </Button>
+      </div>
+      <div className={`rounded-xl border px-4 py-3 text-sm ${uploadsActive ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-emerald-50 border-emerald-200 text-emerald-800"}`}>
+        {uploadsActive ? "Uploads in progress. Save is disabled until uploads complete." : "Uploads complete. Listing is ready to save."}
       </div>
       {error && (
         <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
@@ -581,7 +628,7 @@ export function ExperienceForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-slug">Slug (URL id)</label>
-            <input id="exp-slug" className={inputClass} value={data.slug} onChange={(e) => update("slug", e.target.value)} required placeholder="pontoon-party" aria-label="Slug (URL id)" />
+            <input id="exp-slug" className={inputClass} value={data.slug} onChange={(e) => update("slug", normalizePublicSlug(e.target.value))} required placeholder="pontoon-party" aria-label="Slug (URL id)" />
           </div>
           <div>
             <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-title">Title</label>
@@ -610,6 +657,7 @@ export function ExperienceForm({
             <PhotoUploader
               value={data.heroUrl ? [data.heroUrl] : []}
               onChange={(urls) => update("heroUrl", urls[0] ?? "")}
+              onUploadStateChange={setHeroUploadsActive}
               maxPhotos={1}
               listPrefix="experiences/heroes/"
               mainLabel="Hero"
@@ -627,6 +675,7 @@ export function ExperienceForm({
           <PhotoUploader
             value={data.gallery}
             onChange={(urls) => update("gallery", urls)}
+            onUploadStateChange={setGalleryUploadsActive}
             maxPhotos={24}
             listPrefix="experiences/gallery/"
             reorderable
@@ -904,8 +953,11 @@ export function ExperienceForm({
 
         <div className="flex items-center gap-2">
           <input type="checkbox" id="active" checked={data.active} onChange={(e) => update("active", e.target.checked)} className="rounded border-brand-dark/30" aria-label="Listed on site" />
-          <label htmlFor="active" className="text-sm font-medium text-brand-dark">Listed on site — experience is visible and bookable</label>
+          <label htmlFor="active" className="text-sm font-medium text-brand-dark">Publish listing (make this experience visible and bookable)</label>
         </div>
+        <p className="text-xs text-brand-muted -mt-3">
+          New listings start as drafts. Turn this on only when details, pricing, and media are complete.
+        </p>
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
           <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Chicago" aria-label="Timezone for times and dates" />
@@ -1213,7 +1265,7 @@ export function ExperienceForm({
         <Link href={backHref}>
           <Button type="button" variant="ghost">Cancel</Button>
         </Link>
-        <Button type="submit" disabled={loading}>{loading ? "Saving…" : submitLabel}</Button>
+        <Button type="submit" disabled={loading || uploadsActive}>{loading ? "Saving…" : uploadsActive ? "Waiting for uploads…" : submitLabel}</Button>
       </div>
     </form>
   );

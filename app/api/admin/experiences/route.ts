@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 import type {
   Experience,
   ExperienceRate,
@@ -10,13 +11,42 @@ import type {
   ExperienceSeasonal,
 } from "@/lib/booking/types";
 
+/** Remove undefined values recursively so Firestore accepts writes when ignoreUndefinedProperties is off. */
+function stripUndefined<T>(obj: T): T {
+  if (obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) =>
+      item !== null && typeof item === "object" && Object.getPrototypeOf(item) === Object.prototype
+        ? stripUndefined(item as Record<string, unknown>)
+        : item
+    ) as T;
+  }
+  if (obj === null || typeof obj !== "object" || Object.getPrototypeOf(obj) !== Object.prototype) {
+    return obj;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] =
+      v !== null &&
+      typeof v === "object" &&
+      Object.getPrototypeOf(v) === Object.prototype
+        ? stripUndefined(v as Record<string, unknown>)
+        : Array.isArray(v)
+          ? stripUndefined(v)
+          : v;
+  }
+  return out as T;
+}
+
 function parseBody(
   body: unknown
 ): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; allowDeposit?: boolean } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
-  const slug = typeof b.slug === "string" ? b.slug.trim() : "";
+  const slug = typeof b.slug === "string" ? normalizePublicSlug(b.slug) : "";
   if (!slug) return null;
+  if (!isCanonicalSlug(slug)) return null;
   const title = typeof b.title === "string" ? b.title.trim() : "";
   const subtitle = typeof b.subtitle === "string" ? b.subtitle.trim() : "";
   const descriptionLong = typeof b.descriptionLong === "string" ? b.descriptionLong.trim() : "";
@@ -57,7 +87,7 @@ function parseBody(
     startDate: typeof sea.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.startDate) ? sea.startDate : undefined,
     endDate: typeof sea.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.endDate) ? sea.endDate : undefined,
   };
-  const active = b.active === true;
+  const active = b.active === undefined ? true : b.active === true;
   const timezone = typeof b.timezone === "string" ? b.timezone.trim() || undefined : undefined;
   const rates = Array.isArray(b.rates)
     ? b.rates
@@ -176,6 +206,16 @@ function parseBody(
   };
 }
 
+function validateRates(rates: Array<{ durationHours: number; priceCents: number }>): string | null {
+  const durations = new Set<number>();
+  for (const rate of rates) {
+    if (!(rate.durationHours > 0)) return "Each rate must have durationHours > 0.";
+    if (durations.has(rate.durationHours)) return "Duplicate rate durationHours are not allowed.";
+    durations.add(rate.durationHours);
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -233,6 +273,47 @@ export async function POST(request: NextRequest) {
     if (!existing.empty) {
       return NextResponse.json({ error: "Slug already in use" }, { status: 409 });
     }
+    if (parsed.active) {
+      const activeRates = (parsed.rates ?? []).filter((r) => r.priceCents > 0);
+      if (activeRates.length === 0) {
+        return NextResponse.json(
+          { error: "Active listings require at least one active rate with a positive price." },
+          { status: 409 }
+        );
+      }
+      if (parsed.pricingType === "ticketed") {
+        if (!parsed.maxCapacity || parsed.maxCapacity <= 0) {
+          return NextResponse.json(
+            { error: "Ticketed active listings require maxCapacity > 0." },
+            { status: 400 }
+          );
+        }
+        if (parsed.departureHour == null || parsed.departureMinute == null) {
+          return NextResponse.json(
+            { error: "Ticketed active listings require a departure time (hour and minute)." },
+            { status: 400 }
+          );
+        }
+        if (!parsed.tripDurationHours || parsed.tripDurationHours <= 0) {
+          return NextResponse.json(
+            { error: "Ticketed active listings require tripDurationHours > 0." },
+            { status: 400 }
+          );
+        }
+      }
+    }
+    if (parsed.rates && parsed.rates.some((r) => !r.displayName.trim())) {
+      return NextResponse.json({ error: "Each initial rate must include a displayName." }, { status: 400 });
+    }
+    if (parsed.rates) {
+      const ratesError = validateRates(parsed.rates);
+      if (ratesError) {
+        return NextResponse.json({ error: ratesError }, { status: 400 });
+      }
+    }
+    if (parsed.addons && parsed.addons.some((a) => !a.name.trim())) {
+      return NextResponse.json({ error: "Each initial addon must include a name." }, { status: 400 });
+    }
     const exp: Omit<Experience, "id"> = {
       slug: parsed.slug,
       title: parsed.title,
@@ -270,23 +351,28 @@ export async function POST(request: NextRequest) {
       ...(parsed.departureHour != null && { departureHour: parsed.departureHour }),
       ...(parsed.tripDurationHours != null && { tripDurationHours: parsed.tripDurationHours }),
       ...(parsed.departureMinute != null && { departureMinute: parsed.departureMinute }),
+      updatedAt: Date.now(),
     };
     const ref = db.collection("experiences").doc();
-    await ref.set(exp);
-    const expId = ref.id;
+    const batch = db.batch();
+    let minPriceCents: number | null = null;
+    batch.set(ref, stripUndefined(exp));
     if (parsed.rates?.length) {
-      let minPriceCents: number | null = null;
       for (const r of parsed.rates) {
-        await ref.collection("rates").doc().set({ ...r, active: true });
-        if (minPriceCents === null || r.priceCents < minPriceCents) minPriceCents = r.priceCents;
+        batch.set(ref.collection("rates").doc(), stripUndefined({ ...r, active: true }));
+        if (r.priceCents > 0 && (minPriceCents === null || r.priceCents < minPriceCents)) minPriceCents = r.priceCents;
       }
-      if (minPriceCents !== null) await ref.update({ fromPriceCents: minPriceCents });
     }
     if (parsed.addons?.length) {
       for (const a of parsed.addons) {
-        await ref.collection("addons").doc().set({ ...a, active: true });
+        batch.set(ref.collection("addons").doc(), stripUndefined({ ...a, active: true }));
       }
     }
+    if (minPriceCents !== null) {
+      batch.update(ref, { fromPriceCents: minPriceCents });
+    }
+    await batch.commit();
+    const expId = ref.id;
     return NextResponse.json({ id: expId, slug: parsed.slug });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

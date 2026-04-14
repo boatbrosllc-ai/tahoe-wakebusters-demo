@@ -4,6 +4,12 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { collectAllActiveHoldDocsForBoat } from "@/lib/booking/admin-active-holds-query";
 import { BOOKING_STATUSES_SLOT_TAKEN, type ListingBoat } from "@/lib/booking/types";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
+import { normalizePublicSlug } from "@/lib/booking/slug";
+import {
+  parseBoatType,
+  sanitizePhotoUrls,
+  validateBoatTypeAgainstExperiences,
+} from "@/lib/boats/validation";
 
 /** Remove undefined values so Firestore accepts the update (ignoreUndefinedProperties is off). */
 function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
@@ -20,13 +26,17 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   const out: Record<string, unknown> = {};
   if (typeof b.name === "string") out.name = b.name.trim();
   if (typeof b.slug === "string") {
-    const s = b.slug.trim();
-    out.slug = s ? s.toLowerCase().replace(/\s+/g, "-") : undefined;
+    const normalized = normalizePublicSlug(b.slug);
+    out.slug = normalized || undefined;
   }
   if (typeof b.description === "string") out.description = b.description.trim();
-  if (Array.isArray(b.photos)) out.photos = b.photos.filter((x): x is string => typeof x === "string");
+  if (Array.isArray(b.photos)) out.photos = sanitizePhotoUrls(b.photos).photos;
   if (typeof b.active === "boolean") out.active = b.active;
-  if (typeof b.boatType === "string") out.boatType = b.boatType.trim() || undefined;
+  if (Object.prototype.hasOwnProperty.call(b, "boatType")) {
+    const parsedBoatType = parseBoatType(b.boatType);
+    if (parsedBoatType === null) return null;
+    out.boatType = parsedBoatType ?? undefined;
+  }
   if (Array.isArray(b.experienceIds)) out.experienceIds = b.experienceIds.filter((x): x is string => typeof x === "string");
   if (typeof b.heroSubtitle === "string") out.heroSubtitle = b.heroSubtitle.trim();
   if (b.capacity === null) out.capacity = null;
@@ -57,7 +67,7 @@ export async function GET(
     if ((data as { isListingBoat?: boolean })?.isListingBoat !== true) {
       return NextResponse.json({ error: "Not a listing boat" }, { status: 404 });
     }
-    return NextResponse.json({ id: boatSnap.id, ...data });
+    return NextResponse.json({ id: boatSnap.id, ...data, updatedAt: (data as { updatedAt?: unknown }).updatedAt ?? null });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
@@ -86,35 +96,80 @@ export async function PATCH(
   }
   const parsed = parseBody(body);
   const force = body != null && typeof body === "object" && (body as { force?: unknown }).force === true;
+  const slugProvided =
+    body != null &&
+    typeof body === "object" &&
+    Object.prototype.hasOwnProperty.call(body as Record<string, unknown>, "slug");
+  const hasLastKnownUpdatedAt =
+    body != null &&
+    typeof body === "object" &&
+    Object.prototype.hasOwnProperty.call(body as Record<string, unknown>, "lastKnownUpdatedAt");
+  const lastKnownUpdatedAtRaw =
+    body != null && typeof body === "object"
+      ? (body as { lastKnownUpdatedAt?: unknown }).lastKnownUpdatedAt
+      : undefined;
+  const lastKnownUpdatedAt =
+    typeof lastKnownUpdatedAtRaw === "number"
+      ? lastKnownUpdatedAtRaw
+      : typeof lastKnownUpdatedAtRaw === "string" && lastKnownUpdatedAtRaw.trim()
+        ? Number(lastKnownUpdatedAtRaw)
+        : null;
   if (!parsed) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+  if (slugProvided && typeof parsed.slug !== "string") {
+    return NextResponse.json({ error: "Slug must contain letters or numbers." }, { status: 400 });
+  }
+  if (body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body as Record<string, unknown>, "photos")) {
+    const { invalid } = sanitizePhotoUrls((body as { photos?: unknown }).photos);
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        { error: "One or more photo URLs are invalid for this app.", invalidPhotoUrls: invalid },
+        { status: 400 }
+      );
+    }
   }
 
   try {
     const db = getDb();
     const { FieldValue } = getFirestoreExports();
+    if (!hasLastKnownUpdatedAt) {
+      return NextResponse.json({ error: "Missing lastKnownUpdatedAt revision token." }, { status: 400 });
+    }
+    if (lastKnownUpdatedAt !== null && !Number.isFinite(lastKnownUpdatedAt)) {
+      return NextResponse.json({ error: "Invalid lastKnownUpdatedAt revision token." }, { status: 400 });
+    }
     const boatRef = db.collection("boats").doc(id);
-    const boatSnap = await boatRef.get();
-    if (!boatSnap.exists || (boatSnap.data() as { isListingBoat?: boolean })?.isListingBoat !== true) {
+    const existingBoatSnap = await boatRef.get();
+    if (!existingBoatSnap.exists || (existingBoatSnap.data() as { isListingBoat?: boolean })?.isListingBoat !== true) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const boatData = boatSnap.data() as ListingBoat & { previousSlugs?: string[] };
-    const currentSlug = typeof boatData.slug === "string" ? boatData.slug.trim().toLowerCase() : "";
-    const nextSlug = typeof parsed.slug === "string" ? parsed.slug.trim().toLowerCase() : currentSlug;
-    if (typeof parsed.slug === "string" && nextSlug) {
-      const slugConflict = await db
-        .collection("boats")
-        .where("slug", "==", nextSlug)
-        .limit(1)
-        .get();
-      const conflicting = slugConflict.docs.find((d) => d.id !== id);
-      if (conflicting) {
-        return NextResponse.json(
-          { error: "Slug is already in use by another boat. Choose a unique slug." },
-          { status: 409 }
-        );
+    const existingBoatData = existingBoatSnap.data() as ListingBoat;
+    const effectiveBoatType =
+      typeof parsed.boatType === "string"
+        ? parsed.boatType
+        : typeof existingBoatData.boatType === "string"
+          ? existingBoatData.boatType
+          : undefined;
+    const nextExperienceIds = Array.isArray(parsed.experienceIds)
+      ? parsed.experienceIds
+      : Array.isArray(existingBoatData.experienceIds)
+        ? existingBoatData.experienceIds
+        : [];
+    if (nextExperienceIds.length > 0) {
+      const expRefs = nextExperienceIds.map((expId) => db.collection("experiences").doc(expId));
+      const expSnaps = await db.getAll(...expRefs);
+      const experiences = expSnaps
+        .filter((snap) => snap.exists)
+        .map((snap) => ({ id: snap.id, ...(snap.data() as { slug?: string; title?: string; name?: string }) }));
+      const incompatibility = validateBoatTypeAgainstExperiences(effectiveBoatType, experiences);
+      if (incompatibility) {
+        return NextResponse.json({ error: incompatibility }, { status: 400 });
       }
     }
+    const boatData = existingBoatData as ListingBoat & { previousSlugs?: string[] };
+    const currentSlug = typeof boatData.slug === "string" ? boatData.slug.trim().toLowerCase() : "";
+    const nextSlug = typeof parsed.slug === "string" ? parsed.slug.trim().toLowerCase() : currentSlug;
     let slugChangeWarning: string | null = null;
     if (nextSlug && currentSlug && nextSlug !== currentSlug) {
       const previousSlugs = Array.isArray(boatData.previousSlugs)
@@ -180,8 +235,49 @@ export async function PATCH(
       }
     }
     if (Object.keys(parsed).length > 0) {
-      const updateData = stripUndefined(parsed as Record<string, unknown>);
-      await boatRef.update(updateData);
+      const updateData = stripUndefined({ ...(parsed as Record<string, unknown>), updatedAt: Date.now() });
+      const oldSlugGuardRef = currentSlug ? db.collection("boatUniqueGuards").doc(`slug:${currentSlug}`) : null;
+      const newSlugGuardRef = nextSlug ? db.collection("boatUniqueGuards").doc(`slug:${nextSlug}`) : null;
+      await db.runTransaction(async (tx) => {
+        const currentSnap = await tx.get(boatRef);
+        if (!currentSnap.exists || (currentSnap.data() as { isListingBoat?: boolean })?.isListingBoat !== true) {
+          throw new Error("NOT_FOUND");
+        }
+        const currentData = currentSnap.data() as ListingBoat;
+        const currentUpdatedAt =
+          typeof (currentData as { updatedAt?: unknown }).updatedAt === "number"
+            ? ((currentData as { updatedAt?: number }).updatedAt as number)
+            : null;
+        if (
+          (currentUpdatedAt == null && lastKnownUpdatedAt != null) ||
+          (currentUpdatedAt != null && currentUpdatedAt !== lastKnownUpdatedAt)
+        ) {
+          throw new Error("STALE_WRITE");
+        }
+        if (newSlugGuardRef) {
+          const newSlugGuardSnap = await tx.get(newSlugGuardRef);
+          if (newSlugGuardSnap.exists) {
+            const guardedBoatId = (newSlugGuardSnap.data() as { boatId?: string }).boatId;
+            if (guardedBoatId && guardedBoatId !== id) {
+              throw new Error("SLUG_CONFLICT");
+            }
+          } else {
+            const legacySlugMatch = await tx.get(
+              db.collection("boats").where("isListingBoat", "==", true).where("slug", "==", nextSlug).limit(2)
+            );
+            const conflict = legacySlugMatch.docs.find((doc) => doc.id !== id);
+            if (conflict) throw new Error("SLUG_CONFLICT");
+          }
+          tx.set(newSlugGuardRef, { keyType: "slug", slug: nextSlug, boatId: id, updatedAt: Date.now() });
+        }
+        if (oldSlugGuardRef && oldSlugGuardRef.path !== newSlugGuardRef?.path) {
+          const oldGuardSnap = await tx.get(oldSlugGuardRef);
+          if (oldGuardSnap.exists && (oldGuardSnap.data() as { boatId?: string }).boatId === id) {
+            tx.delete(oldSlugGuardRef);
+          }
+        }
+        tx.update(boatRef, updateData);
+      });
     }
     return NextResponse.json({
       id,
@@ -189,6 +285,23 @@ export async function PATCH(
       ...(holdReleaseSummary ? { holdRelease: holdReleaseSummary } : {}),
     });
   } catch (err) {
+    if (err instanceof Error) {
+      if (err.message === "STALE_WRITE") {
+        return NextResponse.json(
+          { error: "This boat was updated in another tab. Refresh and retry your changes.", code: "STALE_WRITE" },
+          { status: 409 }
+        );
+      }
+      if (err.message === "SLUG_CONFLICT") {
+        return NextResponse.json(
+          { error: "Slug is already in use by another boat. Choose a unique slug." },
+          { status: 409 }
+        );
+      }
+      if (err.message === "NOT_FOUND") {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+    }
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
     return NextResponse.json(

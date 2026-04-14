@@ -5,10 +5,25 @@ import { getExperienceBySlug as getStaticExperience } from "@/content/experience
 import { ExperienceListingPage } from "@/components/experience/ExperienceListingPage";
 import { StaticExperienceDetail } from "@/components/experience/StaticExperienceDetail";
 import { brand } from "@/content/brand";
+import { getDb } from "@/lib/booking/firebase-admin";
+import { getSlugLookupCandidates } from "@/lib/booking/experience-aliases";
 
 type Props = { params: Promise<{ slug: string }> };
 
 const FIRESTORE_SLUGS = ["pontoon", "watersports", "sunset", "holiday"] as const;
+
+async function getAdminManagedExperience(slug: string): Promise<{ active: boolean } | null> {
+  const db = getDb();
+  const candidates = getSlugLookupCandidates(slug.trim().toLowerCase());
+  for (const candidate of candidates) {
+    const snap = await db.collection("experiences").where("slug", "==", candidate).limit(1).get();
+    if (!snap.empty) {
+      const data = snap.docs[0].data() as { active?: boolean };
+      return { active: data.active === true };
+    }
+  }
+  return null;
+}
 
 export async function generateStaticParams() {
   return FIRESTORE_SLUGS.map((slug) => ({ slug }));
@@ -51,6 +66,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     }
     const staticExp = getStaticExperience(slug);
     if (staticExp) {
+      const managed = await getAdminManagedExperience(slug);
+      if (managed && !managed.active) {
+        return { title: "Experience" };
+      }
       const keywords = SLUG_KEYWORDS[slug];
       return {
         title: `${staticExp.title} | Lake Austin Boat Rentals`,
@@ -81,6 +100,10 @@ export default async function ExperienceDetailPage({ params }: Props) {
   }
   const staticExperience = getStaticExperience(slug);
   if (staticExperience) {
+    const managed = await getAdminManagedExperience(slug);
+    if (managed && !managed.active) {
+      notFound();
+    }
     return <StaticExperienceDetail experience={staticExperience} />;
   }
   notFound();

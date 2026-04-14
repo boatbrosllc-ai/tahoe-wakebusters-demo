@@ -1,8 +1,14 @@
 "use client";
 
+import { useMemo } from "react";
 import { BoatForm, getDefaultBoatFormData } from "../BoatForm";
 
 export default function NewBoatPage() {
+  const createRequestKey = useMemo(
+    () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+    []
+  );
+
   async function onSubmit(body: Record<string, unknown>) {
     const res = await fetch("/api/admin/boats", {
       method: "POST",
@@ -30,6 +36,7 @@ export default function NewBoatPage() {
         backHref="/admin/boats"
         submitLabel="Create boat"
         onSubmit={onSubmit}
+        createRequestKey={createRequestKey}
       />
     </div>
   );

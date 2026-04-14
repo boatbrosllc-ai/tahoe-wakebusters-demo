@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { PhotoUploader } from "@/components/admin/PhotoUploader";
 import { ExternalLink } from "lucide-react";
+import { normalizePublicSlug } from "@/lib/booking/slug";
+import { inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 
 const inputClass =
   "mt-1 block w-full min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0 sm:py-2";
@@ -24,6 +26,7 @@ export type BoatFormData = {
   photos: string[];
   active: boolean;
   experienceIds: string[];
+  updatedAt?: number | null;
 };
 
 type ExperienceOption = { id: string; slug: string; title: string; active: boolean };
@@ -40,15 +43,12 @@ function getDefaultFormData(): BoatFormData {
     photos: [],
     active: true,
     experienceIds: [],
+    updatedAt: null,
   };
 }
 
 function slugFromName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-]/g, "");
+  return normalizePublicSlug(name);
 }
 
 function dataFromApi(api: Record<string, unknown>): BoatFormData {
@@ -68,6 +68,7 @@ function dataFromApi(api: Record<string, unknown>): BoatFormData {
     photos,
     active: api.active !== false,
     experienceIds,
+    updatedAt: typeof api.updatedAt === "number" ? api.updatedAt : null,
   };
 }
 
@@ -76,7 +77,7 @@ function formDataToBody(d: BoatFormData): Record<string, unknown> {
   const color = d.color.trim() && /^#([0-9A-Fa-f]{3}){1,2}$/.test(d.color.trim()) ? d.color.trim() : undefined;
   return {
     name: d.name,
-    slug: d.slug.trim() || undefined,
+    slug: normalizePublicSlug(d.slug) || undefined,
     description: d.description.trim(),
     boatType: d.boatType || undefined,
     heroSubtitle: d.heroSubtitle.trim(),
@@ -94,6 +95,7 @@ interface BoatFormProps {
   backHref: string;
   submitLabel: string;
   onSubmit: (body: Record<string, unknown>) => Promise<{ id?: string }>;
+  createRequestKey?: string;
 }
 
 export function BoatForm({
@@ -102,12 +104,13 @@ export function BoatForm({
   backHref,
   submitLabel,
   onSubmit,
+  createRequestKey,
 }: BoatFormProps) {
   const [data, setData] = useState<BoatFormData>(() => initialData);
   const [experiences, setExperiences] = useState<ExperienceOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const initialSlug = (initialData.slug ?? "").trim().toLowerCase();
+  const initialSlug = normalizePublicSlug(initialData.slug ?? "");
 
   useEffect(() => {
     fetch("/api/admin/experiences", { credentials: "include" })
@@ -133,7 +136,10 @@ export function BoatForm({
     setLoading(true);
     setError(null);
     try {
-      const nextSlug = data.slug.trim().toLowerCase();
+      const nextSlug = normalizePublicSlug(data.slug);
+      if (!nextSlug) {
+        throw new Error("Slug is required and must contain letters or numbers.");
+      }
       if (boatId && initialSlug && nextSlug && nextSlug !== initialSlug) {
         const confirmed = window.confirm(
           "Changing this boat slug will change the public /boats/[slug] URL and may break old links. Continue?"
@@ -143,7 +149,20 @@ export function BoatForm({
           return;
         }
       }
-      const body = formDataToBody(data);
+      const selectedExperiences = experiences.filter((exp) => data.experienceIds.includes(exp.id));
+      const hasWatersportsExperience = selectedExperiences.some((exp) => {
+        const candidateSlug = (exp.slug || inferSlugFromTitle(exp.title) || "").toLowerCase();
+        return isWatersportsSlug(candidateSlug);
+      });
+      if (hasWatersportsExperience && data.boatType.trim().toLowerCase() !== "wake") {
+        throw new Error("Watersports-family experiences require boat type: Wake boat.");
+      }
+      const body = formDataToBody({ ...data, slug: nextSlug });
+      if (boatId) {
+        body.lastKnownUpdatedAt = data.updatedAt ?? null;
+      } else if (createRequestKey) {
+        body.createRequestKey = createRequestKey;
+      }
       const result = await onSubmit(body);
       if (result.id) {
         window.location.href = boatId ? "/admin/boats" : `/admin/boats/${result.id}`;
@@ -181,7 +200,7 @@ export function BoatForm({
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="boat-slug">URL slug *</label>
           <div className="flex flex-wrap items-center gap-2 mt-1">
-            <input id="boat-slug" className={`${inputClass} flex-1 min-w-[200px]`} value={data.slug} onChange={(e) => update("slug", e.target.value)} placeholder="jc-neptoon-tritoon" />
+            <input id="boat-slug" className={`${inputClass} flex-1 min-w-[200px]`} value={data.slug} onChange={(e) => update("slug", normalizePublicSlug(e.target.value))} placeholder="jc-neptoon-tritoon" required />
             <Button type="button" variant="outline" size="sm" onClick={() => update("slug", slugFromName(data.name))} disabled={!data.name.trim()}>
               Generate from name
             </Button>

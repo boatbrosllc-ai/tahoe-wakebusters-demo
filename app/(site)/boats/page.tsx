@@ -4,6 +4,7 @@ import Image from "next/image";
 import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
 import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
+import { normalizeBoatPhotoForRender } from "@/lib/boats/validation";
 import { brand } from "@/content/brand";
 import { ChevronRight } from "lucide-react";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
@@ -70,7 +71,8 @@ export default async function BoatsHubPage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
               {boats.map((boat) => {
-                const imageUrl = boat.photos[0] ? getDisplayImageUrl(boat.photos[0]) : "/photos/IMG_3160.webp";
+                const safePhoto = normalizeBoatPhotoForRender(boat.photos[0]);
+                const imageUrl = getDisplayImageUrl(safePhoto);
                 const desc = shortDescription(getDisplayDescription(boat));
                 return (
                   <div

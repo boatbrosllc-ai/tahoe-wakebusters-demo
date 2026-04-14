@@ -11,20 +11,21 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 
 export function ExperienceChooser() {
-  const [listingBySlug, setListingBySlug] = useState<
-    Record<string, { title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }>
-  >({});
+  const [listings, setListings] = useState<
+    Array<{ slug: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }>
+  >([]);
   const [apiError, setApiError] = useState(false);
+  const staticBySlug = new Map(experiences.map((exp) => [exp.slug, exp]));
+  const adminManagedStaticSlugs = new Set(["pontoon", "watersports", "sunset", "holiday"]);
   useEffect(() => {
     bookingCache
       .fetchExperiences()
       .then((data) => {
         setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
-        const map: Record<
-          string,
-          { title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }
-        > = {};
+        const next: Array<
+          { slug: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }
+        > = [];
         list.forEach(
           (item: {
             slug?: string;
@@ -35,42 +36,62 @@ export function ExperienceChooser() {
             pricingType?: "charter" | "ticketed";
           }) => {
             if (item.slug)
-              map[item.slug] = {
+              next.push({
+                slug: item.slug,
                 title: item.title,
                 subtitle: item.subtitle,
                 heroMedia: item.heroMedia,
                 fromPriceCents: item.fromPriceCents,
                 pricingType: item.pricingType,
-              };
+              });
           }
         );
-        setListingBySlug(map);
+        setListings(next);
       })
       .catch(() => {
         setApiError(true);
-        setListingBySlug({});
+        setListings([]);
       });
   }, []);
 
   /** All boats are up to 14 people. */
   const CAPACITY_ALL = "Up to 14";
 
-  const experienceWithListingData = (exp: Experience): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
-    const listing = listingBySlug[exp.slug];
+  const experienceWithListingData = (listing: { slug: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
+    const exp = staticBySlug.get(listing.slug);
     return {
-      ...exp,
-      title: listing?.title?.trim() || exp.title,
-      shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
-      heroImage: listing?.heroMedia?.url || exp.heroImage,
+      slug: listing.slug,
+      title: listing.title?.trim() || exp?.title || "Experience",
+      shortDescription: listing.subtitle?.trim() || exp?.shortDescription || "",
+      description: exp?.description || "",
+      highlights: exp?.highlights || [],
+      duration: exp?.duration || "See details",
+      durationMinutes: exp?.durationMinutes,
       capacity: CAPACITY_ALL,
-      fromPriceCents: listing?.fromPriceCents !== undefined ? listing.fromPriceCents : exp.fromPriceCents,
-      ...(listing?.pricingType && { pricingType: listing.pricingType }),
+      heroImage: listing.heroMedia?.url || exp?.heroImage || "/photos/IMG_0386.webp",
+      gallery: exp?.gallery || [],
+      pricingNote: exp?.pricingNote || "",
+      fromPriceCents: listing.fromPriceCents !== undefined ? listing.fromPriceCents : exp?.fromPriceCents,
+      ...(listing.pricingType && { pricingType: listing.pricingType }),
     };
   };
 
-  const pontoon = experiences.find((e) => e.slug === "pontoon");
-  const rest = experiences.filter((e) => e.slug !== "pontoon");
-  const pontoonData = pontoon ? experienceWithListingData(pontoon) : null;
+  const activeManagedSlugs = new Set(listings.map((item) => item.slug));
+  const staticFallback = listings.length === 0
+    ? experiences.filter((exp) => !adminManagedStaticSlugs.has(exp.slug)).map((exp) => ({
+      slug: exp.slug,
+      title: exp.title,
+      subtitle: exp.shortDescription,
+      heroMedia: { url: exp.heroImage },
+      fromPriceCents: exp.fromPriceCents ?? null,
+      pricingType: undefined,
+    }))
+    : [];
+  const cards = [...listings, ...staticFallback]
+    .filter((item) => !adminManagedStaticSlugs.has(item.slug) || activeManagedSlugs.has(item.slug))
+    .map(experienceWithListingData);
+  const pontoonData = cards.find((e) => e.slug === "pontoon") ?? null;
+  const rest = cards.filter((e) => e.slug !== "pontoon");
 
   return (
     <section className="section-padding bg-white" aria-labelledby="experience-chooser-heading">

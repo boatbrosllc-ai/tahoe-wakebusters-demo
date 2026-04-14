@@ -12,11 +12,20 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 
-type ListingData = { title?: string; subtitle?: string; heroUrl?: string; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" };
+type ListingData = {
+  slug: string;
+  title?: string;
+  subtitle?: string;
+  heroUrl?: string;
+  fromPriceCents?: number | null;
+  pricingType?: "charter" | "ticketed";
+};
+const STATIC_EXPERIENCE_BY_SLUG = new Map(experiences.map((exp) => [exp.slug, exp]));
+const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday"]);
 
 export function ExperiencesListClient() {
   const [order, setOrder] = useState<string[] | null>(null);
-  const [listingBySlug, setListingBySlug] = useState<Record<string, ListingData>>({});
+  const [listings, setListings] = useState<ListingData[]>([]);
   const [apiError, setApiError] = useState(false);
   const { setOpen: setBookingModalOpen } = useBookingModal();
 
@@ -33,53 +42,76 @@ export function ExperiencesListClient() {
       .then((data) => {
         setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
-        const map: Record<string, ListingData> = {};
+        const next: ListingData[] = [];
         list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }) => {
           if (item.slug) {
-            map[item.slug] = {
+            next.push({
+              slug: item.slug,
               title: item.title,
               subtitle: item.subtitle,
               heroUrl: item.heroMedia?.url,
               fromPriceCents: item.fromPriceCents ?? undefined,
               pricingType: item.pricingType,
-            };
+            });
           }
         });
-        setListingBySlug(map);
+        setListings(next);
       })
       .catch(() => {
         setApiError(true);
-        setListingBySlug({});
+        setListings([]);
       });
   }, []);
-
-  const sortedExperiences = useMemo(() => {
-    if (!order || order.length === 0) return experiences;
-    return [...experiences].sort((a, b) => {
-      const i = order.indexOf(a.slug);
-      const j = order.indexOf(b.slug);
-      if (i === -1 && j === -1) return a.title.localeCompare(b.title);
-      if (i === -1) return 1;
-      if (j === -1) return -1;
-      return i - j;
-    });
-  }, [order]);
 
   /** All boats are up to 14 people; use this for every experience card. */
   const CAPACITY_ALL = "Up to 14";
 
-  const experienceWithListingData = (exp: Experience): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
-    const listing = listingBySlug[exp.slug];
+  const listingToCard = (listing: ListingData): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
+    const exp = STATIC_EXPERIENCE_BY_SLUG.get(listing.slug);
     return {
-      ...exp,
-      title: listing?.title?.trim() || exp.title,
-      shortDescription: listing?.subtitle?.trim() || exp.shortDescription,
-      heroImage: listing?.heroUrl || exp.heroImage,
+      slug: listing.slug,
+      title: listing.title?.trim() || exp?.title || "Experience",
+      shortDescription: listing.subtitle?.trim() || exp?.shortDescription || "",
+      description: exp?.description || "",
+      highlights: exp?.highlights || [],
+      duration: exp?.duration || "See details",
+      durationMinutes: exp?.durationMinutes,
       capacity: CAPACITY_ALL,
-      ...(listing?.fromPriceCents != null && { fromPriceCents: listing.fromPriceCents }),
-      ...(listing?.pricingType && { pricingType: listing.pricingType }),
+      heroImage: listing.heroUrl || exp?.heroImage || "/photos/IMG_0386.webp",
+      gallery: exp?.gallery || [],
+      pricingNote: exp?.pricingNote || "",
+      ...(listing.fromPriceCents != null && { fromPriceCents: listing.fromPriceCents }),
+      ...(listing.pricingType && { pricingType: listing.pricingType }),
     };
   };
+
+  const sortedExperiences = useMemo(() => {
+    const activeStaticManagedSlugs = new Set(listings.map((item) => item.slug));
+    const staticFallbackListings: ListingData[] =
+      listings.length === 0
+        ? experiences.filter((exp) => !ADMIN_MANAGED_STATIC_SLUGS.has(exp.slug)).map((exp) => ({
+            slug: exp.slug,
+            title: exp.title,
+            subtitle: exp.shortDescription,
+            heroUrl: exp.heroImage,
+            fromPriceCents: exp.fromPriceCents ?? null,
+          }))
+        : [];
+    const merged = [...listings, ...staticFallbackListings].filter((item) => {
+      if (!item.slug) return false;
+      if (ADMIN_MANAGED_STATIC_SLUGS.has(item.slug)) return activeStaticManagedSlugs.has(item.slug);
+      return true;
+    });
+    const sorted = [...merged].sort((a, b) => {
+      const i = order?.indexOf(a.slug) ?? -1;
+      const j = order?.indexOf(b.slug) ?? -1;
+      if (i === -1 && j === -1) return (a.title ?? "").localeCompare(b.title ?? "");
+      if (i === -1) return 1;
+      if (j === -1) return -1;
+      return i - j;
+    });
+    return sorted.map(listingToCard);
+  }, [listings, order]);
 
   const pontoonExperience = sortedExperiences.find((e) => e.slug === "pontoon");
   const restUnsorted = sortedExperiences.filter((e) => e.slug !== "pontoon");
@@ -87,7 +119,7 @@ export function ExperiencesListClient() {
   const watersports = restUnsorted.find((e) => e.slug === "watersports");
   const restOthers = restUnsorted.filter((e) => e.slug !== "watersports");
   const rest = watersports ? [watersports, ...restOthers] : restUnsorted;
-  const firstData = pontoonExperience ? experienceWithListingData(pontoonExperience) : null;
+  const firstData = pontoonExperience ?? null;
 
   const contentWidth = "max-w-5xl mx-auto px-6 sm:px-8 lg:px-10";
   const reduceMotion = useReducedMotion();
@@ -255,8 +287,7 @@ export function ExperiencesListClient() {
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-5">
-            {rest.map((exp, i) => {
-              const data = experienceWithListingData(exp);
+            {rest.map((data, i) => {
               return (
                 <motion.div
                   key={data.slug}

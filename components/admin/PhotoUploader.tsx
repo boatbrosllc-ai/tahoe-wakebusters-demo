@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Upload, X, FolderOpen, Link2, GripVertical } from "lucide-react";
+import { isApprovedPhotoUrl } from "@/lib/boats/validation";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 
@@ -33,6 +34,8 @@ export interface PhotoUploaderProps {
   reorderable?: boolean;
   /** Label for the main/first image badge (e.g. "Main", "Hero"); hidden if falsy */
   mainLabel?: string;
+  /** Reports upload activity so parent forms can block submit while files are in flight. */
+  onUploadStateChange?: (isUploading: boolean) => void;
   className?: string;
 }
 
@@ -43,6 +46,7 @@ export function PhotoUploader({
   listPrefix = "boats/",
   reorderable = false,
   mainLabel = "Main",
+  onUploadStateChange,
   className,
 }: PhotoUploaderProps) {
   const [dragging, setDragging] = useState(false);
@@ -58,12 +62,22 @@ export function PhotoUploader({
   const uploadInputId = "photo-upload-input";
   const uploadPrefix = listPrefix || "boats/";
 
+  useEffect(() => {
+    onUploadStateChange?.(uploading);
+  }, [onUploadStateChange, uploading]);
+
   const addUrl = useCallback(
     (url: string) => {
-      if (!url.trim()) return;
+      const normalized = url.trim();
+      if (!normalized) return;
       if (value.length >= maxPhotos) return;
-      if (value.includes(url.trim())) return;
-      onChange([...value, url.trim()]);
+      if (!isApprovedPhotoUrl(normalized)) {
+        setError("Invalid image URL. Use Firebase Storage or Google Cloud Storage image URLs only.");
+        return;
+      }
+      if (value.includes(normalized)) return;
+      setError(null);
+      onChange([...value, normalized]);
       setPasteUrl("");
       setShowPasteUrl(false);
     },
@@ -209,7 +223,7 @@ export function PhotoUploader({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="opacity-0 group-hover:opacity-100 h-9 w-9 rounded-full bg-white/90 hover:bg-white text-brand-dark"
+                  className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-brand-dark opacity-100 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
                   onClick={() => remove(i)}
                   aria-label={`Remove photo ${i + 1}`}
                 >

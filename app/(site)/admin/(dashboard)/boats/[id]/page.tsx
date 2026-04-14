@@ -43,6 +43,9 @@ export default function EditBoatPage() {
     const res = await fetchAdminPatchWithForceRetry(`/api/admin/boats/${id}`, body);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (res.status === 409 && data.code === "STALE_WRITE") {
+        throw new Error("This boat was changed in another tab. Refresh the page to load latest values, then save again.");
+      }
       const msg = (data.error as string) || res.statusText;
       const hint = data.hint;
       throw new Error(hint ? `${msg} ${hint}` : msg);

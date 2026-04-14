@@ -7,6 +7,7 @@ import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getBoatBySlug } from "@/lib/booking/get-boats-public";
 import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
+import { normalizeBoatPhotoForRender } from "@/lib/boats/validation";
 import { brand } from "@/content/brand";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
@@ -153,7 +154,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
       description,
       url: canonical,
       siteName: brand.companyName,
-      ...(boat.photos[0] && { images: [{ url: getDisplayImageUrl(boat.photos[0]) }] }),
+      ...(boat.photos[0] && { images: [{ url: getDisplayImageUrl(normalizeBoatPhotoForRender(boat.photos[0])) }] }),
     },
   };
 }
@@ -225,7 +226,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
         boatName={boat.name}
         boatType={boat.boatType}
         description={serviceDescription}
-        imageUrl={boat.photos[0]}
+        imageUrl={normalizeBoatPhotoForRender(boat.photos[0])}
         nonce={nonce}
       />
 
@@ -275,7 +276,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 {boat.photos.slice(0, 6).map((url, i) => (
                   <div key={i} className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-brand-bg shadow-sm ring-1 ring-black/5">
                     <Image
-                      src={getDisplayImageUrl(url)}
+                      src={getDisplayImageUrl(normalizeBoatPhotoForRender(url))}
                       alt=""
                       fill
                       className="object-cover"

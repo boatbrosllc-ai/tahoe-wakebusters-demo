@@ -16,6 +16,7 @@ import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-logic";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
+import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
 
@@ -145,7 +146,10 @@ function parseBody(
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const out: ReturnType<typeof parseBody> = {};
-  if (typeof b.slug === "string") out.slug = b.slug.trim();
+  if (typeof b.slug === "string") {
+    const normalized = normalizePublicSlug(b.slug);
+    out.slug = normalized;
+  }
   if (typeof b.title === "string") out.title = b.title.trim();
   if (typeof b.subtitle === "string") out.subtitle = b.subtitle.trim();
   if (typeof b.descriptionLong === "string") out.descriptionLong = b.descriptionLong.trim();
@@ -289,6 +293,16 @@ function parseBody(
   return Object.keys(out).length ? out : null;
 }
 
+function validateRates(rates: Array<{ durationHours: number }>): string | null {
+  const durations = new Set<number>();
+  for (const rate of rates) {
+    if (!(rate.durationHours > 0)) return "Each rate must have durationHours > 0.";
+    if (durations.has(rate.durationHours)) return "Duplicate rate durationHours are not allowed.";
+    durations.add(rate.durationHours);
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -309,7 +323,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     ]);
     const rates = ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const addons = addonsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    return NextResponse.json({ id: expSnap.id, ...data, rates, addons });
+    return NextResponse.json({ id: expSnap.id, ...data, updatedAt: (data as { updatedAt?: unknown }).updatedAt ?? null, rates, addons });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);
@@ -334,8 +348,25 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
   const parsed = parseBody(body);
   const force = body != null && typeof body === "object" && (body as { force?: unknown }).force === true;
+  const hasLastKnownUpdatedAt =
+    body != null &&
+    typeof body === "object" &&
+    Object.prototype.hasOwnProperty.call(body as Record<string, unknown>, "lastKnownUpdatedAt");
+  const lastKnownUpdatedAtRaw =
+    body != null && typeof body === "object"
+      ? (body as { lastKnownUpdatedAt?: unknown }).lastKnownUpdatedAt
+      : undefined;
+  const lastKnownUpdatedAt =
+    typeof lastKnownUpdatedAtRaw === "number"
+      ? lastKnownUpdatedAtRaw
+      : typeof lastKnownUpdatedAtRaw === "string" && lastKnownUpdatedAtRaw.trim()
+        ? Number(lastKnownUpdatedAtRaw)
+        : null;
   if (!parsed) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+  if (typeof parsed.slug === "string" && (!parsed.slug || !isCanonicalSlug(parsed.slug))) {
+    return NextResponse.json({ error: "Slug must be URL-safe lowercase (letters, numbers, hyphens)." }, { status: 400 });
   }
 
   try {
@@ -347,11 +378,32 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const expData = expSnap.data() as Experience;
+    const currentUpdatedAt = typeof (expData as { updatedAt?: unknown }).updatedAt === "number"
+      ? ((expData as { updatedAt?: number }).updatedAt as number)
+      : null;
+    if (!hasLastKnownUpdatedAt) {
+      return NextResponse.json({ error: "Missing lastKnownUpdatedAt revision token." }, { status: 400 });
+    }
+    if (
+      (currentUpdatedAt == null && lastKnownUpdatedAt != null) ||
+      (currentUpdatedAt != null && !Number.isFinite(lastKnownUpdatedAt as number)) ||
+      (currentUpdatedAt != null && currentUpdatedAt !== lastKnownUpdatedAt)
+    ) {
+      return NextResponse.json(
+        { error: "This experience was updated in another tab. Refresh and retry your changes.", code: "STALE_WRITE" },
+        { status: 409 }
+      );
+    }
     const storedPricingType = expData?.pricingType as string | undefined;
     const currentSlug = typeof expData?.slug === "string" ? expData.slug.trim() : "";
     const experienceIdVariants = getExperienceIdVariants(id, currentSlug);
 
     if (typeof parsed.slug === "string" && parsed.slug.trim() !== currentSlug) {
+      const slugConflict = await db.collection("experiences").where("slug", "==", parsed.slug).limit(1).get();
+      const conflicting = slugConflict.docs.find((d) => d.id !== id);
+      if (conflicting) {
+        return NextResponse.json({ error: "Slug already in use" }, { status: 409 });
+      }
       const slugChangeBlockingBooking = await db
         .collection("bookings")
         .where("experienceId", "in", experienceIdVariants.slice(0, 10))
@@ -398,6 +450,42 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     const effectivePricingType = parsed.pricingType ?? storedPricingType;
+    const resultingActive = parsed.active ?? expData.active;
+    if (resultingActive) {
+      const ratesSource = Array.isArray(parsed.rates)
+        ? parsed.rates
+        : (
+            await expRef.collection("rates").where("active", "==", true).get()
+          ).docs.map((d) => d.data() as Omit<ExperienceRate, "active"> & { active?: boolean });
+      const activeRates = ratesSource.filter((r) => (r.active ?? true) && typeof r.priceCents === "number" && r.priceCents > 0);
+      if (activeRates.length === 0) {
+        return NextResponse.json(
+          { error: "Active listings require at least one active rate with a positive price." },
+          { status: 409 }
+        );
+      }
+      if (effectivePricingType === "ticketed") {
+        const maxCapacity = parsed.maxCapacity ?? expData.maxCapacity;
+        const departureHour = parsed.departureHour ?? expData.departureHour;
+        const departureMinute = parsed.departureMinute ?? expData.departureMinute;
+        const tripDurationHours = parsed.tripDurationHours ?? expData.tripDurationHours;
+        if (!maxCapacity || maxCapacity <= 0) {
+          return NextResponse.json({ error: "Ticketed active listings require maxCapacity > 0." }, { status: 400 });
+        }
+        if (departureHour == null || departureMinute == null) {
+          return NextResponse.json(
+            { error: "Ticketed active listings require a departure time (hour and minute)." },
+            { status: 400 }
+          );
+        }
+        if (!tripDurationHours || tripDurationHours <= 0) {
+          return NextResponse.json(
+            { error: "Ticketed active listings require tripDurationHours > 0." },
+            { status: 400 }
+          );
+        }
+      }
+    }
     const departureConfigChanged =
       effectivePricingType === "ticketed" &&
       ((typeof parsed.departureHour === "number" && parsed.departureHour !== expData.departureHour) ||
@@ -541,6 +629,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       wantsRatesArray && parsed.rates && existingRatesSnap && !ratesPayloadMatchesFirestore(parsed.rates, existingRatesSnap)
         ? parsed.rates
         : undefined;
+    if (rates) {
+      const ratesError = validateRates(rates);
+      if (ratesError) {
+        return NextResponse.json({ error: ratesError }, { status: 400 });
+      }
+    }
     const addons =
       wantsAddonsArray && parsed.addons && existingAddonsSnap && !addonsPayloadMatchesFirestore(parsed.addons, existingAddonsSnap)
         ? parsed.addons
@@ -555,6 +649,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (Object.keys(expFieldsForUpdate).length > 0) {
       Object.assign(expUpdate, stripUndefined(expFieldsForUpdate));
     }
+    expUpdate.updatedAt = Date.now();
 
     if (Array.isArray(rates) && existingRatesSnap) {
       let minPriceCents: number | null = null;
@@ -574,7 +669,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         } else {
           batch.set(ratesRef.doc(), payload);
         }
-        if (typeof r.priceCents === "number" && (minPriceCents === null || r.priceCents < minPriceCents)) {
+        if (typeof r.priceCents === "number" && r.priceCents > 0 && (minPriceCents === null || r.priceCents < minPriceCents)) {
           minPriceCents = r.priceCents;
         }
       }

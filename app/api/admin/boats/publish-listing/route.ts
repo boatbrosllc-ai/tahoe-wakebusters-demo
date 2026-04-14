@@ -23,8 +23,7 @@ async function uniqueBoatSlug(db: ReturnType<typeof getDb>, candidate: string, c
 
 /**
  * POST /api/admin/boats/publish-listing
- * Sets isListingBoat: true and slug (from name) on every boat that's missing them,
- * so they appear on the public Our Boats page and /boats/[slug].
+ * Requires explicit targets (or migrationMode=true) and supports dry-run previews.
  */
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
@@ -32,29 +31,83 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getDb();
-    const snap = await db.collection("boats").get();
+    const body = (await request.json().catch(() => ({}))) as {
+      boatIds?: unknown;
+      migrationMode?: unknown;
+      dryRun?: unknown;
+    };
+    const requestedIds = Array.isArray(body.boatIds)
+      ? body.boatIds.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
+      : [];
+    const migrationMode = body.migrationMode === true;
+    const dryRun = body.dryRun !== false;
+    if (!migrationMode && requestedIds.length === 0) {
+      return NextResponse.json(
+        { error: "Provide explicit boatIds[], or set migrationMode=true for a one-off migration." },
+        { status: 400 }
+      );
+    }
+    const docs =
+      migrationMode
+        ? (await db.collection("boats").get()).docs
+        : (
+            await Promise.all(
+              Array.from(new Set(requestedIds)).map((id) => db.collection("boats").doc(id).get())
+            )
+          ).filter((snap) => snap.exists) as import("firebase-admin/firestore").QueryDocumentSnapshot[];
     let updated = 0;
     const updatedBoats: Array<{ id: string; slug: string; name: string }> = [];
-    for (const doc of snap.docs) {
+    const skipped: Array<{ id: string; reason: string }> = [];
+    for (const doc of docs) {
       const data = doc.data() as { name?: string; isListingBoat?: boolean; slug?: string; photos?: unknown; experienceIds?: unknown };
       const name = typeof data.name === "string" ? data.name.trim() : "";
-      if (!name) continue;
+      if (!name) {
+        skipped.push({ id: doc.id, reason: "Missing boat name" });
+        continue;
+      }
       const needsPublish = data.isListingBoat !== true || !data.slug || typeof data.slug !== "string";
-      if (!needsPublish) continue;
+      if (!needsPublish) {
+        skipped.push({ id: doc.id, reason: "Already published" });
+        continue;
+      }
       const baseSlug = slugFromName(name);
-      if (!baseSlug) continue;
+      if (!baseSlug) {
+        skipped.push({ id: doc.id, reason: "Cannot derive slug from name" });
+        continue;
+      }
       const slug = await uniqueBoatSlug(db, baseSlug, doc.id);
-      const updates: Record<string, unknown> = {
-        isListingBoat: true,
-        slug,
-      };
-      if (!Array.isArray(data.photos)) updates.photos = [];
-      if (!Array.isArray(data.experienceIds)) updates.experienceIds = [];
-      await doc.ref.update(updates);
-      updated += 1;
       updatedBoats.push({ id: doc.id, slug, name });
     }
-    return NextResponse.json({ ok: true, updated, total: snap.size, boats: updatedBoats });
+    const requiresPreview = updatedBoats.length > 1;
+    if (dryRun || requiresPreview) {
+      return NextResponse.json({
+        ok: true,
+        dryRun: true,
+        requiresExplicitCommit: requiresPreview,
+        totalRequested: docs.length,
+        willUpdate: updatedBoats.length,
+        boats: updatedBoats,
+        skipped,
+      });
+    }
+    for (const boat of updatedBoats) {
+      const targetDoc = docs.find((d) => d.id === boat.id);
+      if (!targetDoc) continue;
+      const existingData = targetDoc.data() as { photos?: unknown; experienceIds?: unknown };
+      const updates: Record<string, unknown> = { isListingBoat: true, slug: boat.slug };
+      if (!Array.isArray(existingData.photos)) updates.photos = [];
+      if (!Array.isArray(existingData.experienceIds)) updates.experienceIds = [];
+      await targetDoc.ref.update(updates);
+      updated += 1;
+    }
+    return NextResponse.json({
+      ok: true,
+      dryRun: false,
+      updated,
+      totalRequested: docs.length,
+      boats: updatedBoats,
+      skipped,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isFirebaseConfig = /firebase|FIREBASE|config missing|credential|truncated|private key/i.test(message);

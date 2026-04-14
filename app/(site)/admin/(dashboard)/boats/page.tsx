@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Plus, Ship } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { normalizeBoatPhotoForRender } from "@/lib/boats/validation";
 
 type BoatListItem = {
   id: string;
@@ -53,23 +54,52 @@ export default function AdminBoatsPage() {
   const publishAll = useCallback(() => {
     setPublishLoading(true);
     setPublishMessage(null);
-    fetch("/api/admin/boats/publish-listing", { method: "POST", credentials: "include" })
+    const targetIds = list.filter((b) => !b.slug || b.isListingBoat !== true).map((b) => b.id);
+    fetch("/api/admin/boats/publish-listing", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boatIds: targetIds, dryRun: true }),
+    })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? "Failed to publish");
         return data;
       })
       .then((data) => {
-        setPublishMessage(
-          data.updated > 0
-            ? `${data.updated} boat(s) published to Our Boats page. Refresh the public /boats page to see them.`
-            : "All boats are already on the Our Boats page."
-        );
-        refresh();
+        const willUpdate = typeof data.willUpdate === "number" ? data.willUpdate : 0;
+        if (willUpdate <= 0) {
+          setPublishMessage("All boats are already on the Our Boats page.");
+          return;
+        }
+        const confirmed = window.confirm(`Publish ${willUpdate} boat(s) to the public Our Boats page?`);
+        if (!confirmed) {
+          setPublishMessage("Publish canceled.");
+          return;
+        }
+        return fetch("/api/admin/boats/publish-listing", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ boatIds: targetIds, dryRun: false }),
+        })
+          .then(async (res) => {
+            const commitData = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(commitData.error ?? "Failed to publish");
+            return commitData;
+          })
+          .then((commitData) => {
+            setPublishMessage(
+              commitData.updated > 0
+                ? `${commitData.updated} boat(s) published to Our Boats page.`
+                : "All boats are already on the Our Boats page."
+            );
+            refresh();
+          });
       })
       .catch((e) => setPublishMessage(e instanceof Error ? e.message : "Publish failed"))
       .finally(() => setPublishLoading(false));
-  }, [refresh]);
+  }, [list, refresh]);
 
   const needsPublish = list.some((b) => !b.slug || b.isListingBoat !== true);
 
@@ -129,7 +159,7 @@ export default function AdminBoatsPage() {
         {!loading && !error && list.length > 0 && (
           <ul className="divide-y divide-brand-dark/10">
             {list.map((item) => {
-              const thumb = item.photos?.[0];
+              const thumb = item.photos?.[0] ? normalizeBoatPhotoForRender(item.photos[0]) : null;
               return (
                 <li key={item.id} className="flex items-center gap-3 px-4 py-4 sm:px-6 hover:bg-brand-bg/50 min-h-[56px] sm:min-h-0">
                   {thumb ? (
