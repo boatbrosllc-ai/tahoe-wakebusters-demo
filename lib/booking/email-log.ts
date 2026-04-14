@@ -12,6 +12,7 @@ export type NotificationEventSubtype =
   | EmailTemplateId
   | "booking_cancellation"
   | "final_charge_failed"
+  | "final_charge_failed_missing_payment_method"
   | "final_charge_success"
   | "dead_letter_ops_alert"
   | "waiver_invite"
