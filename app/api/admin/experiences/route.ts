@@ -314,7 +314,7 @@ export async function POST(request: NextRequest) {
     if (parsed.addons && parsed.addons.some((a) => !a.name.trim())) {
       return NextResponse.json({ error: "Each initial addon must include a name." }, { status: 400 });
     }
-    const exp: Omit<Experience, "id"> = {
+    const exp: Omit<Experience, "id"> & { updatedAt: number } = {
       slug: parsed.slug,
       title: parsed.title,
       subtitle: parsed.subtitle,

@@ -452,11 +452,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const effectivePricingType = parsed.pricingType ?? storedPricingType;
     const resultingActive = parsed.active ?? expData.active;
     if (resultingActive) {
-      const ratesSource = Array.isArray(parsed.rates)
-        ? parsed.rates
+      const ratesSource: Array<{ priceCents?: number; active?: boolean }> = Array.isArray(parsed.rates)
+        ? parsed.rates.map((r) => ({ ...r, active: true }))
         : (
             await expRef.collection("rates").where("active", "==", true).get()
-          ).docs.map((d) => d.data() as Omit<ExperienceRate, "active"> & { active?: boolean });
+          ).docs.map((d) => d.data() as ExperienceRate);
       const activeRates = ratesSource.filter((r) => (r.active ?? true) && typeof r.priceCents === "number" && r.priceCents > 0);
       if (activeRates.length === 0) {
         return NextResponse.json(
