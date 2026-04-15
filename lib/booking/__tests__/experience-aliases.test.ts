@@ -18,7 +18,16 @@ import {
 
 describe("getExperienceIdVariants", () => {
   const pontoonFamily = ["pontoon", "lake-austin-pontoon", "pontoon-party"];
-  const watersportsFamily = ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board"];
+  const watersportsFamily = [
+    "watersports",
+    "wake-surf",
+    "wake-surf-club",
+    "lake-austin-wake-boat",
+    "wake",
+    "wakeboard",
+    "wake-board",
+    "wakesurf",
+  ];
   const sunsetFamily = ["sunset", "sunset-cruise"];
   const holidayFamily = ["holiday"];
 
@@ -103,7 +112,16 @@ describe("boatMatchesExperience", () => {
 
 describe("isWatersportsSlug / isPontoonSlug", () => {
   it("isWatersportsSlug true for all watersports aliases", () => {
-    const watersports = ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board"];
+    const watersports = [
+      "watersports",
+      "wake-surf",
+      "wake-surf-club",
+      "lake-austin-wake-boat",
+      "wake",
+      "wakeboard",
+      "wake-board",
+      "wakesurf",
+    ];
     for (const slug of watersports) {
       assert.strictEqual(isWatersportsSlug(slug), true, `expected isWatersportsSlug("${slug}") === true`);
     }
@@ -171,6 +189,8 @@ describe("static-slug-map alignment", () => {
     assert.strictEqual(map["pontoon-party"], "pontoon");
     assert.strictEqual(map["lake-austin-pontoon"], "pontoon");
     assert.strictEqual(map["wake-surf"], "watersports");
+    assert.strictEqual(map["wake-surf-club"], "watersports");
+    assert.strictEqual(map["wakesurf"], "watersports");
     assert.strictEqual(map["sunset-cruise"], "sunset");
   });
   it("canonical slugs are first in each family", () => {

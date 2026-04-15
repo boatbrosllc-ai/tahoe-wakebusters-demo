@@ -18,7 +18,7 @@ function watersportsAllowUntypedBoatInInventory(): boolean {
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
   ["pontoon", "lake-austin-pontoon", "pontoon-party"],
-  ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board"],
+  ["watersports", "wake-surf", "wake-surf-club", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board", "wakesurf"],
   ["sunset", "sunset-cruise"],
   ["holiday"],
 ];

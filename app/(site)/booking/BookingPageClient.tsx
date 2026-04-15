@@ -15,7 +15,8 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { availableDateSetFromSlotsWithBoat } from "@/lib/booking/partial-slots-calendar-derivation";
-import { cn } from "@/lib/utils";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 import { TrustRow } from "@/components/site/TrustRow";
 import { bookingDebugLog } from "@/lib/booking/debug";
 import type { ExperienceItem, BoatOption } from "@/lib/booking/booking-modal-types";
@@ -422,7 +423,8 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
               <div className="grid grid-cols-2 gap-3 sm:gap-4">
                 {experiences!.map((exp) => {
                   const isSelected = selectedExperience?.id === exp.id;
-                  const hasImage = exp.heroMedia?.url && exp.heroMedia.type === "image";
+                  const cardImage = experienceCardImageUrl(exp.heroMedia, exp.gallery);
+                  const hasImage = Boolean(cardImage);
                   return (
                     <button
                       key={exp.id}
@@ -437,9 +439,9 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                       )}
                     >
                       <div className="absolute inset-0 bg-brand-dark/5">
-                        {hasImage ? (
+                        {hasImage && cardImage ? (
                           <Image
-                            src={exp.heroMedia.url}
+                            src={getDisplayImageUrl(cardImage)}
                             alt=""
                             fill
                             className="object-cover"

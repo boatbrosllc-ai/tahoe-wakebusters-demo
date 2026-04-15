@@ -346,6 +346,8 @@ export interface ExperienceListItem {
   title: string;
   subtitle: string;
   heroMedia: { type: "image" | "video"; url: string };
+  /** From listing Firestore; used for cards when hero is video or empty. */
+  gallery: string[];
   maxGuests: number;
   petsMax: number;
   fromPriceCents: number | null;

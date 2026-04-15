@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import type { ExperienceItem } from "./types";
 
@@ -39,7 +40,8 @@ export function BookingStep1Category({
         <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-2.5 sm:gap-4 md:gap-5 flex-1 min-h-0 min-w-0">
           {experiences.map((exp) => {
             const isSelected = selectedExperience?.id === exp.id;
-            const hasImage = exp.heroMedia?.url && exp.heroMedia.type === "image";
+            const cardImage = experienceCardImageUrl(exp.heroMedia, exp.gallery);
+            const hasImage = Boolean(cardImage);
             return (
               <button
                 key={exp.id}
@@ -52,8 +54,8 @@ export function BookingStep1Category({
                 )}
               >
                 <div className="absolute inset-0 bg-brand-dark/5">
-                  {hasImage ? (
-                    <Image src={getDisplayImageUrl(exp.heroMedia.url)} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
+                  {hasImage && cardImage ? (
+                    <Image src={getDisplayImageUrl(cardImage)} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
                   ) : (
                     <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                   )}

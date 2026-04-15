@@ -9,6 +9,8 @@ export interface ExperienceItem {
   title: string;
   subtitle: string;
   heroMedia: { type: "image" | "video"; url: string };
+  /** Listing gallery URLs (subset from API) for card thumbnails when hero is not a still image. */
+  gallery?: string[];
   maxGuests: number;
   petsMax: number;
   fromPriceCents: number | null;

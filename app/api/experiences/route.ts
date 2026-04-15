@@ -11,12 +11,16 @@ function inferTicketedFromSlugOrTitle(exp: Experience): boolean {
   return false;
 }
 
+const LIST_GALLERY_MAX = 12;
+
 export interface ExperienceListItem {
   id: string;
   slug: string;
   title: string;
   subtitle: string;
   heroMedia: { type: "image" | "video"; url: string };
+  /** First URLs from the listing gallery — used when the hero is a video or missing. */
+  gallery: string[];
   maxGuests: number;
   petsMax: number;
   fromPriceCents: number | null;
@@ -37,12 +41,18 @@ export async function GET() {
         const exp = doc.data() as Experience;
         const fromPriceCents: number | null = exp.fromPriceCents ?? null;
         const isTicketed = exp.pricingType === "ticketed" || (exp.pricingType !== "charter" && inferTicketedFromSlugOrTitle(exp));
+        const galleryRaw = Array.isArray(exp.gallery) ? exp.gallery : [];
+        const gallery = galleryRaw
+          .filter((u): u is string => typeof u === "string" && u.trim() !== "")
+          .map((u) => u.trim())
+          .slice(0, LIST_GALLERY_MAX);
         return {
           id: doc.id,
           slug: exp.slug ?? "",
           title: exp.title ?? "",
           subtitle: exp.subtitle ?? "",
           heroMedia: exp.heroMedia ?? { type: "image", url: "" },
+          gallery,
           maxGuests: getMaxGuestsForExperience(exp),
           petsMax: exp.petsMax ?? 0,
           fromPriceCents,

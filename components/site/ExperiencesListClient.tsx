@@ -11,12 +11,14 @@ import { getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 
 type ListingData = {
   slug: string;
   title?: string;
   subtitle?: string;
-  heroUrl?: string;
+  heroMedia?: { type?: "image" | "video"; url?: string };
+  gallery?: string[];
   fromPriceCents?: number | null;
   pricingType?: "charter" | "ticketed";
 };
@@ -43,13 +45,22 @@ export function ExperiencesListClient() {
         setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
         const next: ListingData[] = [];
-        list.forEach((item: { slug?: string; title?: string; subtitle?: string; heroMedia?: { url?: string }; fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" }) => {
+        list.forEach((item: {
+          slug?: string;
+          title?: string;
+          subtitle?: string;
+          heroMedia?: { type?: "image" | "video"; url?: string };
+          gallery?: string[];
+          fromPriceCents?: number | null;
+          pricingType?: "charter" | "ticketed";
+        }) => {
           if (item.slug) {
             next.push({
               slug: item.slug,
               title: item.title,
               subtitle: item.subtitle,
-              heroUrl: item.heroMedia?.url,
+              heroMedia: item.heroMedia,
+              gallery: Array.isArray(item.gallery) ? item.gallery : [],
               fromPriceCents: item.fromPriceCents ?? undefined,
               pricingType: item.pricingType,
             });
@@ -68,6 +79,7 @@ export function ExperiencesListClient() {
 
   const listingToCard = (listing: ListingData): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
     const exp = STATIC_EXPERIENCE_BY_SLUG.get(listing.slug);
+    const fromListing = experienceCardImageUrl(listing.heroMedia, listing.gallery);
     return {
       slug: listing.slug,
       title: listing.title?.trim() || exp?.title || "Experience",
@@ -77,7 +89,7 @@ export function ExperiencesListClient() {
       duration: exp?.duration || "See details",
       durationMinutes: exp?.durationMinutes,
       capacity: CAPACITY_ALL,
-      heroImage: listing.heroUrl || exp?.heroImage || "/photos/IMG_0386.webp",
+      heroImage: fromListing ?? exp?.heroImage ?? "/photos/IMG_0386.webp",
       gallery: exp?.gallery || [],
       pricingNote: exp?.pricingNote || "",
       ...(listing.fromPriceCents != null && { fromPriceCents: listing.fromPriceCents }),
@@ -93,7 +105,8 @@ export function ExperiencesListClient() {
             slug: exp.slug,
             title: exp.title,
             subtitle: exp.shortDescription,
-            heroUrl: exp.heroImage,
+            heroMedia: { type: "image" as const, url: exp.heroImage },
+            gallery: exp.gallery ?? [],
             fromPriceCents: exp.fromPriceCents ?? null,
           }))
         : [];
