@@ -14,7 +14,7 @@ export function allowsTransition(from: BookingStatus, to: BookingStatus, transit
     final_due: ["final_processing", "final_requires_action", "final_failed", "final_paid", "canceled"],
     final_processing: ["final_paid", "final_due", "final_requires_action", "final_failed"],
     final_paid: ["refunded"],
-    final_requires_action: ["final_processing", "final_due", "final_failed"],
+    final_requires_action: ["final_processing", "final_due", "final_failed", "final_paid"],
     final_failed: ["final_due"],
   };
   if (from === "final_failed" && to === "canceled") {

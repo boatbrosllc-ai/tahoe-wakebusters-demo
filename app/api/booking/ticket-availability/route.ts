@@ -17,8 +17,8 @@ import {
   scanLegacyActiveHoldsForExperience,
 } from "@/lib/booking/legacy-hold-scan";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
-import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
-import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { getTicketedDepartureAndDuration, isTicketedOperatingDate } from "@/lib/booking/ticketed-slot-utils";
+import { BlockCheckUnavailableError, hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +72,19 @@ export async function GET(request: NextRequest) {
     const exp = expDoc.data() as Experience & { slug?: string };
     const expSlug = exp?.slug ?? "";
     const allExpIds = getExperienceIdVariants(experienceId, expSlug);
+    const totalIfNonOperating = getMaxGuestsForExperience({
+      pricingType: exp.pricingType,
+      maxCapacity: exp.maxCapacity,
+      maxGuests: exp.maxGuests,
+      slug: exp.slug,
+      title: exp.title,
+    });
+    if (exp.pricingType === "ticketed" && !isTicketedOperatingDate(date, (exp as { ticketedWeekdays?: unknown }).ticketedWeekdays)) {
+      return NextResponse.json(
+        { total: totalIfNonOperating, sold: 0, onHold: 0, available: 0 },
+        { headers: { "Cache-Control": "no-store, max-age=0" } }
+      );
+    }
     const ticketRangeStart = addCalendarDaysToDateStr(
       date,
       -bookingLookbackDaysFromMaxDuration(24 * 14),
@@ -259,6 +272,23 @@ export async function GET(request: NextRequest) {
         adminBlocked = true;
       }
     } catch (blockErr) {
+      if (blockErr instanceof BlockCheckUnavailableError) {
+        const alertUtcDay = new Date().toISOString().slice(0, 10);
+        void writeOperationalAlertIfNewDocId(
+          operationalAlertDedupeDocId([experienceId, alertUtcDay]),
+          {
+            type: "block_check_unavailable",
+            experienceId,
+            source: "api/booking/ticket-availability",
+            hint:
+              "Verify the blocks composite index status in Firebase Console (deploy firestore.indexes.json); indexes must be READY before block queries succeed.",
+          }
+        ).catch(() => {});
+        return NextResponse.json(
+          { error: "Unable to verify availability. Please try again shortly." },
+          { status: 503, headers: { "Cache-Control": "no-store, max-age=0" } }
+        );
+      }
       console.warn("[ticket-availability] block check failed", blockErr);
     }
 

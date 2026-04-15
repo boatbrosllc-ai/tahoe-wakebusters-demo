@@ -216,6 +216,12 @@ export async function register() {
         "This flag is obsolete: block queries that cannot complete now always fail closed (503). Deploy firestore.indexes.json and unset this flag."
     );
   }
+  if (process.env.BLOCK_CHECK_FAIL_OPEN === "true") {
+    throw new Error(
+      "[instrumentation] BLOCK_CHECK_FAIL_OPEN=true is not allowed in production (NODE_ENV=production). " +
+        "It disables admin block enforcement when the Firestore blocks index is missing. Use only in local dev; deploy firestore.indexes.json for real environments."
+    );
+  }
 
   const requiredStripePiMetadataKeys = ["payment_stage"];
   if (!requiredStripePiMetadataKeys.includes("payment_stage")) {

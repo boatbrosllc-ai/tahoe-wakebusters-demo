@@ -267,6 +267,8 @@ export function ManageBookingClient() {
   const [verifyingFinalPayment, setVerifyingFinalPayment] = useState(false);
   const [finalPaymentVerifyMessage, setFinalPaymentVerifyMessage] = useState<string | null>(null);
   const [pendingStripeReturnVerify, setPendingStripeReturnVerify] = useState(false);
+  const [setupIntentReturnError, setSetupIntentReturnError] = useState<string | null>(null);
+  const [setupIntentReturnOk, setSetupIntentReturnOk] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
   const payRemainingInFlightRef = useRef(false);
@@ -274,10 +276,18 @@ export function ManageBookingClient() {
   useEffect(() => {
     const redirectStatus = searchParams.get("redirect_status");
     const paymentIntentUrl = searchParams.get("payment_intent");
-    const stripeReturnVerify =
+    const setupIntentId = searchParams.get("setup_intent");
+    const setupIntentClientSecret = searchParams.get("setup_intent_client_secret");
+    const stripePaymentReturnVerify =
       redirectStatus === "succeeded" &&
       typeof paymentIntentUrl === "string" &&
       paymentIntentUrl.length > 0;
+    const setupIntentReturnSuccess =
+      setupIntentId != null &&
+      setupIntentId.length > 0 &&
+      redirectStatus === "succeeded" &&
+      typeof setupIntentClientSecret === "string" &&
+      setupIntentClientSecret.length > 0;
 
     const urlToken = searchParams.get("token");
     const raw = urlToken ?? getStoredManageToken();
@@ -297,7 +307,7 @@ export function ManageBookingClient() {
       if (urlToken) {
         setStoredManageToken(urlToken);
       }
-      if (stripeReturnVerify) {
+      if (stripePaymentReturnVerify) {
         setPendingStripeReturnVerify(true);
       }
       if (typeof window !== "undefined") {
@@ -306,10 +316,61 @@ export function ManageBookingClient() {
         u.searchParams.delete("redirect_status");
         u.searchParams.delete("payment_intent");
         u.searchParams.delete("payment_intent_client_secret");
+        u.searchParams.delete("setup_intent");
+        u.searchParams.delete("setup_intent_client_secret");
         const next = u.pathname + (u.search && u.search !== "?" ? u.search : "");
         // Removing the token from the visible URL reduces accidental leakage via referrers and shared links.
         // This does not protect against tokens captured before this effect runs (e.g. other scripts, extensions, or pre-navigation logging).
         window.history.replaceState({}, "", next || MANAGE_RETURN_PATH);
+      }
+      if (setupIntentReturnSuccess) {
+        void (async () => {
+          try {
+            if (!stripePromise) {
+              if (!unmountedRef.current) setSetupIntentReturnError("Stripe is not configured.");
+              return;
+            }
+            const stripe = await stripePromise;
+            if (!stripe) {
+              if (!unmountedRef.current) setSetupIntentReturnError("Stripe is not configured.");
+              return;
+            }
+            const { setupIntent, error: siErr } = await stripe.retrieveSetupIntent(setupIntentClientSecret);
+            if (siErr || !setupIntent) {
+              if (!unmountedRef.current) setSetupIntentReturnError(siErr?.message ?? "Could not confirm card update");
+              return;
+            }
+            const pmId =
+              setupIntent.payment_method == null
+                ? undefined
+                : typeof setupIntent.payment_method === "string"
+                  ? setupIntent.payment_method
+                  : (setupIntent.payment_method as { id?: string }).id;
+            if (!pmId) {
+              if (!unmountedRef.current) setSetupIntentReturnError("No payment method returned");
+              return;
+            }
+            const attachRes = await fetch("/api/booking/manage/attach-payment-method", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ token: raw, paymentMethodId: pmId }),
+            });
+            if (!attachRes.ok) {
+              const d = await attachRes.json().catch(() => ({}));
+              if (!unmountedRef.current) {
+                setSetupIntentReturnError((d as { error?: string }).error ?? "Failed to save card");
+              }
+              return;
+            }
+            if (!unmountedRef.current) {
+              setSetupIntentReturnOk(true);
+              setSetupIntentReturnError(null);
+            }
+          } catch (e) {
+            if (!unmountedRef.current) setSetupIntentReturnError(e instanceof Error ? e.message : "Failed");
+          }
+        })();
       }
       setLoading(true);
       return;
@@ -527,6 +588,16 @@ export function ManageBookingClient() {
           }}
         >
           <h1 className="text-xl font-bold text-brand-dark mb-2">Confirm your email</h1>
+          {setupIntentReturnError && (
+            <p className="text-sm text-red-600 mb-3" role="alert">
+              {setupIntentReturnError}
+            </p>
+          )}
+          {setupIntentReturnOk && !setupIntentReturnError && (
+            <p className="text-sm text-green-700 mb-3" role="status">
+              Card updated successfully. Enter your email below to view your booking.
+            </p>
+          )}
           <p className="text-sm text-brand-muted mb-4">
             Enter the email address you used for this booking to open your manage link.
           </p>
@@ -625,6 +696,16 @@ export function ManageBookingClient() {
     <div className="min-h-screen p-6 bg-brand-bg/30">
       <div className="max-w-lg mx-auto rounded-2xl border border-brand-dark/10 bg-white p-6 sm:p-8 shadow-soft">
         <h1 className="text-xl font-bold text-brand-dark mb-1">Manage booking</h1>
+        {setupIntentReturnError && (
+          <p className="text-sm text-red-600 mb-3" role="alert">
+            {setupIntentReturnError}
+          </p>
+        )}
+        {setupIntentReturnOk && !setupIntentReturnError && (
+          <p className="text-sm text-green-700 mb-3" role="status">
+            Card on file was updated successfully.
+          </p>
+        )}
         <p className="text-sm text-brand-muted mb-6">Hi {data.customerName ?? "there"}.</p>
 
         {(verifyingFinalPayment || finalPaymentVerifyMessage) && (

@@ -4,7 +4,7 @@
  */
 import { getSlugForBoatTypeFilter, isTicketedExperienceSlug } from "@/lib/booking/experience-aliases";
 import { inferSlugFromTitle } from "@/lib/booking/experience-aliases";
-import type { ParsedSlotId } from "@/lib/booking/experience-slots";
+import { getWeekdayInSlotTimezone, type ParsedSlotId } from "@/lib/booking/experience-slots";
 import type { ExperienceRate } from "@/lib/booking/types";
 
 export type ExperienceForTicketed = {
@@ -15,9 +15,32 @@ export type ExperienceForTicketed = {
   departureHour?: number;
   departureMinute?: number;
   tripDurationHours?: number;
+  /** When set and non-empty, departures only on these weekdays (0=Sun … 6=Sat) in America/Chicago. */
+  ticketedWeekdays?: number[];
   defaultRateId?: string;
   id?: string;
 };
+
+/** Normalize admin/client input: unique integers 0–6, sorted. */
+export function normalizeTicketedWeekdaysInput(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const nums = raw.filter((x): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 6);
+  return Array.from(new Set(nums)).sort((a, b) => a - b);
+}
+
+/** Persist only when 1–6 distinct weekdays; empty or all seven means “every day” (omit field). */
+export function ticketedWeekdaysForFirestore(arr: number[] | undefined): number[] | undefined {
+  if (!arr || arr.length === 0 || arr.length >= 7) return undefined;
+  return arr;
+}
+
+/** True if this calendar date is allowed for ticketed departures given optional weekday restriction. */
+export function isTicketedOperatingDate(dateStr: string, ticketedWeekdays?: number[] | null | unknown): boolean {
+  const normalized = normalizeTicketedWeekdaysInput(ticketedWeekdays);
+  const w = ticketedWeekdaysForFirestore(normalized);
+  if (w == null) return true;
+  return w.includes(getWeekdayInSlotTimezone(dateStr));
+}
 
 /** Accepts Firestore QueryDocumentSnapshot-like or { id, data() } so slots and create-hold can pass .docs. */
 export type RateDocLike = { id: string; data: () => unknown };

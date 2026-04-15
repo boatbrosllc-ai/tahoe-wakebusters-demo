@@ -434,14 +434,30 @@ export const WAKEBOARD_SATURDAY_START_TIMES: { hour: number; minute: number }[] 
   { hour: 16, minute: 0 },
 ];
 
-/** True if dateStr (YYYY-MM-DD) is a Saturday in America/Chicago. */
-export function isSaturdayInSlotTimezone(dateStr: string): boolean {
+const WEEKDAY_SHORT_TO_NUM: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+/** Weekday 0=Sunday … 6=Saturday for dateStr (YYYY-MM-DD) in {@link SLOT_TIMEZONE}. */
+export function getWeekdayInSlotTimezone(dateStr: string): number {
   const noonUtc = new Date(`${dateStr}T12:00:00.000Z`);
-  const weekday = new Intl.DateTimeFormat("en-US", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: SLOT_TIMEZONE,
     weekday: "short",
-  }).format(noonUtc);
-  return weekday.toLowerCase() === "sat";
+  }).formatToParts(noonUtc);
+  const w = parts.find((p) => p.type === "weekday")?.value ?? "Sun";
+  return WEEKDAY_SHORT_TO_NUM[w] ?? 0;
+}
+
+/** True if dateStr (YYYY-MM-DD) is a Saturday in America/Chicago. */
+export function isSaturdayInSlotTimezone(dateStr: string): boolean {
+  return getWeekdayInSlotTimezone(dateStr) === 6;
 }
 
 /**
@@ -529,14 +545,18 @@ export function getTicketedSlotGrid(
   endDate: Date,
   durationHours: number,
   departureHour: number,
-  departureMinute: number = 0
+  departureMinute: number = 0,
+  /** When non-empty, only dates whose weekday (Chicago) is in this set get a slot. */
+  allowedWeekdays?: readonly number[] | null
 ): SlotGridItem[] {
   const out: SlotGridItem[] = [];
   const now = new Date();
   const todayStr = getTodayDateStr(now);
   const startStr = getDateStrInSlotTimezone(startDate);
   const endStr = getDateStrInSlotTimezone(endDate);
+  const restrict = allowedWeekdays != null && allowedWeekdays.length > 0;
   for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
+    if (restrict && !allowedWeekdays!.includes(getWeekdayInSlotTimezone(dateStr))) continue;
     const { start: slotStart } = getSlotStartEnd(dateStr, departureHour, durationHours, departureMinute);
     if (dateStr === todayStr && slotStart < now) continue;
     out.push({ dateStr, startHour: departureHour, startMinute: departureMinute, durationHours });

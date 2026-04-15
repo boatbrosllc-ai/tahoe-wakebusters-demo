@@ -88,6 +88,8 @@ export type HoldCreationPaymentCallbacks = {
   setTotalCentsFromServer: (v: number | null) => void;
   setFinalCentsFromServer: (v: number | null) => void;
   setPayFullAmount: (v: boolean) => void;
+  /** Optional: server `depositLeadTimeHours` from create-hold for deposit UI lead-time guard. */
+  setDepositLeadTimeHoursFromHold?: (v: number | null) => void;
   setAppliedDiscount: (v: { discountCents: number; code: string } | null) => void;
   clientSecret: string | null;
   holdExpiresAt: string | null;
@@ -603,6 +605,9 @@ export function useHoldCreation(
         if (code && holdResult.holdDiscountCents > 0) {
           opts.setAppliedDiscount({ discountCents: holdResult.holdDiscountCents, code });
         }
+      }
+      if (typeof holdResult.depositLeadTimeHours === "number" && Number.isFinite(holdResult.depositLeadTimeHours)) {
+        opts.setDepositLeadTimeHoursFromHold?.(holdResult.depositLeadTimeHours);
       }
       if (holdResult.expiresAt) opts.setHoldExpiresAt(holdResult.expiresAt);
       opts.setReceiptClaimToken(null);

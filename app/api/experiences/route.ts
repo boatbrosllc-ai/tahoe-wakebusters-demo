@@ -72,9 +72,12 @@ export async function GET() {
       if (orderA !== orderB) return orderA - orderB;
       return (a.title ?? "").localeCompare(b.title ?? "");
     });
-    return NextResponse.json({ experiences: list }, {
-      headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" },
-    });
+    return NextResponse.json(
+      { experiences: list },
+      {
+        headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" },
+      }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isConfigMissing =

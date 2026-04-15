@@ -4,22 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-
-type ParsedPayload = {
-  pricingType?: "charter" | "ticketed";
-  allowDeposit?: boolean;
-};
-
-function enforceAllowDeposit(
-  parsed: ParsedPayload,
-  storedPricingType: string | undefined
-): ParsedPayload {
-  const effectivePricingType = parsed.pricingType ?? storedPricingType;
-  if (effectivePricingType === "ticketed" && parsed.allowDeposit === true) {
-    return { ...parsed, allowDeposit: false };
-  }
-  return parsed;
-}
+import { enforceAllowDeposit } from "../enforce-allow-deposit";
 
 describe("allowDeposit PATCH enforcement", () => {
   it("ticketed stored, pricingType omitted in payload → allowDeposit coerced to false", () => {
@@ -48,5 +33,12 @@ describe("allowDeposit PATCH enforcement", () => {
     const storedPricingType = "charter";
     const result = enforceAllowDeposit(parsed, storedPricingType);
     assert.strictEqual(result.allowDeposit, true);
+  });
+
+  it("ticketed stored, pricingType omitted, allowDeposit omitted in payload → allowDeposit coerced to false", () => {
+    const parsed = {};
+    const storedPricingType = "ticketed";
+    const result = enforceAllowDeposit(parsed, storedPricingType);
+    assert.strictEqual(result.allowDeposit, false);
   });
 });

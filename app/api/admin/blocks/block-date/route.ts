@@ -1,18 +1,52 @@
 /**
  * Block or unblock a full day (admin). Uses blocks collection (Google Calendar–style).
- * POST body: { experienceId, date: "YYYY-MM-DD", action?: "block" | "unblock", boatIds?: string[] }
- * Block: creates one block doc per boat for that day (00:00–23:59:59). Unblock: deletes those blocks.
+ * POST body: { experienceId, date: "YYYY-MM-DD", action?: "block" | "unblock", boatIds?: string[], includePartial?: boolean }
+ * Block: creates one block doc per boat for that calendar day (Central bounds from getCentralCalendarDayBounds).
+ * Unblock (includePartial false, default): deletes only full-day blocks matching that day exactly.
+ * Unblock (includePartial true): deletes every block whose interval overlaps that calendar day.
  * Auth: middleware (admin path) + Bearer BLOCK_SECRET or valid admin session cookie (defence-in-depth).
  */
 
+import type { Firestore } from "firebase-admin/firestore";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
-import { getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { getAdminEmailFromSessionCookie, requireAdminSession } from "@/lib/admin-auth-firebase";
 import { timingSafeStringEqual } from "@/lib/booking/secure-compare";
-import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
+import { findBlockConflicts, type BlockConflict } from "@/lib/booking/block-conflict-check";
+import { findOverlappingAdminBlocksForWrite } from "@/lib/booking/admin-block-overlap";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
+
+/** One conflict check per target boat (or whole experience when `null`), deduped by type+id. */
+async function findBlockConflictsMergedForTargets(
+  db: Firestore,
+  variantIds: string[],
+  blockStart: Date,
+  blockEnd: Date,
+  now: Date,
+  targets: (string | null)[]
+): Promise<BlockConflict[]> {
+  const seen = new Set<string>();
+  const out: BlockConflict[] = [];
+  for (const boatId of targets) {
+    const chunk = await findBlockConflicts({
+      db,
+      variantIds,
+      blockStart,
+      blockEnd,
+      boatId: typeof boatId === "string" ? boatId : undefined,
+      now,
+    });
+    for (const c of chunk) {
+      const k = `${c.type}:${c.id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(c);
+    }
+  }
+  return out;
+}
 
 async function resolveBlockDateAuth(
   request: NextRequest
@@ -38,6 +72,7 @@ export async function POST(request: NextRequest) {
     const experienceId = typeof body?.experienceId === "string" ? body.experienceId : null;
     const dateStr = typeof body?.date === "string" ? body.date : null;
     const action = body?.action === "unblock" ? "unblock" : "block";
+    const includePartial = body?.includePartial === true;
     const bodyBoatIds = Array.isArray(body?.boatIds) ? (body.boatIds as unknown[]).filter((id): id is string => typeof id === "string").filter(Boolean) : null;
     if (!experienceId || !dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       return NextResponse.json({ error: "experienceId and date (YYYY-MM-DD) required" }, { status: 400 });
@@ -74,19 +109,19 @@ export async function POST(request: NextRequest) {
       ? bodyBoatIds.filter((id) => allBoatIds.includes(id))
       : allBoatIds;
 
-    // Central-timezone-aware day boundaries so 7 AM–7 PM Central slots on dateStr are inside the block.
-    const { start: dayStart } = getSlotStartEnd(dateStr, 0, 0, 0);
-    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+    const { dayStart, dayEnd } = getCentralCalendarDayBounds(dateStr);
     const now = new Date();
 
     if (action === "block") {
-      const conflicts = await findBlockConflicts({
+      const conflictTargets = boatIds.length > 0 ? boatIds : [null];
+      const conflicts = await findBlockConflictsMergedForTargets(
         db,
-        variantIds: experienceIdVariants,
-        blockStart: dayStart,
-        blockEnd: dayEnd,
+        experienceIdVariants,
+        dayStart,
+        dayEnd,
         now,
-      });
+        conflictTargets
+      );
       if (conflicts.length > 0) {
         return NextResponse.json(
           { error: "Block overlaps active holds or bookings", conflicts },
@@ -119,14 +154,56 @@ export async function POST(request: NextRequest) {
           mergedBlockDocs.push(doc);
         }
       }
-      const toDelete = mergedBlockDocs.filter((doc) => {
-        const b = doc.data() as { boatId?: string | null; endAt: { toDate(): Date } };
-        const endAt = b.endAt?.toDate?.();
-        if (!endAt || endAt.getTime() < dayStart.getTime()) return false;
+      const boatMatchesUnblockFilter = (b: { boatId?: string | null }) => {
         if (boatIds.length === 0) return true;
         if (b.boatId == null) return true;
-        return boatIds.includes(b.boatId);
+        return boatIds.includes(b.boatId as string);
+      };
+      const overlapsTargetDay = (startAt: Date, endAt: Date) =>
+        startAt.getTime() <= dayEnd.getTime() && endAt.getTime() >= dayStart.getTime();
+      const isFullDayBlockForThisDate = (b: {
+        slotId?: string | null;
+        startAt?: { toDate?: () => Date };
+        endAt?: { toDate?: () => Date };
+      }) => {
+        if ((b.slotId ?? null) !== null) return false;
+        const startAt = b.startAt?.toDate?.();
+        const endAt = b.endAt?.toDate?.();
+        if (!startAt || !endAt) return false;
+        return (
+          startAt.getTime() === dayStart.getTime() &&
+          endAt.getTime() === dayEnd.getTime()
+        );
+      };
+      const toDelete = mergedBlockDocs.filter((doc) => {
+        const b = doc.data() as {
+          boatId?: string | null;
+          slotId?: string | null;
+          startAt?: { toDate?: () => Date };
+          endAt?: { toDate?: () => Date };
+        };
+        const startAt = b.startAt?.toDate?.();
+        const endAt = b.endAt?.toDate?.();
+        if (!startAt || !endAt || !overlapsTargetDay(startAt, endAt)) return false;
+        if (!boatMatchesUnblockFilter(b)) return false;
+        if (includePartial) return true;
+        return isFullDayBlockForThisDate(b);
       });
+      const toDeleteIds = new Set(toDelete.map((d) => d.id));
+      const timedOrPartialBlocksSkipped = includePartial
+        ? 0
+        : mergedBlockDocs.filter((doc) => {
+            const b = doc.data() as {
+              boatId?: string | null;
+              startAt?: { toDate?: () => Date };
+              endAt?: { toDate?: () => Date };
+            };
+            const startAt = b.startAt?.toDate?.();
+            const endAt = b.endAt?.toDate?.();
+            if (!startAt || !endAt || !overlapsTargetDay(startAt, endAt)) return false;
+            if (!boatMatchesUnblockFilter(b)) return false;
+            return !toDeleteIds.has(doc.id);
+          }).length;
       const BATCH_SIZE = 500;
       for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
         const batch = db.batch();
@@ -142,14 +219,22 @@ export async function POST(request: NextRequest) {
         adminEmail: auth.adminEmail,
         actorType: auth.actorType,
       });
-      return NextResponse.json({ ok: true, date: dateStr, action: "unblock", blocksDeleted: toDelete.length });
+      return NextResponse.json({
+        ok: true,
+        date: dateStr,
+        action: "unblock",
+        includePartial,
+        blocksDeleted: toDelete.length,
+        timedOrPartialBlocksSkipped,
+      });
     }
 
     let created = 0;
     let existing = 0;
     const batch = db.batch();
     const createTargets = boatIds.length > 0 ? boatIds : [null];
-    const createdBlockRefs: FirebaseFirestore.DocumentReference[] = [];
+    const createdBlockMeta: { ref: FirebaseFirestore.DocumentReference; boatId: string | null }[] = [];
+    const boatOutcomes: { boatId: string | null; outcome: "created" | "skipped_existing_full_day" }[] = [];
     for (const boatId of createTargets) {
       const existingSnap = await db
         .collection("blocks")
@@ -159,22 +244,42 @@ export async function POST(request: NextRequest) {
       const alreadyExists = existingSnap.docs.some((doc) => {
         const b = doc.data() as {
           boatId?: string | null;
+          startAt?: { toDate?: () => Date };
           endAt?: { toDate?: () => Date };
           slotId?: string | null;
         };
-        const endAt = b.endAt?.toDate?.();
-        if (!endAt || endAt.getTime() < dayStart.getTime()) return false;
         if ((b.slotId ?? null) !== null) return false;
+        const startAt = b.startAt?.toDate?.();
+        const endAt = b.endAt?.toDate?.();
+        if (!startAt || !endAt) return false;
+        if (startAt.getTime() !== dayStart.getTime() || endAt.getTime() !== dayEnd.getTime()) return false;
         const docBoat = typeof b.boatId === "string" ? b.boatId : null;
         const targetBoat = typeof boatId === "string" ? boatId : null;
         return docBoat === targetBoat;
       });
       if (alreadyExists) {
         existing++;
+        boatOutcomes.push({ boatId: typeof boatId === "string" ? boatId : null, outcome: "skipped_existing_full_day" });
+        continue;
+      }
+      const targetBoatId = typeof boatId === "string" ? boatId : null;
+      const blockOverlaps = await findOverlappingAdminBlocksForWrite({
+        db,
+        Timestamp,
+        experienceId,
+        experienceSlug,
+        variantIds: experienceIdVariants,
+        intervalStart: dayStart,
+        intervalEnd: dayEnd,
+        boatId: targetBoatId,
+      });
+      if (blockOverlaps.length > 0) {
+        existing++;
+        boatOutcomes.push({ boatId: targetBoatId, outcome: "skipped_existing_full_day" });
         continue;
       }
       const blockRef = db.collection("blocks").doc();
-      createdBlockRefs.push(blockRef);
+      createdBlockMeta.push({ ref: blockRef, boatId: targetBoatId });
       batch.set(blockRef, {
         experienceId,
         experienceCanonicalId: experienceId,
@@ -188,25 +293,33 @@ export async function POST(request: NextRequest) {
         createdAt: FieldValue.serverTimestamp(),
         createdBy: auth.actorType === "admin_session" ? auth.adminEmail ?? null : null,
       });
+      boatOutcomes.push({ boatId: typeof boatId === "string" ? boatId : null, outcome: "created" });
       created++;
     }
     await batch.commit();
     // Post-write conflict verification to shrink TOCTOU window; rollback created blocks on conflict.
-    const postConflicts = await findBlockConflicts({
-      db,
-      variantIds: experienceIdVariants,
-      blockStart: dayStart,
-      blockEnd: dayEnd,
-      now,
-    });
-    if (postConflicts.length > 0) {
-      const rollbackBatch = db.batch();
-      for (const ref of createdBlockRefs) rollbackBatch.delete(ref);
-      await rollbackBatch.commit();
-      return NextResponse.json(
-        { error: "Block overlaps active holds or bookings", conflicts: postConflicts },
-        { status: 409 }
-      );
+    if (createdBlockMeta.length > 0) {
+      const verifyKeys = [...new Set(createdBlockMeta.map((m) => (m.boatId == null ? "__EXP__" : m.boatId)))];
+      for (const key of verifyKeys) {
+        const boatForVerify = key === "__EXP__" ? null : key;
+        const postConflicts = await findBlockConflicts({
+          db,
+          variantIds: experienceIdVariants,
+          blockStart: dayStart,
+          blockEnd: dayEnd,
+          boatId: boatForVerify ?? undefined,
+          now,
+        });
+        if (postConflicts.length > 0) {
+          const rollbackBatch = db.batch();
+          for (const { ref } of createdBlockMeta) rollbackBatch.delete(ref);
+          await rollbackBatch.commit();
+          return NextResponse.json(
+            { error: "Block overlaps active holds or bookings", conflicts: postConflicts },
+            { status: 409 }
+          );
+        }
+      }
     }
     void writeAdminAuditLog("block_date", {
       action: "block",
@@ -218,7 +331,13 @@ export async function POST(request: NextRequest) {
       adminEmail: auth.adminEmail,
       actorType: auth.actorType,
     });
-    return NextResponse.json({ ok: true, date: dateStr, blocksCreated: created, blocksExisting: existing });
+    return NextResponse.json({
+      ok: true,
+      date: dateStr,
+      blocksCreated: created,
+      blocksExisting: existing,
+      boatOutcomes,
+    });
   } catch (err) {
     console.error("[admin/blocks/block-date]", err);
     return NextResponse.json({ error: "Failed to block date" }, { status: 500 });

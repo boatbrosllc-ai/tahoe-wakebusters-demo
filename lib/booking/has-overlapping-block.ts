@@ -21,6 +21,8 @@ export class BlockCheckUnavailableError extends Error {
  * by `endAt` and boat in memory. This intentionally avoids Firestore multi-range index coupling during
  * booking-critical writes. If Firestore still cannot run the query
  * (e.g. failed-precondition / index), throws `BlockCheckUnavailableError` so callers return 503.
+ * **Exception:** set `BLOCK_CHECK_FAIL_OPEN=true` only in local/emergency debugging to treat a missing
+ * index as “no block” (disables block enforcement — never use in production).
  */
 export async function hasOverlappingBlock(opts: {
   db: Firestore;
@@ -86,14 +88,11 @@ export async function hasOverlappingBlock(opts: {
       const message = err instanceof Error ? err.message : String(err);
       const indexRelated = code === "failed-precondition" || /index/i.test(message);
       if (indexRelated) {
-        const failOpen =
-          process.env.NODE_ENV !== "production" || process.env.BLOCK_CHECK_FAIL_OPEN === "true";
-        if (failOpen) {
-          bookingWarn("slot-availability", "blocks query failed; treating as unblocked in fail-open mode", {
+        if (process.env.BLOCK_CHECK_FAIL_OPEN === "true") {
+          bookingWarn("slot-availability", "blocks query failed but BLOCK_CHECK_FAIL_OPEN=true — skipping block enforcement", {
             experienceId: expIdForQuery,
             firestoreCode: code ?? null,
             message: message.slice(0, 800),
-            hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
           });
           return false;
         }
@@ -123,14 +122,11 @@ export async function hasOverlappingBlock(opts: {
       const message = err instanceof Error ? err.message : String(err);
       const indexRelated = code === "failed-precondition" || /index/i.test(message);
       if (indexRelated) {
-        const failOpen =
-          process.env.NODE_ENV !== "production" || process.env.BLOCK_CHECK_FAIL_OPEN === "true";
-        if (failOpen) {
-          bookingWarn("slot-availability", "blocks slug query failed; treating as unblocked in fail-open mode", {
+        if (process.env.BLOCK_CHECK_FAIL_OPEN === "true") {
+          bookingWarn("slot-availability", "blocks slug query failed but BLOCK_CHECK_FAIL_OPEN=true — skipping block enforcement", {
             experienceSlug: slugForQuery,
             firestoreCode: code ?? null,
             message: message.slice(0, 800),
-            hint: "Deploy firestore.indexes.json (blocks composite) and wait until indexes are READY in Firebase Console.",
           });
           return false;
         }

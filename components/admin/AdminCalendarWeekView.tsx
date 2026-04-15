@@ -5,7 +5,7 @@ import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/for
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { getSlotStartEnd, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
 
 const CHICAGO = "America/Chicago";
 const HOUR_START = 7;
@@ -59,6 +59,9 @@ type CalendarEvent = {
   type: "booking" | "block";
   startAt: string;
   endAt: string;
+  /** When a multi-day block is clipped for a day column, the API interval before clipping. */
+  originalStartAt?: string;
+  originalEndAt?: string;
   boatId: string | null;
   boatName: string | null;
   title: string;
@@ -282,9 +285,30 @@ export function AdminCalendarWeekView({
   const eventsByDay = useMemo<PositionedEvent[][]>(() => {
     const byDay: CalendarEvent[][] = [[], [], [], [], [], [], []];
     for (const ev of filteredEvents) {
-      const eventDateStr = isoToChicagoDateStr(ev.startAt);
-      const idx = weekDayKeys.indexOf(eventDateStr);
-      if (idx >= 0 && idx < 7) byDay[idx].push(ev);
+      if (ev.type === "block") {
+        for (let i = 0; i < 7; i++) {
+          const dayKey = weekDayKeys[i];
+          const { dayStart, dayEnd } = getCentralCalendarDayBounds(dayKey);
+          const evS = new Date(ev.startAt);
+          const evE = new Date(ev.endAt);
+          if (evE.getTime() < dayStart.getTime() || evS.getTime() > dayEnd.getTime()) continue;
+          const clipS = new Date(Math.max(evS.getTime(), dayStart.getTime()));
+          const clipE = new Date(Math.min(evE.getTime(), dayEnd.getTime()));
+          if (clipS.getTime() >= clipE.getTime()) continue;
+          byDay[i].push({
+            ...ev,
+            id: `${ev.blockId ?? ev.id}__${dayKey}`,
+            originalStartAt: ev.startAt,
+            originalEndAt: ev.endAt,
+            startAt: clipS.toISOString(),
+            endAt: clipE.toISOString(),
+          });
+        }
+      } else {
+        const eventDateStr = isoToChicagoDateStr(ev.startAt);
+        const idx = weekDayKeys.indexOf(eventDateStr);
+        if (idx >= 0 && idx < 7) byDay[idx].push(ev);
+      }
     }
     return byDay.map(resolveOverlaps);
   }, [filteredEvents, weekDayKeys]);
@@ -299,7 +323,7 @@ export function AdminCalendarWeekView({
     if (slotStart < new Date()) return;
     setNewBlockStart(toCentralDatetimeLocal(slotStart));
     setNewBlockEnd(toCentralDatetimeLocal(slotEnd));
-    setNewBlockBoatId(boatList[0]?.id ?? "");
+    setNewBlockBoatId("");
     setNewBlockNote("");
     setBlockError(null);
     setBlockNotice(null);
@@ -816,8 +840,8 @@ export function AdminCalendarWeekView({
         {selectedBlock?.blockId && (
           <BlockEditForm
             blockId={selectedBlock.blockId}
-            startAt={selectedBlock.startAt}
-            endAt={selectedBlock.endAt}
+            startAt={selectedBlock.originalStartAt ?? selectedBlock.startAt}
+            endAt={selectedBlock.originalEndAt ?? selectedBlock.endAt}
             note={selectedBlock.note ?? ""}
             onSave={updateBlock}
             onDelete={() => deleteBlock(selectedBlock.blockId!)}

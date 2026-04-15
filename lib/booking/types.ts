@@ -177,6 +177,11 @@ export interface Experience {
   departureMinute?: number;
   /** Ticketed: trip duration in hours (e.g. 1 for a 1-hour sunset cruise). Drives slot end time. */
   tripDurationHours?: number;
+  /**
+   * Ticketed: optional weekly schedule — departures only on these weekdays (0=Sun … 6=Sat) in listing timezone
+   * (slot logic uses America/Chicago). Omit or empty = every day.
+   */
+  ticketedWeekdays?: number[];
   showSpotsRemaining?: boolean;
   /** Denormalized minimum rate price in cents; kept in sync by admin write paths to avoid subcollection reads on list queries. */
   fromPriceCents?: number;
@@ -650,6 +655,8 @@ export interface CreateHoldResponse {
   /** Confirmed discount from server repricing (weekend/holiday rate, etc.). */
   discountCents?: number;
   discountCode?: string;
+  /** Deposit option is available only when trip start is at least this many hours away. */
+  depositLeadTimeHours?: number;
 }
 
 export interface CreateCheckoutSessionInput {

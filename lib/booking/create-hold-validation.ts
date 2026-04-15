@@ -99,7 +99,13 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
       answers[k] = v;
     }
   }
-  const bookingMode: "shared" | "charter" = o.bookingMode === "shared" ? "shared" : "charter";
+  let bookingMode: "shared" | "charter" | undefined;
+  if (Object.prototype.hasOwnProperty.call(o, "bookingMode")) {
+    if (o.bookingMode !== "shared" && o.bookingMode !== "charter") {
+      return { input: null, hint: 'bookingMode must be "shared" or "charter" when provided.' };
+    }
+    bookingMode = o.bookingMode === "shared" ? "shared" : "charter";
+  }
   const resumeHoldId = typeof o.resumeHoldId === "string" && o.resumeHoldId.trim() ? o.resumeHoldId.trim() : undefined;
   let holdRequestId: string | undefined;
   if (o.holdRequestId != null && o.holdRequestId !== undefined) {
@@ -137,7 +143,7 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
       marketingOptIn,
       tipCents,
       discountCode: discountCode || undefined,
-      bookingMode,
+      ...(bookingMode ? { bookingMode } : {}),
       resumeHoldId,
       holdRequestId,
       ...(release_token ? { release_token } : {}),

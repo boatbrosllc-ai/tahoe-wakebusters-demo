@@ -23,6 +23,7 @@ import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
 import { getDateStrInSlotTimezone, isSeasonalAllowed, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
 import { getExperienceIdVariants, inferSlugFromTitle, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
+import { isTicketedOperatingDate } from "@/lib/booking/ticketed-slot-utils";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
@@ -208,6 +209,10 @@ export async function GET(request: NextRequest) {
         prices[dateStr] = 0;
         continue;
       }
+      if (isTicketed && !isTicketedOperatingDate(dateStr, (exp as { ticketedWeekdays?: unknown }).ticketedWeekdays)) {
+        prices[dateStr] = 0;
+        continue;
+      }
       prices[dateStr] = useListingBoatCalendar
         ? getEffectiveBoatRatePriceCents(
             {
@@ -365,6 +370,10 @@ export async function GET(request: NextRequest) {
 
       ticketsAvailableByDate = {};
       for (const dateStr of dateStrs) {
+        if (!isTicketedOperatingDate(dateStr, (exp as { ticketedWeekdays?: unknown }).ticketedWeekdays)) {
+          ticketsAvailableByDate[dateStr] = 0;
+          continue;
+        }
         if (seasonalForPricing?.enabled && !isSeasonalAllowed(seasonalForPricing, new Date(dateStr + "T12:00:00.000Z"), dateStr)) {
           ticketsAvailableByDate[dateStr] = 0;
           continue;

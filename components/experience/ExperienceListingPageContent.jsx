@@ -112,8 +112,12 @@ export function ExperienceListingPageContent(props) {
     [openWithSelection, id, experience.slug, experience.pricingType],
   );
 
-  // Hero: experience name as title, subtext under it (like pontoon listing)
-  const heroImageUrl = experience.heroMedia?.url;
+  const rawGallery = experience.gallery ?? [];
+
+  // Hero: use admin hero only, or first gallery image — never the static pontoon/Unsplash template.
+  const rawHero = experience.heroMedia?.url?.trim();
+  const firstGalleryStill = rawGallery.find((u) => typeof u === "string" && u.trim());
+  const heroImageUrl = rawHero || firstGalleryStill || undefined;
   const heroTitle = getHeroTitle(experience);
   const heroSubtitle = getHeroSubtitle(experience);
 
@@ -144,7 +148,6 @@ export function ExperienceListingPageContent(props) {
     steps.length > 0
       ? steps.map((s) => ({ step: s.label, desc: s.description || "" }))
       : undefined;
-  const rawGallery = experience.gallery ?? [];
   const overviewImageUrl = rawGallery[0];
   const overviewImageAlt = experience.title ? `${experience.title} experience` : undefined;
 
@@ -167,7 +170,7 @@ export function ExperienceListingPageContent(props) {
         }))
       : rawGallery.length === 1
         ? [{ url: rawGallery[0], alt: experience.galleryAltTexts?.[0]?.trim() || undefined }]
-        : undefined;
+        : [];
 
   // Included: strings -> { icon, title, desc }; add "Good vibes" last
   const includedStrings = (experience.included ?? [])
@@ -195,7 +198,7 @@ export function ExperienceListingPageContent(props) {
           rating: 5,
           featured: i === 0,
         }))
-      : undefined;
+      : [];
 
   // FAQ: { q, a } -> { question, answer }
   const faqItems =
@@ -218,6 +221,7 @@ export function ExperienceListingPageContent(props) {
         title={heroTitle}
         subtitle={heroSubtitle}
         imagePosition={slug === "watersports" ? "center 30%" : undefined}
+        omitTemplateFallback
       />
 
       <section
@@ -233,7 +237,6 @@ export function ExperienceListingPageContent(props) {
               pricingType={experience.pricingType ?? "charter"}
               onCheckAvailability={handlePreviewCheckAvailability}
               fromPriceCents={experience.fromPriceCents ?? null}
-              seasonal={experience.seasonal}
             />
           </div>
         </div>
@@ -253,6 +256,7 @@ export function ExperienceListingPageContent(props) {
         seoParagraphs={overviewSeoParagraphs}
         timeline={overviewTimelineFinal}
         imageAlt={overviewImageAlt}
+        useStaticImageFallback={false}
       />
 
       {slug === "watersports" && (

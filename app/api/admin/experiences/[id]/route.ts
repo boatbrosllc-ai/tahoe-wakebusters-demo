@@ -19,6 +19,7 @@ import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
+import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/lib/booking/ticketed-slot-utils";
 
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
 function stripUndefined<T>(obj: T): T {
@@ -139,6 +140,8 @@ function parseBody(
   departureHour: number;
   departureMinute: number;
   tripDurationHours: number;
+  /** Normalized 0–6; empty array means “every day” on write. */
+  ticketedWeekdays: number[];
   allowDeposit: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
@@ -285,6 +288,9 @@ function parseBody(
   if (typeof b.departureHour === "number") out.departureHour = Math.min(23, Math.max(0, Math.floor(b.departureHour)));
   if (typeof b.departureMinute === "number") out.departureMinute = Math.min(59, Math.max(0, Math.floor(b.departureMinute)));
   if (typeof b.tripDurationHours === "number" && b.tripDurationHours > 0) out.tripDurationHours = b.tripDurationHours;
+  if (Array.isArray(b.ticketedWeekdays)) {
+    out.ticketedWeekdays = normalizeTicketedWeekdaysInput(b.ticketedWeekdays);
+  }
   if (typeof b.allowDeposit === "boolean") {
     out.allowDeposit = b.pricingType === "ticketed" ? false : b.allowDeposit;
   }
@@ -293,7 +299,17 @@ function parseBody(
   return Object.keys(out).length ? out : null;
 }
 
-function validateRates(rates: Array<{ durationHours: number }>): string | null {
+function validateRates(
+  rates: Array<{ durationHours: number }>,
+  options?: { pricingType?: "ticketed" | "charter"; tripDurationHours?: number }
+): string | null {
+  if (options?.pricingType === "ticketed") {
+    if (rates.length !== 1) return "Ticketed experiences must include exactly one rate.";
+    const tripDurationHours = options.tripDurationHours;
+    if (tripDurationHours != null && tripDurationHours > 0 && rates[0].durationHours !== tripDurationHours) {
+      return "Ticketed rate durationHours must match tripDurationHours.";
+    }
+  }
   const durations = new Set<number>();
   for (const rate of rates) {
     if (!(rate.durationHours > 0)) return "Each rate must have durationHours > 0.";
@@ -630,7 +646,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         ? parsed.rates
         : undefined;
     if (rates) {
-      const ratesError = validateRates(rates);
+      const effectiveTripDurationHours =
+        (typeof parsed.tripDurationHours === "number" && parsed.tripDurationHours > 0
+          ? parsed.tripDurationHours
+          : typeof expData.tripDurationHours === "number" && expData.tripDurationHours > 0
+            ? expData.tripDurationHours
+            : undefined);
+      const ratesError = validateRates(rates, {
+        pricingType: effectivePricingType === "ticketed" ? "ticketed" : "charter",
+        tripDurationHours: effectiveTripDurationHours,
+      });
       if (ratesError) {
         return NextResponse.json({ error: ratesError }, { status: 400 });
       }
@@ -650,6 +675,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       Object.assign(expUpdate, stripUndefined(expFieldsForUpdate));
     }
     expUpdate.updatedAt = Date.now();
+
+    if (effectivePricingType === "charter") {
+      expUpdate.ticketedWeekdays = FieldValue.delete();
+    } else if (effectivePricingType === "ticketed" && "ticketedWeekdays" in expUpdate) {
+      const tw = expUpdate.ticketedWeekdays;
+      if (!Array.isArray(tw)) {
+        delete expUpdate.ticketedWeekdays;
+      } else {
+        const stored = ticketedWeekdaysForFirestore(normalizeTicketedWeekdaysInput(tw));
+        expUpdate.ticketedWeekdays = stored == null ? FieldValue.delete() : stored;
+      }
+    }
 
     if (Array.isArray(rates) && existingRatesSnap) {
       let minPriceCents: number | null = null;

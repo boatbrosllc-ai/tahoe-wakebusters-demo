@@ -22,7 +22,11 @@ import {
   operationalAlertDedupeDocId,
   writeOperationalAlertIfNewDocId,
 } from "@/lib/booking/operational-alerts";
-import { getTicketedDepartureAndDuration } from "@/lib/booking/ticketed-slot-utils";
+import {
+  getTicketedDepartureAndDuration,
+  normalizeTicketedWeekdaysInput,
+  ticketedWeekdaysForFirestore,
+} from "@/lib/booking/ticketed-slot-utils";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
@@ -370,7 +374,17 @@ export async function GET(request: NextRequest) {
         // --- Ticketed experience: one slot per date with capacity enrichment ---
         const tRatesSnap = ratesSnap;
 
-        const ticketedGrid = getTicketedSlotGrid(gridStart, gridEnd, tDurationHours, tDepartureHour, tDepartureMinute);
+        const ticketedWeekdaysRestricted = ticketedWeekdaysForFirestore(
+          normalizeTicketedWeekdaysInput((expDataFull as { ticketedWeekdays?: unknown }).ticketedWeekdays)
+        );
+        const ticketedGrid = getTicketedSlotGrid(
+          gridStart,
+          gridEnd,
+          tDurationHours,
+          tDepartureHour,
+          tDepartureMinute,
+          ticketedWeekdaysRestricted ?? null
+        );
         const ticketedStartDateStrLower = addCalendarDaysToDateStr(
           startDate,
           -bookingLookbackDaysFromMaxDuration(tDurationHours),

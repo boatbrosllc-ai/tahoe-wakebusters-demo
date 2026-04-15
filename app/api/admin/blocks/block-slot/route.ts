@@ -71,6 +71,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const existingSlotSnap = await db
+      .collection("blocks")
+      .where("experienceId", "==", experienceId)
+      .where("slotId", "==", slotId)
+      .get();
+    const existingForBoat = existingSlotSnap.docs.find((d) => {
+      const row = d.data() as { boatId?: string | null };
+      const rowBoat = typeof row.boatId === "string" ? row.boatId.trim() || null : null;
+      const wantBoat = boatId ?? null;
+      return rowBoat === wantBoat;
+    });
+    if (existingForBoat) {
+      return NextResponse.json({
+        ok: true,
+        blockId: existingForBoat.id,
+        slotId,
+        boatId,
+        reused: true,
+      });
+    }
+
     if (boatId) {
       const boatRef = db.collection("boats").doc(boatId);
       const boatSnap = await boatRef.get();

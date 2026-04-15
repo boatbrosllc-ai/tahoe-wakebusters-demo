@@ -27,15 +27,31 @@ export async function findBlockConflicts(params: {
   const seenConflictIds = new Set<string>();
   const conflicts: BlockConflict[] = [];
 
-  const holdQueryBase = db.collection("holds").where("status", "==", "active").where("expiresAt", ">=", now);
+  const nowMs = now.getTime();
+  /** Firestore needs a composite index for status + expiresAt + boatId; boatId + status exists — filter expiry in memory. */
   const holdSnaps = await Promise.all(
     boatId
-      ? [holdQueryBase.where("boatId", "==", boatId).get()]
-      : variantIds.map((variantId) => holdQueryBase.where("experienceId", "==", variantId).get())
+      ? [
+          db.collection("holds").where("boatId", "==", boatId).where("status", "==", "active").get(),
+        ]
+      : variantIds.map((variantId) =>
+          db
+            .collection("holds")
+            .where("status", "==", "active")
+            .where("expiresAt", ">=", now)
+            .where("experienceId", "==", variantId)
+            .get()
+        )
   );
   for (const snap of holdSnaps) {
     for (const docSnap of snap.docs) {
-      const h = docSnap.data() as { slotId?: string; slot_id?: string };
+      const h = docSnap.data() as {
+        slotId?: string;
+        slot_id?: string;
+        expiresAt?: { toDate?: () => Date };
+      };
+      const exp = h.expiresAt?.toDate?.();
+      if (!exp || exp.getTime() < nowMs) continue;
       const iv = bookingIntervalMsFromSlotFields(h.slotId, h.slot_id);
       if (!iv) continue;
       if (!intervalsOverlapMs(blockStartMs, blockEndMs, iv.startMs, iv.endMs)) continue;

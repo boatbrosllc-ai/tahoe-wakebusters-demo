@@ -14,6 +14,7 @@ export function Hero({
   subtitle,
   introParagraph,
   imagePosition,
+  omitTemplateFallback,
 }: {
   /** When set (e.g. from admin pontoon listing), overrides static HERO image. */
   heroImageUrl?: string;
@@ -25,6 +26,8 @@ export function Hero({
   introParagraph?: string;
   /** Optional object-position for the hero image (e.g. "center 30%" to show more of top). */
   imagePosition?: string;
+  /** When true and `heroImageUrl` is missing, show gradient-only hero (no default template image). */
+  omitTemplateFallback?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const motionProps = reduceMotion
@@ -35,26 +38,33 @@ export function Hero({
         transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
       };
 
-  const heroSrc = heroImageUrl ? getDisplayImageUrl(heroImageUrl) : (HERO.unsplashFallback as string);
+  const heroSrc =
+    heroImageUrl
+      ? getDisplayImageUrl(heroImageUrl)
+      : omitTemplateFallback
+        ? null
+        : (HERO.unsplashFallback as string);
   const heroTitle = title ?? HERO.title;
   const heroSubtitle = subtitle ?? HERO.subtitle;
 
   return (
     <section className="relative w-full min-h-[60vh] sm:min-h-[75vh] overflow-hidden bg-brand-dark">
-      <div className="absolute inset-0">
-        <Image
-          src={heroSrc}
-          alt=""
-          fill
-          className={cn(
-            "object-cover scale-[1.02] sm:scale-105",
-            !imagePosition && "object-[center_85%] sm:object-[center_65%]"
-          )}
-          style={imagePosition ? { objectPosition: imagePosition } : undefined}
-          priority
-          sizes="100vw"
-        />
-      </div>
+      {heroSrc ? (
+        <div className="absolute inset-0">
+          <Image
+            src={heroSrc}
+            alt=""
+            fill
+            className={cn(
+              "object-cover scale-[1.02] sm:scale-105",
+              !imagePosition && "object-[center_85%] sm:object-[center_65%]"
+            )}
+            style={imagePosition ? { objectPosition: imagePosition } : undefined}
+            priority
+            sizes="100vw"
+          />
+        </div>
+      ) : null}
       {/* Gradient covers whole hero: 0% at top, navy at bottom, blends into next section */}
       <div
         className="absolute inset-0 w-full h-full min-h-full pointer-events-none"

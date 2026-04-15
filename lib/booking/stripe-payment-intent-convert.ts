@@ -86,6 +86,39 @@ export function customerOverrideFromPaymentIntent(
   return { name, email, phone };
 }
 
+/**
+ * Merge Stripe Checkout `customer_details` with the hold draft (checkout.session.completed path).
+ * When the hold already has a real guest email, that address wins: `customer_details.email` often reflects
+ * the Stripe account or card holder (e.g. business inbox) and must not replace the email from the booking form.
+ * Placeholder hold emails still resolve from Checkout. Same rules as {@link customerOverrideFromPaymentIntent}.
+ */
+export function customerOverrideFromCheckoutSession(
+  session: Pick<Stripe.Checkout.Session, "customer_details">,
+  holdDraft: { name: string; email: string; phone: string }
+): { name: string; email: string; phone: string } | undefined {
+  const d = session.customer_details;
+  const stripeEmail = (d?.email ?? "").trim() || "";
+  const stripeName = (d?.name ?? "").trim() || "";
+  const stripePhone = (d?.phone ?? "").trim() || "";
+
+  const holdEmailTrimmed = (holdDraft.email ?? "").trim();
+  const email =
+    holdEmailTrimmed && !isPlaceholderCheckoutEmail(holdEmailTrimmed)
+      ? holdEmailTrimmed
+      : stripeEmail || holdEmailTrimmed;
+  const name = stripeName || holdDraft.name || "Guest";
+  const phone = stripePhone || holdDraft.phone;
+
+  if (isPlaceholderCheckoutEmail(email)) return undefined;
+
+  const holdNameNorm = (holdDraft.name || "Guest").trim();
+  if (email === holdEmailTrimmed && name === holdNameNorm && phone === holdDraft.phone) {
+    return undefined;
+  }
+
+  return { name, email, phone };
+}
+
 /** Same deposit vs full classification as {@link buildConvertHoldInputFromSucceededPaymentIntent} (metadata + amount vs total). */
 export function resolveUsesDepositInputFromPaymentIntent(
   pi: Pick<Stripe.PaymentIntent, "metadata" | "amount"> & { id?: string },

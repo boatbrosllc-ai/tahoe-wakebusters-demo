@@ -13,6 +13,7 @@ import {
   intervalsOverlapMs,
 } from "@/lib/booking/booking-interval";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { warnIfLegacyBookingFallbackEnabled } from "@/lib/booking/legacy-fallback-warn";
@@ -227,8 +228,53 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
 }
 
 /**
- * Legacy boat-only flow (no experienceId): same overlap guarantees as assertSlotAvailable using boatId
- * as the synthetic experience key for blocks, plus boat-scoped booking/slot scans.
+ * Resolves experience id variants from a listing boat for admin block queries.
+ * Blocks are keyed by experience id/slug, not boat id — legacy boat-only flows must not pass boatId as experienceId.
+ */
+export async function resolveLegacyBoatBlockCheckContext(opts: {
+  db: Firestore;
+  get: (
+    ref: import("firebase-admin/firestore").DocumentReference
+  ) => Promise<import("firebase-admin/firestore").DocumentSnapshot>;
+  boatId: string;
+}): Promise<{ experienceId: string; experienceIdVariants: string[] }> {
+  const { db, get, boatId } = opts;
+  const bid = boatId.trim();
+  if (!bid) return { experienceId: "", experienceIdVariants: [] };
+  const boatSnap = await get(db.collection("boats").doc(bid));
+  if (!boatSnap.exists) {
+    return { experienceId: bid, experienceIdVariants: [bid] };
+  }
+  const boat = boatSnap.data() as { experienceIds?: unknown };
+  const rawIds = Array.isArray(boat.experienceIds)
+    ? boat.experienceIds
+        .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+        .map((x) => x.trim())
+    : [];
+  if (rawIds.length === 0) {
+    return { experienceId: bid, experienceIdVariants: [bid] };
+  }
+  const variantSet = new Set<string>();
+  for (const eid of rawIds) {
+    variantSet.add(eid);
+    const expSnap = await get(db.collection("experiences").doc(eid));
+    let slug = "";
+    if (expSnap.exists) {
+      const d = expSnap.data() as { slug?: string };
+      slug = typeof d.slug === "string" ? d.slug.trim() : "";
+    }
+    for (const v of getExperienceIdVariants(eid, slug)) variantSet.add(v);
+  }
+  variantSet.add(bid);
+  return {
+    experienceId: rawIds[0] ?? bid,
+    experienceIdVariants: Array.from(variantSet),
+  };
+}
+
+/**
+ * Legacy boat-only flow (no experienceId): same overlap guarantees as assertSlotAvailable, with block queries
+ * keyed by the boat's linked experience ids (plus boat-scoped booking/slot scans).
  */
 export async function assertLegacyBoatSlotAvailable(opts: {
   db: Firestore;
@@ -277,11 +323,16 @@ export async function assertLegacyBoatSlotAvailable(opts: {
     }
   }
 
+  const blockCtx = await resolveLegacyBoatBlockCheckContext({
+    db,
+    get: (ref) => get(ref) as Promise<import("firebase-admin/firestore").DocumentSnapshot>,
+    boatId: bid,
+  });
   const blocked = await hasOverlappingBlock({
     db,
     Timestamp,
-    experienceId: bid,
-    experienceIdVariants: [bid],
+    experienceId: blockCtx.experienceId || bid,
+    experienceIdVariants: blockCtx.experienceIdVariants.length > 0 ? blockCtx.experienceIdVariants : [bid],
     boatId: bid,
     slotStart,
     slotEnd,

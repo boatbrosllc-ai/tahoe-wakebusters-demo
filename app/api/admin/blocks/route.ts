@@ -5,7 +5,8 @@ import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Block } from "@/lib/booking/types";
-import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
+import { findBlockConflicts, type BlockConflict } from "@/lib/booking/block-conflict-check";
+import { findOverlappingAdminBlocksForWrite } from "@/lib/booking/admin-block-overlap";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -16,6 +17,22 @@ function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
 function isMissingIndexError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /FAILED_PRECONDITION.*index/i.test(msg);
+}
+
+/** Surfaces in-flight checkout holds in 409 responses so operators see which reservation may be interrupted. */
+async function enrichBlockConflictsWithHoldExpiry(
+  db: import("firebase-admin/firestore").Firestore,
+  conflicts: BlockConflict[]
+): Promise<(BlockConflict | { type: "hold"; id: string; expiresAt: string | null })[]> {
+  return Promise.all(
+    conflicts.map(async (c) => {
+      if (c.type !== "hold") return c;
+      const snap = await db.collection("holds").doc(c.id).get();
+      const raw = snap.exists ? (snap.data() as { expiresAt?: { toDate?: () => Date } }).expiresAt : undefined;
+      const exp = raw?.toDate?.();
+      return { type: "hold" as const, id: c.id, expiresAt: exp ? exp.toISOString() : null };
+    })
+  );
 }
 
 /** GET: list blocks in range. Query: experienceId, from (YYYY-MM-DD or ISO), to (YYYY-MM-DD or ISO), boatId (optional). Includes slug variants so blocks created under a variant experienceId are returned. */
@@ -164,8 +181,25 @@ export async function POST(request: NextRequest) {
       now,
     });
     if (conflicts.length > 0) {
+      const conflictsDetailed = await enrichBlockConflictsWithHoldExpiry(db, conflicts);
       return NextResponse.json(
-        { error: "Block overlaps active holds or bookings", conflicts },
+        { error: "Block overlaps active holds or bookings", conflicts: conflictsDetailed },
+        { status: 409 }
+      );
+    }
+    const blockOverlaps = await findOverlappingAdminBlocksForWrite({
+      db,
+      Timestamp,
+      experienceId,
+      experienceSlug,
+      variantIds,
+      intervalStart: startAt,
+      intervalEnd: endAt,
+      boatId,
+    });
+    if (blockOverlaps.length > 0) {
+      return NextResponse.json(
+        { error: "This time range overlaps an existing admin block", blockOverlaps },
         { status: 409 }
       );
     }

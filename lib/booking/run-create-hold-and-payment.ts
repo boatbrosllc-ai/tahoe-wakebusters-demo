@@ -39,6 +39,8 @@ export type CreateHoldOnlySuccess = {
   /** From create-hold: discount after server-computed subtotal (reconciles UI vs hold). */
   holdDiscountCents?: number;
   holdDiscountCode?: string;
+  /** Hours before trip start when deposit is still allowed (matches server `CreateHoldResponse`). */
+  depositLeadTimeHours?: number;
 };
 
 export interface CreateHoldAndPaymentSuccess {
@@ -168,6 +170,7 @@ type CreateHoldJson = {
   pricing?: unknown;
   discountCents?: unknown;
   discountCode?: unknown;
+  depositLeadTimeHours?: unknown;
 };
 
 function parseIncidentId(data: CreateHoldJson): string | undefined {
@@ -284,6 +287,10 @@ export async function runCreateHold(
     typeof (holdData as { discountCode?: unknown }).discountCode === "string"
       ? (holdData as { discountCode: string }).discountCode
       : undefined;
+  const depositLeadTimeHours =
+    typeof holdData.depositLeadTimeHours === "number" && Number.isFinite(holdData.depositLeadTimeHours)
+      ? holdData.depositLeadTimeHours
+      : undefined;
 
   return {
     ok: true,
@@ -293,6 +300,7 @@ export async function runCreateHold(
     pricing,
     ...(holdDiscountCents !== undefined ? { holdDiscountCents } : {}),
     ...(holdDiscountCode !== undefined ? { holdDiscountCode } : {}),
+    ...(depositLeadTimeHours !== undefined ? { depositLeadTimeHours } : {}),
   };
 }
 

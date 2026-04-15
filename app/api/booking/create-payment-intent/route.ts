@@ -23,6 +23,8 @@ import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/boo
 import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-secret";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
 import { buildBookingPaymentIntentMethodParams } from "@/lib/booking/payment-intent-methods";
+import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { isDepositEligibleByLeadTime } from "@/lib/booking/final-charge-at";
 
 /** Re-sign after optional hold extension so the client can cancel/back after the original create-hold window. */
 function releaseTokenFieldForResponse(holdId: string, effectiveExpiresAt: Date): { releaseToken: string } | Record<string, never> {
@@ -485,6 +487,24 @@ export async function POST(request: NextRequest) {
           ? (hold as { allowDeposit?: boolean }).allowDeposit
           : experienceForPolicy.allowDeposit === true;
       if (holdAllowDeposit === true) {
+        if (!input.clientPayFullAmount) {
+          const parsedHoldSlot = parseSlotIdRelaxed(hold.slotId) ?? parseSlotId(hold.slotId);
+          if (!parsedHoldSlot) {
+            return NextResponse.json({ error: "Invalid hold slot. Please create a new hold and try again." }, { status: 400 });
+          }
+          const slotStart = getSlotStartEnd(
+            parsedHoldSlot.dateStr,
+            parsedHoldSlot.startHour,
+            parsedHoldSlot.durationHours,
+            parsedHoldSlot.startMinute ?? 0
+          ).start;
+          if (!isDepositEligibleByLeadTime(slotStart.getTime(), Date.now())) {
+            return NextResponse.json(
+              { error: "Deposit is only available for trips more than 48 hours away. Please pay in full." },
+              { status: 400 }
+            );
+          }
+        }
         payFullAmount = input.clientPayFullAmount;
       } else {
         payFullAmount = true;
@@ -777,6 +797,37 @@ export async function POST(request: NextRequest) {
                 }
                 const existingAmount = existing.amount;
                 if (existingAmount === chargeCents && existing.client_secret) {
+                  if (!payFullAmount) {
+                    const parsedReuseSlot =
+                      parseSlotIdRelaxed(holdForCharge.slotId) ?? parseSlotId(holdForCharge.slotId);
+                    if (!parsedReuseSlot) {
+                      return NextResponse.json(
+                        { error: "Invalid hold slot. Please create a new hold and try again." },
+                        { status: 400 }
+                      );
+                    }
+                    const slotStartReuse = getSlotStartEnd(
+                      parsedReuseSlot.dateStr,
+                      parsedReuseSlot.startHour,
+                      parsedReuseSlot.durationHours,
+                      parsedReuseSlot.startMinute ?? 0
+                    ).start;
+                    if (!isDepositEligibleByLeadTime(slotStartReuse.getTime(), Date.now())) {
+                      await stripe.paymentIntents.cancel(existingPiId).catch(() => {});
+                      const { FieldValue: fvDepositWindowClosed } = getFirestoreExports();
+                      await holdRef.update({
+                        depositPaymentIntentId: fvDepositWindowClosed.delete(),
+                        updatedAt: fvDepositWindowClosed.serverTimestamp(),
+                      });
+                      return NextResponse.json(
+                        {
+                          error:
+                            "The deposit payment window has closed for this trip. Please pay in full to complete your booking.",
+                        },
+                        { status: 400 }
+                      );
+                    }
+                  }
                   bookingLog("create-payment-intent", "reusing existing PI", {
                     holdId: input.holdId,
                     paymentIntentId: existing.id,

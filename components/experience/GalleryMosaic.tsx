@@ -19,7 +19,7 @@ export function GalleryMosaic({ id = "gallery", images: imagesProp }: { id?: str
   const [category, setCategory] = useState<string | null>(null);
 
   const images = useMemo(() => {
-    if (imagesProp?.length) {
+    if (Array.isArray(imagesProp)) {
       return imagesProp.map(({ url, alt }) => ({ url: getDisplayImageUrl(url), alt: alt ?? "" }));
     }
     return GALLERY_IMAGES.map((img) => ({ url: img.url, alt: img.alt }));
@@ -47,7 +47,11 @@ export function GalleryMosaic({ id = "gallery", images: imagesProp }: { id?: str
 
   const main = images[0];
   const rest = images.slice(1, 5);
-  const showCategoryFilter = !imagesProp?.length;
+  const showCategoryFilter = !Array.isArray(imagesProp);
+
+  if (Array.isArray(imagesProp) && imagesProp.length === 0) {
+    return null;
+  }
 
   return (
     <section id={id} className="bg-brand-dark py-16 sm:py-20 lg:py-24">

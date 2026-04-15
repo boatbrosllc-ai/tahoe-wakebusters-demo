@@ -18,7 +18,8 @@ const ease = [0.22, 1, 0.36, 1];
 
 export function Reviews({ reviews: reviewsProp }: { reviews?: ReviewItem[] } = {}) {
   const reduceMotion = useReducedMotion();
-  const list = reviewsProp?.length ? reviewsProp : REVIEWS;
+  const list = reviewsProp === undefined ? REVIEWS : reviewsProp;
+  if (!list.length) return null;
   const featured = list.find((r) => r.featured) ?? list[0];
   const rest = list.filter((r) => r !== featured);
 

@@ -52,6 +52,7 @@ import { analytics } from "@/lib/analytics";
 import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
 import { location } from "@/content/location";
 import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
+import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
 import { BookingStep2Calendar } from "@/components/site/booking-modal-steps/BookingStep2Calendar";
@@ -121,6 +122,10 @@ function receiptTokenFromCompleteAfterPaymentPayload(data: {
 
 function formatTime(iso: string) {
   return formatBookingTimeFromIso(iso);
+}
+
+function getSlotStartMs(slot: SlotDto): number {
+  return new Date(slot.startAt).getTime();
 }
 
 /** Keeps `handleBack` (step 4) and `handleHoldExpired` navigation aligned for calendar-first vs multi-boat. */
@@ -204,6 +209,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
   const [payFullAmount, setPayFullAmount] = useState(true);
+  const [depositLeadTimeHoursFromHold, setDepositLeadTimeHoursFromHold] = useState<number | null>(null);
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
   const [completedReceiptToken, setCompletedReceiptToken] = useState<string | null>(null);
   const [discountLimitExceededFromServer, setDiscountLimitExceededFromServer] = useState(false);
@@ -653,6 +659,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [selectedExperience?.allowDeposit, isTicketed]);
 
+  useEffect(() => {
+    setDepositLeadTimeHoursFromHold(null);
+  }, [selectedSlot?.id]);
+
+  const depositLeadTimeMs = useMemo(() => {
+    void chicagoDateTick;
+    const h = depositLeadTimeHoursFromHold ?? DEPOSIT_LEAD_TIME_HOURS;
+    return h * 60 * 60 * 1000;
+  }, [chicagoDateTick, depositLeadTimeHoursFromHold]);
+
+  const isDepositWithin48h = useMemo(() => {
+    void chicagoDateTick;
+    if (selectedSlot == null) return false;
+    const startMs = getSlotStartMs(selectedSlot);
+    if (!Number.isFinite(startMs)) return false;
+    return startMs - Date.now() < depositLeadTimeMs;
+  }, [selectedSlot, depositLeadTimeMs, chicagoDateTick]);
+
+  useEffect(() => {
+    if (isDepositWithin48h && !payFullAmount) {
+      setPayFullAmount(true);
+    }
+  }, [isDepositWithin48h, payFullAmount]);
+
   // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice).
   // Validate that the selected slot's startHour matches experience.departureHour when available; if mismatch, clear and refresh.
   useEffect(() => {
@@ -1052,6 +1082,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setTotalCentsFromServer,
       setFinalCentsFromServer,
       setPayFullAmount,
+      setDepositLeadTimeHoursFromHold,
       setAppliedDiscount,
       clientSecret,
       holdExpiresAt,
@@ -1072,6 +1103,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setTotalCentsFromServer,
       setFinalCentsFromServer,
       setPayFullAmount,
+      setDepositLeadTimeHoursFromHold,
       setAppliedDiscount,
       clientSecret,
       holdExpiresAt,
@@ -3435,7 +3467,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   )}
 
                   {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
-                  {!isTicketed && selectedExperience?.allowDeposit === true && (
+                  {!isTicketed && selectedExperience?.allowDeposit === true && !isDepositWithin48h && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount

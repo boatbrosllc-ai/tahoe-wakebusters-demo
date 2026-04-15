@@ -9,6 +9,7 @@
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "expiresAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
+    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "expiresAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
 
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "ASCENDING" }] },

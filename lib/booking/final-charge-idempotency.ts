@@ -3,21 +3,41 @@
  * Separate key namespaces per source so Stripe idempotency is not shared across different PI parameters.
  */
 
+import type { Booking } from "@/lib/booking/types";
+
 export type FinalChargeIdempotencySource = "cron" | "customer";
 
 /** Distinguishes off-session vs Payment Element PI creation so two Stripe calls never share one idempotency key. */
 export type FinalChargeIdempotencyAttempt = "off-session" | "element";
 
-/** Deterministic key per booking, charge path, and amount (avoids Stripe replaying a stale amount within idempotency window). */
+/** Stable anchor from `booking.finalChargeAt` for idempotency key suffix (Firestore Timestamp or seconds). */
+export function finalChargeAtSecondsFromBooking(booking: Booking): number | undefined {
+  const fc = booking.finalChargeAt as { seconds?: number; toDate?: () => Date } | undefined;
+  if (!fc) return undefined;
+  if (typeof fc.toDate === "function") return Math.floor(fc.toDate().getTime() / 1000);
+  if (typeof fc.seconds === "number") return fc.seconds;
+  return undefined;
+}
+
+/**
+ * Deterministic key per booking, charge path, and amount (avoids Stripe replaying a stale amount within idempotency window).
+ * When `finalChargeAtAnchorSec` is set (Firestore `finalChargeAt.seconds`), it extends Stripe idempotency dedupe across
+ * the 24h window by varying the key when the scheduled final-charge instant changes.
+ */
 export function getFinalChargeIdempotencyKey(
   bookingId: string,
   source: FinalChargeIdempotencySource,
   attempt?: FinalChargeIdempotencyAttempt,
-  amountCents?: number
+  amountCents?: number,
+  finalChargeAtAnchorSec?: number
 ): string {
   const amt =
     amountCents != null && Number.isFinite(amountCents) ? Math.max(0, Math.round(amountCents)) : 0;
-  const base = `final_charge_${bookingId}_${source}_${amt}`;
+  const anchor =
+    finalChargeAtAnchorSec != null && Number.isFinite(finalChargeAtAnchorSec)
+      ? `_fca_${Math.floor(finalChargeAtAnchorSec)}`
+      : "";
+  const base = `final_charge_${bookingId}_${source}_${amt}${anchor}`;
   if (attempt === "off-session") return `${base}:off-session`;
   if (attempt === "element") return `${base}:element`;
   return base;

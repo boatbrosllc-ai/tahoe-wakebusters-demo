@@ -4,14 +4,16 @@
  */
 "use client";
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { HoldCountdown } from "@/components/booking/HoldCountdown";
 import { buildSlotId, getDateStrInSlotTimezone, getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
-import { formatBookingTime, formatBookingTimeFromIso } from "@/lib/booking/format-booking-datetime";
+import { formatBookingTime, formatBookingTimeFromIso, formatBookingDate } from "@/lib/booking/format-booking-datetime";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
+import { bumpSlotCacheVersion } from "@/lib/booking/booking-data-cache";
 import Link from "next/link";
 import { Calendar as CalendarIcon, ChevronDown, ChevronUp, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette, Ban, Plus, Trash2, RefreshCw } from "lucide-react";
 import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
@@ -86,6 +88,48 @@ function getSlotDurationLabel(slot: SlotDto): string {
   return "";
 }
 
+/** Chicago calendar-day bounds used by admin full-day block / unblock (matches block-date API). */
+function getCentralFullDayBoundsMs(dateStr: string): { startMs: number; endMs: number } {
+  const { start } = getSlotStartEnd(dateStr, 0, 0, 0);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+function blockSegmentOnCentralDay(
+  startIso: string,
+  endIso: string,
+  dateStr: string
+): { clipStart: Date; clipEnd: Date } | null {
+  const { start: ds } = getSlotStartEnd(dateStr, 0, 0, 0);
+  const de = new Date(ds.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const s = new Date(startIso);
+  const e = new Date(endIso);
+  const clipStart = new Date(Math.max(s.getTime(), ds.getTime()));
+  const clipEnd = new Date(Math.min(e.getTime(), de.getTime()));
+  if (clipStart.getTime() >= clipEnd.getTime()) return null;
+  return { clipStart, clipEnd };
+}
+
+function isSingleCentralFullDayBlock(startAtIso: string, endAtIso: string): boolean {
+  const sDay = getDateStrInSlotTimezone(new Date(startAtIso));
+  const eDay = getDateStrInSlotTimezone(new Date(endAtIso));
+  if (sDay !== eDay) return false;
+  const { startMs, endMs } = getCentralFullDayBoundsMs(sDay);
+  return new Date(startAtIso).getTime() === startMs && new Date(endAtIso).getTime() === endMs;
+}
+
+/** True when this block’s coverage on `dateStr` is not the entire Chicago calendar day (incl. slot-tied blocks). */
+function isNonFullDayBlockOnDate(
+  block: { slotId?: string | null; startAt: string; endAt: string },
+  dateStr: string
+): boolean {
+  if (block.slotId) return true;
+  const seg = blockSegmentOnCentralDay(block.startAt, block.endAt, dateStr);
+  if (!seg) return false;
+  const { startMs, endMs } = getCentralFullDayBoundsMs(dateStr);
+  return !(seg.clipStart.getTime() === startMs && seg.clipEnd.getTime() === endMs);
+}
+
 function getMonthRange(month: Date): { start: string; end: string } {
   const start = new Date(month.getFullYear(), month.getMonth(), 1);
   const end = new Date(month.getFullYear(), month.getMonth() + 2, 0);
@@ -118,12 +162,58 @@ function getSlotCalendarDate(slot: SlotDto): string {
   return `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
 }
 
+/** Chicago wall time for `<input type="datetime-local" />` (matches Admin week view block dialog). */
+function formatDateAsCentralDatetimeLocal(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const y = get("year");
+  const mo = get("month").padStart(2, "0");
+  const da = get("day").padStart(2, "0");
+  const hr = get("hour").padStart(2, "0");
+  const min = get("minute").padStart(2, "0");
+  if (!/^\d{4}$/.test(y) || !/^\d{2}$/.test(mo) || !/^\d{2}$/.test(da)) return "";
+  return `${y}-${mo}-${da}T${hr}:${min}`;
+}
+
+/**
+ * Parse `datetime-local` value as an instant using Chicago wall time via `getSlotStartEnd`.
+ * Accepts single-digit month/day/hour/minute and optional seconds (browser variants).
+ */
+function parseCentralDatetimeLocalInput(s: string): Date {
+  const trimmed = s.trim();
+  const tIdx = trimmed.indexOf("T");
+  if (tIdx === -1) return new Date(NaN);
+  const datePart = trimmed.slice(0, tIdx);
+  const timePart = trimmed.slice(tIdx + 1);
+  const dm = datePart.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!dm) return new Date(NaN);
+  const normalizedDate = `${dm[1]}-${dm[2].padStart(2, "0")}-${dm[3].padStart(2, "0")}`;
+  const tm = timePart.match(/^(\d{1,2}):(\d{1,2})/);
+  if (!tm) return new Date(NaN);
+  const hour = Number(tm[1]);
+  const minute = Number(tm[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return new Date(NaN);
+  const { start } = getSlotStartEnd(normalizedDate, hour, 0, minute);
+  return start;
+}
+
 const SLOT_STATUS_CLASS: Record<SlotStatus, string> = {
   open: "bg-emerald-100 text-emerald-800 border-emerald-300",
   held: "bg-amber-100 text-amber-800 border-amber-300",
   booked: "bg-sky-100 text-sky-800 border-sky-300",
   blocked: "bg-slate-100 text-slate-600 border-slate-200",
 };
+
+/** Preset durations for “Block a boat time” length chips (hours). */
+const QUICK_BLOCK_LENGTH_PRESET_HOURS = [1, 2, 3, 4, 6] as const;
 
 const SLOT_LABELS: Record<SlotStatus, string> = {
   open: "Available",
@@ -214,7 +304,9 @@ export default function CalendarsPage() {
   const [rangeBoatId, setRangeBoatId] = useState("");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [addBlockOpen, setAddBlockOpen] = useState(false);
-  const [blocks, setBlocks] = useState<{ id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }[]>([]);
+  const [blocks, setBlocks] = useState<
+    { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null; slotId?: string | null }[]
+  >([]);
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
@@ -226,10 +318,23 @@ export default function CalendarsPage() {
     description: string;
     confirmLabel: string;
     run: () => Promise<void>;
+    /** Optional controls shown between description and action buttons */
+    children?: ReactNode;
   } | null>(null);
   const [calendarActionConfirmBusy, setCalendarActionConfirmBusy] = useState(false);
+  /** Read when confirming unblock date — avoids stale state in async run. */
+  const unblockIncludePartialRef = useRef(false);
+  const unblockDialogRenderKey = useRef(0);
   const [boatNames, setBoatNames] = useState<Map<string, string>>(new Map());
   const [blockDayBoatIds, setBlockDayBoatIds] = useState<Set<string>>(new Set());
+  /** Day modal: quick block one boat for a chosen range (POST /api/admin/blocks). */
+  const [quickBlockExperienceId, setQuickBlockExperienceId] = useState("");
+  const [quickBlockBoatId, setQuickBlockBoatId] = useState("");
+  const [quickBlockStart, setQuickBlockStart] = useState("");
+  const [quickBlockEnd, setQuickBlockEnd] = useState("");
+  const [quickBlockNote, setQuickBlockNote] = useState("");
+  const [quickBlockSaving, setQuickBlockSaving] = useState(false);
+  const [quickBlockError, setQuickBlockError] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
   const [weekStart, setWeekStart] = useState(() => {
     const d = new Date();
@@ -733,6 +838,58 @@ export default function CalendarsPage() {
 
   const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate)?.slots ?? [] : [];
 
+  const quickBlockBoatsForExperience = useMemo(() => {
+    if (!quickBlockExperienceId) return [];
+    return boatList.filter((b) =>
+      (b.experienceIds ?? []).some((slugOrId) => {
+        const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+        return docId === quickBlockExperienceId;
+      })
+    );
+  }, [boatList, experienceDocIdBySlugOrId, quickBlockExperienceId]);
+
+  /** Which length chip matches Start→End (Chicago-parsed), if any — within 1 minute of a whole hour. */
+  const quickBlockSelectedLengthHours = useMemo(() => {
+    const s = parseCentralDatetimeLocalInput(quickBlockStart);
+    const e = parseCentralDatetimeLocalInput(quickBlockEnd);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null;
+    if (e.getTime() <= s.getTime()) return null;
+    const hours = (e.getTime() - s.getTime()) / (60 * 60 * 1000);
+    for (const h of QUICK_BLOCK_LENGTH_PRESET_HOURS) {
+      if (Math.abs(hours - h) < 1 / 60) return h;
+    }
+    return null;
+  }, [quickBlockStart, quickBlockEnd]);
+
+  useEffect(() => {
+    if (!dayDetailOpen || !selectedDate) return;
+    setQuickBlockError(null);
+    setQuickBlockNote("");
+    const { start, end } = getSlotStartEnd(selectedDate, 9, 2, 0);
+    setQuickBlockStart(formatDateAsCentralDatetimeLocal(start));
+    setQuickBlockEnd(formatDateAsCentralDatetimeLocal(end));
+  }, [dayDetailOpen, selectedDate]);
+
+  useEffect(() => {
+    if (!dayDetailOpen) return;
+    setQuickBlockExperienceId((prev) => {
+      if (uniqueExperienceIds.length === 1) return uniqueExperienceIds[0];
+      if (prev && uniqueExperienceIds.includes(prev)) return prev;
+      return uniqueExperienceIds[0] ?? "";
+    });
+  }, [dayDetailOpen, uniqueExperienceIds]);
+
+  useEffect(() => {
+    if (!dayDetailOpen || !quickBlockExperienceId) return;
+    const boats = boatList.filter((b) =>
+      (b.experienceIds ?? []).some((slugOrId) => {
+        const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+        return docId === quickBlockExperienceId;
+      })
+    );
+    setQuickBlockBoatId((prev) => (boats.some((b) => b.id === prev) ? prev : boats[0]?.id ?? ""));
+  }, [dayDetailOpen, quickBlockExperienceId, boatList, experienceDocIdBySlugOrId]);
+
   const runBlockDate = async (dateStr: string) => {
     if (uniqueExperienceIds.length === 0) return;
     const key = `date-${dateStr}`;
@@ -752,22 +909,39 @@ export default function CalendarsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds: boatIds ?? undefined }),
         });
-        const data = await res.json().catch(() => ({}));
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          blocksCreated?: number;
+          boatOutcomes?: { boatId: string | null; outcome: string }[];
+        };
         if (!res.ok) throw new Error(data.error ?? "Failed to block date");
-        const blocksCreated = typeof (data as { blocksCreated?: unknown }).blocksCreated === "number"
-          ? (data as { blocksCreated: number }).blocksCreated
-          : 0;
-        return { skipped: false, experienceId, blocksCreated };
+        const blocksCreated = typeof data.blocksCreated === "number" ? data.blocksCreated : 0;
+        return { skipped: false, experienceId, blocksCreated, boatOutcomes: data.boatOutcomes };
       });
       const settled = await Promise.allSettled(requests);
       const succeeded: string[] = [];
       const failed: string[] = [];
       let totalBlocksCreated = 0;
+      const skippedBoatSummaryLines: string[] = [];
       for (const item of settled) {
         if (item.status === "fulfilled") {
           if (item.value.skipped) continue;
           totalBlocksCreated += item.value.blocksCreated ?? 0;
           succeeded.push(experienceNames.get(item.value.experienceId) ?? item.value.experienceId);
+          const outcomes = item.value.boatOutcomes;
+          if (Array.isArray(outcomes) && outcomes.length > 0) {
+            const skippedLabels = outcomes
+              .filter((o) => o.outcome === "skipped_existing_full_day")
+              .map((o) => {
+                if (o.boatId == null) return "all boats";
+                const name = boatList.find((b) => b.id === o.boatId)?.name;
+                return name ?? `${o.boatId.slice(0, 8)}…`;
+              });
+            if (skippedLabels.length > 0) {
+              const expLabel = experienceNames.get(item.value.experienceId) ?? item.value.experienceId;
+              skippedBoatSummaryLines.push(`${expLabel}: ${skippedLabels.join(", ")}`);
+            }
+          }
         } else {
           failed.push(item.reason instanceof Error ? item.reason.message : "Failed");
         }
@@ -775,22 +949,31 @@ export default function CalendarsPage() {
       if (failed.length > 0) {
         const successMsg = succeeded.length > 0 ? `Succeeded: ${succeeded.join(", ")}.` : "No successful experience writes.";
         setError(`${successMsg} Failed: ${failed.join(" | ")}`);
+        if (succeeded.length > 0) {
+          bumpSlotCacheVersion();
+          await fetchSlots();
+        }
         await fetchBlocks();
         return;
       }
       const targetedExperienceLabels = succeeded;
       const expSummary = targetedExperienceLabels.length > 0 ? targetedExperienceLabels.join(", ") : "selected experiences";
+      const skippedSuffix =
+        skippedBoatSummaryLines.length > 0
+          ? ` Some boats already had a full-day block (skipped): ${skippedBoatSummaryLines.join(" · ")}.`
+          : "";
       if (totalBlocksCreated === 0) {
         setNotice({
           level: "warning",
-          message: `No blocks were created for ${expSummary}. Check listing-boat assignment for this date.`,
+          message: `No blocks were created for ${expSummary}. Check listing-boat assignment for this date.${skippedSuffix}`,
         });
       } else {
         setNotice({
           level: "success",
-          message: `Blocked ${dateStr} for ${expSummary}.`,
+          message: `Blocked ${dateStr} for ${expSummary}.${skippedSuffix}`,
         });
       }
+      bumpSlotCacheVersion();
       await fetchSlots();
       await fetchBlocks();
       setDayDetailOpen(false);
@@ -819,23 +1002,42 @@ export default function CalendarsPage() {
     setNotice(null);
     try {
       const targetedExperienceLabels: string[] = [];
+      let totalDeleted = 0;
+      let totalSkipped = 0;
       for (const experienceId of uniqueExperienceIds) {
         const res = await fetch("/api/admin/blocks/block-date", {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ experienceId, date: dateStr, action: "unblock" }),
+          body: JSON.stringify({
+            experienceId,
+            date: dateStr,
+            action: "unblock",
+            includePartial: unblockIncludePartialRef.current,
+          }),
         });
-        const data = await res.json().catch(() => ({}));
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          blocksDeleted?: number;
+          timedOrPartialBlocksSkipped?: number;
+        };
         if (!res.ok) throw new Error(data.error ?? "Failed to unblock date");
         targetedExperienceLabels.push(experienceNames.get(experienceId) ?? experienceId);
+        totalDeleted += typeof data.blocksDeleted === "number" ? data.blocksDeleted : 0;
+        totalSkipped += typeof data.timedOrPartialBlocksSkipped === "number" ? data.timedOrPartialBlocksSkipped : 0;
       }
       const expSummary = targetedExperienceLabels.length > 0 ? targetedExperienceLabels.join(", ") : "selected experiences";
+      let message = `Unblocked ${dateStr} for ${expSummary}. Removed ${totalDeleted} block${totalDeleted === 1 ? "" : "s"}.`;
+      if (totalSkipped > 0) {
+        message += ` ${totalSkipped} time-range block${totalSkipped === 1 ? "" : "s"} on this date ${totalSkipped === 1 ? "was" : "were"} not removed — delete ${totalSkipped === 1 ? "it" : "them"} individually from the block list.`;
+      }
       setNotice({
         level: "success",
-        message: `Unblocked ${dateStr} for ${expSummary}.`,
+        message,
       });
+      bumpSlotCacheVersion();
       await fetchSlots();
+      await fetchBlocks();
       setDayDetailOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to unblock date");
@@ -845,77 +1047,32 @@ export default function CalendarsPage() {
   };
 
   const unblockDate = (dateStr: string) => {
+    unblockIncludePartialRef.current = false;
+    unblockDialogRenderKey.current += 1;
     setCalendarActionConfirm({
       title: "Unblock this date?",
       description:
-        "Remove full-day blocks for this date on all selected experiences so customers can book again (subject to availability).",
+        "By default, removes only full-day blocks that exactly match this calendar day (Chicago time). Optionally include timed or partial-day blocks that overlap this day.",
       confirmLabel: "Unblock date",
+      children: (
+        <div key={unblockDialogRenderKey.current} className="max-w-md">
+          <label className="flex items-start gap-2 text-sm text-brand-dark cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-1 rounded border-brand-dark/30"
+              defaultChecked={false}
+              onChange={(e) => {
+                unblockIncludePartialRef.current = e.target.checked;
+              }}
+            />
+            <span>
+              Also remove timed and partial-day blocks that overlap this day (including slot-specific blocks). Use with
+              care — in-flight checkouts may fail.
+            </span>
+          </label>
+        </div>
+      ),
       run: () => runUnblockDate(dateStr),
-    });
-  };
-
-  const runBlockSlot = async (slot: SlotDto) => {
-    const experienceId = slot.experienceId;
-    if (!experienceId) return;
-    setBlocking(slot.id);
-    setError(null);
-    try {
-      const res = await fetch("/api/admin/blocks/block-slot", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to block slot");
-      await fetchSlots();
-      await fetchBlocks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to block slot");
-    } finally {
-      setBlocking(null);
-    }
-  };
-
-  const blockSlot = (slot: SlotDto) => {
-    setCalendarActionConfirm({
-      title: "Block this time slot?",
-      description:
-        "This creates an admin block for this slot so it is not bookable. Applies to the selected boat (or all boats if none specified).",
-      confirmLabel: "Block slot",
-      run: () => runBlockSlot(slot),
-    });
-  };
-
-  const runUnblockSlot = async (slot: SlotDto) => {
-    const experienceId = slot.experienceId;
-    if (!experienceId) return;
-    setActionLoading(slot.id);
-    setError(null);
-    try {
-      const res = await fetch("/api/admin/blocks/unblock-slot", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experienceId, slotId: slot.id, boatId: slot.boatId ?? undefined }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to unblock slot");
-      await fetchSlots();
-      await fetchBlocks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to unblock slot");
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const unblockSlot = (slot: SlotDto) => {
-    setCalendarActionConfirm({
-      title: "Remove block for this slot?",
-      description: "This removes the matching admin block so the slot can be booked again if nothing else holds it.",
-      confirmLabel: "Unblock slot",
-      run: () => runUnblockSlot(slot),
     });
   };
 
@@ -1115,6 +1272,10 @@ export default function CalendarsPage() {
         const successMsg =
           targetedExperienceLabels.size > 0 ? `Succeeded: ${Array.from(targetedExperienceLabels).join(", ")}.` : "No successful experience writes.";
         setError(`${successMsg} Failed: ${failed.join(" | ")}`);
+        if (targetedExperienceLabels.size > 0) {
+          bumpSlotCacheVersion();
+          await fetchSlots();
+        }
         await fetchBlocks();
         return;
       }
@@ -1130,6 +1291,7 @@ export default function CalendarsPage() {
           message: `Blocked ${rangeStart} to ${rangeEnd} for ${expSummary}.`,
         });
       }
+      bumpSlotCacheVersion();
       await fetchSlots();
       await fetchBlocks();
       setAddBlockOpen(false);
@@ -1147,7 +1309,14 @@ export default function CalendarsPage() {
     setBlocksLoading(true);
     try {
       const seen = new Set<string>();
-      const all: { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }[] = [];
+      const all: {
+        id: string;
+        boatId: string | null;
+        startAt: string;
+        endAt: string;
+        note: string | null;
+        slotId?: string | null;
+      }[] = [];
       for (const expId of uniqueExperienceIds) {
         const res = await fetch(
           `/api/admin/blocks?experienceId=${encodeURIComponent(expId)}&from=${visibleBlockRange.start}&to=${visibleBlockRange.end}`,
@@ -1156,9 +1325,24 @@ export default function CalendarsPage() {
         if (!res.ok) continue;
         const data = await res.json();
         if (Array.isArray(data)) {
-          data.forEach((b: { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null }) => {
-            if (!seen.has(b.id)) { seen.add(b.id); all.push(b); }
-          });
+          data.forEach(
+            (b: {
+              id: string;
+              boatId: string | null;
+              startAt: string;
+              endAt: string;
+              note: string | null;
+              slotId?: string | null;
+            }) => {
+              if (!seen.has(b.id)) {
+                seen.add(b.id);
+                all.push({
+                  ...b,
+                  slotId: b.slotId ?? null,
+                });
+              }
+            }
+          );
         }
       }
       all.sort((a, b) => a.startAt.localeCompare(b.startAt));
@@ -1166,6 +1350,82 @@ export default function CalendarsPage() {
     } catch { setBlocks([]); }
     finally { setBlocksLoading(false); }
   }, [uniqueExperienceIds, visibleBlockRange.end, visibleBlockRange.start]);
+
+  const runQuickBlockForDay = useCallback(async () => {
+    setQuickBlockError(null);
+    if (!quickBlockExperienceId) {
+      setQuickBlockError("Select an experience (use the filters above if this list is empty).");
+      return;
+    }
+    const start = parseCentralDatetimeLocalInput(quickBlockStart);
+    const end = parseCentralDatetimeLocalInput(quickBlockEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      setQuickBlockError("Enter valid start and end times.");
+      return;
+    }
+    if (start >= end) {
+      setQuickBlockError("End must be after start.");
+      return;
+    }
+    if (end.getTime() <= Date.now()) {
+      setQuickBlockError("That time range is already over. Pick a future window.");
+      return;
+    }
+    setQuickBlockSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/blocks", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          experienceId: quickBlockExperienceId,
+          startAt: start.toISOString(),
+          endAt: end.toISOString(),
+          boatId: quickBlockBoatId.trim() || undefined,
+          note: quickBlockNote.trim() || undefined,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to create block");
+      setNotice({
+        level: "success",
+        message: "Blocked that time for the selected boat (or whole experience if no boat).",
+      });
+      bumpSlotCacheVersion();
+      await fetchSlots();
+      await fetchBlocks();
+    } catch (e) {
+      setQuickBlockError(e instanceof Error ? e.message : "Failed to create block");
+    } finally {
+      setQuickBlockSaving(false);
+    }
+  }, [
+    quickBlockExperienceId,
+    quickBlockStart,
+    quickBlockEnd,
+    quickBlockBoatId,
+    quickBlockNote,
+    fetchSlots,
+    fetchBlocks,
+  ]);
+
+  const applyQuickBlockDurationHours = useCallback(
+    (hours: number) => {
+      let start = parseCentralDatetimeLocalInput(quickBlockStart);
+      if (Number.isNaN(start.getTime()) && dayDetailOpen && selectedDate) {
+        const seeded = getSlotStartEnd(selectedDate, 9, 2, 0).start;
+        const startStr = formatDateAsCentralDatetimeLocal(seeded);
+        if (startStr) setQuickBlockStart(startStr);
+        start = seeded;
+      }
+      if (Number.isNaN(start.getTime())) return;
+      const end = new Date(start.getTime() + hours * 60 * 60 * 1000);
+      const endStr = formatDateAsCentralDatetimeLocal(end);
+      if (endStr) setQuickBlockEnd(endStr);
+    },
+    [quickBlockStart, dayDetailOpen, selectedDate]
+  );
 
   useEffect(() => { fetchBlocks(); }, [fetchBlocks]);
 
@@ -1181,7 +1441,9 @@ export default function CalendarsPage() {
         return;
       }
       setBlocks((prev) => prev.filter((b) => b.id !== id));
+      bumpSlotCacheVersion();
       await fetchSlots();
+      await fetchBlocks();
     } catch {
       setError("Failed to delete block");
       await fetchBlocks();
@@ -1210,7 +1472,9 @@ export default function CalendarsPage() {
         return;
       }
       setBlocks([]);
+      bumpSlotCacheVersion();
       await fetchSlots();
+      await fetchBlocks();
     } catch {
       setError("Failed to delete all blocks");
       await fetchBlocks();
@@ -1246,12 +1510,19 @@ export default function CalendarsPage() {
   const formatCents = (cents: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(cents / 100);
 
-  const fmtBlockDate = (startAt: string, endAt: string): string => {
+  const fmtBlockDate = (startAt: string, endAt: string, slotId?: string | null): string => {
+    const timeRange = `${formatBookingTimeFromIso(startAt)}–${formatBookingTimeFromIso(endAt)}`;
     const sDay = getDateStrInSlotTimezone(new Date(startAt));
     const eDay = getDateStrInSlotTimezone(new Date(endAt));
-    const fmt = (d: string) =>
-      new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-    return sDay === eDay ? fmt(sDay) : `${fmt(sDay)} – ${fmt(eDay)}`;
+    const fmtDay = (d: string) => formatBookingDate(getSlotStartEnd(d, 0, 0, 0).start);
+    if (sDay === eDay) {
+      const dayLabel = fmtDay(sDay);
+      if (!slotId && isSingleCentralFullDayBlock(startAt, endAt)) {
+        return `${dayLabel} · All day`;
+      }
+      return `${dayLabel} · ${timeRange}`;
+    }
+    return `${fmtDay(sDay)} – ${fmtDay(eDay)} · ${timeRange}`;
   };
 
   const weekViewExperienceIds = useMemo(() => {
@@ -1540,7 +1811,11 @@ export default function CalendarsPage() {
               onNextWeek={() => setWeekStart((w) => { const d = new Date(w); d.setDate(d.getDate() + 7); return d; })}
               onGoToToday={() => { const d = new Date(); d.setDate(d.getDate() - d.getDay()); d.setHours(0, 0, 0, 0); setWeekStart(d); }}
               onBookingClick={(bookingId) => { setBookingDetailId(bookingId); setBookingDetailOpen(true); }}
-              onRefresh={() => { fetchSlots(); fetchBookings(); }}
+              onRefresh={() => {
+                bumpSlotCacheVersion();
+                void fetchSlots();
+                void fetchBookings();
+              }}
             />
             )
           ) : (
@@ -1695,6 +1970,12 @@ export default function CalendarsPage() {
                       : null;
                     const isDeleting = deletingBlockId === block.id;
                     const blockTitle = block.note?.trim() || "Blocked";
+                    const sDay = getDateStrInSlotTimezone(new Date(block.startAt));
+                    const eDay = getDateStrInSlotTimezone(new Date(block.endAt));
+                    const showPartialBadge =
+                      (block.slotId ?? null) !== null ||
+                      sDay !== eDay ||
+                      !isSingleCentralFullDayBlock(block.startAt, block.endAt);
                     return (
                       <div
                         key={block.id}
@@ -1707,7 +1988,12 @@ export default function CalendarsPage() {
                       >
                         <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
                         <span>{blockTitle}</span>
-                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt)}</span>
+                        {showPartialBadge ? (
+                          <span className="rounded bg-amber-100 text-amber-950 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0">
+                            Partial
+                          </span>
+                        ) : null}
+                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
                         {boatLabel && (
                           <span className="opacity-60">· {boatLabel}</span>
                         )}
@@ -1715,7 +2001,7 @@ export default function CalendarsPage() {
                           type="button"
                           onClick={() => deleteBlock(block.id)}
                           disabled={isDeleting}
-                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt)})`}
+                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt, block.slotId)})`}
                           className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
                         >
                           {isDeleting ? (
@@ -1951,12 +2237,30 @@ export default function CalendarsPage() {
                                       {cell.heldCount} held
                                     </span>
                                   )}
-                                  {cell.isBlocked && (
-                                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-full">
-                                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" aria-hidden />
-                                      Blocked
-                                    </span>
-                                  )}
+                                  {cell.isBlocked && (() => {
+                                    const dayBlocks = blocks.filter(
+                                      (b) => blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr) != null
+                                    );
+                                    const partialSummaries = dayBlocks
+                                      .filter((b) => isNonFullDayBlockOnDate(b, cell.dateStr))
+                                      .map((b) => {
+                                        const seg = blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr)!;
+                                        return `${formatBookingTimeFromIso(seg.clipStart.toISOString())}–${formatBookingTimeFromIso(seg.clipEnd.toISOString())}`;
+                                      });
+                                    const pillLabel =
+                                      partialSummaries.length > 0
+                                        ? `Blocked · ${partialSummaries.slice(0, 2).join(", ")}${partialSummaries.length > 2 ? ` +${partialSummaries.length - 2}` : ""}`
+                                        : "Blocked · All day";
+                                    return (
+                                      <span
+                                        className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-full max-w-full"
+                                        title={pillLabel}
+                                      >
+                                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" aria-hidden />
+                                        <span className="truncate">{pillLabel}</span>
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
                               )}
                               {daySlots.length === 0 && !isPast && <span className="text-[10px] italic text-brand-muted mt-auto">No slots</span>}
@@ -2022,7 +2326,7 @@ export default function CalendarsPage() {
                   if (!hasAnything) {
                     return (
                       <p className="py-4 text-center text-sm text-brand-muted rounded-xl bg-brand-bg/30 border border-brand-dark/10">
-                        No bookings yet. Use &quot;Add booking&quot; below or block the day if needed.
+                        No bookings on this day yet. You can still block individual boat times below, block the whole day, or use Add booking.
                       </p>
                     );
                   }
@@ -2145,6 +2449,137 @@ export default function CalendarsPage() {
                     </ul>
                   );
                 })()}
+              </div>
+
+              {/* Quick block: one short form instead of scrolling every open slot */}
+              <div className="border-t border-brand-dark/10 pt-4">
+                <p className="mb-2 text-xs font-semibold text-brand-dark uppercase tracking-wide flex items-center gap-1.5">
+                  <Ban className="h-3.5 w-3.5" />
+                  Block a boat time (no booking)
+                </p>
+                <p className="mb-3 text-sm text-brand-muted">
+                  Pick the boat and the time range — no customer booking needed (personal use, maintenance, etc.). Times
+                  are <span className="font-medium text-brand-dark">America/Chicago</span>, same as trip times.
+                </p>
+                {uniqueExperienceIds.length === 0 ? (
+                  <p className="text-sm text-brand-muted rounded-lg border border-dashed border-brand-dark/15 bg-brand-bg/20 px-3 py-2.5">
+                    Select at least one experience using the filters above, then open this day again.
+                  </p>
+                ) : (
+                  <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/20 p-3 sm:p-4 space-y-3">
+                    {uniqueExperienceIds.length > 1 && (
+                      <label className="block space-y-1">
+                        <span className="text-xs font-medium text-brand-muted">Experience</span>
+                        <select
+                          className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                          value={quickBlockExperienceId}
+                          onChange={(e) => setQuickBlockExperienceId(e.target.value)}
+                        >
+                          {uniqueExperienceIds.map((id) => (
+                            <option key={id} value={id}>
+                              {experienceNames.get(id) ?? id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-brand-muted">Boat</span>
+                      <select
+                        className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                        value={quickBlockBoatId}
+                        onChange={(e) => setQuickBlockBoatId(e.target.value)}
+                        disabled={quickBlockSaving}
+                      >
+                        <option value="">All boats (experience-wide)</option>
+                        {quickBlockBoatsForExperience.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block space-y-1">
+                        <span className="text-xs font-medium text-brand-muted">Start</span>
+                        <input
+                          type="datetime-local"
+                          className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                          value={quickBlockStart}
+                          onChange={(e) => setQuickBlockStart(e.target.value)}
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-xs font-medium text-brand-muted">End</span>
+                        <input
+                          type="datetime-local"
+                          className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                          value={quickBlockEnd}
+                          onChange={(e) => setQuickBlockEnd(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 items-center" role="group" aria-label="Block length presets">
+                      <span className="text-[11px] font-medium text-brand-muted mr-1">Length:</span>
+                      {QUICK_BLOCK_LENGTH_PRESET_HOURS.map((h) => {
+                        const isSelected = quickBlockSelectedLengthHours === h;
+                        return (
+                          <Button
+                            key={h}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            aria-pressed={isSelected}
+                            className={cn(
+                              "h-7 px-2 text-xs transition-colors",
+                              isSelected &&
+                                "border-brand-primary bg-brand-primary/15 text-brand-primary font-semibold shadow-sm hover:bg-brand-primary/20 hover:border-brand-primary hover:text-brand-primary",
+                            )}
+                            disabled={quickBlockSaving}
+                            onClick={() => applyQuickBlockDurationHours(h)}
+                          >
+                            {h}h
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-brand-muted">Note (optional)</span>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark placeholder:text-brand-muted/70"
+                        placeholder="e.g. Captain PTO, boat in shop"
+                        value={quickBlockNote}
+                        onChange={(e) => setQuickBlockNote(e.target.value)}
+                      />
+                    </label>
+                    {quickBlockError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{quickBlockError}</p>}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1.5"
+                        disabled={quickBlockSaving}
+                        onClick={() => {
+                          setCalendarActionConfirm({
+                            title: "Block this time for this boat?",
+                            description:
+                              "Customers will not be able to book this boat for the selected window. If a checkout is in progress for that time, blocking may be rejected — try again after the hold expires.",
+                            confirmLabel: "Block time",
+                            run: runQuickBlockForDay,
+                          });
+                        }}
+                      >
+                        <Ban className="h-3.5 w-3.5" />
+                        Block this window
+                      </Button>
+                      <p className="text-[11px] text-brand-muted">
+                        Week view still supports click-to-block on the grid for fine control.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Block day / Add booking */}
@@ -2492,6 +2927,9 @@ export default function CalendarsPage() {
         description={calendarActionConfirm?.description}
         fullScreenOnMobile
       >
+        {calendarActionConfirm?.children ? (
+          <div className="pb-3 pt-1">{calendarActionConfirm.children}</div>
+        ) : null}
         <div className="flex flex-wrap justify-end gap-2 pt-2">
           <Button
             type="button"

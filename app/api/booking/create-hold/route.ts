@@ -15,7 +15,12 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
-import { getTicketedDepartureAndDuration, validateTicketedSlotParsed, type RateDocLike } from "@/lib/booking/ticketed-slot-utils";
+import {
+  getTicketedDepartureAndDuration,
+  isTicketedOperatingDate,
+  validateTicketedSlotParsed,
+  type RateDocLike,
+} from "@/lib/booking/ticketed-slot-utils";
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
@@ -25,6 +30,7 @@ import {
   LegacyScanLimitReachedError,
   assertNoOverlappingActiveSameDaySlots,
   transactionGetQueryOrDoc,
+  resolveLegacyBoatBlockCheckContext,
 } from "@/lib/booking/slot-availability";
 import { departureTimesMatch } from "@/lib/booking/departure-match";
 import type { CreateHoldInput, CreateHoldResponse, Discount } from "@/lib/booking/types";
@@ -36,7 +42,12 @@ import { attachHoldReleaseCookie } from "@/lib/booking/hold-release-cookie";
 import { parseCreateHoldBody } from "@/lib/booking/create-hold-validation";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingLog, bookingWarn, bookingError, generateIncidentCode } from "@/lib/booking/debug";
-import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
+import {
+  operationalAlertDedupeDocId,
+  writeOperationalAlert,
+  writeOperationalAlertIfNewDocId,
+} from "@/lib/booking/operational-alerts";
+import { executeReleaseHoldTransaction } from "@/lib/booking/release-hold-transaction";
 import { createHold503Payload, type CreateHold503Code } from "@/lib/booking/create-hold-errors";
 import { isTransientFirestoreFailure } from "@/lib/booking/firestore-transient";
 import {
@@ -48,6 +59,7 @@ import { HOLD_EXPIRY_MINUTES, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/const
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { resolveSingleListingBoatIdForExperience } from "@/lib/booking/listing-boat-resolution";
 import { assertCanonicalExperienceId } from "@/lib/booking/experience-id";
+import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
 import { assertProductionReleaseTokenSecret } from "@/lib/booking/env";
 import {
   bookingNotReadyResponse,
@@ -58,6 +70,14 @@ import { assertReceiptTokenSecretConfigured } from "@/lib/booking/receipt-token-
 import { applyDiscountCounterSwapInTransaction } from "@/lib/booking/discount-counter-swap";
 
 type ExperienceForTicketed = import("@/lib/booking/ticketed-slot-utils").ExperienceForTicketed;
+
+function bookingModeExplicitInRequestBody(body: unknown): boolean {
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    Object.prototype.hasOwnProperty.call(body as object, "bookingMode")
+  );
+}
 
 /** Resume: same discount code (trimmed, case-insensitive) was already counted on original hold — do not increment/decrement again. */
 function discountCodesDifferOnResume(oldCode: string | undefined, newCode: string | undefined): boolean {
@@ -85,18 +105,27 @@ function validateTicketedSlotId(
     departureHour: (experience as { departureHour?: number }).departureHour,
     departureMinute: (experience as { departureMinute?: number }).departureMinute,
     tripDurationHours: (experience as { tripDurationHours?: number }).tripDurationHours,
+    ticketedWeekdays: Array.isArray((experience as { ticketedWeekdays?: unknown }).ticketedWeekdays)
+      ? ((experience as { ticketedWeekdays: number[] }).ticketedWeekdays as number[])
+      : undefined,
     defaultRateId: (experience as { defaultRateId?: string }).defaultRateId,
   };
   const { deptHour, deptMinute, tripDuration } = getTicketedDepartureAndDuration(expForTicketed, ratesDocs);
   const rateDuration = typeof (rate as { durationHours?: number }).durationHours === "number" ? (rate as { durationHours: number }).durationHours : undefined;
-  const valid = validateTicketedSlotParsed(parsedForValidation, deptHour, deptMinute, tripDuration, rateDuration);
+  const validTime = validateTicketedSlotParsed(parsedForValidation, deptHour, deptMinute, tripDuration, rateDuration);
+  const validDay = isTicketedOperatingDate(parsedForValidation.dateStr, expForTicketed.ticketedWeekdays);
+  const valid = validTime && validDay;
   if (valid) return null;
   bookingWarn("create-hold", "ticketed slot validation failed", {
     parsedForValidation: {
+      dateStr: parsedForValidation.dateStr,
       startHour: parsedForValidation.startHour,
       startMinute: parsedForValidation.startMinute,
       durationHours: parsedForValidation.durationHours,
     },
+    validTime,
+    validDay,
+    ticketedWeekdays: expForTicketed.ticketedWeekdays,
     expected: { deptHour, deptMinute, tripDuration },
     rateDuration,
     experienceTripDurationHours: (experience as { tripDurationHours?: number }).tripDurationHours,
@@ -180,6 +209,8 @@ function slotDocIntervalMatchesParsed(
 }
 
 export async function POST(request: NextRequest) {
+  /** Set after body parse; used for operational alerts when block checks fail outside parsed-input scope. */
+  let createHoldExperienceIdForAlerts: string | undefined;
   try {
     bookingLog("create-hold", "request started");
     const rl = await checkRateLimitSensitiveMutation(getClientKey(request));
@@ -238,6 +269,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const parsedInput = parsed.input;
+    const bookingModeExplicitInBody = bookingModeExplicitInRequestBody(body);
     bookingLog("create-hold", "parsed input", {
       experienceId: parsedInput.experienceId ?? null,
       boatId: parsedInput.boatId ?? null,
@@ -282,6 +314,14 @@ export async function POST(request: NextRequest) {
       cachedExperienceDoc = expCheckDoc;
       const expCheckData = expCheckDoc.exists ? (expCheckDoc.data() as Experience) : null;
       const isTicketedExperience = expCheckData?.pricingType === "ticketed";
+      if (isTicketedExperience === true && !bookingModeExplicitInBody) {
+        return NextResponse.json(
+          {
+            error: "bookingMode is required for ticketed experiences ('shared' or 'charter')",
+          },
+          { status: 400 }
+        );
+      }
       // Shared ticketed: no boat on hold (admin may assign later). Charter + non-ticketed: resolve listing boats
       // using id/slug/alias variants so boats match experienceIds even when only the slug is stored.
       const skipListingBoatResolution = isTicketedExperience === true && parsedInput.bookingMode === "shared";
@@ -305,6 +345,7 @@ export async function POST(request: NextRequest) {
     }
     const resolvedInput = { ...parsedInput, boatId: resolvedBoatId };
     const input = resolvedInput;
+    createHoldExperienceIdForAlerts = input.experienceId ?? undefined;
     const parsedSlotId = parseSlotIdRelaxed(input.slotId) ?? parseSlotId(input.slotId);
     if (!parsedSlotId) {
       return NextResponse.json({ error: "Invalid slot" }, { status: 400 });
@@ -371,6 +412,14 @@ export async function POST(request: NextRequest) {
       }
       if (boat.active === false) {
         return NextResponse.json({ error: "Boat not available" }, { status: 400 });
+      }
+      if (experience.pricingType === "ticketed" && !bookingModeExplicitInBody) {
+        return NextResponse.json(
+          {
+            error: "bookingMode is required for ticketed experiences ('shared' or 'charter')",
+          },
+          { status: 400 }
+        );
       }
       listingBoatForPricing = boat;
       capacityMax = getMaxGuestsForExperience(experience);
@@ -496,6 +545,14 @@ export async function POST(request: NextRequest) {
       experienceSlugForAssert = effectiveSlug || undefined;
       if (!experience.active) {
         return NextResponse.json({ error: "Experience not available" }, { status: 400 });
+      }
+      if (experience.pricingType === "ticketed" && !bookingModeExplicitInBody) {
+        return NextResponse.json(
+          {
+            error: "bookingMode is required for ticketed experiences ('shared' or 'charter')",
+          },
+          { status: 400 }
+        );
       }
       capacityMax = getMaxGuestsForExperience(experience);
       if (input.partySize < 1 || input.partySize > capacityMax) {
@@ -714,7 +771,9 @@ export async function POST(request: NextRequest) {
     if (input.boatId) holdPayload.boatId = input.boatId;
     if (experienceForPricing?.pricingType) holdPayload.pricingType = experienceForPricing.pricingType;
     holdPayload.allowDeposit = experienceForPricing?.allowDeposit ?? false;
-    if (input.bookingMode) holdPayload.bookingMode = input.bookingMode;
+    holdPayload.bookingMode = input.bookingMode ?? "charter";
+    const includeDepositLeadTimeInResponse =
+      holdPayload.allowDeposit === true && holdPayload.bookingMode !== "shared";
     if (input.holdRequestId) holdPayload.clientHoldRequestId = input.holdRequestId;
     if (tipCents > 0) holdPayload.tipCents = tipCents;
     if (discountCodeApplied && discountCents > 0) {
@@ -1167,12 +1226,33 @@ export async function POST(request: NextRequest) {
           );
         }
       });
+      // Admin block may be written after in-tx reads but before the transaction commits; re-check once
+      // outside the transaction (direct Firestore read, not tx.get) to shrink the TOCTOU window to one query RTT.
+      if (slotStartForBlock && slotEndForBlock) {
+        const blockedAfterTx = await hasOverlappingBlock({
+          db,
+          Timestamp,
+          experienceId: expIdForCapacity,
+          experienceIdVariants: slugVariantsList,
+          experienceSlug: experienceSlugForAssert,
+          boatId: isListingBoatFlow ? input.boatId : undefined,
+          slotStart: slotStartForBlock,
+          slotEnd: slotEndForBlock,
+        });
+        if (blockedAfterTx) {
+          await executeReleaseHoldTransaction(db, effectiveHoldId, {
+            releaseContext: "create-hold-post-tx-block-recheck",
+          });
+          return NextResponse.json({ error: "This slot is blocked", code: "slot_blocked" }, { status: 409 });
+        }
+      }
       const responsePricing = { ...pricing, totalCents: totalCentsWithTip };
       const releaseToken = signReleaseToken(effectiveHoldId, Math.floor(effectiveExpiresAt.getTime() / 1000));
       const response: CreateHoldResponse = {
         holdId: effectiveHoldId,
         expiresAt: effectiveExpiresAt.toISOString(),
         pricing: responsePricing,
+        ...(includeDepositLeadTimeInResponse ? { depositLeadTimeHours: DEPOSIT_LEAD_TIME_HOURS } : {}),
         ...(releaseToken ? { releaseToken } : {}),
         ...(discountCodeApplied ? { discountCents: sharedDiscountOut.cents, discountCode: discountCodeApplied } : {}),
       };
@@ -1722,6 +1802,41 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    // Admin block may be written after in-tx reads but before the transaction commits; re-check once
+    // outside the transaction (direct Firestore read, not tx.get) to shrink the TOCTOU window to one query RTT.
+    if (slotStartForBlock && slotEndForBlock && (input.experienceId || input.boatId)) {
+      let recheckExperienceId = input.experienceId ?? "";
+      let recheckVariants = experienceIdVariantsForAssert;
+      let recheckSlug: string | undefined = experienceSlugForAssert;
+      if (!input.experienceId && input.boatId) {
+        const legacyCtx = await resolveLegacyBoatBlockCheckContext({
+          db,
+          get: (ref) => ref.get(),
+          boatId: input.boatId,
+        });
+        recheckExperienceId = legacyCtx.experienceId || input.boatId.trim();
+        recheckVariants = legacyCtx.experienceIdVariants;
+        recheckSlug = undefined;
+      }
+      const blockedAfterTx = await hasOverlappingBlock({
+        db,
+        Timestamp,
+        experienceId: recheckExperienceId,
+        experienceIdVariants: recheckVariants,
+        experienceSlug: recheckSlug,
+        boatId: input.boatId,
+        slotStart: slotStartForBlock,
+        slotEnd: slotEndForBlock,
+      });
+      if (blockedAfterTx) {
+        const holdIdToRelease = reusedHoldId ?? holdId;
+        await executeReleaseHoldTransaction(db, holdIdToRelease, {
+          releaseContext: "create-hold-post-tx-block-recheck",
+        });
+        return NextResponse.json({ error: "This slot is blocked", code: "slot_blocked" }, { status: 409 });
+      }
+    }
+
     void cancelStalePaymentIntentsAfterHoldResume(charterResumePiIdsToCancel);
 
     bookingLog("create-hold", "transaction completed", {
@@ -1753,6 +1868,7 @@ export async function POST(request: NextRequest) {
         holdId: reusedHoldId,
         expiresAt: expiresAtDate.toISOString(),
         pricing: responsePricing,
+        ...(includeDepositLeadTimeInResponse ? { depositLeadTimeHours: DEPOSIT_LEAD_TIME_HOURS } : {}),
         ...(releaseToken ? { releaseToken } : {}),
         ...(discountCodeApplied ? { discountCents: charterDiscountOut.cents, discountCode: discountCodeApplied } : {}),
       };
@@ -1764,6 +1880,7 @@ export async function POST(request: NextRequest) {
       holdId,
       expiresAt: charterExpiresAt.toISOString(),
       pricing: responsePricing,
+      ...(includeDepositLeadTimeInResponse ? { depositLeadTimeHours: DEPOSIT_LEAD_TIME_HOURS } : {}),
       ...(releaseToken ? { releaseToken } : {}),
       ...(discountCodeApplied ? { discountCents: charterDiscountOut.cents, discountCode: discountCodeApplied } : {}),
     };
@@ -1772,6 +1889,19 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : "Create hold failed";
     if (err instanceof BlockCheckUnavailableError) {
       const incidentId = generateIncidentCode();
+      const expId = createHoldExperienceIdForAlerts ?? "unknown";
+      const alertUtcDay = new Date().toISOString().slice(0, 10);
+      void writeOperationalAlertIfNewDocId(
+        operationalAlertDedupeDocId([expId, alertUtcDay]),
+        {
+          type: "block_check_unavailable",
+          experienceId: expId === "unknown" ? undefined : expId,
+          source: "api/booking/create-hold",
+          incidentId,
+          hint:
+            "Verify the blocks composite index status in Firebase Console (deploy firestore.indexes.json); indexes must be READY before block queries succeed.",
+        }
+      ).catch(() => {});
       bookingWarn("create-hold", "block check unavailable (503)", {
         incidentId,
         hint: "Firestore blocks query failed (e.g. index missing or building).",

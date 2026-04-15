@@ -14,6 +14,8 @@ const inputClass =
 const textareaClass =
   "mt-1 block w-full rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary";
 
+const TICKETED_WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
 const defaultCancellation = {
   freeCancelDays: 30,
   partialRefundDaysStart: 15,
@@ -35,6 +37,21 @@ type HolidayDateRow = { label: string; start: string; end: string; recurring?: b
 type AddonRow = { name: string; description: string; priceCents: number; type: "toggle" | "quantity" | "tip"; maxQty: number; highlight: boolean };
 type FaqRow = { q: string; a: string };
 type TestimonialRow = { name: string; quote: string; date: string };
+
+function normalizeTicketedRates(rates: RateRow[], tripDurationHours: number): RateRow[] {
+  const durationHours = tripDurationHours > 0 ? tripDurationHours : 1;
+  const first = rates[0];
+  return [
+    {
+      durationHours,
+      displayName: first?.displayName?.trim() || "General admission",
+      priceCents: first?.priceCents ?? 0,
+      ...(first?.priceWeekendCents != null && { priceWeekendCents: first.priceWeekendCents }),
+      ...(first?.priceFriSunCents != null && { priceFriSunCents: first.priceFriSunCents }),
+      ...(first?.priceHolidayCents != null && { priceHolidayCents: first.priceHolidayCents }),
+    },
+  ];
+}
 
 export type ExperienceFormData = {
   slug: string;
@@ -84,6 +101,8 @@ export type ExperienceFormData = {
   departureHour: number;
   departureMinute: number;
   tripDurationHours: number;
+  /** Empty = departures every day (Chicago weekday). Otherwise only these days (0=Sun … 6=Sat). */
+  ticketedWeekdays: number[];
   showSpotsRemaining?: boolean;
   allowDeposit: boolean;
   allowTipNow: boolean;
@@ -115,7 +134,7 @@ function getDefaultFormData(): ExperienceFormData {
     seasonalEndMonth: 12,
     seasonalStartDate: "",
     seasonalEndDate: "",
-    active: false,
+    active: true,
     timezone: "America/Chicago",
     rates: [],
     addons: [],
@@ -139,6 +158,7 @@ function getDefaultFormData(): ExperienceFormData {
     departureHour: 10,
     departureMinute: 0,
     tripDurationHours: 1,
+    ticketedWeekdays: [],
     showSpotsRemaining: false,
     allowDeposit: false,
     allowTipNow: true,
@@ -250,6 +270,9 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     departureHour: typeof api.departureHour === "number" ? api.departureHour : 10,
     departureMinute: typeof api.departureMinute === "number" ? api.departureMinute : 0,
     tripDurationHours: typeof api.tripDurationHours === "number" && api.tripDurationHours > 0 ? api.tripDurationHours : 1,
+    ticketedWeekdays: Array.isArray(api.ticketedWeekdays)
+      ? (api.ticketedWeekdays as number[]).filter((x) => typeof x === "number" && x >= 0 && x <= 6).sort((a, b) => a - b)
+      : [],
     showSpotsRemaining: api.showSpotsRemaining === true,
     allowDeposit: api.allowDeposit === true,
     allowTipNow: api.allowTipNow !== false,
@@ -353,6 +376,7 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
       departureHour: d.departureHour,
       departureMinute: d.departureMinute,
       tripDurationHours: d.tripDurationHours > 0 ? d.tripDurationHours : 1,
+      ticketedWeekdays: d.ticketedWeekdays,
       showSpotsRemaining: d.showSpotsRemaining ?? false,
     }),
   };
@@ -493,6 +517,11 @@ export function ExperienceForm({
       setLoading(false);
       return;
     }
+    if (data.pricingType === "ticketed" && data.rates.length !== 1) {
+      setError("Ticketed experiences use one per-ticket rate. Remove extra rate rows before saving.");
+      setLoading(false);
+      return;
+    }
     if (uploadsActive) {
       setError("Please wait for all photo uploads to finish before saving.");
       setLoading(false);
@@ -513,6 +542,15 @@ export function ExperienceForm({
       }
       durationSet.add(rate.durationHours);
     }
+    if (
+      data.pricingType === "ticketed" &&
+      data.rates[0] &&
+      data.rates[0].durationHours !== (data.tripDurationHours > 0 ? data.tripDurationHours : 1)
+    ) {
+      setError("Ticketed rate duration must match trip duration.");
+      setLoading(false);
+      return;
+    }
     try {
       const normalizedSlug = normalizePublicSlug(data.slug);
       if (!normalizedSlug) {
@@ -532,6 +570,7 @@ export function ExperienceForm({
           departureHour: data.departureHour,
           departureMinute: data.departureMinute,
           tripDurationHours: data.tripDurationHours,
+          ticketedWeekdays: data.ticketedWeekdays,
           allowDeposit: data.allowDeposit,
           weekendDays: data.weekendDays,
           friSunDays: data.friSunDays,
@@ -545,6 +584,7 @@ export function ExperienceForm({
           departureHour: initialDataSnapshot.departureHour,
           departureMinute: initialDataSnapshot.departureMinute,
           tripDurationHours: initialDataSnapshot.tripDurationHours,
+          ticketedWeekdays: initialDataSnapshot.ticketedWeekdays,
           allowDeposit: initialDataSnapshot.allowDeposit,
           weekendDays: initialDataSnapshot.weekendDays,
           friSunDays: initialDataSnapshot.friSunDays,
@@ -956,7 +996,7 @@ export function ExperienceForm({
           <label htmlFor="active" className="text-sm font-medium text-brand-dark">Publish listing (make this experience visible and bookable)</label>
         </div>
         <p className="text-xs text-brand-muted -mt-3">
-          New listings start as drafts. Turn this on only when details, pricing, and media are complete.
+          New listings are published by default. Turn this off to keep a listing as a draft.
         </p>
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
@@ -980,7 +1020,7 @@ export function ExperienceForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
             type="button"
-            onClick={() => update("pricingType", "charter")}
+            onClick={() => setData((prev) => ({ ...prev, pricingType: "charter", ticketedWeekdays: [] }))}
             className={cn(
               "rounded-xl border-2 p-4 text-left transition-all",
               data.pricingType === "charter"
@@ -999,7 +1039,13 @@ export function ExperienceForm({
           </button>
           <button
             type="button"
-            onClick={() => update("pricingType", "ticketed")}
+            onClick={() =>
+              setData((prev) => ({
+                ...prev,
+                pricingType: "ticketed",
+                rates: normalizeTicketedRates(prev.rates, prev.tripDurationHours),
+              }))
+            }
             className={cn(
               "rounded-xl border-2 p-4 text-left transition-all",
               data.pricingType === "ticketed"
@@ -1098,7 +1144,15 @@ export function ExperienceForm({
                   value={data.tripDurationHours || ""}
                   onChange={(e) => {
                     const val = parseFloat(e.target.value);
-                    update("tripDurationHours", isNaN(val) || val <= 0 ? 1 : val);
+                    const nextDuration = isNaN(val) || val <= 0 ? 1 : val;
+                    setData((prev) => ({
+                      ...prev,
+                      tripDurationHours: nextDuration,
+                      rates:
+                        prev.pricingType === "ticketed"
+                          ? normalizeTicketedRates(prev.rates, nextDuration)
+                          : prev.rates,
+                    }));
                   }}
                   placeholder="e.g. 1"
                   aria-label="Trip duration in hours"
@@ -1162,6 +1216,33 @@ export function ExperienceForm({
                 </p>
               </div>
             </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-sky-900">Operating weekdays</p>
+              <p className="text-xs text-sky-800">
+                Uses listing timezone (see above; slots use America/Chicago). Leave none selected for <strong>every</strong> day, or pick fixed days (e.g. Wednesday only for a weekly surf club).
+              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {TICKETED_WEEKDAY_LABELS.map((label, day) => (
+                  <label key={label} className="inline-flex items-center gap-2 text-sm text-sky-900 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="rounded border-sky-400 text-sky-600 focus:ring-sky-500"
+                      checked={data.ticketedWeekdays.includes(day)}
+                      onChange={(e) => {
+                        setData((prev) => {
+                          const next = new Set(prev.ticketedWeekdays);
+                          if (e.target.checked) next.add(day);
+                          else next.delete(day);
+                          return { ...prev, ticketedWeekdays: Array.from(next).sort((a, b) => a - b) };
+                        });
+                      }}
+                      aria-label={`Operating on ${label}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
             <label className="flex items-start gap-3 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -1195,7 +1276,15 @@ export function ExperienceForm({
         </div>
         {!collapsedSections.has("rates") && <DynamicPricingEditor
           rates={data.rates}
-          onRatesChange={(rates) => setData((prev) => ({ ...prev, rates }))}
+          onRatesChange={(rates) =>
+            setData((prev) => ({
+              ...prev,
+              rates:
+                prev.pricingType === "ticketed"
+                  ? normalizeTicketedRates(rates, prev.tripDurationHours)
+                  : rates,
+            }))
+          }
           holidayDates={data.holidayDates}
           onHolidayDatesChange={(holidayDates) => setData((prev) => ({ ...prev, holidayDates }))}
           weekendDays={data.weekendDays}

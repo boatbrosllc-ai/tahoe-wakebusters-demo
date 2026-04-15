@@ -284,7 +284,7 @@ export function BookingSuccessPanel({
                   const detailsHref = successReceiptHref;
                   return (
                     <>
-                      We&apos;ve received your <strong>50% deposit</strong> of{" "}
+                      We&apos;ve received your <strong>{Math.round(DEPOSIT_FRACTION * 100)}% deposit</strong> of{" "}
                       <span className="font-semibold text-brand-dark">{formatMoneyNonNegative(depositCents)}</span>.
                       {ambiguousRemainingBalance ? (
                         <>

@@ -106,4 +106,22 @@ describe("isDepositMode", () => {
     });
     assert.strictEqual(isDepositMode(b), true);
   });
+
+  it("returns false when status is final_due but depositAmountCents is absent (falls through; no amount evidence)", () => {
+    const b = booking({
+      status: "final_due",
+      pricing: { ...defaultPricing, totalCents: 32000 },
+      stripe: { totalAmountCents: 32000 },
+    });
+    assert.strictEqual(isDepositMode(b), false);
+  });
+
+  it("returns false when status is final_paid but depositAmountCents is absent", () => {
+    const b = booking({
+      status: "final_paid",
+      pricing: { ...defaultPricing, totalCents: 32000 },
+      stripe: { totalAmountCents: 32000, finalPaymentIntentId: "pi_f" },
+    });
+    assert.strictEqual(isDepositMode(b), false);
+  });
 });

@@ -70,7 +70,7 @@ export function BookingStep3Boat({
               : isHeld
                 ? { label: "On hold" as const, suffix: " (On hold)" as const }
                 : isBlocked
-                  ? { label: "Unavailable" as const, suffix: " (Unavailable)" as const }
+                  ? { label: "Blocked" as const, suffix: " (Blocked)" as const }
                   : null;
           const isSel = selectedBoat?.id === boat.id;
           const thumb = boat.photos?.[0];

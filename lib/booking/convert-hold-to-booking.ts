@@ -55,9 +55,9 @@ import {
 } from "@/lib/booking/hold-expiry";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { getStripe } from "@/lib/booking/stripe-client";
-import { computeFinalChargeAtUtc } from "@/lib/booking/final-charge-at";
+import { computeFinalChargeAtUtc, isDepositEligibleByLeadTime } from "@/lib/booking/final-charge-at";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
-import { LegacyScanLimitReachedError } from "@/lib/booking/slot-availability";
+import { LegacyScanLimitReachedError, resolveLegacyBoatBlockCheckContext } from "@/lib/booking/slot-availability";
 import { isCanonicalExperienceId } from "@/lib/booking/experience-id";
 import { paymentIntentMatchesHoldForConversion } from "@/lib/booking/stripe-payment-intent-convert";
 
@@ -119,6 +119,13 @@ export const BOOKING_BLOCKED_BY_OPERATOR_MESSAGE =
 
 export function isBookingBlockedByOperatorError(err: unknown): boolean {
   return err instanceof Error && err.message === BOOKING_BLOCKED_BY_OPERATOR_MESSAGE;
+}
+
+/** Thrown when deposit PI succeeded but the 48h-before-trip final-charge instant is already past — caller should refund/reconcile. */
+export const DEPOSIT_WINDOW_CLOSED_MESSAGE = "Deposit window has closed for this trip";
+
+export function isDepositWindowClosedError(err: unknown): boolean {
+  return err instanceof Error && err.message === DEPOSIT_WINDOW_CLOSED_MESSAGE;
 }
 
 export async function convertHoldToBooking(
@@ -661,7 +668,7 @@ export async function convertHoldToBooking(
   const customer = (isDeposit ? input.customerOverride : fullInput.customerOverride) ?? hold.customerDraft;
   const specialNotes = fullInput.specialNotesOverride ?? (hold.answers?.comments?.trim() || undefined);
   const bookingId = db.collection("bookings").doc().id;
-  const parsedForBlock = hold.experienceId ? (parseSlotIdRelaxed(hold.slotId) ?? parseSlotId(hold.slotId)) : null;
+  const parsedForBlock = parseSlotIdRelaxed(hold.slotId) ?? parseSlotId(hold.slotId);
   const parsedSlot = parseSlotId(hold.slotId);
   const startDateStrFallback = hold.slotId.length >= 10 ? hold.slotId.slice(0, 10) : null;
   if (!parsedSlot) {
@@ -686,6 +693,10 @@ export async function convertHoldToBooking(
   ).start;
   const finalChargeAtDate = computeFinalChargeAtUtc(slotStartFromHoldId);
   const finalChargeAtTimestamp = Timestamp.fromDate(finalChargeAtDate);
+
+  if (isDeposit && !isDepositEligibleByLeadTime(slotStartFromHoldId.getTime(), Date.now())) {
+    throw new Error(DEPOSIT_WINDOW_CLOSED_MESSAGE);
+  }
 
   /** Canonical booking value: always store totalAmountCents = finalPricing.totalCents so revenue summary increment (here) and decrement (admin cancel) use the same field and stay in sync. */
   if (isDeposit && (typeof input.stripe.depositCents !== "number" || !Number.isFinite(input.stripe.depositCents))) {
@@ -732,7 +743,41 @@ export async function convertHoldToBooking(
       type: "deposit_booking_missing_payment_method",
       holdId,
       paymentIntentId: input.paymentIntentId,
+      ...(stripeBlock.customerId ? { severity: "critical" as const } : {}),
     });
+  }
+  let stripeBlockForBooking: Booking["stripe"] = stripeBlock;
+  if (isDeposit && !stripeBlockForBooking.paymentMethodId && stripeBlockForBooking.customerId) {
+    try {
+      const pmList = await getStripe().paymentMethods.list({
+        customer: stripeBlockForBooking.customerId,
+        type: "card",
+        limit: 1,
+      });
+      const recoveredPmId = pmList.data[0]?.id;
+      if (recoveredPmId) {
+        stripeBlockForBooking = { ...stripeBlockForBooking, paymentMethodId: recoveredPmId };
+        bookingLog("convert-hold", "recovered paymentMethodId from Stripe customer list (expand race)", {
+          holdId,
+          customerId: stripeBlockForBooking.customerId,
+        });
+      }
+    } catch (pmListErr) {
+      bookingWarn("convert-hold", "last-resort customer paymentMethods.list failed", {
+        holdId,
+        err: pmListErr instanceof Error ? pmListErr.message : String(pmListErr),
+      });
+    }
+  }
+  if (isDeposit && !stripeBlockForBooking.paymentMethodId && stripeBlockForBooking.customerId) {
+    throw new Error(
+      "Deposit booking conversion requires a saved card on the Stripe customer so the final balance can be charged; payment method was missing on the PaymentIntent and none was found on the customer."
+    );
+  }
+  if (isDeposit && !stripeBlockForBooking.paymentMethodId && !stripeBlockForBooking.customerId) {
+    throw new Error(
+      "Deposit booking conversion requires a Stripe customer id or saved payment method on the succeeded PaymentIntent so the final balance can be charged; refusing to create a final_due booking with neither."
+    );
   }
 
   const booking: Omit<Booking, "createdAt"> & {
@@ -756,7 +801,7 @@ export async function convertHoldToBooking(
     pricing: finalPricing,
     cancellationPolicy: experienceForPricing?.cancellationPolicy ?? DEFAULT_EXPERIENCE_CANCELLATION_POLICY,
     status: isDeposit ? "final_due" : "paid",
-    stripe: stripeBlock,
+    stripe: stripeBlockForBooking,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
     ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
     ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
@@ -831,31 +876,51 @@ export async function convertHoldToBooking(
       { holdDocId: holdId }
     );
     if (!transactionalPiMatch.ok) throw HOLD_PI_MATCH_FAILED_SENTINEL;
-    if (hold.experienceId && parsedForBlock) {
+    if (parsedForBlock) {
       const { start: slotStartBlock, end: slotEndBlock } = getSlotStartEnd(
         parsedForBlock.dateStr,
         parsedForBlock.startHour,
         parsedForBlock.durationHours,
         parsedForBlock.startMinute ?? 0
       );
-      const expSlugBlock =
-        experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
-          ? (experienceForPricing as Experience).slug.trim()
-          : "";
-      // Transitional compatibility shim; remove after legacy slug-based records are fully backfilled.
-      const expVariantsBlock = getExperienceIdVariants(hold.experienceId, expSlugBlock);
-      const blocked = await hasOverlappingBlock({
-        db,
-        Timestamp,
-        experienceId: hold.experienceId,
-        experienceIdVariants: expVariantsBlock,
-        experienceSlug: expSlugBlock || undefined,
-        boatId: hold.boatId,
-        slotStart: slotStartBlock,
-        slotEnd: slotEndBlock,
-        get: (q) => tx.get(q as Query),
-      });
-      if (blocked) throw new Error(BOOKING_BLOCKED_BY_OPERATOR_MESSAGE);
+      if (hold.experienceId) {
+        const expSlugBlock =
+          experienceForPricing && typeof (experienceForPricing as Experience).slug === "string"
+            ? (experienceForPricing as Experience).slug.trim()
+            : "";
+        // Transitional compatibility shim; remove after legacy slug-based records are fully backfilled.
+        const expVariantsBlock = getExperienceIdVariants(hold.experienceId, expSlugBlock);
+        const blocked = await hasOverlappingBlock({
+          db,
+          Timestamp,
+          experienceId: hold.experienceId,
+          experienceIdVariants: expVariantsBlock,
+          experienceSlug: expSlugBlock || undefined,
+          boatId: hold.boatId,
+          slotStart: slotStartBlock,
+          slotEnd: slotEndBlock,
+          get: (q) => tx.get(q as Query),
+        });
+        if (blocked) throw new Error(BOOKING_BLOCKED_BY_OPERATOR_MESSAGE);
+      } else if (hold.boatId) {
+        const bid = hold.boatId.trim();
+        const legacyCtx = await resolveLegacyBoatBlockCheckContext({
+          db,
+          get: (ref) => tx.get(ref),
+          boatId: bid,
+        });
+        const blockedLegacy = await hasOverlappingBlock({
+          db,
+          Timestamp,
+          experienceId: legacyCtx.experienceId || bid,
+          experienceIdVariants: legacyCtx.experienceIdVariants.length > 0 ? legacyCtx.experienceIdVariants : [bid],
+          boatId: bid,
+          slotStart: slotStartBlock,
+          slotEnd: slotEndBlock,
+          get: (q) => tx.get(q as Query),
+        });
+        if (blockedLegacy) throw new Error(BOOKING_BLOCKED_BY_OPERATOR_MESSAGE);
+      }
     }
 
     let inventoryRefForShared: ReturnType<typeof getDepartureInventoryRef> | null = null;

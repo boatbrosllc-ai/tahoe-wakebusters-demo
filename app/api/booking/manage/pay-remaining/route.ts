@@ -15,6 +15,7 @@ import { getStripe } from "@/lib/booking/stripe-client";
 import { verifyManageToken } from "@/lib/booking/manageToken";
 import {
   getFinalChargeIdempotencyKey,
+  finalChargeAtSecondsFromBooking,
   isFinalChargeLockRecent,
   isCustomerFinalPiInFlightRecent,
 } from "@/lib/booking/final-charge-idempotency";
@@ -24,6 +25,7 @@ import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import {
   persistFinalBalanceNormalizationIfNeeded,
   resolveFinalBalanceFromBooking,
+  FINAL_BALANCE_MISMATCH_EPSILON_CENTS,
 } from "@/lib/booking/final-balance-resolver";
 import { resolveManageCustomerEmail } from "@/lib/booking/manage-booking-resolve-email";
 import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-customer-index";
@@ -217,6 +219,24 @@ export async function POST(request: NextRequest) {
       source: "manage/pay-remaining",
     });
     const authoritativeFinalCents = persistAfterLoad.authoritativeFinalCents;
+    const depositBalanceResolution = resolveFinalBalanceFromBooking(booking);
+    if (depositBalanceResolution.isDepositAmountMissing) {
+      await writeOperationalAlert({
+        type: "pay_remaining_blocked_missing_deposit_amount_cents",
+        severity: "critical",
+        bookingId: payload.bookingId,
+        source: "manage/pay-remaining",
+        depositPaymentIntentId: booking.stripe?.depositPaymentIntentId ?? null,
+        depositAmountCents: depositBalanceResolution.depositAmountCents,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "This booking’s payment record is incomplete. Please contact support so we can fix your balance before you pay the remainder.",
+        },
+        { status: 503 }
+      );
+    }
     if (!customerId && booking.customer?.email) {
       const emailKey = booking.customer.email.trim().toLowerCase();
       if (emailKey) {
@@ -342,17 +362,40 @@ export async function POST(request: NextRequest) {
         source: "manage/pay-remaining",
       });
       const amountCentsForKeys = persistKeys.authoritativeFinalCents;
+      const loopDepositResolution = resolveFinalBalanceFromBooking(ibForKeys);
+      if (loopDepositResolution.isDepositAmountMissing) {
+        await clearCustomerFinalPiInFlight().catch(() => {});
+        await writeOperationalAlert({
+          type: "pay_remaining_blocked_missing_deposit_amount_cents",
+          severity: "critical",
+          bookingId: payload.bookingId,
+          source: "manage/pay-remaining",
+          phase: "final_pi_gate_loop",
+          depositPaymentIntentId: ibForKeys.stripe?.depositPaymentIntentId ?? null,
+          depositAmountCents: loopDepositResolution.depositAmountCents,
+        });
+        return NextResponse.json(
+          {
+            error:
+              "This booking’s payment record is incomplete. Please contact support so we can fix your balance before you pay the remainder.",
+          },
+          { status: 503 }
+        );
+      }
+      const fcaSec = finalChargeAtSecondsFromBooking(booking);
       const offSessionKey = getFinalChargeIdempotencyKey(
         payload.bookingId,
         "customer",
         "off-session",
-        amountCentsForKeys
+        amountCentsForKeys,
+        fcaSec
       );
       const elementKey = getFinalChargeIdempotencyKey(
         payload.bookingId,
         "customer",
         "element",
-        amountCentsForKeys
+        amountCentsForKeys,
+        fcaSec
       );
       const pendingKeyForGate =
         typeof booking.stripe?.paymentMethodId === "string" &&
@@ -407,6 +450,18 @@ export async function POST(request: NextRequest) {
           paymentIntentId: gate.existingPiId,
         });
         const pi = await stripe.paymentIntents.retrieve(gate.existingPiId);
+        if (Math.abs(pi.amount - amountCentsForKeys) > FINAL_BALANCE_MISMATCH_EPSILON_CENTS) {
+          await stripe.paymentIntents.cancel(gate.existingPiId).catch(() => {});
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(bookingRef);
+            if (!snap.exists) return;
+            const b = snap.data() as Booking;
+            if (!ALLOWED_STATUSES.includes(b.status as (typeof ALLOWED_STATUSES)[number])) return;
+            resetBookingToFinalDue(tx, bookingRef, FieldValue, Timestamp);
+          });
+          await clearCustomerFinalPiInFlight().catch(() => {});
+          continue;
+        }
         if (pi.status === "succeeded") {
           bookingLog("manage-pay-remaining", "reconcile to final_paid (reuse path, PI succeeded)", {
             bookingId: payload.bookingId,

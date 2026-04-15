@@ -252,6 +252,11 @@ async function main() {
         "ENABLE_BLOCK_CHECK_FAIL_OPEN must be absent or false in production (obsolete flag; block queries now fail closed on index errors).",
       );
     }
+    if (process.env.BLOCK_CHECK_FAIL_OPEN === "true") {
+      missing.push(
+        "BLOCK_CHECK_FAIL_OPEN must be absent or false in production (it disables block enforcement when the blocks index query fails).",
+      );
+    }
     missing.push(...collectProductionGa4Missing());
   }
   if (missing.length > 0) {

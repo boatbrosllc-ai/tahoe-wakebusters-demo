@@ -16,6 +16,8 @@ export interface ExperienceOverviewProps {
   seoParagraphs?: string[];
   timeline?: { step: string; desc: string }[];
   imageAlt?: string;
+  /** When false and `overviewImageUrl` is missing, do not use the static pontoon Unsplash placeholder. */
+  useStaticImageFallback?: boolean;
 }
 
 export function ExperienceOverview({
@@ -25,9 +27,14 @@ export function ExperienceOverview({
   seoParagraphs: seoParagraphsProp,
   timeline: timelineProp,
   imageAlt,
+  useStaticImageFallback = true,
 }: ExperienceOverviewProps = {}) {
   const reduceMotion = useReducedMotion();
-  const imageSrc = overviewImageUrl ? getDisplayImageUrl(overviewImageUrl) : EXPERIENCE_OVERVIEW.imageUrl;
+  const imageSrc = overviewImageUrl
+    ? getDisplayImageUrl(overviewImageUrl)
+    : useStaticImageFallback
+      ? EXPERIENCE_OVERVIEW.imageUrl
+      : null;
   const headlineText = headline ?? EXPERIENCE_OVERVIEW.headline;
   const storyText = story ?? EXPERIENCE_OVERVIEW.story;
   const seoParagraphs = seoParagraphsProp?.length ? seoParagraphsProp : EXPERIENCE_OVERVIEW.seoParagraphs ?? [];
@@ -36,28 +43,33 @@ export function ExperienceOverview({
   return (
     <section className="bg-brand-dark py-16 sm:py-20 lg:py-24">
       <div className="max-w-7xl mx-auto px-5 sm:px-6 lg:px-8">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
-          {/* Left: image with subtle tilt on hover */}
-          <motion.div
-            className="relative aspect-[4/3] rounded-2xl overflow-hidden"
-            initial={reduceMotion ? false : { opacity: 0, x: -24 }}
-            whileInView={reduceMotion ? {} : { opacity: 1, x: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.7, ease }}
-            whileHover={reduceMotion ? {} : { scale: 1.02 }}
-            style={{ transformOrigin: "center center" }}
-          >
-            <Image
-              src={imageSrc}
-              alt={imageAlt ?? "Lake Austin pontoon experience"}
-              fill
-              className="object-cover"
-              sizes="(max-width: 1024px) 100vw, 50vw"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 hover:opacity-100 transition-opacity duration-300" />
-          </motion.div>
+        <div
+          className={cn(
+            "grid items-center gap-12 lg:gap-16",
+            imageSrc ? "lg:grid-cols-2" : "max-w-3xl mx-auto"
+          )}
+        >
+          {imageSrc ? (
+            <motion.div
+              className="relative aspect-[4/3] rounded-2xl overflow-hidden"
+              initial={reduceMotion ? false : { opacity: 0, x: -24 }}
+              whileInView={reduceMotion ? {} : { opacity: 1, x: 0 }}
+              viewport={{ once: true, amount: 0.2 }}
+              transition={{ duration: 0.7, ease }}
+              whileHover={reduceMotion ? {} : { scale: 1.02 }}
+              style={{ transformOrigin: "center center" }}
+            >
+              <Image
+                src={imageSrc}
+                alt={imageAlt ?? "Lake Austin pontoon experience"}
+                fill
+                className="object-cover"
+                sizes="(max-width: 1024px) 100vw, 50vw"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 hover:opacity-100 transition-opacity duration-300" />
+            </motion.div>
+          ) : null}
 
-          {/* Right: copy + features + timeline */}
           <div>
             <motion.h2
               className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight"

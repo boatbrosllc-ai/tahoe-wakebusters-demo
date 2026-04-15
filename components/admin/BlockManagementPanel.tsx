@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Ban, Plus, Trash2, RefreshCw, CalendarDays } from "lucide-react";
-import { getSlotStartEnd, SLOT_TIMEZONE } from "@/lib/booking/experience-slots";
+import { Ban, Plus, Trash2, RefreshCw, CalendarDays, Pencil } from "lucide-react";
+import { getCentralCalendarDayBounds, getSlotStartEnd, SLOT_TIMEZONE } from "@/lib/booking/experience-slots";
+import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { bumpSlotCacheVersion } from "@/lib/booking/booking-data-cache";
 
 interface BlockItem {
   id: string;
@@ -40,7 +43,12 @@ function plusMonths(dateStr: string, n: number) {
 }
 
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "America/Chicago",
+  });
 }
 
 function fmtDateTime(iso: string) {
@@ -70,6 +78,40 @@ function isFullDay(startAt: string, endAt: string): boolean {
   return s.hour === 0 && s.minute === 0 && e.hour === 23 && e.minute >= 59;
 }
 
+/** Format a Date in America/Chicago as YYYY-MM-DDTHH:MM for datetime-local input. */
+function toCentralDatetimeLocal(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SLOT_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/** Parse YYYY-MM-DDTHH:MM as America/Chicago wall time and return a UTC Date. */
+function parseCentralDatetimeLocal(s: string): Date {
+  const [datePart, timePart] = s.split("T");
+  if (!datePart || !timePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return new Date(s);
+  const [h, m] = timePart.split(":").map(Number);
+  const hour = Number.isNaN(h) ? 0 : h;
+  const minute = Number.isNaN(m) ? 0 : m;
+  const { start } = getSlotStartEnd(datePart, hour, 0, minute);
+  return start;
+}
+
+function parseHmFromTimeInput(t: string): { hour: number; minute: number } | null {
+  const s = t.trim();
+  if (!s) return null;
+  const [a, b] = s.split(":").map((x) => parseInt(x, 10));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return { hour: a, minute: b };
+}
+
 export function BlockManagementPanel({ experienceId, experienceName }: BlockManagementPanelProps) {
   const isGlobal = !experienceId;
 
@@ -92,11 +134,21 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
   const [addStartDate, setAddStartDate] = useState(todayStr);
   const [addEndDate, setAddEndDate] = useState(todayStr);
   const [addNote, setAddNote] = useState("");
+  const [addStartTime, setAddStartTime] = useState("");
+  const [addEndTime, setAddEndTime] = useState("");
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
   // Delete state
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Inline edit
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editStartLocal, setEditStartLocal] = useState("");
+  const [editEndLocal, setEditEndLocal] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const activeExpId = isGlobal ? selectedExpId : experienceId!;
 
@@ -140,10 +192,32 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
     setAddLoading(true);
     setAddError(null);
     try {
-      const startAt = getSlotStartEnd(addStartDate, 0, 0, 0).start.toISOString();
-      const endOfDay = getSlotStartEnd(addEndDate, 23, 0, 59).start;
-      endOfDay.setSeconds(59, 999);
-      const endAt = endOfDay.toISOString();
+      const hasAnyTime = Boolean(addStartTime.trim() || addEndTime.trim());
+      let startAt: string;
+      let endAt: string;
+      if (!hasAnyTime) {
+        const { dayStart } = getCentralCalendarDayBounds(addStartDate);
+        const { dayEnd } = getCentralCalendarDayBounds(addEndDate);
+        startAt = dayStart.toISOString();
+        endAt = dayEnd.toISOString();
+      } else {
+        const startHm = parseHmFromTimeInput(addStartTime);
+        const endHm = parseHmFromTimeInput(addEndTime);
+        const { dayStart: defaultStart } = getCentralCalendarDayBounds(addStartDate);
+        const { dayEnd: defaultEnd } = getCentralCalendarDayBounds(addEndDate);
+        const start = startHm
+          ? getSlotStartEnd(addStartDate, startHm.hour, 0, startHm.minute).start
+          : defaultStart;
+        const end = endHm
+          ? getSlotStartEnd(addEndDate, endHm.hour, 0, endHm.minute).start
+          : defaultEnd;
+        if (start.getTime() >= end.getTime()) {
+          setAddError("End must be after start.");
+          return;
+        }
+        startAt = start.toISOString();
+        endAt = end.toISOString();
+      }
       const res = await fetch("/api/admin/blocks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,8 +226,11 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
       });
       const data = await res.json();
       if (!res.ok) { setAddError(data?.error ?? "Failed to add block"); return; }
+      bumpSlotCacheVersion();
       setAddOpen(false);
       setAddNote("");
+      setAddStartTime("");
+      setAddEndTime("");
       setAddStartDate(todayStr());
       setAddEndDate(todayStr());
       loadBlocks();
@@ -161,6 +238,46 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
       setAddError("Failed to add block");
     } finally {
       setAddLoading(false);
+    }
+  }
+
+  function openEdit(block: BlockItem) {
+    setEditingId(block.id);
+    setEditError(null);
+    setEditStartLocal(toCentralDatetimeLocal(new Date(block.startAt)));
+    setEditEndLocal(toCentralDatetimeLocal(new Date(block.endAt)));
+    setEditNote(block.note ?? "");
+  }
+
+  async function handleSaveEdit(blockId: string) {
+    if (!confirm("Save changes to this block? Customers will see the new unavailable window immediately.")) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const startAt = parseCentralDatetimeLocal(editStartLocal).toISOString();
+      const endAt = parseCentralDatetimeLocal(editEndLocal).toISOString();
+      if (new Date(startAt) >= new Date(endAt)) {
+        setEditError("End must be after start.");
+        return;
+      }
+      const res = await fetch(`/api/admin/blocks/${blockId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ startAt, endAt, note: editNote.trim() || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditError(typeof data?.error === "string" ? data.error : "Failed to update block");
+        return;
+      }
+      setEditingId(null);
+      bumpSlotCacheVersion();
+      loadBlocks();
+    } catch {
+      setEditError("Failed to update block");
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -174,6 +291,7 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
         setBlocksError(data?.error ?? "Failed to delete block");
         return;
       }
+      bumpSlotCacheVersion();
       setBlocks((prev) => prev.filter((b) => b.id !== id));
     } catch {
       setBlocksError("Failed to delete block");
@@ -269,6 +387,14 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
       {addOpen && (
         <div className="rounded-xl border border-brand-primary/20 bg-brand-primary/5 p-4 space-y-3">
           <p className="text-sm font-medium text-brand-dark">New blocked date range</p>
+          <p className="text-xs text-brand-muted leading-relaxed">
+            Blocks default to full calendar days ({SLOT_TIMEZONE}). Set optional start/end times below for a partial-day
+            window on those dates. You can also drag ranges on the{" "}
+            <Link href="/admin/calendars" className="text-brand-primary underline font-medium">
+              week calendar
+            </Link>
+            .
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label htmlFor="bmp-add-start" className="block text-xs font-medium text-brand-muted mb-1">Start date</label>
@@ -297,6 +423,34 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
               />
             </div>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="bmp-add-start-time" className="block text-xs font-medium text-brand-muted mb-1">
+                Start time (optional, Central)
+              </label>
+              <input
+                id="bmp-add-start-time"
+                type="time"
+                className={inputClass}
+                value={addStartTime}
+                onChange={(e) => setAddStartTime(e.target.value)}
+                aria-label="Optional block start time in Central time"
+              />
+            </div>
+            <div>
+              <label htmlFor="bmp-add-end-time" className="block text-xs font-medium text-brand-muted mb-1">
+                End time (optional, Central)
+              </label>
+              <input
+                id="bmp-add-end-time"
+                type="time"
+                className={inputClass}
+                value={addEndTime}
+                onChange={(e) => setAddEndTime(e.target.value)}
+                aria-label="Optional block end time in Central time"
+              />
+            </div>
+          </div>
           <div>
             <label className="block text-xs font-medium text-brand-muted mb-1">Note (optional)</label>
             <input
@@ -312,7 +466,17 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
             <Button type="button" size="sm" onClick={handleAddBlock} disabled={addLoading || !addStartDate || !addEndDate}>
               {addLoading ? "Adding…" : "Add block"}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => { setAddOpen(false); setAddError(null); }}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setAddOpen(false);
+                setAddError(null);
+                setAddStartTime("");
+                setAddEndTime("");
+              }}
+            >
               Cancel
             </Button>
             {addStartDate === addEndDate ? (
@@ -345,48 +509,113 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
         <div className="space-y-2">
           {blocks.map((block) => {
             const fullDay = isFullDay(block.startAt, block.endAt);
-            const sameDay = block.startAt.slice(0, 10) === block.endAt.slice(0, 10);
+            const sameDay =
+              isoToChicagoDateStr(block.startAt) === isoToChicagoDateStr(block.endAt);
+            const isEditing = editingId === block.id;
             return (
               <div
                 key={block.id}
-                className="flex items-center gap-3 rounded-xl border border-brand-dark/10 bg-white px-4 py-3"
+                className="flex flex-col gap-3 rounded-xl border border-brand-dark/10 bg-white px-4 py-3"
               >
-                <Ban className="h-4 w-4 text-red-400 shrink-0" aria-hidden />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-brand-dark">
-                    {fullDay && sameDay
-                      ? fmtDate(block.startAt)
-                      : fullDay
-                        ? `${fmtDate(block.startAt)} → ${fmtDate(block.endAt)}`
-                        : `${fmtDateTime(block.startAt)} → ${fmtDateTime(block.endAt)}`}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
-                    {block.note && (
-                      <span className="text-xs text-brand-muted">{block.note}</span>
-                    )}
-                    {block.boatId && (
-                      <span className="text-xs text-brand-muted">Boat: {block.boatId.slice(0, 8)}…</span>
-                    )}
-                    {block.slotId && (
-                      <span className="text-xs text-brand-muted/60">Slot-based</span>
-                    )}
+                <div className="flex items-center gap-3">
+                  <Ban className="h-4 w-4 text-red-400 shrink-0" aria-hidden />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-brand-dark">
+                      {fullDay && sameDay
+                        ? `${fmtDate(block.startAt)} (full day)`
+                        : fullDay
+                          ? `${fmtDate(block.startAt)} → ${fmtDate(block.endAt)}`
+                          : `${fmtDateTime(block.startAt)} → ${fmtDateTime(block.endAt)}`}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+                      {!fullDay && (
+                        <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                          Partial — {formatBookingTimeFromIso(block.startAt)} – {formatBookingTimeFromIso(block.endAt)}{" "}
+                          only
+                        </span>
+                      )}
+                      {block.note && (
+                        <span className="text-xs text-brand-muted">{block.note}</span>
+                      )}
+                      {block.boatId && (
+                        <span className="text-xs text-brand-muted">Boat: {block.boatId.slice(0, 8)}…</span>
+                      )}
+                      {block.slotId && (
+                        <span className="text-xs text-brand-muted/60">Slot-based</span>
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-brand-muted hover:text-brand-primary"
+                    onClick={() => (isEditing ? setEditingId(null) : openEdit(block))}
+                    disabled={deletingId === block.id || editSaving}
+                    aria-expanded={isEditing}
+                    aria-label={isEditing ? "Close edit" : "Edit block"}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-brand-muted hover:text-red-500"
+                    onClick={() => handleDelete(block.id)}
+                    disabled={deletingId === block.id}
+                    aria-label="Delete block"
+                  >
+                    {deletingId === block.id ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 text-brand-muted hover:text-red-500"
-                  onClick={() => handleDelete(block.id)}
-                  disabled={deletingId === block.id}
-                  aria-label="Delete block"
-                >
-                  {deletingId === block.id ? (
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
-                  )}
-                </Button>
+                {isEditing && (
+                  <div className="pl-7 space-y-2 border-t border-brand-dark/10 pt-3">
+                    <p className="text-xs font-medium text-brand-muted">Edit start / end (Central time)</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <label className="block text-xs text-brand-muted">
+                        <span className="block mb-0.5">Start</span>
+                        <input
+                          type="datetime-local"
+                          className={inputClass}
+                          value={editStartLocal}
+                          onChange={(e) => setEditStartLocal(e.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs text-brand-muted">
+                        <span className="block mb-0.5">End</span>
+                        <input
+                          type="datetime-local"
+                          className={inputClass}
+                          value={editEndLocal}
+                          onChange={(e) => setEditEndLocal(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label className="block text-xs text-brand-muted">
+                      <span className="block mb-0.5">Note</span>
+                      <input
+                        type="text"
+                        className={inputClass}
+                        value={editNote}
+                        onChange={(e) => setEditNote(e.target.value)}
+                      />
+                    </label>
+                    {editError && <p className="text-xs text-red-600">{editError}</p>}
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" size="sm" onClick={() => void handleSaveEdit(block.id)} disabled={editSaving}>
+                        {editSaving ? "Saving…" : "Save"}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setEditingId(null)} disabled={editSaving}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

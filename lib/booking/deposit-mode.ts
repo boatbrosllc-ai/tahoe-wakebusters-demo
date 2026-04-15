@@ -19,18 +19,29 @@ const DEPOSIT_STATUSES: ReadonlySet<BookingStatus> = new Set<BookingStatus>([
  * Single source of truth for deposit vs full-payment mode from a booking record.
  * Used by receipt API and email templates so messaging is consistent.
  *
- * Status takes precedence: if status is in DEPOSIT_STATUSES, treat as deposit regardless of depositAmountCents.
- * Otherwise use amount-driven signal: stripe.depositAmountCents set and less than total.
+ * When status is in DEPOSIT_STATUSES, treat as deposit only if `stripe.depositAmountCents` is present
+ * (evidence of the 50/50 flow). If that field is missing on a final_* status, emit an ops alert and
+ * fall through to the amount-driven check. Otherwise use amount-driven signal: deposit set and less than total.
  */
 export function isDepositMode(booking: Booking): boolean {
-  if (DEPOSIT_STATUSES.has(booking.status)) {
-    const stripe = booking.stripe;
-    if (stripe?.depositAmountCents == null) {
-      console.warn("[deposit-mode] Booking status is deposit flow but depositAmountCents is absent", { status: booking.status });
-    }
-    return true;
-  }
   const stripe = booking.stripe;
+  if (DEPOSIT_STATUSES.has(booking.status)) {
+    if (stripe?.depositAmountCents == null) {
+      void import("./operational-alerts")
+        .then(({ writeOperationalAlert }) =>
+          writeOperationalAlert({
+            type: "deposit_mode_missing_deposit_amount_cents",
+            status: booking.status,
+            ...(typeof stripe?.depositPaymentIntentId === "string" && stripe.depositPaymentIntentId.trim()
+              ? { depositPaymentIntentId: stripe.depositPaymentIntentId.trim() }
+              : {}),
+          })
+        )
+        .catch(() => {});
+    } else {
+      return true;
+    }
+  }
   if (stripe?.depositAmountCents == null) return false;
   const totalCents = stripe?.totalAmountCents ?? booking.pricing?.totalCents;
   const depositCents = stripe.depositAmountCents;

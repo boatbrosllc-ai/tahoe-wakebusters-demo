@@ -36,6 +36,7 @@ import {
 } from "@/lib/booking/operational-alerts";
 import { upsertPendingRefundRecord } from "@/lib/booking/pending-refund-idempotent";
 import type { Booking, Experience, Hold } from "@/lib/booking/types";
+import { isDepositMode } from "@/lib/booking/deposit-mode";
 import type Stripe from "stripe";
 import type { Firestore } from "firebase-admin/firestore";
 import {
@@ -242,33 +243,34 @@ async function trySuccessResponseIfBookingExistsForSucceededPi(
   }
   if (!recoveredBookingId) return null;
 
+  const bSnapRec = await db.collection("bookings").doc(recoveredBookingId).get();
+  if (!bSnapRec.exists) return null;
+  const bookingRec = bSnapRec.data() as Booking;
+  const sb = bookingRec.stripe;
+  const totRecover =
+    typeof sb?.totalAmountCents === "number" && Number.isFinite(sb.totalAmountCents)
+      ? sb.totalAmountCents
+      : bookingRec.pricing?.totalCents ?? 0;
+  const useDepRecover = isDepositMode(bookingRec);
+  const depositStored =
+    typeof sb?.depositAmountCents === "number" && Number.isFinite(sb.depositAmountCents) ? sb.depositAmountCents : 0;
+  const finalStored =
+    typeof sb?.finalAmountCents === "number" && Number.isFinite(sb.finalAmountCents) ? sb.finalAmountCents : 0;
+  const paymentSummaryRecovered = {
+    isDeposit: useDepRecover,
+    depositCents: useDepRecover ? depositStored : totRecover,
+    totalCents: totRecover,
+    finalCents: useDepRecover ? finalStored : 0,
+  };
+
   bookingLog("complete-after-payment", logTag, {
     holdId,
     recoveredBookingId,
     paymentIntentId,
   });
 
-  const ciRecover = await buildConvertHoldInputFromSucceededPaymentIntent(pi, null);
-  const useDepRecover = isConvertHoldInputDeposit(ciRecover);
-  const amtRecover = pi.amount ?? 0;
-  const totRecover = useDepRecover
-    ? (ciRecover as ConvertHoldInputDeposit).stripe.totalCents
-    : (() => {
-        const fromMeta = parseInt(pi.metadata?.totalCents ?? "0", 10) || 0;
-        return fromMeta > 0 ? fromMeta : amtRecover;
-      })();
-  const paymentSummaryRecovered = {
-    isDeposit: useDepRecover,
-    depositCents: useDepRecover ? amtRecover : totRecover,
-    totalCents: totRecover,
-    finalCents: useDepRecover ? Math.max(0, totRecover - amtRecover) : 0,
-  };
-
-  const bSnapRec = await db.collection("bookings").doc(recoveredBookingId).get();
   const recoveredExp =
-    bSnapRec.exists && typeof (bSnapRec.data() as Booking).experienceId === "string"
-      ? (bSnapRec.data() as Booking).experienceId
-      : undefined;
+    typeof bookingRec.experienceId === "string" ? bookingRec.experienceId : undefined;
 
   const receiptClaimToken = signReceiptClaimToken(holdId) ?? undefined;
   if (!receiptClaimToken) {
@@ -1062,6 +1064,23 @@ export async function POST(request: NextRequest) {
       });
       try {
         if (holdIdForAlert && paymentIntentIdForAlert) {
+          try {
+            const stripeRefund = getStripe();
+            await stripeRefund.refunds.create({
+              payment_intent: paymentIntentIdForAlert,
+              metadata: { reason: "operator_date_blocked_at_conversion", holdId: holdIdForAlert },
+            });
+            bookingLog("complete-after-payment", "immediate Stripe refund issued for operator-blocked conversion", {
+              holdId: holdIdForAlert,
+              paymentIntentId: paymentIntentIdForAlert,
+            });
+          } catch (refundErr) {
+            bookingWarn("complete-after-payment", "immediate refund attempt failed; pendingRefunds/cron may still recover", {
+              holdId: holdIdForAlert,
+              paymentIntentId: paymentIntentIdForAlert,
+              err: refundErr instanceof Error ? refundErr.message : String(refundErr),
+            });
+          }
           const dbAlert = getDb();
           let customerEmail: string | undefined;
           try {

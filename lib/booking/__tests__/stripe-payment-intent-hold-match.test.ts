@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkoutIncomingMismatchAgainstHold,
+  customerOverrideFromCheckoutSession,
   customerOverrideFromPaymentIntent,
   isPlaceholderCheckoutEmail,
   paymentIntentMatchesHoldForConversion,
@@ -188,5 +189,37 @@ describe("customerOverrideFromPaymentIntent", () => {
   it("treats checkout@pending.local as placeholder for hold email", () => {
     assert.equal(isPlaceholderCheckoutEmail("checkout@pending.local"), true);
     assert.equal(isPlaceholderCheckoutEmail("Checkout@Pending.Local"), true);
+  });
+});
+
+describe("customerOverrideFromCheckoutSession", () => {
+  it("prefers hold guest email over Checkout customer_details when both are non-placeholder", () => {
+    const holdDraft = { name: "Pat Guest", email: "pat@example.com", phone: "+15550001111" };
+    const session = {
+      customer_details: { email: "boatbrosllc@gmail.com", name: "Boat Bros LLC", phone: "" },
+    };
+    const r = customerOverrideFromCheckoutSession(session as never, holdDraft);
+    assert.ok(r);
+    assert.equal(r!.email, "pat@example.com");
+    assert.equal(r!.name, "Boat Bros LLC");
+  });
+
+  it("uses Checkout email when hold still has internal checkout placeholder", () => {
+    const holdDraft = { name: "Pat", email: "checkout+abc@pending.internal", phone: "+15550001111" };
+    const session = {
+      customer_details: { email: "patreal@example.com", name: "Pat Guest", phone: "" },
+    };
+    const r = customerOverrideFromCheckoutSession(session as never, holdDraft);
+    assert.ok(r);
+    assert.equal(r!.email, "patreal@example.com");
+  });
+
+  it("returns undefined when resolved customer matches hold draft", () => {
+    const holdDraft = { name: "Pat Guest", email: "pat@example.com", phone: "+15550001111" };
+    const session = {
+      customer_details: { email: "pat@example.com", name: "Pat Guest", phone: "+15550001111" },
+    };
+    const r = customerOverrideFromCheckoutSession(session as never, holdDraft);
+    assert.equal(r, undefined);
   });
 });

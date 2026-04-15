@@ -19,6 +19,7 @@ import { siteConfig } from "@/config/site";
 import { loadConfetti } from "@/lib/client/load-confetti";
 import { TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
+import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -232,11 +233,39 @@ export function InlineBookingDetailsStep({
     };
   }, []);
 
+  const [depositLeadTimeHoursFromHold, setDepositLeadTimeHoursFromHold] = useState<number | null>(null);
+  const [depositLeadTimeTick, setDepositLeadTimeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setDepositLeadTimeTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    setDepositLeadTimeHoursFromHold(null);
+  }, [slot.id]);
+
+  const depositLeadTimeMs = useMemo(() => {
+    void depositLeadTimeTick;
+    const h = depositLeadTimeHoursFromHold ?? DEPOSIT_LEAD_TIME_HOURS;
+    return h * 60 * 60 * 1000;
+  }, [depositLeadTimeTick, depositLeadTimeHoursFromHold]);
+
+  const isDepositWithinLeadTime = useMemo(() => {
+    void depositLeadTimeTick;
+    const startMs = Date.parse(slot.startAt);
+    if (!Number.isFinite(startMs)) return false;
+    return startMs - Date.now() < depositLeadTimeMs;
+  }, [slot.startAt, depositLeadTimeMs, depositLeadTimeTick]);
+
   const [charterPayFull, setCharterPayFull] = useState(true);
   const payFullAmount = bookingMode === "shared" ? true : charterPayFull;
   useEffect(() => {
     if (bookingMode !== "shared" && allowDeposit !== true) setCharterPayFull(true);
   }, [bookingMode, allowDeposit]);
+  useEffect(() => {
+    if (bookingMode !== "shared" && isDepositWithinLeadTime && !charterPayFull) {
+      setCharterPayFull(true);
+    }
+  }, [bookingMode, isDepositWithinLeadTime, charterPayFull]);
 
   const addonKeyForAttempt = useMemo(
     () =>
@@ -534,6 +563,9 @@ export function InlineBookingDetailsStep({
         return;
       }
       setHoldId(result.holdId);
+      if (typeof result.depositLeadTimeHours === "number" && Number.isFinite(result.depositLeadTimeHours)) {
+        setDepositLeadTimeHoursFromHold(result.depositLeadTimeHours);
+      }
       try {
         if (typeof sessionStorage !== "undefined") sessionStorage.setItem(SESSION_STORAGE_HOLD_ID_KEY, result.holdId);
       } catch (_) {}
@@ -1185,7 +1217,7 @@ export function InlineBookingDetailsStep({
         )}
 
         {/* Payment amount — deposit only when experience explicitly enables it */}
-        {bookingMode !== "shared" && allowDeposit === true ? (
+        {bookingMode !== "shared" && allowDeposit === true && !isDepositWithinLeadTime ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="flex flex-col gap-2">
@@ -1215,7 +1247,7 @@ export function InlineBookingDetailsStep({
               </button>
             </div>
           </div>
-        ) : bookingMode === "shared" ? (
+        ) : bookingMode === "shared" || (allowDeposit === true && isDepositWithinLeadTime) ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="rounded-xl border-2 border-brand-primary bg-brand-primary/10 py-3 px-3 text-sm">
@@ -1357,7 +1389,6 @@ export function InlineBookingDetailsStep({
             disabled={
               priceLoading ||
               effectiveRateCents === null ||
-              (!payFullAmount && depositCentsFromServer == null) ||
               paymentPhase !== "form" ||
               holdSubmitInFlight
             }

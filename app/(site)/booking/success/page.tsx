@@ -13,6 +13,7 @@ import {
 } from "@/lib/booking/complete-after-payment-client";
 import { SESSION_HOLD_ID_KEY, type ModalHoldRecoveryPayloadV1 } from "@/components/site/useHoldCreation";
 import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
+import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
 
 function receiptClaimForCompleteAfterPayment(receiptTokenFromUrl: string | null): string | null {
   const u = receiptTokenFromUrl?.trim();
@@ -586,7 +587,7 @@ function BookingSuccessContent() {
                 </>
               ) : (
                 <>
-                  You paid a <strong>50% deposit</strong> today. The remaining balance will be charged automatically 48 hours before your trip.
+                  You paid a <strong>{Math.round(DEPOSIT_FRACTION * 100)}% deposit</strong> today. The remaining balance will be charged automatically 48 hours before your trip.
                 </>
               )}
             </p>

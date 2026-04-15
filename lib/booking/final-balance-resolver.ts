@@ -21,6 +21,10 @@ export type FinalBalanceResolution = {
   storedFinalAmountCents: number | undefined;
   /** True when stored `stripe.finalAmountCents` disagrees with authoritative total − deposit. */
   mismatchVsStored: boolean;
+  /**
+   * Deposit PI id is set on the booking but `depositAmountCents` is missing or non-positive — do not charge full total off-session.
+   */
+  isDepositAmountMissing: boolean;
 };
 
 export function resolveFinalBalanceFromBooking(booking: Booking): FinalBalanceResolution {
@@ -33,12 +37,20 @@ export function resolveFinalBalanceFromBooking(booking: Booking): FinalBalanceRe
   const mismatchVsStored =
     storedFinalAmountCents != null &&
     Math.abs(storedFinalAmountCents - authoritativeFinalCents) > FINAL_BALANCE_MISMATCH_EPSILON_CENTS;
+  const depositPiTrim =
+    typeof s?.depositPaymentIntentId === "string" && s.depositPaymentIntentId.trim().length > 0
+      ? s.depositPaymentIntentId.trim()
+      : "";
+  const hasValidDepositAmountCents =
+    typeof s?.depositAmountCents === "number" && Number.isFinite(s.depositAmountCents) && s.depositAmountCents > 0;
+  const isDepositAmountMissing = Boolean(depositPiTrim) && !hasValidDepositAmountCents;
   return {
     authoritativeFinalCents,
     totalAmountCents,
     depositAmountCents,
     storedFinalAmountCents,
     mismatchVsStored,
+    isDepositAmountMissing,
   };
 }
 

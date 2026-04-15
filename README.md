@@ -25,6 +25,8 @@ Open [http://localhost:3000](http://localhost:3000).
 
 **Booking system (cold start):** The booking calendar and checkout start with an empty Firestore. To enable them: set Firebase, Stripe, Brevo, and `APP_BASE_URL` in `.env.local`, then open **[http://localhost:3000/admin](http://localhost:3000/admin)** and click **Run setup**. See **`docs/BOOKING_SETUP.md`** for the full checklist.
 
+**Firestore indexes (blocks + booking):** Before exercising create-hold or availability locally, deploy composite indexes from **`firestore.indexes.json`** to your project or emulator (e.g. `firebase deploy --only firestore:indexes`, or start the emulator with an import that already includes index definitions). If the `blocks` composite index is missing, block checks return **503** until indexes are **READY** in the Firebase Console—this is intentional so enforcement is never skipped.
+
 ### Build (production)
 
 ```bash

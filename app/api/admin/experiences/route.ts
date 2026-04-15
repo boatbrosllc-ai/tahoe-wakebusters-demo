@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
+import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/lib/booking/ticketed-slot-utils";
 import type {
   Experience,
   ExperienceRate,
@@ -41,7 +42,7 @@ function stripUndefined<T>(obj: T): T {
 
 function parseBody(
   body: unknown
-): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; allowDeposit?: boolean } | null {
+): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; ticketedWeekdays?: number[]; allowDeposit?: boolean } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const slug = typeof b.slug === "string" ? normalizePublicSlug(b.slug) : "";
@@ -163,6 +164,10 @@ function parseBody(
   const departureHour = b.pricingType === "ticketed" && typeof b.departureHour === "number" ? Math.min(23, Math.max(0, Math.floor(b.departureHour))) : undefined;
   const departureMinute = b.pricingType === "ticketed" && typeof b.departureMinute === "number" ? Math.min(59, Math.max(0, Math.floor(b.departureMinute))) : undefined;
   const tripDurationHours = b.pricingType === "ticketed" && typeof b.tripDurationHours === "number" && b.tripDurationHours > 0 ? b.tripDurationHours : undefined;
+  const ticketedWeekdays =
+    b.pricingType === "ticketed" && Array.isArray(b.ticketedWeekdays)
+      ? ticketedWeekdaysForFirestore(normalizeTicketedWeekdaysInput(b.ticketedWeekdays))
+      : undefined;
   const allowDeposit = b.pricingType !== "ticketed" && b.allowDeposit === true ? true : false;
   return {
     slug,
@@ -202,11 +207,22 @@ function parseBody(
     departureHour,
     departureMinute,
     tripDurationHours,
+    ...(ticketedWeekdays != null && ticketedWeekdays.length > 0 && { ticketedWeekdays }),
     allowDeposit,
   };
 }
 
-function validateRates(rates: Array<{ durationHours: number; priceCents: number }>): string | null {
+function validateRates(
+  rates: Array<{ durationHours: number; priceCents: number }>,
+  options?: { pricingType?: "ticketed"; tripDurationHours?: number }
+): string | null {
+  if (options?.pricingType === "ticketed") {
+    if (rates.length !== 1) return "Ticketed experiences must include exactly one rate.";
+    const tripDurationHours = options.tripDurationHours;
+    if (tripDurationHours != null && tripDurationHours > 0 && rates[0].durationHours !== tripDurationHours) {
+      return "Ticketed rate durationHours must match tripDurationHours.";
+    }
+  }
   const durations = new Set<number>();
   for (const rate of rates) {
     if (!(rate.durationHours > 0)) return "Each rate must have durationHours > 0.";
@@ -307,7 +323,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Each initial rate must include a displayName." }, { status: 400 });
     }
     if (parsed.rates) {
-      const ratesError = validateRates(parsed.rates);
+      const ratesError = validateRates(parsed.rates, {
+        pricingType: parsed.pricingType,
+        tripDurationHours: parsed.tripDurationHours,
+      });
       if (ratesError) {
         return NextResponse.json({ error: ratesError }, { status: 400 });
       }
@@ -352,6 +371,8 @@ export async function POST(request: NextRequest) {
       ...(parsed.departureHour != null && { departureHour: parsed.departureHour }),
       ...(parsed.tripDurationHours != null && { tripDurationHours: parsed.tripDurationHours }),
       ...(parsed.departureMinute != null && { departureMinute: parsed.departureMinute }),
+      ...(parsed.ticketedWeekdays != null &&
+        parsed.ticketedWeekdays.length > 0 && { ticketedWeekdays: parsed.ticketedWeekdays }),
       updatedAt: Date.now(),
     };
     const ref = db.collection("experiences").doc();

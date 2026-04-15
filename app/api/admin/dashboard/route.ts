@@ -196,7 +196,8 @@ export async function GET(request: NextRequest) {
     const cancelSummaryAlertCutoff = new Date();
     cancelSummaryAlertCutoff.setDate(cancelSummaryAlertCutoff.getDate() - 30);
     const cancelSummaryAlertCutoffMs = cancelSummaryAlertCutoff.getTime();
-    const [finalFailedOldSnap, cancelSummaryAlertsSnap] = await Promise.all([
+    const PAGE_SIZE_FINAL_DUE = 400;
+    const [finalFailedOldSnap, cancelSummaryAlertsSnap, finalDueSnap] = await Promise.all([
       db.collection("bookings").where("status", "==", "final_failed").limit(500).get(),
       // Single equality on `type` only — avoids a composite index (type + createdAt range).
       // Filter last 30 days in memory; cap fetch for rare high-volume edge cases.
@@ -205,6 +206,7 @@ export async function GET(request: NextRequest) {
         .where("type", "==", "admin_cancel_summary_adjustment_skipped")
         .limit(500)
         .get(),
+      db.collection("bookings").where("status", "==", "final_due").limit(PAGE_SIZE_FINAL_DUE).get(),
     ]);
     let adminCancelSummaryAdjustmentSkippedCount = 0;
     for (const d of cancelSummaryAlertsSnap.docs) {
@@ -217,6 +219,16 @@ export async function GET(request: NextRequest) {
       const fc = b.finalChargeAt ? toDate(b.finalChargeAt) : null;
       if (fc && fc <= finalFailedCutoff) finalFailedBeyondGraceCount++;
     });
+    const nowForFinalDue = new Date();
+    let finalDuePastDueCount = 0;
+    let finalDueTotalCents = 0;
+    for (const d of finalDueSnap.docs) {
+      const b = d.data() as Booking;
+      const fc = b.finalChargeAt ? toDate(b.finalChargeAt as { toDate?: () => Date; seconds?: number }) : null;
+      if (fc && fc.getTime() <= nowForFinalDue.getTime()) finalDuePastDueCount++;
+      finalDueTotalCents += typeof b.stripe?.finalAmountCents === "number" ? b.stripe.finalAmountCents : 0;
+    }
+    const finalDueCount = finalDueSnap.size;
     let confirmationDeadLetterCount = 0;
     deadLetterSnap.docs.forEach((d) => {
       const row = d.data() as { type?: string };
@@ -248,6 +260,10 @@ export async function GET(request: NextRequest) {
       /** Among the last 500 bookings (by createdAt): slot-taken rows missing boatId where per-boat occupancy applies (excludes shared ticketed inventory). */
       recentBookingsMissingBoatId,
       finalFailedBeyondGraceCount,
+      /** Capped at 400 documents; sum/count are for that page only (same pattern as final-failed scan). */
+      finalDueCount,
+      finalDueTotalCents,
+      finalDuePastDueCount,
       finalFailedReleaseSlaHours,
       missingBookingStartDateStrCount,
       missingHoldsStartDateStrCount,

@@ -472,17 +472,21 @@ export function DynamicPricingEditor({
                   key={i}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-brand-dark/15 bg-white pl-2 pr-1 py-1.5 text-sm"
                 >
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    className="w-11 rounded border border-brand-dark/20 px-1.5 py-0.5 text-sm"
-                    placeholder="hrs"
-                    value={r.durationHours || ""}
-                    onChange={(e) => setRateNum(i, "durationHours", parseFloat(e.target.value) || 0)}
-                    aria-label="Hours"
-                  />
-                  <span className="text-brand-muted text-xs">hrs</span>
+                  {!isTicketed && (
+                    <>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        className="w-11 rounded border border-brand-dark/20 px-1.5 py-0.5 text-sm"
+                        placeholder="hrs"
+                        value={r.durationHours || ""}
+                        onChange={(e) => setRateNum(i, "durationHours", parseFloat(e.target.value) || 0)}
+                        aria-label="Hours"
+                      />
+                      <span className="text-brand-muted text-xs">hrs</span>
+                    </>
+                  )}
                   <input
                     className="w-28 min-w-0 rounded border border-brand-dark/20 px-1.5 py-0.5 text-sm"
                     placeholder="Label"
@@ -490,14 +494,18 @@ export function DynamicPricingEditor({
                     onChange={(e) => setRate(i, "displayName", e.target.value)}
                     aria-label="Label"
                   />
-                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => removeRate(i)} aria-label="Remove">
-                    <Trash2 className="w-3 h-3 text-brand-muted" />
-                  </Button>
+                  {!isTicketed && (
+                    <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => removeRate(i)} aria-label="Remove">
+                      <Trash2 className="w-3 h-3 text-brand-muted" />
+                    </Button>
+                  )}
                 </span>
               ))}
-              <Button type="button" variant="outline" size="sm" className="text-xs" onClick={addRate}>
-                <Plus className="w-3.5 h-3.5 mr-1" /> {isTicketed ? "Add ticket option" : "Add duration"}
-              </Button>
+              {!isTicketed && (
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={addRate}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add duration
+                </Button>
+              )}
             </div>
           </div>
 

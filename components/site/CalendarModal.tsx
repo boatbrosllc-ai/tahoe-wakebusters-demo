@@ -459,27 +459,14 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
 
           {/* Scroll wrapper: flex+grid alone is unreliable for min-height 0 / overflow on mobile WebKit */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
-          <div className={cn(slotsLoading ? "grid grid-cols-7 gap-0.5 sm:gap-1" : "space-y-0.5 sm:space-y-1")} role="grid">
-            {slotsLoading ? (
-              Array.from({ length: 5 }, (_, rowIdx) => (
-                <div key={`loading-row-${rowIdx}`} role="row" className="grid grid-cols-7 gap-0.5 sm:gap-1 col-span-7">
-                  {Array.from({ length: 7 }, (_, colIdx) => (
-                    <div
-                      key={`loading-${rowIdx}-${colIdx}`}
-                      role="gridcell"
-                      className="min-h-[36px] sm:min-h-[44px] animate-pulse rounded bg-brand-dark/10"
-                      aria-hidden
-                    />
-                  ))}
-                </div>
-              ))
-            ) : (
-              calendarWeeks.map((week, weekIdx) => (
+          <div className="space-y-0.5 sm:space-y-1" role="grid">
+            {calendarWeeks.map((week, weekIdx) => (
                 <div key={`week-${weekIdx}`} role="row" className="grid grid-cols-7 gap-0.5 sm:gap-1">
                   {week.map((cell) => {
                     const isAvailable = cell.available && !cell.isPast;
                     const isPast = cell.isPast;
-                    const isClickable = cell.isCurrentMonth && !isPast;
+                    const isClickable =
+                      cell.isCurrentMonth && !isPast && (slotsLoading || cell.available);
                     const isToday = cell.dateStr === todayStr;
                     const isSelected = selectedDate === cell.dateStr;
                     const isDisabled = !isClickable;
@@ -490,9 +477,11 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                       ? "Outside current month"
                       : isPast
                         ? "Unavailable. Past date"
-                        : isAvailable
-                          ? "Available"
-                          : "Unavailable";
+                        : slotsLoading
+                          ? "Loading availability"
+                          : isAvailable
+                            ? "Available"
+                            : "Unavailable";
                     return (
                       <div key={cell.dateStr + cell.day} role="gridcell">
                         <button
@@ -502,12 +491,18 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                           onClick={() => handleDayClick(cell.dateStr)}
                           className={cn(
                             "min-h-[36px] sm:min-h-[44px] w-full flex flex-col items-center justify-center rounded text-xs sm:text-sm font-medium transition-all touch-manipulation",
+                            slotsLoading && cell.isCurrentMonth && "animate-pulse bg-brand-dark/10",
                             !cell.isCurrentMonth && "text-brand-muted/40",
                             cell.isCurrentMonth && cell.isPast && "text-brand-muted/50 bg-brand-dark/5",
-                            cell.isCurrentMonth && !cell.isPast && !cell.available && "bg-brand-dark/10 text-brand-muted hover:bg-brand-dark/15 cursor-pointer",
-                            isAvailable && !slotsPartialData && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer",
-                            isAvailable && slotsPartialData && "bg-amber-50 text-amber-900 ring-1 ring-amber-400/60 border border-dashed border-amber-400/60 hover:bg-amber-100 cursor-pointer",
+                            !slotsLoading &&
+                              cell.isCurrentMonth &&
+                              !cell.isPast &&
+                              !cell.available &&
+                              "bg-brand-dark/10 text-brand-muted cursor-not-allowed",
+                            isAvailable && !slotsPartialData && "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30",
+                            isAvailable && slotsPartialData && "bg-amber-50 text-amber-900 ring-1 ring-amber-400/60 border border-dashed border-amber-400/60 hover:bg-amber-100",
                             isClickable && "cursor-pointer",
+                            !isClickable && "cursor-default",
                             isToday && cell.isCurrentMonth && "ring-2 ring-brand-primary ring-offset-1",
                             isSelected && "ring-2 ring-brand-primary ring-offset-1 bg-brand-primary/15"
                           )}
@@ -520,8 +515,7 @@ export function CalendarModal({ open, onOpenChange }: CalendarModalProps) {
                     );
                   })}
                 </div>
-              ))
-            )}
+              ))}
           </div>
           </div>
 

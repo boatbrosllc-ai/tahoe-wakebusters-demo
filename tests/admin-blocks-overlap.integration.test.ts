@@ -5,6 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { adminBlockIntervalsOverlap } from "../lib/booking/admin-block-overlap";
 
 function blockOverlapsRange(
   blockStart: Date,
@@ -57,5 +58,27 @@ describe("admin blocks overlap-safe range", () => {
     const blockEndBefore = new Date("2025-03-10T23:59:59");
     assert.strictEqual(blockEndOverlap.getTime() >= rangeStart.getTime(), true);
     assert.strictEqual(blockEndBefore.getTime() >= rangeStart.getTime(), false);
+  });
+});
+
+describe("adminBlockIntervalsOverlap (exclusive-end, matches booking enforcement)", () => {
+  it("returns false for two adjacent intervals that share an exact endpoint", () => {
+    const boundary = new Date("2025-06-01T12:00:00.000Z");
+    const a0 = new Date("2025-06-01T06:00:00.000Z");
+    const b0 = boundary;
+    const b1 = new Date("2025-06-01T18:00:00.000Z");
+    assert.strictEqual(
+      adminBlockIntervalsOverlap(a0, boundary, b0, b1),
+      false,
+      "touching at shared instant must not count as overlap"
+    );
+  });
+
+  it("returns true when intervals genuinely overlap", () => {
+    const a0 = new Date("2025-06-01T06:00:00.000Z");
+    const a1 = new Date("2025-06-01T14:00:00.000Z");
+    const b0 = new Date("2025-06-01T12:00:00.000Z");
+    const b1 = new Date("2025-06-01T18:00:00.000Z");
+    assert.strictEqual(adminBlockIntervalsOverlap(a0, a1, b0, b1), true);
   });
 });

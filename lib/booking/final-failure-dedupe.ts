@@ -10,7 +10,7 @@ import { getFirestoreExports } from "./firebase-admin";
 const LEASE_MS = 10 * 60 * 1000;
 
 function dedupeKey(bookingId: string, paymentIntentId?: string): string {
-  return paymentIntentId ?? `cron_${bookingId}`;
+  return paymentIntentId ? paymentIntentId : bookingId;
 }
 
 /**

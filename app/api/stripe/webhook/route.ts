@@ -33,6 +33,7 @@ import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { formatSlotDateTime } from "@/lib/booking/format-booking-datetime";
 import {
   checkoutIncomingMismatchAgainstHold,
+  customerOverrideFromCheckoutSession,
   customerOverrideFromPaymentIntent,
   patchBookingCustomerIfPlaceholderFromCheckoutSession,
   paymentIntentMatchesHoldForConversion,
@@ -127,8 +128,8 @@ export async function POST(request: NextRequest) {
     /** Bumps per-path retry counters on `stripeEvents/{eventId}`; use with `webhookTransientFailureShouldRetry`. */
     const recordWebhookRetryAttempt = (counterField: string) =>
       incrementStripeWebhookRetryCounter(db, eventsRef, eventId, counterField);
-    /** 2 minutes blocks the ~1-minute Stripe retry window from concurrent duplicate processing; later Stripe retries proceed after a crashed handler. */
-    const PROCESSING_LEASE_MS = 2 * 60 * 1000;
+    /** 5 minutes aligns with Netlify max serverless duration so a slow handler is less likely to overlap a stale-lease reclaim retry. */
+    const PROCESSING_LEASE_MS = 5 * 60 * 1000;
 
     type ClaimResult = { runHandler: boolean; alreadyCompleted: boolean; reclaimedStale?: boolean; needsCustomerPatch?: boolean };
     const claimResult = await db.runTransaction(async (tx): Promise<ClaimResult> => {
@@ -255,6 +256,9 @@ export async function POST(request: NextRequest) {
         eventId,
         eventType: event.type,
         metric: "stripe_webhook_stale_reclaimed",
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.random() * 2000);
       });
     }
 
@@ -603,12 +607,7 @@ export async function POST(request: NextRequest) {
         }
         return true;
       }
-      const customerDetails = session.customer_details;
-      const customerOverride = {
-        name: (customerDetails?.name ?? "").trim() || hold.customerDraft.name,
-        email: (customerDetails?.email ?? "").trim() || hold.customerDraft.email,
-        phone: (customerDetails?.phone ?? "").trim() || hold.customerDraft.phone,
-      };
+      const customerOverride = customerOverrideFromCheckoutSession(session, hold.customerDraft);
       let specialNotesOverride: string | undefined;
       if (Array.isArray(session.custom_fields)) {
         const field = session.custom_fields.find((f: { key?: string }) => f.key === "special_notes");
@@ -628,7 +627,7 @@ export async function POST(request: NextRequest) {
           currency,
           source: "checkout_webhook",
           paymentIntent: piActiveGuard,
-          customerOverride,
+          ...(customerOverride ? { customerOverride } : {}),
           specialNotes: specialNotesOverride,
           checkoutSessionId: sessionId,
         });
@@ -650,12 +649,13 @@ export async function POST(request: NextRequest) {
           } catch (e) {
             console.error("[stripe-webhook] sendAmountIntegrityMismatchOpsEmail", e);
           }
-          const em = customerOverride.email?.trim();
+          const em = (customerOverride?.email ?? hold.customerDraft.email)?.trim();
           if (em) {
             try {
               await sendAmountIntegrityMismatchCustomerEmail({
                 to: em,
-                customerName: customerOverride.name?.trim() || "Guest",
+                customerName:
+                  customerOverride?.name?.trim() || hold.customerDraft.name?.trim() || "Guest",
                 holdId,
               });
             } catch (e) {
@@ -1102,12 +1102,7 @@ export async function POST(request: NextRequest) {
             }
             return true;
           }
-          const customerDetails = session.customer_details;
-          const customerOverride = {
-            name: (customerDetails?.name ?? "").trim() || hold.customerDraft.name,
-            email: (customerDetails?.email ?? "").trim() || hold.customerDraft.email,
-            phone: (customerDetails?.phone ?? "").trim() || hold.customerDraft.phone,
-          };
+          const customerOverride = customerOverrideFromCheckoutSession(session, hold.customerDraft);
           let specialNotesOverride: string | undefined;
           if (Array.isArray(session.custom_fields)) {
             const field = session.custom_fields.find((f: { key?: string }) => f.key === "special_notes");
@@ -1129,7 +1124,7 @@ export async function POST(request: NextRequest) {
               paymentIntent: piConvGuard,
               amountTotalCents: amountTotal ?? undefined,
               currency: currency ?? undefined,
-              customerOverride,
+              ...(customerOverride ? { customerOverride } : {}),
               specialNotes: specialNotesOverride,
             });
             const result = conversion.result;
@@ -1150,12 +1145,13 @@ export async function POST(request: NextRequest) {
               } catch (e) {
                 console.error("[stripe-webhook] sendAmountIntegrityMismatchOpsEmail", e);
               }
-              const em2 = customerOverride.email?.trim();
+              const em2 = (customerOverride?.email ?? hold.customerDraft.email)?.trim();
               if (em2) {
                 try {
                   await sendAmountIntegrityMismatchCustomerEmail({
                     to: em2,
-                    customerName: customerOverride.name?.trim() || "Guest",
+                    customerName:
+                      customerOverride?.name?.trim() || hold.customerDraft.name?.trim() || "Guest",
                     holdId,
                   });
                 } catch (e) {

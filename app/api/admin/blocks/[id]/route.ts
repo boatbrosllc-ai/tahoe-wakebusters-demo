@@ -4,6 +4,7 @@ import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { findBlockConflicts } from "@/lib/booking/block-conflict-check";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
+import { findOverlappingAdminBlocksForWrite } from "@/lib/booking/admin-block-overlap";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -69,6 +70,25 @@ export async function PATCH(
     if (conflicts.length > 0) {
       return NextResponse.json(
         { error: "Block overlaps active holds or bookings", conflicts },
+        { status: 409 }
+      );
+    }
+    const boatForScope =
+      typeof current.boatId === "string" ? current.boatId.trim() || null : null;
+    const blockOverlaps = await findOverlappingAdminBlocksForWrite({
+      db,
+      Timestamp,
+      experienceId,
+      experienceSlug,
+      variantIds,
+      intervalStart: startAt,
+      intervalEnd: endAt,
+      boatId: boatForScope,
+      excludeBlockId: id,
+    });
+    if (blockOverlaps.length > 0) {
+      return NextResponse.json(
+        { error: "This time range overlaps an existing admin block", blockOverlaps },
         { status: 409 }
       );
     }
