@@ -1579,8 +1579,8 @@ export async function POST(request: NextRequest) {
         collectStaleBookingsByTimestampField(db, "final_failed", "updatedAt", cutoffTs),
       ]);
       const staleFailedDocs = new Map<string, QueryDocumentSnapshot<DocumentData>>();
-      for (const [id, doc] of staleByFinalChargeAt) staleFailedDocs.set(id, doc);
-      for (const [id, doc] of staleByUpdatedAt) staleFailedDocs.set(id, doc);
+      staleByFinalChargeAt.forEach((doc, id) => staleFailedDocs.set(id, doc));
+      staleByUpdatedAt.forEach((doc, id) => staleFailedDocs.set(id, doc));
       for (const doc of Array.from(staleFailedDocs.values())) {
         const b = doc.data() as Booking;
         if (!b.finalChargeAt) {
@@ -1713,8 +1713,8 @@ export async function POST(request: NextRequest) {
         collectStaleBookingsByTimestampField(db, "final_requires_action", "updatedAt", raCutoffTs),
       ]);
       const raDocs = new Map<string, QueryDocumentSnapshot<DocumentData>>();
-      for (const [id, doc] of staleByAttemptedAt) raDocs.set(id, doc);
-      for (const [id, doc] of staleByUpdatedAt) raDocs.set(id, doc);
+      staleByAttemptedAt.forEach((doc, id) => raDocs.set(id, doc));
+      staleByUpdatedAt.forEach((doc, id) => raDocs.set(id, doc));
       for (const doc of Array.from(raDocs.values())) {
         const b = doc.data() as Booking;
         try {

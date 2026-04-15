@@ -299,7 +299,7 @@ export async function POST(request: NextRequest) {
     await batch.commit();
     // Post-write conflict verification to shrink TOCTOU window; rollback created blocks on conflict.
     if (createdBlockMeta.length > 0) {
-      const verifyKeys = [...new Set(createdBlockMeta.map((m) => (m.boatId == null ? "__EXP__" : m.boatId)))];
+      const verifyKeys = Array.from(new Set(createdBlockMeta.map((m) => (m.boatId == null ? "__EXP__" : m.boatId))));
       for (const key of verifyKeys) {
         const boatForVerify = key === "__EXP__" ? null : key;
         const postConflicts = await findBlockConflicts({
