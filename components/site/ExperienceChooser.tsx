@@ -6,7 +6,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { experiences, formatExperiencePriceLabel } from "@/content/experiences";
 import type { Experience } from "@/content/experiences";
-import { getDisplayImageUrl } from "@/lib/utils";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
@@ -22,6 +22,7 @@ export function ExperienceChooser() {
       gallery?: string[];
       fromPriceCents?: number | null;
       pricingType?: "charter" | "ticketed";
+      listingCardImagePosition?: string;
     }>
   >([]);
   const [apiError, setApiError] = useState(false);
@@ -41,6 +42,7 @@ export function ExperienceChooser() {
           gallery?: string[];
           fromPriceCents?: number | null;
           pricingType?: "charter" | "ticketed";
+          listingCardImagePosition?: string;
         }> = [];
         list.forEach((item: {
           slug?: string;
@@ -50,17 +52,23 @@ export function ExperienceChooser() {
           gallery?: string[];
           fromPriceCents?: number | null;
           pricingType?: "charter" | "ticketed";
+          listingCardImagePosition?: string;
         }) => {
-          if (item.slug)
-            next.push({
-              slug: item.slug,
-              title: item.title,
-              subtitle: item.subtitle,
-              heroMedia: item.heroMedia,
-              gallery: Array.isArray(item.gallery) ? item.gallery : [],
-              fromPriceCents: item.fromPriceCents,
-              pricingType: item.pricingType,
-            });
+          if (!item.slug) return;
+          const hm = item.heroMedia;
+          next.push({
+            slug: item.slug,
+            title: item.title,
+            subtitle: item.subtitle,
+            heroMedia:
+              hm?.url != null ? { type: hm.type ?? "image", url: hm.url } : hm,
+            gallery: Array.isArray(item.gallery) ? item.gallery : [],
+            fromPriceCents: item.fromPriceCents,
+            pricingType: item.pricingType,
+            ...(typeof item.listingCardImagePosition === "string" && item.listingCardImagePosition.trim()
+              ? { listingCardImagePosition: item.listingCardImagePosition.trim() }
+              : {}),
+          });
         });
         setListings(next);
       })
@@ -81,9 +89,13 @@ export function ExperienceChooser() {
     gallery?: string[];
     fromPriceCents?: number | null;
     pricingType?: "charter" | "ticketed";
+    listingCardImagePosition?: string;
   }): Experience & { fromPriceCents?: number | null; pricingType?: "charter" | "ticketed" } => {
-    const exp = staticBySlug.get(listing.slug);
+    const slugKey = listing.slug.trim().toLowerCase();
+    const exp = staticBySlug.get(listing.slug) ?? staticBySlug.get(slugKey);
     const fromListing = experienceCardImageUrl(listing.heroMedia, listing.gallery);
+    const mergedGallery =
+      listing.gallery && listing.gallery.length > 0 ? listing.gallery : (exp?.gallery ?? []);
     return {
       slug: listing.slug,
       title: listing.title?.trim() || exp?.title || "Experience",
@@ -94,10 +106,11 @@ export function ExperienceChooser() {
       durationMinutes: exp?.durationMinutes,
       capacity: CAPACITY_ALL,
       heroImage: fromListing ?? exp?.heroImage ?? "/photos/IMG_0386.webp",
-      gallery: exp?.gallery || [],
+      gallery: mergedGallery,
       pricingNote: exp?.pricingNote || "",
       fromPriceCents: listing.fromPriceCents !== undefined ? listing.fromPriceCents : exp?.fromPriceCents,
       ...(listing.pricingType && { pricingType: listing.pricingType }),
+      ...(listing.listingCardImagePosition?.trim() && { listingCardImagePosition: listing.listingCardImagePosition.trim() }),
     };
   };
 
@@ -241,7 +254,15 @@ export function ExperienceChooser() {
                   src={getDisplayImageUrl(pontoonData.heroImage)}
                   alt=""
                   fill
-                  className="object-cover object-[center_90%] sm:object-[center_75%] lg:object-[center_65%] transition-transform duration-500 group-hover:scale-[1.03]"
+                  className={cn(
+                    "object-cover transition-transform duration-500 group-hover:scale-[1.03]",
+                    !pontoonData.listingCardImagePosition?.trim() && "object-center"
+                  )}
+                  style={
+                    pontoonData.listingCardImagePosition?.trim()
+                      ? { objectPosition: pontoonData.listingCardImagePosition.trim() }
+                      : undefined
+                  }
                   sizes="(max-width: 640px) 100vw, (max-width: 1024px) 100vw, 1280px"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
@@ -400,8 +421,7 @@ export function ExperienceChooser() {
 
         {rest.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-5">
-          {rest.map((exp, i) => {
-            const data = experienceWithListingData(exp);
+          {rest.map((data, i) => {
             return (
               <motion.div
                 key={data.slug}
@@ -420,7 +440,15 @@ export function ExperienceChooser() {
                     src={getDisplayImageUrl(data.heroImage)}
                     alt=""
                     fill
-                    className="object-cover object-[center_90%] transition-transform duration-500 group-hover:scale-[1.03]"
+                    className={cn(
+                      "object-cover transition-transform duration-500 group-hover:scale-[1.03]",
+                      !data.listingCardImagePosition?.trim() && "object-center"
+                    )}
+                    style={
+                      data.listingCardImagePosition?.trim()
+                        ? { objectPosition: data.listingCardImagePosition.trim() }
+                        : undefined
+                    }
                     sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />

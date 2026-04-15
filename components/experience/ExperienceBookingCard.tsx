@@ -177,7 +177,7 @@ export function ExperienceBookingCard({
   const [discountCode, setDiscountCode] = useState("");
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [cancellationAck, setCancellationAck] = useState(false);
-  const [partySize, setPartySize] = useState(2);
+  const [partySize, setPartySize] = useState(() => (pricingType === "ticketed" ? 1 : 2));
   const [holdId, setHoldId] = useState<string | null>(null);
   const [releaseToken, setReleaseToken] = useState<string | null>(null);
   // Tracks which slot the current holdId was created for, so we can pass resumeHoldId on re-submission.

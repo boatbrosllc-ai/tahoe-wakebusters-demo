@@ -45,6 +45,8 @@ export interface ListingBoat {
   description?: string;
   /** Photo URLs for gallery/booking picker */
   photos: string[];
+  /** Optional CSS `object-position` for boat cards (first photo). */
+  listingCardImagePosition?: string;
   active: boolean;
   /** Experience document IDs this boat is available for */
   experienceIds: string[];
@@ -122,6 +124,10 @@ export interface Experience {
   subtitle: string;
   descriptionLong: string;
   heroMedia: { type: "image" | "video"; url: string };
+  /** Optional CSS `object-position` for the listing detail hero image (e.g. `center 30%`). */
+  heroImagePosition?: string;
+  /** Optional CSS `object-position` for homepage / grid listing cards (cover image). */
+  listingCardImagePosition?: string;
   gallery: string[];
   location: ExperienceLocation;
   maxGuests: number;

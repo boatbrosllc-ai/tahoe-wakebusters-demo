@@ -444,7 +444,15 @@ export function BookingPageClient({ initialSelection }: { initialSelection?: Ini
                             src={getDisplayImageUrl(cardImage)}
                             alt=""
                             fill
-                            className="object-cover"
+                            className={cn(
+                              "object-cover",
+                              !exp.listingCardImagePosition?.trim() && "object-center"
+                            )}
+                            style={
+                              exp.listingCardImagePosition?.trim()
+                                ? { objectPosition: exp.listingCardImagePosition.trim() }
+                                : undefined
+                            }
                             sizes="(max-width: 640px) 50vw, 240px"
                           />
                         ) : (

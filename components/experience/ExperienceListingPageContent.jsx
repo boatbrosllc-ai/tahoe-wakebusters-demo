@@ -220,7 +220,10 @@ export function ExperienceListingPageContent(props) {
         heroImageUrl={heroImageUrl}
         title={heroTitle}
         subtitle={heroSubtitle}
-        imagePosition={slug === "watersports" ? "center 30%" : undefined}
+        imagePosition={
+          experience.heroImagePosition?.trim() ||
+          (slug === "watersports" ? "center 30%" : undefined)
+        }
         omitTemplateFallback
       />
 

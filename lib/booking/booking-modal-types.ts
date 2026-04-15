@@ -11,6 +11,8 @@ export interface ExperienceItem {
   heroMedia: { type: "image" | "video"; url: string };
   /** Listing gallery URLs (subset from API) for card thumbnails when hero is not a still image. */
   gallery?: string[];
+  /** CSS object-position for step-1 category thumbnails. */
+  listingCardImagePosition?: string;
   maxGuests: number;
   petsMax: number;
   fromPriceCents: number | null;

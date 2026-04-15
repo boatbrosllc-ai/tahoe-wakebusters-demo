@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Anchor, Users, Info, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DynamicPricingEditor } from "@/components/admin/DynamicPricingEditor";
 import { PhotoUploader } from "@/components/admin/PhotoUploader";
+import { ImageFramingTool } from "@/components/admin/ImageFramingTool";
 import { normalizePublicSlug } from "@/lib/booking/slug";
+import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 
 const inputClass =
   "mt-1 block w-full min-h-[44px] rounded-lg border border-brand-dark/20 px-3 py-2.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary sm:min-h-0 sm:py-2";
@@ -60,6 +62,10 @@ export type ExperienceFormData = {
   descriptionLong: string;
   heroType: "image" | "video";
   heroUrl: string;
+  /** CSS object-position for detail hero (empty = site default). */
+  heroImagePosition: string;
+  /** CSS object-position for homepage / grid cards. */
+  listingCardImagePosition: string;
   gallery: string[];
   locationTitle: string;
   locationAddress: string;
@@ -118,6 +124,8 @@ function getDefaultFormData(): ExperienceFormData {
     descriptionLong: "",
     heroType: "image",
     heroUrl: "",
+    heroImagePosition: "",
+    listingCardImagePosition: "",
     gallery: [],
     locationTitle: "",
     locationAddress: "",
@@ -182,6 +190,8 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     descriptionLong: typeof api.descriptionLong === "string" ? api.descriptionLong : "",
     heroType: hero.type === "video" ? "video" : "image",
     heroUrl: typeof hero.url === "string" ? hero.url : "",
+    heroImagePosition: typeof api.heroImagePosition === "string" ? api.heroImagePosition : "",
+    listingCardImagePosition: typeof api.listingCardImagePosition === "string" ? api.listingCardImagePosition : "",
     gallery: Array.isArray(api.gallery) ? api.gallery.filter((x): x is string => typeof x === "string") : [],
     locationTitle: typeof loc.title === "string" ? loc.title : "",
     locationAddress: typeof loc.addressText === "string" ? loc.addressText : "",
@@ -319,6 +329,8 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     descriptionLong: d.descriptionLong,
     heroMedia: { type: d.heroType, url: d.heroUrl },
     gallery: d.gallery,
+    heroImagePosition: d.heroImagePosition.trim(),
+    listingCardImagePosition: d.listingCardImagePosition.trim(),
     location: { title: d.locationTitle, addressText: d.locationAddress, notes: d.locationNotes || undefined },
     maxGuests: d.maxGuests,
     petsMax: 0, // Pets are offered as add-ons only; no separate max-pets field
@@ -404,6 +416,16 @@ export function ExperienceForm({
   const [heroUploadsActive, setHeroUploadsActive] = useState(false);
   const [galleryUploadsActive, setGalleryUploadsActive] = useState(false);
   const uploadsActive = heroUploadsActive || galleryUploadsActive;
+  const heroFramingPreviewUrl = useMemo(() => {
+    if (data.heroType === "image" && data.heroUrl.trim()) return data.heroUrl.trim();
+    const first = data.gallery.find((u) => u.trim());
+    return first?.trim() ?? "";
+  }, [data.heroType, data.heroUrl, data.gallery]);
+  const cardFramingPreviewUrl = useMemo(
+    () =>
+      experienceCardImageUrl({ type: data.heroType, url: data.heroUrl }, data.gallery) ?? "",
+    [data.heroType, data.heroUrl, data.gallery]
+  );
   const initialDataSnapshot = initialData ?? getDefaultFormData();
   const toggleSection = (name: string) => setCollapsedSections((prev) => {
     const next = new Set(prev);
@@ -720,6 +742,30 @@ export function ExperienceForm({
             listPrefix="experiences/gallery/"
             reorderable
           />
+        </div>
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm font-medium text-brand-dark">Image framing</p>
+            <p className="text-sm text-brand-muted mt-1">
+              Preview matches live crops (same aspect ratios and <code className="text-xs">object-fit: cover</code>). Video heroes use your first gallery image for these previews.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-6">
+            <ImageFramingTool
+              label="Detail page hero"
+              hint="Wide band at the top of the trip page."
+              imageUrl={heroFramingPreviewUrl}
+              value={data.heroImagePosition}
+              onChange={(v) => update("heroImagePosition", v)}
+            />
+            <ImageFramingTool
+              label="Listing cards"
+              hint="Homepage, experiences grid, and booking category tiles — uses the same cover image the site picks from hero + gallery."
+              imageUrl={cardFramingPreviewUrl || null}
+              value={data.listingCardImagePosition}
+              onChange={(v) => update("listingCardImagePosition", v)}
+            />
+          </div>
         </div>
         </div>}
       </section>

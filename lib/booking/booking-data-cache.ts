@@ -357,6 +357,7 @@ export interface ExperienceListItem {
   departureHour?: number;
   departureMinute?: number;
   allowDeposit?: boolean;
+  listingCardImagePosition?: string;
 }
 
 export interface CachedSlotDto {

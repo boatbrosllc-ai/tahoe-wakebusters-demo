@@ -20,6 +20,7 @@ import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
 import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/lib/booking/ticketed-slot-utils";
+import { sanitizeCssObjectPosition } from "@/lib/image-position";
 
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
 function stripUndefined<T>(obj: T): T {
@@ -145,6 +146,8 @@ function parseBody(
   allowDeposit: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
+  heroImagePosition?: string;
+  listingCardImagePosition?: string;
 }> | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
@@ -296,6 +299,22 @@ function parseBody(
   }
   if (typeof b.allowTipNow === "boolean") out.allowTipNow = b.allowTipNow;
   if (typeof b.allowTipLater === "boolean") out.allowTipLater = b.allowTipLater;
+  if (Object.prototype.hasOwnProperty.call(b, "heroImagePosition")) {
+    if (b.heroImagePosition === null || b.heroImagePosition === "") {
+      out.heroImagePosition = "";
+    } else if (typeof b.heroImagePosition === "string") {
+      const s = sanitizeCssObjectPosition(b.heroImagePosition);
+      if (s) out.heroImagePosition = s;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(b, "listingCardImagePosition")) {
+    if (b.listingCardImagePosition === null || b.listingCardImagePosition === "") {
+      out.listingCardImagePosition = "";
+    } else if (typeof b.listingCardImagePosition === "string") {
+      const s = sanitizeCssObjectPosition(b.listingCardImagePosition);
+      if (s) out.listingCardImagePosition = s;
+    }
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -665,7 +684,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         ? parsed.addons
         : undefined;
 
-    const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType);
+    const expFieldsForUpdate = buildExperienceDocUpdate(parsed as Parameters<typeof buildExperienceDocUpdate>[0], storedPricingType) as Record<string, unknown>;
+    for (const key of ["heroImagePosition", "listingCardImagePosition"] as const) {
+      if (expFieldsForUpdate[key] === "") {
+        expFieldsForUpdate[key] = FieldValue.delete();
+      }
+    }
 
     // Accumulate all writes into a single batch for one round-trip.
     const batch = db.batch();

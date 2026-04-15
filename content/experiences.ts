@@ -14,6 +14,8 @@ export interface Experience {
   durationMinutes?: number;
   capacity: string;
   heroImage: string;
+  /** From admin: CSS object-position for card thumbnails. */
+  listingCardImagePosition?: string;
   gallery: string[];
   pricingNote: string;
   /** Optional: lowest price in cents for "From $X" on cards. Use null when pricing is only from live API. */

@@ -29,7 +29,7 @@ export function BookingPreviewCard({
   const reduceMotion = useReducedMotion();
   const isTicketed = pricingType === "ticketed";
   const [duration, setDuration] = useState<number>(BOOKING_PREVIEW.durations[1]);
-  const [guests, setGuests] = useState(6);
+  const [guests, setGuests] = useState(() => (pricingType === "ticketed" ? 1 : 6));
 
   const openAvailability = () => {
     if (sectionId) {
@@ -79,10 +79,10 @@ export function BookingPreviewCard({
         </>
       )}
 
-      <p className="text-white/90 text-sm font-medium mb-2">Guests</p>
+      <p className="text-white/90 text-sm font-medium mb-2">{isTicketed ? "Tickets" : "Guests"}</p>
       <div className="flex items-center gap-3 mb-5">
         <label htmlFor="booking-guests" className="sr-only">
-          Number of guests
+          {isTicketed ? "Number of tickets" : "Number of guests"}
         </label>
         <input
           id="booking-guests"
@@ -113,7 +113,7 @@ export function BookingPreviewCard({
         onClick={openAvailability}
         className="w-full rounded-xl h-12 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 font-semibold focus-visible:ring-brand-primary"
       >
-        See available dates
+        {isTicketed ? "Check availability" : "See available dates"}
       </Button>
       <p className="text-white/60 text-xs text-center mt-3">{BOOKING_PREVIEW.trustLine}</p>
     </motion.div>

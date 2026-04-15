@@ -70,8 +70,13 @@ export function ExperienceCard({
               fill
               className={cn(
                 "object-cover transition-transform duration-500 group-hover:scale-[1.04]",
-                (experience.slug === "pontoon" || experience.slug === "sunset") && "object-[center_65%]"
+                !experience.listingCardImagePosition?.trim() && "object-center"
               )}
+              style={
+                experience.listingCardImagePosition?.trim()
+                  ? { objectPosition: experience.listingCardImagePosition.trim() }
+                  : undefined
+              }
               sizes={variant === "compact" ? "(max-width: 1024px) 50vw, 25vw" : "(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-brand-dark/30 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />

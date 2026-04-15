@@ -55,7 +55,21 @@ export function BookingStep1Category({
               >
                 <div className="absolute inset-0 bg-brand-dark/5">
                   {hasImage && cardImage ? (
-                    <Image src={getDisplayImageUrl(cardImage)} alt="" fill className="object-cover" sizes="(max-width: 768px) 50vw, 280px" />
+                    <Image
+                      src={getDisplayImageUrl(cardImage)}
+                      alt=""
+                      fill
+                      className={cn(
+                        "object-cover",
+                        !exp.listingCardImagePosition?.trim() && "object-center"
+                      )}
+                      style={
+                        exp.listingCardImagePosition?.trim()
+                          ? { objectPosition: exp.listingCardImagePosition.trim() }
+                          : undefined
+                      }
+                      sizes="(max-width: 768px) 50vw, 280px"
+                    />
                   ) : (
                     <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
                   )}

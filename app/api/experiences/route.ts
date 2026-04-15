@@ -19,7 +19,7 @@ export interface ExperienceListItem {
   title: string;
   subtitle: string;
   heroMedia: { type: "image" | "video"; url: string };
-  /** First URLs from the listing gallery — used when the hero is a video or missing. */
+  /** First URLs from the listing gallery (admin order) — used when the hero is a video or missing. */
   gallery: string[];
   maxGuests: number;
   petsMax: number;
@@ -31,6 +31,8 @@ export interface ExperienceListItem {
   departureHour?: number;
   departureMinute?: number;
   allowDeposit?: boolean;
+  /** CSS object-position for listing card thumbnails. */
+  listingCardImagePosition?: string;
 }
 
 export async function GET() {
@@ -42,6 +44,10 @@ export async function GET() {
         const fromPriceCents: number | null = exp.fromPriceCents ?? null;
         const isTicketed = exp.pricingType === "ticketed" || (exp.pricingType !== "charter" && inferTicketedFromSlugOrTitle(exp));
         const galleryRaw = Array.isArray(exp.gallery) ? exp.gallery : [];
+        const listingCardImagePosition =
+          typeof exp.listingCardImagePosition === "string" && exp.listingCardImagePosition.trim()
+            ? exp.listingCardImagePosition.trim()
+            : undefined;
         const gallery = galleryRaw
           .filter((u): u is string => typeof u === "string" && u.trim() !== "")
           .map((u) => u.trim())
@@ -53,6 +59,7 @@ export async function GET() {
           subtitle: exp.subtitle ?? "",
           heroMedia: exp.heroMedia ?? { type: "image", url: "" },
           gallery,
+          ...(listingCardImagePosition && { listingCardImagePosition }),
           maxGuests: getMaxGuestsForExperience(exp),
           petsMax: exp.petsMax ?? 0,
           fromPriceCents,

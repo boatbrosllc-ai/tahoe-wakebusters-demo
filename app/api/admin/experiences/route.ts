@@ -11,6 +11,7 @@ import type {
   ExperienceCancellationPolicy,
   ExperienceSeasonal,
 } from "@/lib/booking/types";
+import { sanitizeCssObjectPosition } from "@/lib/image-position";
 
 /** Remove undefined values recursively so Firestore accepts writes when ignoreUndefinedProperties is off. */
 function stripUndefined<T>(obj: T): T {
@@ -42,7 +43,7 @@ function stripUndefined<T>(obj: T): T {
 
 function parseBody(
   body: unknown
-): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; ticketedWeekdays?: number[]; allowDeposit?: boolean } | null {
+): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; ticketedWeekdays?: number[]; allowDeposit?: boolean; heroImagePosition?: string; listingCardImagePosition?: string } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const slug = typeof b.slug === "string" ? normalizePublicSlug(b.slug) : "";
@@ -169,6 +170,8 @@ function parseBody(
       ? ticketedWeekdaysForFirestore(normalizeTicketedWeekdaysInput(b.ticketedWeekdays))
       : undefined;
   const allowDeposit = b.pricingType !== "ticketed" && b.allowDeposit === true ? true : false;
+  const heroImagePosition = sanitizeCssObjectPosition(b.heroImagePosition);
+  const listingCardImagePosition = sanitizeCssObjectPosition(b.listingCardImagePosition);
   return {
     slug,
     title,
@@ -209,6 +212,8 @@ function parseBody(
     tripDurationHours,
     ...(ticketedWeekdays != null && ticketedWeekdays.length > 0 && { ticketedWeekdays }),
     allowDeposit,
+    ...(heroImagePosition && { heroImagePosition }),
+    ...(listingCardImagePosition && { listingCardImagePosition }),
   };
 }
 
@@ -373,6 +378,8 @@ export async function POST(request: NextRequest) {
       ...(parsed.departureMinute != null && { departureMinute: parsed.departureMinute }),
       ...(parsed.ticketedWeekdays != null &&
         parsed.ticketedWeekdays.length > 0 && { ticketedWeekdays: parsed.ticketedWeekdays }),
+      ...(parsed.heroImagePosition != null && { heroImagePosition: parsed.heroImagePosition }),
+      ...(parsed.listingCardImagePosition != null && { listingCardImagePosition: parsed.listingCardImagePosition }),
       updatedAt: Date.now(),
     };
     const ref = db.collection("experiences").doc();
