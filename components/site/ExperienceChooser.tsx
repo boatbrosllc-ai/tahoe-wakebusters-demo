@@ -166,7 +166,7 @@ export function ExperienceChooser() {
     );
   };
 
-  /** Homepage: large pontoon first; one row of three (sunset, holiday, wake surf club listing); then large Lake Austin Watersports (`watersports` only). */
+  /** Homepage: large pontoon first; one row of three (sunset, holiday, wake surf club listing); then large watersports hero. */
   const pontoonData = cards.find((e) => normSlug(e.slug) === "pontoon") ?? null;
   const sunsetCard = cards.find((e) => normSlug(e.slug) === "sunset") ?? null;
   const holidayCard = cards.find((e) => normSlug(e.slug) === "holiday") ?? null;
@@ -349,9 +349,6 @@ export function ExperienceChooser() {
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.45, delay: 0.12 }}
           >
-            <p className="text-center text-sm sm:text-base font-semibold text-brand-dark tracking-wide uppercase mb-3">
-              Lake Austin Watersports
-            </p>
             <Link
               href={`/experiences/${watersportsFeatured.slug}`}
               className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1 hover:ring-brand-primary/90"
