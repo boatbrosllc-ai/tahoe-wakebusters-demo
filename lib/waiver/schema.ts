@@ -104,6 +104,8 @@ export const submitWaiverSigningSchema = z
   .object({
     token: z.string().optional(),
     groupToken: z.string().optional(),
+    /** Stable QR/kiosk link id (Firestore waiverQrLinks); mutually exclusive with token/groupToken. */
+    qrLinkId: z.string().optional(),
     signer: signerSchema,
     termsAccepted: z.boolean(),
     termsAcceptedAtIso: z.string(),
@@ -112,10 +114,15 @@ export const submitWaiverSigningSchema = z
     signatureDataUrl: optionalSignatureDataUrlSchema,
     typedName: optionalTrimmedStringSchema,
   })
-  .refine((data) => (data.token?.length ?? 0) > 0 || (data.groupToken?.length ?? 0) > 0, {
-    message: "Either token or groupToken is required",
-    path: ["token"],
-  });
+  .refine(
+    (data) => {
+      const hasT = (data.token?.trim().length ?? 0) > 0;
+      const hasG = (data.groupToken?.trim().length ?? 0) > 0;
+      const hasQ = (data.qrLinkId?.trim().length ?? 0) > 0;
+      return Number(hasT) + Number(hasG) + Number(hasQ) === 1;
+    },
+    { message: "Exactly one of token, groupToken, or qrLinkId is required", path: ["token"] }
+  );
 
 export type SubmitWaiverSigningInput = z.infer<typeof submitWaiverSigningSchema>;
 

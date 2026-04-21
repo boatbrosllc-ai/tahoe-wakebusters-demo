@@ -22,7 +22,9 @@ import {
   flagWaiverRequestForManualReview,
   commitSingleUseTokenWaiverSign,
   commitGroupTokenNewSignedRequest,
+  commitQrLinkSignedRequest,
 } from "@/lib/waiver/firestore";
+import { getWaiverQrLinkById } from "@/lib/waiver/waiver-qr-firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
 import type { WaiverSignedPayload, WaiverSigned, WaiverTemplateSnapshot } from "@/lib/waiver/types";
@@ -58,6 +60,7 @@ export async function POST(request: NextRequest) {
   const {
     token,
     groupToken,
+    qrLinkId: qrLinkIdRaw,
     signer,
     initials,
     signatureDataUrl,
@@ -83,6 +86,7 @@ export async function POST(request: NextRequest) {
     let normalizedDob: string | null | undefined;
     let requestIdForStorage: string;
     let isGroupSign: boolean;
+    let isQrSign = false;
 
     if (groupToken) {
       const gt = await getGroupTokenById(groupToken);
@@ -118,8 +122,29 @@ export async function POST(request: NextRequest) {
         expectedSignerEmail = tok?.signerEmail ?? reqPreview.signerEmail;
       requestIdForStorage = reqPreview.id;
       isGroupSign = false;
+    } else if ((qrLinkIdRaw ?? "").trim()) {
+      const qrId = qrLinkIdRaw!.trim();
+      const link = await getWaiverQrLinkById(qrId);
+      if (!link?.active) {
+        return NextResponse.json({ error: "This QR link is not active. Ask staff for a current code." }, { status: 400 });
+      }
+      const db = getDb();
+      requestIdForStorage = db.collection("waiverRequests").doc().id;
+      bookingId = `walkin-${requestIdForStorage}`;
+      templateId = link.templateId;
+      const tmplLive = await getTemplateById(templateId);
+      if (!tmplLive?.isActive) {
+        return NextResponse.json(
+          { error: "This waiver is not accepting signatures right now. Please ask staff for assistance." },
+          { status: 403 }
+        );
+      }
+      templateVersion = tmplLive.version;
+      templateSnapshot = undefined;
+      isGroupSign = false;
+      isQrSign = true;
     } else {
-      return NextResponse.json({ error: "Token or group link is required" }, { status: 400 });
+      return NextResponse.json({ error: "Token, group link, or QR link is required" }, { status: 400 });
     }
 
       const template =
@@ -133,7 +158,7 @@ export async function POST(request: NextRequest) {
         })());
 
       if (!template) {
-        const requestIdToFlag = isGroupSign ? null : requestIdForStorage;
+        const requestIdToFlag = isGroupSign || isQrSign ? null : requestIdForStorage;
         if (requestIdToFlag) {
           await flagWaiverRequestForManualReview(requestIdToFlag, {
             reasonCode: "waiver_template_version_mismatch",
@@ -154,7 +179,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Waiver template version mismatch; please contact support." }, { status: 409 });
       }
 
-      if (!isGroupSign && expectedSignerEmail) {
+      if (!isGroupSign && !isQrSign && expectedSignerEmail) {
         const submitted = signer.email.trim().toLowerCase();
         const expected = expectedSignerEmail.trim().toLowerCase();
         if (submitted !== expected) {
@@ -340,38 +365,51 @@ export async function POST(request: NextRequest) {
       ...(manualReviewCandidate ? { requiresManualReview: { ...manualReviewCandidate, at: now } } : {}),
     };
 
-    const committed = isGroupSign
-      ? await commitGroupTokenNewSignedRequest(groupToken!, requestIdForStorage, signed, templateSnapshotToPersist)
-      : await commitSingleUseTokenWaiverSign(token!, signed, templateSnapshotToPersist);
-
-    if (!committed) {
-      return NextResponse.json(
-        {
-          error: isGroupSign
-            ? "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached."
-            : "This signing link has expired or already been used",
-        },
-        { status: 400 }
-      );
+    if (isQrSign) {
+      await commitQrLinkSignedRequest({
+        requestId: requestIdForStorage,
+        qrLinkId: qrLinkIdRaw!.trim(),
+        bookingId,
+        templateId,
+        templateVersion,
+        templateSnapshot: templateSnapshotToPersist,
+        signed,
+      });
+    } else {
+      const committed = isGroupSign
+        ? await commitGroupTokenNewSignedRequest(groupToken!, requestIdForStorage, signed, templateSnapshotToPersist)
+        : await commitSingleUseTokenWaiverSign(token!, signed, templateSnapshotToPersist);
+      if (!committed) {
+        return NextResponse.json(
+          {
+            error: isGroupSign
+              ? "This group link is invalid or has expired, or the maximum number of waiver signers for this booking has already been reached."
+              : "This signing link has expired or already been used",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     try {
-      const existing = await getBookingWaiverPointer(bookingId);
-      if (isGroupSign) {
-        await setBookingWaiverPointer(bookingId, {
-          requestId: existing?.requestId ?? requestIdForStorage,
-          status: "partial",
-          templateId: existing?.templateId ?? templateId,
-          templateVersion: existing?.templateVersion ?? templateVersion,
-          signedCount: 1,
-        });
-      } else {
-        await setBookingWaiverPointer(bookingId, {
-          requestId: existing?.requestId ?? requestIdForStorage,
-          status: "signed",
-          templateId: existing?.templateId ?? templateId,
-          templateVersion: existing?.templateVersion ?? templateVersion,
-        });
+      if (!bookingId.startsWith("walkin-")) {
+        const existing = await getBookingWaiverPointer(bookingId);
+        if (isGroupSign) {
+          await setBookingWaiverPointer(bookingId, {
+            requestId: existing?.requestId ?? requestIdForStorage,
+            status: "partial",
+            templateId: existing?.templateId ?? templateId,
+            templateVersion: existing?.templateVersion ?? templateVersion,
+            signedCount: 1,
+          });
+        } else {
+          await setBookingWaiverPointer(bookingId, {
+            requestId: existing?.requestId ?? requestIdForStorage,
+            status: "signed",
+            templateId: existing?.templateId ?? templateId,
+            templateVersion: existing?.templateVersion ?? templateVersion,
+          });
+        }
       }
     } catch (pointerErr) {
       console.error("[waiver/submit] setBookingWaiverPointer failed (non-fatal)", pointerErr);

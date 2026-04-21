@@ -9,22 +9,33 @@ export default function WaiverSignPage() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token")?.trim() ?? "";
   const group = searchParams.get("group")?.trim() ?? "";
+  const qr = searchParams.get("qr")?.trim() ?? "";
   const [data, setData] = useState<WaiverValidateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [invalid, setInvalid] = useState<string | null>(null);
 
   const runValidate = useCallback(() => {
-    if (!token && !group) {
-      setInvalid("Missing signing link. Please use the link from your email or from your group.");
+    if (!token && !group && !qr) {
+      setInvalid("Missing signing link. Please use the link from your email, group invite, or QR code.");
       setLoading(false);
       return;
     }
     setLoading(true);
-    const query = group ? `group=${encodeURIComponent(group)}` : `token=${encodeURIComponent(token)}`;
+    const query = qr
+      ? `qr=${encodeURIComponent(qr)}`
+      : group
+        ? `group=${encodeURIComponent(group)}`
+        : `token=${encodeURIComponent(token)}`;
     fetch(`/api/waiver/signing/validate?${query}`)
       .then(async (res) => {
         const text = await res.text();
-        let json: { valid?: unknown; waiverRequestId?: unknown; isGroupSigning?: unknown; error?: string };
+        let json: {
+          valid?: unknown;
+          waiverRequestId?: unknown;
+          isGroupSigning?: unknown;
+          isQrLinkSigning?: unknown;
+          error?: string;
+        };
         try {
           json = text ? (JSON.parse(text) as typeof json) : {};
         } catch {
@@ -40,7 +51,7 @@ export default function WaiverSignPage() {
         return json;
       })
       .then((json) => {
-        if (json.valid && (json.waiverRequestId !== undefined || json.isGroupSigning)) {
+        if (json.valid && (json.waiverRequestId !== undefined || json.isGroupSigning || json.isQrLinkSigning)) {
           setData(json as WaiverValidateResponse);
           setInvalid(null);
         } else {
@@ -53,7 +64,7 @@ export default function WaiverSignPage() {
         setData(null);
       })
       .finally(() => setLoading(false));
-  }, [token, group]);
+  }, [token, group, qr]);
 
   useEffect(() => {
     runValidate();
@@ -96,7 +107,7 @@ export default function WaiverSignPage() {
 
   return (
     <div className="container mx-auto w-full min-w-0 max-w-lg px-4 py-6 sm:py-8">
-      <WaiverSigningWizard data={data} token={token} />
+      <WaiverSigningWizard data={data} token={token || undefined} />
     </div>
   );
 }

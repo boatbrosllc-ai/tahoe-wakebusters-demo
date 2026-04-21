@@ -29,6 +29,7 @@ import type {
   FirestoreTimestamp,
   BookingWaiverPointer,
   BookingWaiverPointerStatus,
+  WaiverSigningChannel,
 } from "./types";
 import type { CreateWaiverTemplateInput } from "./schema";
 
@@ -694,6 +695,37 @@ function waiverSignedFieldsForRequestUpdate(signed: WaiverSigned): Record<string
     signerPhone: signed.signedPayload.signerPhone,
     signerDob: signed.signedPayload.signerDob ?? null,
   };
+}
+
+/**
+ * Create a signed waiver request document for the QR/kiosk path (no booking, no signing token).
+ */
+export async function commitQrLinkSignedRequest(params: {
+  requestId: string;
+  qrLinkId: string;
+  bookingId: string;
+  templateId: string;
+  templateVersion: number;
+  templateSnapshot: WaiverTemplateSnapshot;
+  signed: WaiverSigned;
+}): Promise<void> {
+  const db = getDb();
+  const { Timestamp } = getFirestoreExports();
+  const signedFields = waiverSignedFieldsForRequestUpdate(params.signed);
+  const channel: WaiverSigningChannel = "qr_kiosk";
+  await db.collection(COLL.requests).doc(params.requestId).set({
+    bookingId: params.bookingId,
+    templateId: params.templateId,
+    templateVersion: params.templateVersion,
+    templateSnapshot: params.templateSnapshot,
+    qrLinkId: params.qrLinkId,
+    signingChannel: channel,
+    signingTokenId: "",
+    signingUrl: "",
+    sent: { initialSentAt: null, lastSentAt: null, reminder1SentAt: null },
+    createdAt: Timestamp.now(),
+    ...signedFields,
+  });
 }
 
 /**

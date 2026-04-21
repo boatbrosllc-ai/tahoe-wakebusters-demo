@@ -205,6 +205,7 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
       try {
         const token = tokenProp ?? "";
         const groupToken = data.isGroupSigning && data.groupToken ? data.groupToken : undefined;
+        const qrLinkId = data.isQrLinkSigning && data.qrLinkId ? data.qrLinkId : undefined;
         if (!termsAcceptedAtIso || !termsContentHash) {
           setError("Missing terms acceptance metadata. Please accept the terms again.");
           setSubmitting(false);
@@ -226,7 +227,7 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
           ...(signer.bookingDate.trim() ? { bookingDate: signer.bookingDate.trim() } : {}),
         };
         const submitBody: Record<string, unknown> = {
-          ...(groupToken ? { groupToken } : { token }),
+          ...(qrLinkId ? { qrLinkId } : groupToken ? { groupToken } : { token }),
           signer: submitSigner,
           initials,
           termsAccepted,
@@ -275,6 +276,8 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     requireTypedSig,
     data.isGroupSigning,
     data.groupToken,
+    data.isQrLinkSigning,
+    data.qrLinkId,
     tokenProp,
     onSuccess,
     requirePhone,

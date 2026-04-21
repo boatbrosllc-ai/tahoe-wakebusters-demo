@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
-import { flagWaiverRequestForManualReview, getTokenById, getRequestById, getTemplateById, getGroupTokenById, isTokenValid } from "@/lib/waiver/firestore";
+import {
+  flagWaiverRequestForManualReview,
+  getTokenById,
+  getRequestById,
+  getTemplateById,
+  getGroupTokenById,
+  isTokenValid,
+} from "@/lib/waiver/firestore";
+import { getWaiverQrLinkById } from "@/lib/waiver/waiver-qr-firestore";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
 import { toValidateTemplatePayload } from "@/lib/waiver/to-validate-template-payload";
 
@@ -40,6 +48,60 @@ async function buildBookingSummary(bookingId: string): Promise<{ experienceName:
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token")?.trim();
   const group = request.nextUrl.searchParams.get("group")?.trim();
+  const qr = request.nextUrl.searchParams.get("qr")?.trim();
+
+  if (qr) {
+    try {
+      const link = await getWaiverQrLinkById(qr);
+      if (!link || !link.active) {
+        return NextResponse.json(
+          { valid: false, error: "This QR code is no longer active. Ask staff for a current waiver link.", code: "qr_inactive" },
+          { status: 404 }
+        );
+      }
+      const template = await getTemplateById(link.templateId);
+      if (!template) {
+        return NextResponse.json({ valid: false, error: "Waiver template not found.", code: "template_missing" }, { status: 404 });
+      }
+      if (!template.isActive) {
+        return NextResponse.json(
+          {
+            valid: false,
+            error: "This waiver is not accepting signatures right now. Please ask staff for assistance.",
+            code: "template_inactive",
+          },
+          { status: 403 }
+        );
+      }
+      let templatePayload: WaiverValidateResponse["template"];
+      try {
+        templatePayload = toValidateTemplatePayload(template);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await getDb()
+          .collection("waiverTemplates")
+          .doc(link.templateId)
+          .set({ adminReviewRequired: true, adminReviewError: message }, { merge: true });
+        return NextResponse.json({ valid: false, error: message }, { status: 400 });
+      }
+      const response: WaiverValidateResponse = {
+        valid: true,
+        waiverRequestId: "",
+        isQrLinkSigning: true,
+        qrLinkId: link.id,
+        bookingSummary: {
+          experienceName: template.title,
+          tripDate: "",
+          partySize: undefined,
+        },
+        template: templatePayload,
+      };
+      return NextResponse.json(response);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return NextResponse.json({ valid: false, error: message }, { status: 500 });
+    }
+  }
 
   if (group) {
     try {

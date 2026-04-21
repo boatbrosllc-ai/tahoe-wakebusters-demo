@@ -38,6 +38,19 @@ export interface WaiverPageHeading {
   subheading: string;
 }
 
+/** Internal QR/kiosk link for stable printed codes (Firestore: waiverQrLinks). */
+export interface WaiverQrLink {
+  templateId: string;
+  /** When false, scans should show “unavailable” (rotated / retired link). */
+  active: boolean;
+  label?: string;
+  assignedBoat?: string;
+  /** e.g. boat sticker, kiosk, captain phone, dock sign */
+  useCase?: string;
+  createdAt: FirestoreTimestamp;
+  updatedAt: FirestoreTimestamp;
+}
+
 export interface WaiverTemplate {
   title: string;
   description: string;
@@ -116,6 +129,8 @@ export interface WaiverManualReview {
   metadata?: Record<string, unknown>;
 }
 
+export type WaiverSigningChannel = "booking_token" | "group" | "qr_kiosk";
+
 export interface WaiverRequest {
   bookingId: string;
   templateId: string;
@@ -129,6 +144,8 @@ export interface WaiverRequest {
   signerDob?: string;
   /** When present, operators must review before the waiver is relied on legally. */
   requiresManualReview?: WaiverManualReview;
+  qrLinkId?: string;
+  signingChannel?: WaiverSigningChannel;
   signingTokenId: string;
   signingUrl: string;
   /** Share link for additional party members; same token doc as {@link WaiverGroupTokenDoc}. */
@@ -187,6 +204,9 @@ export interface WaiverValidateResponse {
   /** Set when signing via group link; submit with groupToken to create a new signer for the booking. */
   isGroupSigning?: boolean;
   groupToken?: string;
+  /** Stable QR/kiosk link: submit with `qrLinkId` instead of token/groupToken. */
+  isQrLinkSigning?: boolean;
+  qrLinkId?: string;
   bookingSummary: WaiverBookingSummary;
   template: {
     title: string;

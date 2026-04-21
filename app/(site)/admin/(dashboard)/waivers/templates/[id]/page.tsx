@@ -10,6 +10,7 @@ import {
   type WaiverTemplateFormValues,
 } from "@/components/waiver/WaiverTemplateForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { WaiverQrPanel } from "@/components/waiver/WaiverQrPanel";
 
 type Template = {
   id: string;
@@ -157,6 +158,8 @@ export default function EditWaiverTemplatePage() {
           </div>
         </div>
       </div>
+
+      <WaiverQrPanel templateId={id} />
     </div>
   );
 }
