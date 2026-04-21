@@ -30,7 +30,11 @@ interface WaiverSigningWizardProps {
   onSuccess?: () => void;
 }
 
-export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: WaiverSigningWizardProps) {
+export function WaiverSigningWizard({
+  data,
+  token: tokenProp,
+  onSuccess,
+}: WaiverSigningWizardProps) {
   const [step, setStep] = useState(0);
   const [signer, setSigner] = useState({
     name: "",
@@ -49,7 +53,14 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Field-level errors for step 0 (info) */
-  const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string; phone?: string; dob?: string; address?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    email?: string;
+    phone?: string;
+    dob?: string;
+    address?: string;
+    bookingDate?: string;
+  }>({});
   /** Step 1: terms validation (scroll + agree) */
   const [step1TermsError, setStep1TermsError] = useState<string | null>(null);
   /** Step 1: initials validation */
@@ -61,6 +72,7 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
   const emailRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
   const dobRef = useRef<HTMLInputElement>(null);
+  const bookingDateRef = useRef<HTMLInputElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
   const firstInitialRef = useRef<HTMLInputElement>(null);
   const stepContentRef = useRef<HTMLDivElement>(null);
@@ -108,7 +120,8 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     (!requirePhone || signer.phone.trim().length > 0) &&
     (!requireDob || signer.dob.trim().length > 0) &&
     (!requireAddress || signer.address.trim().length > 0) &&
-    (!requireBookingDate || signer.bookingDate.trim().length > 0);
+    (!requireBookingDate ||
+      (/^\d{4}-\d{2}-\d{2}$/.test(signer.bookingDate.trim()) && signer.bookingDate.trim().length > 0));
   const canProceedFromTerms =
     termsAccepted &&
     termsContentHash != null &&
@@ -129,18 +142,26 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
   /** Validate step 0 and return first error field id for focus. */
   function validateStep0(): keyof typeof fieldErrors | null {
     const err: typeof fieldErrors = {};
+    const bookingDateTrim = signer.bookingDate.trim();
+    const bookingDateOk = /^\d{4}-\d{2}-\d{2}$/.test(bookingDateTrim);
+
     if (!signer.name.trim()) err.name = "Full name is required.";
     if (!signer.email.trim()) err.email = "Email is required.";
     else if (!EMAIL_REGEX.test(signer.email.trim())) err.email = "Please enter a valid email address.";
     if (requirePhone && !signer.phone.trim()) err.phone = "Phone number is required.";
     if (requireDob && !signer.dob.trim()) err.dob = "Date of birth is required.";
     if (requireAddress && !signer.address.trim()) err.address = "Address is required.";
+    if (requireBookingDate) {
+      if (!bookingDateTrim) err.bookingDate = "Trip / booking date is required.";
+      else if (!bookingDateOk) err.bookingDate = "Please use a valid date.";
+    }
     setFieldErrors(err);
     if (err.name) return "name";
     if (err.email) return "email";
     if (err.phone) return "phone";
     if (err.dob) return "dob";
     if (err.address) return "address";
+    if (err.bookingDate) return "bookingDate";
     return null;
   }
 
@@ -153,8 +174,15 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
     if (step === 0) {
       const first = validateStep0();
       if (first) {
-      const refMap = { name: nameRef, email: emailRef, phone: phoneRef, dob: dobRef, address: addressRef } as const;
-        refMap[first].current?.focus();
+        const refMap = {
+          name: nameRef,
+          email: emailRef,
+          phone: phoneRef,
+          dob: dobRef,
+          address: addressRef,
+          bookingDate: bookingDateRef,
+        } as const;
+        refMap[first]?.current?.focus();
         stepContentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
@@ -426,6 +454,42 @@ export function WaiverSigningWizard({ data, token: tokenProp, onSuccess }: Waive
                   {fieldErrors.address && (
                     <p id="waiver-address-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">
                       {fieldErrors.address}
+                    </p>
+                  )}
+                </div>
+              )}
+              {requireBookingDate && (
+                <div className="min-w-0 w-full">
+                  <label htmlFor="waiver-booking-date" className={labelClass}>
+                    Trip / booking date <span className="text-red-600" aria-hidden>*</span>
+                  </label>
+                  <input
+                    ref={bookingDateRef}
+                    id="waiver-booking-date"
+                    type="date"
+                    value={signer.bookingDate}
+                    onChange={(e) => {
+                      setSigner((s) => ({ ...s, bookingDate: e.target.value }));
+                      setFieldErrors((prev) => (prev.bookingDate ? { ...prev, bookingDate: undefined } : prev));
+                    }}
+                    onBlur={(e) => {
+                      const v = e.currentTarget.value.trim();
+                      if (!v) setFieldErrors((prev) => ({ ...prev, bookingDate: "Trip / booking date is required." }));
+                      else if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+                        setFieldErrors((prev) => ({ ...prev, bookingDate: "Please use a valid date." }));
+                      }
+                    }}
+                    className={cn(
+                      inputClass,
+                      "bg-white text-brand-dark [color-scheme:light] w-full max-w-full min-w-0 box-border",
+                      fieldErrors.bookingDate && "border-red-500 focus:border-red-500 focus:ring-red-500/20",
+                    )}
+                    aria-label="Trip or booking date"
+                    aria-describedby={fieldErrors.bookingDate ? "waiver-booking-date-error" : undefined}
+                  />
+                  {fieldErrors.bookingDate && (
+                    <p id="waiver-booking-date-error" className="mt-1 text-sm text-red-600 font-medium" role="alert">
+                      {fieldErrors.bookingDate}
                     </p>
                   )}
                 </div>
