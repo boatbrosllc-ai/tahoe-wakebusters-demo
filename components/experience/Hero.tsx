@@ -117,7 +117,7 @@ export function Hero({
           </motion.p>
           {introParagraph && (
             <motion.p
-              className="font-display mt-4 sm:mt-5 text-sm sm:text-base lg:text-lg text-white/90 max-w-3xl mx-auto leading-relaxed [text-shadow:0_1px_3px_rgba(0,0,0,0.8)] sm:[text-shadow:none]"
+              className="font-display mt-4 sm:mt-5 text-sm sm:text-base lg:text-lg text-white/90 max-w-3xl mx-auto leading-relaxed whitespace-pre-line [text-shadow:0_1px_3px_rgba(0,0,0,0.8)] sm:[text-shadow:none]"
               initial={motionProps.initial}
               animate={motionProps.animate}
               transition={{ ...motionProps.transition, delay: reduceMotion ? 0 : 0.22 }}

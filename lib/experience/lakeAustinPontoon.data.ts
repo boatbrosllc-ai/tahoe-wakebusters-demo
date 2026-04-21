@@ -43,6 +43,11 @@ export const SOCIAL_PROOF = [
   { label: "Lily pad included", sub: "" },
   { label: "Cooler Included", sub: "" },
 ];
+
+/** Static strip when the default pontoon fallback is used but lily pad does not apply (e.g. wake surf club). */
+export const SOCIAL_PROOF_WITHOUT_LILY_PAD = SOCIAL_PROOF.filter(
+  (item) => !/\b(lily|lilly)\s*pad\b/i.test(item.label)
+);
 export const SOCIAL_AVATARS = [
   "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&crop=face",
   "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face",

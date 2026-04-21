@@ -13,6 +13,8 @@ export interface SocialProofStripProps {
   stats?: string[];
   /** Tagline for the avatars block (e.g. "Loved by locals & visitors"). */
   tagline?: string;
+  /** When CMS has no rating/stats (or built items are empty), use this instead of default pontoon `SOCIAL_PROOF`. */
+  staticFallbackOverride?: { label: string; sub: string }[];
 }
 
 function buildItemsFromExperience(props: SocialProofStripProps): { label: string; sub: string }[] {
@@ -43,15 +45,25 @@ function buildItemsFromExperience(props: SocialProofStripProps): { label: string
   return items;
 }
 
-export function SocialProofStrip({ rating, ratingCount, stats, tagline }: SocialProofStripProps = {}) {
+export function SocialProofStrip({
+  rating,
+  ratingCount,
+  stats,
+  tagline,
+  staticFallbackOverride,
+}: SocialProofStripProps = {}) {
   const reduceMotion = useReducedMotion();
 
   const useRealData = rating != null || (ratingCount?.trim?.() ?? "") !== "" || (stats?.length ?? 0) > 0;
   const items = useMemo(() => {
-    if (!useRealData) return SOCIAL_PROOF;
+    const fallback = staticFallbackOverride ?? SOCIAL_PROOF;
+    if (!useRealData) return fallback;
     const built = buildItemsFromExperience({ rating, ratingCount, stats, tagline });
-    return built.length > 0 ? built : SOCIAL_PROOF;
-  }, [useRealData, rating, ratingCount, stats, tagline]);
+    if (built.length > 0) return built;
+    return fallback;
+  }, [useRealData, rating, ratingCount, stats, tagline, staticFallbackOverride]);
+
+  if (items.length === 0) return null;
 
   return (
     <motion.section
