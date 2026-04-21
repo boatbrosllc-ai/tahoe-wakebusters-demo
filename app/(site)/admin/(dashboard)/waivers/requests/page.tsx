@@ -73,6 +73,8 @@ type RequestDetail = {
     };
     /** Set when PDF was generated; used for "View PDF" link. */
     pdfStoragePath?: string | null;
+    /** Stored signed HTML (always when submit succeeded storing HTML); PDF may be missing on serverless. */
+    htmlStoragePath?: string | null;
   };
   bookingSummary?: { experienceName?: string; tripDate?: string; startTime?: string; endTime?: string };
 };
@@ -104,6 +106,7 @@ export default function WaiverRequestsPage() {
   const [viewModalRequestId, setViewModalRequestId] = useState<string | null>(null);
   const [viewDetail, setViewDetail] = useState<RequestDetail | null>(null);
   const [viewDetailLoading, setViewDetailLoading] = useState(false);
+  const [regeneratePdfBusyId, setRegeneratePdfBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!viewModalRequestId) {
@@ -168,6 +171,29 @@ export default function WaiverRequestsPage() {
       setCopiedId(requestId);
       setTimeout(() => setCopiedId(null), 2000);
     });
+  };
+
+  const regeneratePdf = async (requestId: string) => {
+    setRegeneratePdfBusyId(requestId);
+    try {
+      const res = await fetch(`/api/admin/waiver-requests/${requestId}/regenerate-pdf`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const combined = [data.error, data.hint].filter(Boolean).join(" — ") || "PDF generation failed";
+        throw new Error(combined);
+      }
+      const detailRes = await fetch(`/api/admin/waiver-requests/${requestId}`, { credentials: "include" });
+      const detailJson = await detailRes.json().catch(() => ({}));
+      if (detailRes.ok) setViewDetail(detailJson as RequestDetail);
+      fetchList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "PDF generation failed");
+    } finally {
+      setRegeneratePdfBusyId(null);
+    }
   };
 
   const sendReminder = async (requestId: string) => {
@@ -661,17 +687,30 @@ export default function WaiverRequestsPage() {
                     </Button>
                   </>
                 )}
-                {viewDetail.status === "signed" && (viewDetail.signed as { pdfStoragePath?: string | null } | undefined)?.pdfStoragePath && (
-                  <a
-                    href={`/api/waiver/pdf/${viewDetail.id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button variant="outline" size="sm" className="gap-1.5">
-                      <ExternalLink className="h-3.5 w-3.5" /> View PDF
+                {viewDetail.status === "signed" &&
+                  viewDetail.signed &&
+                  (viewDetail.signed.pdfStoragePath || viewDetail.signed.htmlStoragePath) && (
+                    <a href={`/api/waiver/pdf/${viewDetail.id}`} target="_blank" rel="noopener noreferrer">
+                      <Button variant="outline" size="sm" className="gap-1.5">
+                        <ExternalLink className="h-3.5 w-3.5" />{" "}
+                        {viewDetail.signed.pdfStoragePath ? "View PDF" : "Download waiver (HTML)"}
+                      </Button>
+                    </a>
+                  )}
+                {viewDetail.status === "signed" &&
+                  viewDetail.signed?.htmlStoragePath &&
+                  !viewDetail.signed.pdfStoragePath && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={regeneratePdfBusyId === viewDetail.id}
+                      onClick={() => regeneratePdf(viewDetail.id)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />{" "}
+                      {regeneratePdfBusyId === viewDetail.id ? "Generating…" : "Generate PDF"}
                     </Button>
-                  </a>
-                )}
+                  )}
               </div>
             </>
           )}

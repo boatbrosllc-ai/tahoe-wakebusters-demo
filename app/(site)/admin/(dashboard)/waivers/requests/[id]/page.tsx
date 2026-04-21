@@ -44,6 +44,8 @@ export default function WaiverRequestDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [regeneratePdfBusy, setRegeneratePdfBusy] = useState(false);
+  const [regeneratePdfMessage, setRegeneratePdfMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/admin/waiver-requests/${id}`, { credentials: "include" })
@@ -57,6 +59,42 @@ export default function WaiverRequestDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  const refreshRequest = () =>
+    fetch(`/api/admin/waiver-requests/${id}`, { credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to load");
+        return data;
+      })
+      .then(setReq);
+
+  const copyLink = () => {
+    if (req?.signingUrl) navigator.clipboard.writeText(req.signingUrl);
+  };
+
+  const handleRegeneratePdf = async () => {
+    setRegeneratePdfBusy(true);
+    setRegeneratePdfMessage(null);
+    try {
+      const res = await fetch(`/api/admin/waiver-requests/${id}/regenerate-pdf`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const combined = [data.error, data.hint].filter(Boolean).join(" — ") || "PDF generation failed";
+        throw new Error(combined);
+      }
+      await refreshRequest();
+      setRegeneratePdfMessage(
+        data.alreadyStored ? "PDF was already stored." : "PDF generated and attached to this request."
+      );
+    } catch (e) {
+      setRegeneratePdfMessage(e instanceof Error ? e.message : "Error");
+    }
+    setRegeneratePdfBusy(false);
+  };
+
   const handleResend = async () => {
     setSending(true);
     try {
@@ -66,16 +104,11 @@ export default function WaiverRequestDetailPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Failed to send");
-      const updated = await fetch(`/api/admin/waiver-requests/${id}`, { credentials: "include" }).then((r) => r.json());
-      setReq(updated);
+      await refreshRequest();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     }
     setSending(false);
-  };
-
-  const copyLink = () => {
-    if (req?.signingUrl) navigator.clipboard.writeText(req.signingUrl);
   };
 
   if (loading) return <p className="text-brand-muted">Loading…</p>;
@@ -94,19 +127,27 @@ export default function WaiverRequestDetailPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-brand-dark">Waiver request</h1>
-        <div className="flex gap-2">
-          {req.status === "signed" && req.signed?.pdfStoragePath && (
-            <a
-              href={`/api/waiver/pdf/${req.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button variant="outline">View PDF</Button>
-            </a>
-          )}
-          {req.status === "signed" && req.signed && !req.signed.pdfStoragePath && (
-            <span className="text-sm text-brand-muted">PDF not generated for this signing</span>
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          {req.status === "signed" &&
+            req.signed &&
+            (req.signed.pdfStoragePath || req.signed.htmlStoragePath) && (
+              <a href={`/api/waiver/pdf/${req.id}`} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline">
+                  {req.signed.pdfStoragePath ? "View PDF" : "Download waiver (HTML)"}
+                </Button>
+              </a>
+            )}
+          {req.status === "signed" &&
+            req.signed?.htmlStoragePath &&
+            !req.signed.pdfStoragePath && (
+              <Button
+                variant="secondary"
+                onClick={handleRegeneratePdf}
+                disabled={regeneratePdfBusy}
+              >
+                {regeneratePdfBusy ? "Generating PDF…" : "Generate PDF from HTML"}
+              </Button>
+            )}
           {req.status === "pending" && (
             <>
               <Button onClick={copyLink} variant="outline">Copy signing link</Button>
@@ -117,6 +158,15 @@ export default function WaiverRequestDetailPage() {
           )}
         </div>
       </div>
+
+      {regeneratePdfMessage && (
+        <p
+          className={`text-sm ${regeneratePdfMessage.includes("PDF generated") || regeneratePdfMessage.includes("already stored") ? "text-green-800" : "text-red-600"}`}
+          role="status"
+        >
+          {regeneratePdfMessage}
+        </p>
+      )}
 
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-6 space-y-6">
         <section>
