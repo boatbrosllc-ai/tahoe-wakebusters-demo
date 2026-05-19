@@ -17,6 +17,8 @@ import {
   isWakeListingBoatType,
   shouldUseWakeBoardCharterGrid,
   getDateStrInSlotTimezone,
+  getSlotGridWakeBoard,
+  getSlotGrid,
 } from "../experience-slots";
 import { bookingIntervalMsFromSlotFields, intervalOverlapsRequestWindow } from "../booking-interval";
 
@@ -254,31 +256,45 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
     assert.strictEqual(isSaturdayInSlotTimezone(mon), false);
   });
 
-  it("wake boat: Saturday afternoon is allowed even when allowedStartTimes omits it (matches slots API)", () => {
+  it("wake boat: Saturday uses hourly grid when allowedStartTimes empty (same as pontoon)", () => {
     const boat = {
       boatType: "Wake",
       allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }, { hour: 10, minute: 0 }, { hour: 10, minute: 30 }],
     };
     assert.strictEqual(
       isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4),
-      true,
-      "3pm Saturday must match WAKEBOARD_SATURDAY_START_TIMES, not Firestore weekday list"
+      false,
+      "restricted boat list limits Saturday afternoon"
     );
+    const boatHourly = { boatType: "Wake", allowedStartTimes: [] as { hour: number; minute: number }[] };
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatHourly, sat, 15, 0, 4), true);
+    assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatHourly, sat, 12, 0, 3), true);
   });
 
   it("watersports listing + missing boatType: wake grid only when untyped fallback env is set", () => {
-    const boat = {
+    const boatRestricted = {
       allowedStartTimes: [{ hour: 9, minute: 0 }, { hour: 9, minute: 30 }],
     };
+    const boatHourly = { allowedStartTimes: [] as { hour: number; minute: number }[] };
     const prevPub = process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
     try {
       delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), false);
+      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatRestricted, sat, 15, 0, 4, true), false);
       process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
-      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), false);
+      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatRestricted, sat, 15, 0, 4, true), false);
       process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
-      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, true), true);
-      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4, false), false);
+      assert.strictEqual(
+        isListingBoatCharterStartTimeAllowed(boatRestricted, sat, 15, 0, 4, true),
+        false,
+        "restricted allowedStartTimes still apply on wake grid"
+      );
+      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatHourly, sat, 12, 0, 3, true), true);
+      assert.strictEqual(isListingBoatCharterStartTimeAllowed(boatHourly, sat, 15, 0, 4, true), true);
+      assert.strictEqual(
+        isListingBoatCharterStartTimeAllowed(boatRestricted, sat, 9, 0, 4, false),
+        true,
+        "non-watersports path still honors boat allowedStartTimes"
+      );
     } finally {
       delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
       if (prevPub === undefined) delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
@@ -308,5 +324,35 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
     };
     assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 9, 0, 4), true);
     assert.strictEqual(isListingBoatCharterStartTimeAllowed(boat, sat, 15, 0, 4), false);
+  });
+});
+
+describe("getSlotGridWakeBoard (hourly like pontoon)", () => {
+  const sat = "2026-05-30";
+
+  it("Saturday wake grid includes noon start for 3h charters", () => {
+    const start = new Date(`${sat}T12:00:00.000Z`);
+    const end = new Date(`${sat}T12:00:00.000Z`);
+    const wakeGrid = getSlotGridWakeBoard(start, end, [3]);
+    const pontoonGrid = getSlotGrid(start, end, [3]);
+    assert.ok(
+      wakeGrid.some((s) => s.dateStr === sat && s.startHour === 12 && s.startMinute === 0 && s.durationHours === 3),
+      "wake grid should offer 12:00 PM 3h on Saturday"
+    );
+    assert.ok(
+      pontoonGrid.some((s) => s.dateStr === sat && s.startHour === 12 && s.startMinute === 0 && s.durationHours === 3),
+      "pontoon grid baseline"
+    );
+  });
+
+  it("wake grid with boat allowedStartTimes matches restricted list only", () => {
+    const start = new Date(`${sat}T12:00:00.000Z`);
+    const end = new Date(`${sat}T12:00:00.000Z`);
+    const restricted = getSlotGridWakeBoard(start, end, [3], [
+      { hour: 9, minute: 0 },
+      { hour: 10, minute: 30 },
+    ]);
+    assert.ok(restricted.some((s) => s.startHour === 9 && s.startMinute === 0));
+    assert.ok(!restricted.some((s) => s.startHour === 12));
   });
 });

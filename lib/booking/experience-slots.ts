@@ -327,8 +327,7 @@ export function shouldUseWakeBoardCharterGrid(boatType: string | undefined, wate
 
 /**
  * Start-time check for wake listing boats; must match {@link getSlotGridWakeBoard} (slots API).
- * Saturday uses {@link WAKEBOARD_SATURDAY_START_TIMES} regardless of `weekdayAllowedStartTimes`.
- * Weekdays: explicit list if non-empty, else hourly :00 starts within the operating window.
+ * Uses boat `allowedStartTimes` when set; otherwise hourly :00 starts 7am–7pm (same as pontoon default grid).
  */
 export function isWakeBoardListingStartTimeAllowed(
   dateStr: string,
@@ -336,15 +335,11 @@ export function isWakeBoardListingStartTimeAllowed(
   startMinute: number,
   weekdayAllowedStartTimes?: { hour: number; minute: number }[]
 ): boolean {
-  const startDecimal = startHour + startMinute / 60;
-  if (startDecimal < OPERATING_START_HOUR || startDecimal > OPERATING_END_HOUR) return false;
-  if (isSaturdayInSlotTimezone(dateStr)) {
-    return WAKEBOARD_SATURDAY_START_TIMES.some((t) => t.hour === startHour && t.minute === startMinute);
-  }
+  void dateStr;
   if (weekdayAllowedStartTimes && weekdayAllowedStartTimes.length > 0) {
     return weekdayAllowedStartTimes.some((t) => t.hour === startHour && t.minute === startMinute);
   }
-  return startMinute === 0;
+  return isAllowedSlotTime(startHour, startMinute, 1, undefined);
 }
 
 /** Charter listing-boat path: wake boats use the same grid rules as GET /api/booking/slots; others use {@link isAllowedSlotTime}. */
@@ -565,8 +560,7 @@ export function getTicketedSlotGrid(
 }
 
 /**
- * Wake board boats: on Saturday use full Saturday times (9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm);
- * on other days use weekdayStartTimes if provided (e.g. 9, 9:30, 10, 10:30), otherwise hourly.
+ * Wake board boats: same default as pontoon (hourly 7am–7pm). Boat `allowedStartTimes` restricts when set.
  */
 export function getSlotGridWakeBoard(
   startDate: Date,
@@ -574,49 +568,8 @@ export function getSlotGridWakeBoard(
   durationHoursList: number[],
   weekdayStartTimes?: { hour: number; minute: number }[]
 ): SlotGridItem[] {
-  const out: SlotGridItem[] = [];
-  const now = new Date();
-  const todayStr = getTodayDateStr(now);
-  const startStr = getDateStrInSlotTimezone(startDate);
-  const endStr = getDateStrInSlotTimezone(endDate);
-  for (let dateStr = startStr; dateStr <= endStr; dateStr = nextDateStr(dateStr)) {
-    const isSaturday = isSaturdayInSlotTimezone(dateStr);
-    if (isSaturday) {
-      for (const durationHours of durationHoursList) {
-        for (const { hour: startHour, minute: startMinute } of WAKEBOARD_SATURDAY_START_TIMES) {
-          const startDecimal = startHour + startMinute / 60;
-          if (startDecimal > OPERATING_END_HOUR) continue;
-          if (dateStr === todayStr) {
-            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
-            if (slotStart < now) continue;
-          }
-          out.push({ dateStr, startHour, startMinute, durationHours });
-        }
-      }
-    } else if (weekdayStartTimes?.length) {
-      for (const durationHours of durationHoursList) {
-        for (const { hour: startHour, minute: startMinute } of weekdayStartTimes) {
-          const startDecimal = startHour + startMinute / 60;
-          if (startDecimal > OPERATING_END_HOUR) continue;
-          if (dateStr === todayStr) {
-            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, startMinute);
-            if (slotStart < now) continue;
-          }
-          out.push({ dateStr, startHour, startMinute, durationHours });
-        }
-      }
-    } else {
-      for (const durationHours of durationHoursList) {
-        const latestStart = getLatestStartHourForDuration(durationHours);
-        for (let startHour = OPERATING_START_HOUR; startHour <= latestStart; startHour++) {
-          if (dateStr === todayStr) {
-            const { start: slotStart } = getSlotStartEnd(dateStr, startHour, durationHours, 0);
-            if (slotStart < now) continue;
-          }
-          out.push({ dateStr, startHour, startMinute: 0, durationHours });
-        }
-      }
-    }
+  if (weekdayStartTimes?.length) {
+    return getSlotGridForStartTimes(startDate, endDate, durationHoursList, weekdayStartTimes);
   }
-  return out;
+  return getSlotGrid(startDate, endDate, durationHoursList);
 }

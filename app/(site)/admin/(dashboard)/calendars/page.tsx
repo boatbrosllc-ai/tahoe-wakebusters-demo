@@ -18,6 +18,12 @@ import Link from "next/link";
 import { Calendar as CalendarIcon, ChevronDown, ChevronUp, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette, Ban, Plus, Trash2, RefreshCw } from "lucide-react";
 import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
 import { AddBookingModal } from "@/app/(site)/admin/(dashboard)/bookings/AddBookingModal";
+import {
+  bookingCardDisplayTime,
+  bookingCardDurationHours,
+  formatDurationHoursLabel,
+  pickCanonicalBookingSlotRow as pickCanonicalBookingSlotRowHelper,
+} from "@/lib/admin/calendar-booking-card";
 
 type SlotStatus = "open" | "held" | "booked" | "blocked";
 
@@ -28,6 +34,12 @@ interface BookingSummary {
   boatName: string | null;
   totalCents: number;
   status: string;
+  /** Canonical trip fields from booking doc (same source as booking detail modal). */
+  slotId?: string | null;
+  startDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  durationHours?: number | null;
 }
 
 interface SlotDto {
@@ -66,6 +78,11 @@ function formatSlotTime(slot: SlotDto): string {
   return formatBookingTimeFromIso(slot.startAt);
 }
 
+/** Booking cards: use canonical booking trip time, not overlap grid row slot id. */
+function formatBookingCardTime(slot: SlotDto): string {
+  return bookingCardDisplayTime(slot, formatSlotTime);
+}
+
 /** Duration label for a slot, e.g. "2 hr" or "4 hr", from slot id or start/end times. */
 function getSlotDurationLabel(slot: SlotDto): string {
   if (typeof slot.bookingDurationHours === "number" && slot.bookingDurationHours > 0) {
@@ -86,6 +103,17 @@ function getSlotDurationLabel(slot: SlotDto): string {
     }
   }
   return "";
+}
+
+/** Booking cards: duration from booking doc when available. */
+function getBookingCardDurationLabel(slot: SlotDto): string {
+  const hours = bookingCardDurationHours(slot);
+  if (hours != null) return formatDurationHoursLabel(hours);
+  return getSlotDurationLabel(slot);
+}
+
+function pickCanonicalBookingSlotRow(existing: SlotDto, candidate: SlotDto): SlotDto {
+  return pickCanonicalBookingSlotRowHelper(existing, candidate);
 }
 
 /** Chicago calendar-day bounds used by admin full-day block / unblock (matches block-date API). */
@@ -538,7 +566,25 @@ export default function CalendarsPage() {
     boatName?: string | null;
     pricing?: { totalCents?: number };
     status?: string;
+    startDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    durationHours?: number | null;
   };
+
+  const bookingSummaryFromRaw = (b: RawBooking): BookingSummary => ({
+    bookingId: b.id,
+    customerName: b.customer?.name ?? "",
+    customerEmail: b.customer?.email ?? "",
+    boatName: b.boatName ?? null,
+    totalCents: b.pricing?.totalCents ?? 0,
+    status: b.status ?? "",
+    slotId: b.slotId ?? null,
+    startDate: b.startDate ?? null,
+    startTime: b.startTime ?? null,
+    endTime: b.endTime ?? null,
+    durationHours: b.durationHours ?? null,
+  });
 
   const fetchBookings = useCallback(async () => {
     setBookingsError(null);
@@ -572,14 +618,7 @@ export default function CalendarsPage() {
       list
         .filter((b) => typeof b.status === "string" && statuses.includes(b.status))
         .forEach((b) => {
-          const summary: BookingSummary = {
-            bookingId: b.id,
-            customerName: b.customer?.name ?? "",
-            customerEmail: b.customer?.email ?? "",
-            boatName: b.boatName ?? null,
-            totalCents: b.pricing?.totalCents ?? 0,
-            status: b.status ?? "",
-          };
+          const summary = bookingSummaryFromRaw(b);
           map.set(b.id, summary);
           // Index by experienceId:slotId so only the correct experience's ticketed slots match
           if (b.slotId && b.experienceId) bySlotKey.set(`${b.experienceId}:${b.slotId}`, summary);
@@ -614,7 +653,9 @@ export default function CalendarsPage() {
               holdId: null,
               bookingId: b.id,
               experienceId: b.experienceId ?? undefined,
-              bookingSummary: b.experienceId ? (bySlotKey.get(`${b.experienceId}:${sid}`) ?? null) : null,
+              bookingSummary: b.experienceId
+                ? (bySlotKey.get(`${b.experienceId}:${sid}`) ?? bookingSummaryFromRaw(b))
+                : bookingSummaryFromRaw(b),
             } satisfies SlotDto];
           } catch { return []; }
         })
@@ -795,18 +836,17 @@ export default function CalendarsPage() {
     return map;
   }, [filteredSlots]);
 
-  /** One slot per booking per day (deduplicated) — avoids duplicate rows when one booking has multiple experience slots. */
+  /** One slot per booking per day — prefer canonical booking slot row over overlap grid rows. */
   const uniqueBookedSlotsByDay = useMemo(() => {
     const map = new Map<string, SlotDto[]>();
     bookedSlotsByDay.forEach((slots, day) => {
-      const seen = new Set<string>();
-      const unique: SlotDto[] = [];
+      const byBookingId = new Map<string, SlotDto>();
       for (const s of slots) {
         const key = s.bookingId ?? s.bookingSummary?.bookingId ?? s.id;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unique.push(s);
+        const prev = byBookingId.get(key);
+        byBookingId.set(key, prev ? pickCanonicalBookingSlotRow(prev, s) : s);
       }
+      const unique = Array.from(byBookingId.values()).sort((a, b) => a.startAt.localeCompare(b.startAt));
       map.set(day, unique);
     });
     return map;
@@ -2213,7 +2253,7 @@ export default function CalendarsPage() {
                                     style={{ borderLeftColor: boatColor, backgroundColor: `${boatColor}15`, color: "rgb(15 23 42)" }}
                                     title={bookingId ? "View booking details" : undefined}
                                   >
-                                    <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatSlotTime(slot)}{getSlotDurationLabel(slot) ? ` · ${getSlotDurationLabel(slot)}` : ""}</span>
+                                    <span className="font-bold tabular-nums" style={{ color: boatColor }}>{formatBookingCardTime(slot)}{getBookingCardDurationLabel(slot) ? ` · ${getBookingCardDurationLabel(slot)}` : ""}</span>
                                     {(slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name) && (
                                       <span className="block truncate opacity-90 text-brand-dark">{slot.bookingSummary?.boatName ?? boatList.find((b) => b.id === slot.boatId)?.name}</span>
                                     )}
@@ -2401,9 +2441,9 @@ export default function CalendarsPage() {
                               }}
                             >
                               <span className="shrink-0 h-2 w-2 rounded-full" style={{ backgroundColor: boatColor }} aria-hidden />
-                              <span className="font-semibold text-brand-dark tabular-nums text-sm">{formatSlotTime(slot)}</span>
-                              {getSlotDurationLabel(slot) && (
-                                <span className="text-xs text-brand-muted font-normal">· {getSlotDurationLabel(slot)}</span>
+                              <span className="font-semibold text-brand-dark tabular-nums text-sm">{formatBookingCardTime(slot)}</span>
+                              {getBookingCardDurationLabel(slot) && (
+                                <span className="text-xs text-brand-muted font-normal">· {getBookingCardDurationLabel(slot)}</span>
                               )}
                               {expName && <span className="text-xs text-brand-muted">{expName}</span>}
                               <span className="text-sm text-brand-dark">
