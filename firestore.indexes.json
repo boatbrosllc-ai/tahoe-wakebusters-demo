@@ -25,6 +25,8 @@
     { "collectionGroup": "blocks", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "endAt", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }] },
     { "collectionGroup": "blocks", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceSlug", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }, { "fieldPath": "endAt", "order": "ASCENDING" }] },
     { "collectionGroup": "blocks", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceSlug", "order": "ASCENDING" }, { "fieldPath": "endAt", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }] },
+    { "collectionGroup": "blocks", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }, { "fieldPath": "endAt", "order": "ASCENDING" }] },
+    { "collectionGroup": "blocks", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "endAt", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }] },
 
     { "collectionGroup": "waiverRequests", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "bookingId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "waiverRequests", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }] },

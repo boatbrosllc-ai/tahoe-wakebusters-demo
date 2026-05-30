@@ -328,7 +328,8 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
 });
 
 describe("getSlotGridWakeBoard (hourly like pontoon)", () => {
-  const sat = "2026-05-30";
+  // Future Saturday so getSlotGrid "today" past-time filter does not drop noon/9am starts.
+  const sat = "2026-06-06";
 
   it("Saturday wake grid includes noon start for 3h charters", () => {
     const start = new Date(`${sat}T12:00:00.000Z`);

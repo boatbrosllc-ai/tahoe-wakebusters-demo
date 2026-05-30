@@ -28,6 +28,7 @@ import {
   ticketedWeekdaysForFirestore,
 } from "@/lib/booking/ticketed-slot-utils";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { fetchBlockDocsOverlappingWindow } from "@/lib/booking/blocks-overlap-queries";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -67,95 +68,6 @@ const SLOTS_FIREBASE_HINT =
 /** Dedupe key for operationalAlerts from this route (stable per alert type + scope + UTC calendar day). */
 function slotsAlertDocId(alertType: string, scopeKey: string, utcDay: string): string {
   return operationalAlertDedupeDocId([alertType, scopeKey, utcDay]);
-}
-
-function blockOverlapsWindowMs(
-  blockStartMs: number,
-  blockEndMs: number,
-  windowStartMs: number,
-  windowEndMs: number,
-): boolean {
-  return blockStartMs <= windowEndMs && blockEndMs >= windowStartMs;
-}
-
-/**
- * Loads block docs overlapping [start, end]. Uses composite queries by both experienceId and
- * experienceSlug when indexed; if that fails
- * with a missing-index error, falls back to experienceId-only queries and filters in memory so we
- * still apply blocks without marking the response partial (calendar often looked correct before).
- */
-async function fetchBlocksDocsOverlappingWindow(
-  db: ReturnType<typeof getDb>,
-  start: Date,
-  end: Date,
-  expIds: string[],
-): Promise<{ docs: import("firebase-admin/firestore").QueryDocumentSnapshot[]; incomplete: boolean }> {
-  const { Timestamp } = getFirestoreExports();
-  const windowStartMs = start.getTime();
-  const windowEndMs = end.getTime();
-
-  try {
-    const snaps = await Promise.all([
-      ...expIds.map((expId) =>
-        db
-          .collection("blocks")
-          .where("experienceId", "==", expId)
-          .where("startAt", "<=", Timestamp.fromDate(end))
-          .where("endAt", ">=", Timestamp.fromDate(start))
-          .get()
-      ),
-      ...expIds.map((expId) =>
-        db
-          .collection("blocks")
-          .where("experienceSlug", "==", expId)
-          .where("startAt", "<=", Timestamp.fromDate(end))
-          .where("endAt", ">=", Timestamp.fromDate(start))
-          .get()
-      ),
-    ]);
-    const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
-    const seen = new Set<string>();
-    snaps.forEach((snap) => {
-      snap.docs.forEach((doc) => {
-        if (seen.has(doc.id)) return;
-        seen.add(doc.id);
-        merged.push(doc);
-      });
-    });
-    return { docs: merged, incomplete: false };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!/FAILED_PRECONDITION.*index/i.test(msg)) throw err;
-    console.warn("[slots] blocks composite query failed (index); using experienceId-only fallback:", msg);
-    const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
-    const seen = new Set<string>();
-    let anyFallbackFailed = false;
-    for (const expId of expIds) {
-      try {
-        const snap = await db.collection("blocks").where("experienceId", "==", expId).get();
-        snap.docs.forEach((doc) => {
-          const b = doc.data() as { startAt?: { toDate?: () => Date }; endAt?: { toDate?: () => Date } };
-          const bs = b.startAt?.toDate?.()?.getTime();
-          const be = b.endAt?.toDate?.()?.getTime();
-          if (bs == null || be == null) return;
-          if (!blockOverlapsWindowMs(bs, be, windowStartMs, windowEndMs)) return;
-          if (seen.has(doc.id)) return;
-          seen.add(doc.id);
-          merged.push(doc);
-        });
-      } catch (fallbackErr) {
-        anyFallbackFailed = true;
-        console.warn(
-          "[slots] blocks fallback query failed:",
-          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
-        );
-      }
-    }
-    if (anyFallbackFailed) {
-      return { docs: [], incomplete: true };
-    }
-    return { docs: merged, incomplete: false };
-  }
 }
 
 /** Merge holds missing `startDateStr` into ticketed capacity (same rules as expiresAt-bounded legacy scan). */
@@ -665,12 +577,14 @@ export async function GET(request: NextRequest) {
         }
 
         // Query blocks for all experience ID variants (slug-based or legacy)
-        const { docs: ticketedBlockDocs, incomplete: blocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
+        const { docs: ticketedBlockDocs, incomplete: blocksIncomplete } = await fetchBlockDocsOverlappingWindow({
           db,
-          winStart,
-          winEnd,
-          tAllExpIds,
-        );
+          Timestamp,
+          windowStart: winStart,
+          windowEnd: winEnd,
+          experienceIds: tAllExpIds,
+          boatIds: tBoatIds,
+        });
         const blocksQueryFailed = blocksIncomplete;
         if (blocksIncomplete) {
           void writeOperationalAlertIfNewDocId(
@@ -1270,7 +1184,14 @@ export async function GET(request: NextRequest) {
       };
 
       // Query blocks for all experience ID variants (slug-based or legacy); merge and dedupe.
-      const blocksResultPromise = fetchBlocksDocsOverlappingWindow(db, winStart, winEnd, allExpIds);
+      const blocksResultPromise = fetchBlockDocsOverlappingWindow({
+        db,
+        Timestamp,
+        windowStart: winStart,
+        windowEnd: winEnd,
+        experienceIds: allExpIds,
+        boatIds,
+      });
 
       // 2) Load Firestore slot docs — do not overwrite keys already set by bookings.
       await Promise.all(
@@ -1410,7 +1331,8 @@ export async function GET(request: NextRequest) {
         const blockEnd = b.endAt?.toDate?.()?.getTime();
         if (blockStart == null || blockEnd == null || blockEnd < winStart.getTime()) return;
         const range = { start: blockStart, end: blockEnd };
-        const boatId = typeof b.boatId === "string" ? b.boatId : null;
+        const boatIdRaw = typeof b.boatId === "string" ? b.boatId.trim() : "";
+        const boatId = boatIdRaw || null;
         if (boatId) {
           if (!blockRangesByBoat.has(boatId)) blockRangesByBoat.set(boatId, []);
           blockRangesByBoat.get(boatId)!.push(range);
@@ -1467,12 +1389,6 @@ export async function GET(request: NextRequest) {
           let rowBookingId: string | null = null;
           if (blockedByCalendar) {
             rowStatus = "blocked";
-          } else if (existing?.status === "open") {
-            // Exact slot row is authoritative; do not let synthetic overlap rows override it.
-            rowStatus = "open";
-          } else if (overlappingOtherTaken) {
-            // Fallback path only when exact row is missing: non-booked taken intervals are generic unavailable.
-            rowStatus = "blocked";
           } else if (overlappingBooked) {
             // Same paid charter overlapping this start time (e.g. 7am–10am trip blocks a 9am start on the same boat).
             // Use "booked" so the UI matches the exact slot row, not generic "Unavailable".
@@ -1481,6 +1397,10 @@ export async function GET(request: NextRequest) {
               overlappingBooked.bookingId != null && String(overlappingBooked.bookingId).trim() !== ""
                 ? String(overlappingBooked.bookingId).trim()
                 : null;
+          } else if (overlappingOtherTaken) {
+            rowStatus = "blocked";
+          } else if (existing?.status === "open") {
+            rowStatus = "open";
           } else {
             rowStatus = "open";
           }
@@ -1604,12 +1524,14 @@ export async function GET(request: NextRequest) {
 
     // Boats: legacy – bookings/holds by interval overlap (match charter policy), slot docs for grid/held/blocked
     let legacyMaxDuration = 1;
+    let legacyBlockExperienceIds: string[] = [];
     try {
       const legacyBoatSnap = await db.collection("boats").doc(boatId!).get();
       const legacyExpIds =
         (legacyBoatSnap.data() as { experienceIds?: string[] } | undefined)?.experienceIds?.filter(
           (id): id is string => typeof id === "string" && id.trim() !== "",
         ) ?? [];
+      legacyBlockExperienceIds = legacyExpIds;
       const primaryLegacyExpId = legacyExpIds[0];
       if (primaryLegacyExpId) {
         const legacyRatesSnap = await db
@@ -1691,12 +1613,14 @@ export async function GET(request: NextRequest) {
     const legacyIvOverlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
       aStart < bEnd && aEnd > bStart;
 
-    const { docs: legacyBlockDocs, incomplete: legacyBlocksIncomplete } = await fetchBlocksDocsOverlappingWindow(
+    const { docs: legacyBlockDocs, incomplete: legacyBlocksIncomplete } = await fetchBlockDocsOverlappingWindow({
       db,
-      legacyWinStart,
-      legacyWinEnd,
-      [boatId!],
-    );
+      Timestamp,
+      windowStart: legacyWinStart,
+      windowEnd: legacyWinEnd,
+      experienceIds: legacyBlockExperienceIds,
+      boatIds: boatId ? [boatId] : [],
+    });
     if (legacyBlocksIncomplete) {
       void writeOperationalAlertIfNewDocId(
         slotsAlertDocId("slots_blocks_query_incomplete_legacy_boat", boatId ?? "unknown", alertUtcDay),

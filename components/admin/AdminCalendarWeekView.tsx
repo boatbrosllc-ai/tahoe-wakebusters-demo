@@ -733,15 +733,15 @@ export function AdminCalendarWeekView({
               className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
             />
           </label>
-          {resolvedExperienceIds.length > 1 && (
+          {resolvedExperienceIds.length > 0 && (
             <label className="block">
-              <span className="text-xs font-medium text-brand-muted">Experience</span>
+              <span className="text-xs font-medium text-brand-muted">Trip type</span>
               <select
                 value={newBlockExperienceId}
                 onChange={(e) => setNewBlockExperienceId(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
               >
-                <option value="">Select experience</option>
+                {resolvedExperienceIds.length > 1 && <option value="">Select trip type</option>}
                 {resolvedExperienceIds.map((id) => (
                   <option key={id} value={id}>
                     {experienceNamesById[id] ?? id}
@@ -758,7 +758,7 @@ export function AdminCalendarWeekView({
                 onChange={(e) => setNewBlockBoatId(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
               >
-                <option value="">All boats</option>
+                <option value="">All boats for this trip type</option>
                 {boatList.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name}
@@ -767,6 +767,9 @@ export function AdminCalendarWeekView({
               </select>
             </label>
           )}
+          <p className="text-[11px] text-brand-muted">
+            Blocking one boat applies on every trip type that uses that boat on the public site.
+          </p>
           <label className="block">
             <span className="text-xs font-medium text-brand-muted">Note (optional)</span>
             <input

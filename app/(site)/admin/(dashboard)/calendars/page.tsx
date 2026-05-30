@@ -330,6 +330,7 @@ export default function CalendarsPage() {
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
   const [rangeBoatId, setRangeBoatId] = useState("");
+  const [rangeExperienceId, setRangeExperienceId] = useState("");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [addBlockOpen, setAddBlockOpen] = useState(false);
   const [blocks, setBlocks] = useState<
@@ -822,6 +823,13 @@ export default function CalendarsPage() {
     if (boatList.length === 1 && !rangeBoatId) setRangeBoatId(boatList[0].id);
   }, [boatList, rangeBoatId]);
 
+  useEffect(() => {
+    if (uniqueExperienceIds.length === 0) return;
+    setRangeExperienceId((prev) =>
+      prev && uniqueExperienceIds.includes(prev) ? prev : uniqueExperienceIds[0] ?? "",
+    );
+  }, [uniqueExperienceIds]);
+
   /** Slots that have a booking (booked or blocked with a booking) — shown on each calendar day card. */
   /** Only slots that have a confirmed booking in our bookings list (single source of truth). */
   const bookedSlotsByDay = useMemo(() => {
@@ -1264,7 +1272,7 @@ export default function CalendarsPage() {
   };
 
   const blockRange = async () => {
-    if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd) return;
+    if (uniqueExperienceIds.length === 0 || !rangeStart || !rangeEnd || !rangeExperienceId) return;
     if (rangeStart > rangeEnd) {
       setError("Start date must be before end date.");
       return;
@@ -1275,10 +1283,11 @@ export default function CalendarsPage() {
     try {
       const boatIds = rangeBoatId ? [rangeBoatId] : undefined;
       const requests: Promise<{ experienceId: string; blocksCreated: number }>[] = [];
+      const experienceIdsToBlock = [rangeExperienceId];
       for (let d = new Date(`${rangeStart}T12:00:00.000Z`); d <= new Date(`${rangeEnd}T12:00:00.000Z`); d.setUTCDate(d.getUTCDate() + 1)) {
         const dateStr = getDateStrInSlotTimezone(d);
         if (dateStr < todayStr) continue;
-        for (const experienceId of uniqueExperienceIds) {
+        for (const experienceId of experienceIdsToBlock) {
           requests.push(
             fetch("/api/admin/blocks/block-date", {
               method: "POST",
@@ -1926,6 +1935,21 @@ export default function CalendarsPage() {
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Custom range</p>
                   <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex flex-col gap-1 min-w-[200px]">
+                      <label htmlFor="block-range-experience" className="text-xs text-brand-muted">Trip type</label>
+                      <select
+                        id="block-range-experience"
+                        value={rangeExperienceId}
+                        onChange={(e) => setRangeExperienceId(e.target.value)}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      >
+                        {uniqueExperienceIds.map((id) => (
+                          <option key={id} value={id}>
+                            {experienceNames.get(id) ?? id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="flex flex-col gap-1">
                       <label htmlFor="block-range-from" className="text-xs text-brand-muted">From</label>
                       <input
@@ -1962,7 +1986,14 @@ export default function CalendarsPage() {
                           className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
                         >
                           <option value="">All boats</option>
-                          {boatList.map((b) => (
+                          {boatList
+                            .filter((b) =>
+                              (b.experienceIds ?? []).some((slugOrId) => {
+                                const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+                                return docId === rangeExperienceId;
+                              }),
+                            )
+                            .map((b) => (
                             <option key={b.id} value={b.id}>{b.name}</option>
                           ))}
                         </select>
@@ -1971,7 +2002,7 @@ export default function CalendarsPage() {
                     <Button
                       size="sm"
                       onClick={blockRange}
-                      disabled={rangeLoading || !rangeStart || !rangeEnd}
+                      disabled={rangeLoading || !rangeStart || !rangeEnd || !rangeExperienceId}
                       className="gap-1.5 min-h-[36px]"
                     >
                       <Lock className="h-3.5 w-3.5" />
@@ -1986,6 +2017,9 @@ export default function CalendarsPage() {
                       Cancel
                     </Button>
                   </div>
+                  <p className="mt-2 text-xs text-brand-muted">
+                    Pick the trip type customers book on the site. Blocking a specific boat applies on every trip type for that boat.
+                  </p>
                   {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
                 </div>
               </div>
@@ -2507,22 +2541,23 @@ export default function CalendarsPage() {
                   </p>
                 ) : (
                   <div className="rounded-xl border border-brand-dark/10 bg-brand-bg/20 p-3 sm:p-4 space-y-3">
-                    {uniqueExperienceIds.length > 1 && (
-                      <label className="block space-y-1">
-                        <span className="text-xs font-medium text-brand-muted">Experience</span>
-                        <select
-                          className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
-                          value={quickBlockExperienceId}
-                          onChange={(e) => setQuickBlockExperienceId(e.target.value)}
-                        >
-                          {uniqueExperienceIds.map((id) => (
-                            <option key={id} value={id}>
-                              {experienceNames.get(id) ?? id}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-brand-muted">Trip type</span>
+                      <select
+                        className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                        value={quickBlockExperienceId}
+                        onChange={(e) => setQuickBlockExperienceId(e.target.value)}
+                      >
+                        {uniqueExperienceIds.map((id) => (
+                          <option key={id} value={id}>
+                            {experienceNames.get(id) ?? id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p className="text-[11px] text-brand-muted -mt-1">
+                      Blocks on a specific boat apply on every trip type for that boat (customers cannot book it on Pontoon, Holiday, etc.).
+                    </p>
                     <label className="block space-y-1">
                       <span className="text-xs font-medium text-brand-muted">Boat</span>
                       <select
