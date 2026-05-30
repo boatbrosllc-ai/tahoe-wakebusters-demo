@@ -3,7 +3,7 @@
  * Boat-specific blocks apply to that boat on every trip type (experience), not only the
  * experienceId stored on the block doc (admin may save under Holiday while customers book Pontoon).
  */
-import type { Firestore, Query, QuerySnapshot } from "firebase-admin/firestore";
+import type { Firestore, Query, QueryDocumentSnapshot, QuerySnapshot } from "firebase-admin/firestore";
 import { bookingWarn } from "@/lib/booking/debug";
 
 /** Thrown when the blocks query fails (e.g. missing index). Callers should return 503, not 409 "blocked". */
@@ -57,11 +57,9 @@ export function blockRowOverlapsSlot(
   return blockIntervalsOverlapMs(startAt.getTime(), endAt.getTime(), slotStartMs, slotEndMs);
 }
 
-function mergeUniqueDocs(
-  target: import("firebase-admin/firestore").QueryDocumentSnapshot[],
-  seen: Set<string>,
-  snap: QuerySnapshot,
-): void {
+type BlockQueryResult = { docs: QueryDocumentSnapshot[] };
+
+function mergeUniqueDocs(target: QueryDocumentSnapshot[], seen: Set<string>, snap: BlockQueryResult): void {
   for (const doc of snap.docs) {
     if (seen.has(doc.id)) continue;
     seen.add(doc.id);
@@ -79,7 +77,7 @@ async function runIndexedBlockQuery(
   query: Query,
   get: (q: Query) => Promise<QuerySnapshot>,
   context: Record<string, unknown>,
-): Promise<QuerySnapshot> {
+): Promise<BlockQueryResult> {
   try {
     return await get(query);
   } catch (err) {
@@ -90,7 +88,7 @@ async function runIndexedBlockQuery(
         firestoreCode: (err as { code?: string }).code ?? null,
         message: err instanceof Error ? err.message.slice(0, 800) : String(err),
       });
-      return { docs: [] } as QuerySnapshot;
+      return { docs: [] };
     }
     bookingWarn("slot-availability", "blocks query failed; cannot verify admin blocks — returning 503 to callers", {
       ...context,
@@ -129,7 +127,7 @@ export async function fetchBlockDocsOverlappingSlot(opts: {
   slotStart: Date;
   slotEnd: Date;
   get?: (q: Query) => Promise<QuerySnapshot>;
-}): Promise<{ docs: import("firebase-admin/firestore").QueryDocumentSnapshot[] }> {
+}): Promise<BlockQueryResult> {
   const { db, Timestamp, experienceId, slotStart, slotEnd } = opts;
   const boatId = typeof opts.boatId === "string" && opts.boatId.trim() ? opts.boatId.trim() : null;
   const slotStartMs = slotStart.getTime();
@@ -144,7 +142,7 @@ export async function fetchBlockDocsOverlappingSlot(opts: {
     typeof opts.experienceSlug === "string" && opts.experienceSlug.trim() ? opts.experienceSlug.trim() : null;
   const getSnap = opts.get ?? ((q: Query) => q.get());
 
-  const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+  const merged: QueryDocumentSnapshot[] = [];
   const seen = new Set<string>();
 
   for (const expIdForQuery of expIds) {
@@ -221,10 +219,10 @@ export async function fetchBlockDocsOverlappingWindow(opts: {
   const boatIds = (opts.boatIds ?? []).map((id) => id.trim()).filter(Boolean);
   const windowStartMs = windowStart.getTime();
   const windowEndMs = windowEnd.getTime();
-  const merged: import("firebase-admin/firestore").QueryDocumentSnapshot[] = [];
+  const merged: QueryDocumentSnapshot[] = [];
   const seen = new Set<string>();
 
-  const mergeFromSnap = (snap: QuerySnapshot) => {
+  const mergeFromSnap = (snap: BlockQueryResult) => {
     for (const doc of snap.docs) {
       const row = doc.data() as BlockRow;
       const bs = row.startAt?.toDate?.()?.getTime();
