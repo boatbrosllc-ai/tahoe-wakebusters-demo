@@ -10,11 +10,13 @@ const durations = [2, 4, 6, 8] as const;
 
 export function PricingSection({
   id,
-  /** When set (e.g. from Firestore rates on the server), overrides static `PRICING_MAP` for display dollars by duration. */
   pricingDollarsByDuration,
+  subtext,
 }: {
   id?: string;
   pricingDollarsByDuration?: Record<number, number>;
+  /** Override default pontoon-centric pricing blurb (SEO landing pages). */
+  subtext?: string;
 }) {
   const reduceMotion = useReducedMotion();
   const pricingMap = pricingDollarsByDuration && Object.keys(pricingDollarsByDuration).length > 0 ? pricingDollarsByDuration : PRICING_MAP_STATIC;
@@ -44,7 +46,8 @@ export function PricingSection({
           viewport={{ once: true }}
           transition={{ duration: 0.5, delay: 0.1 }}
         >
-          All trips include captain, fuel, cooler (ice included), sound system, and lily pad.
+          {subtext ??
+            "All trips include captain, fuel, cooler (ice included), sound system, and lily pad."}
         </motion.p>
         <motion.div
           className="max-w-2xl rounded-2xl border border-white/20 bg-white/5 backdrop-blur-sm p-6 sm:p-8"

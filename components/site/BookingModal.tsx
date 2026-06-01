@@ -50,7 +50,7 @@ import { TrustLine } from "@/components/site/TrustLine";
 import { loadConfetti } from "@/lib/client/load-confetti";
 import { analytics } from "@/lib/analytics";
 import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
-import { location } from "@/content/location";
+import { ratingWithReviewCount } from "@/content/location";
 import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
@@ -3981,7 +3981,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements key={clientSecret ?? ""} stripe={stripePromise} options={{ clientSecret }}>
                       <p className="text-center text-xs text-brand-muted mb-3 px-2 leading-snug order-first">
-                        ⭐ {location.rating} · {location.reviewCount}+ Google reviews · Cancel within 48 hours for a full refund.
+                        ⭐ {ratingWithReviewCount()} · Cancel within 48 hours for a full refund.
                       </p>
                       <BookingStep4PaymentForm
                         receiptClaimToken={receiptClaimToken}

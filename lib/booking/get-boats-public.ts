@@ -2,6 +2,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { ListingBoat, Experience } from "@/lib/booking/types";
+import { resolveCanonicalExperienceSlug } from "@/lib/booking/experience-aliases";
 
 export interface PublicBoatListItem {
   id: string;
@@ -26,6 +27,8 @@ export interface PublicBoatBySlug {
   id: string;
   name: string;
   slug: string;
+  /** True when the boat was found via `previousSlugs` rather than the current slug. */
+  matchedViaPreviousSlug?: boolean;
   description?: string;
   photos: string[];
   boatType?: string;
@@ -70,7 +73,7 @@ async function fetchListingBoatsForPublic(): Promise<PublicBoatListItem[]> {
       const exp = expById.get(firstExpId);
       if (exp && exp.active !== false && typeof exp.slug === "string") {
         const s = exp.slug.trim();
-        if (s) firstLinkedExperienceSlug = s;
+        if (s) firstLinkedExperienceSlug = resolveCanonicalExperienceSlug(s, s);
       }
     }
     list.push({
@@ -125,6 +128,7 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
     .get();
 
   let doc = snap.empty ? null : snap.docs[0];
+  let matchedViaPreviousSlug = false;
   if (!doc) {
     const fallbackSnap = await db
       .collection("boats")
@@ -135,9 +139,13 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
       .get();
     if (fallbackSnap.empty) return null;
     doc = fallbackSnap.docs[0];
+    matchedViaPreviousSlug = true;
   }
   if (!doc) return null;
   const boat = doc.data() as ListingBoat;
+  const rawSlug = typeof boat.slug === "string" ? boat.slug.trim() : "";
+  const canonicalSlug = rawSlug.toLowerCase();
+  if (!canonicalSlug) return null;
   const experienceIds = Array.isArray(boat.experienceIds) ? boat.experienceIds.filter((x): x is string => typeof x === "string") : [];
 
   const experiencePromises = experienceIds.map((expId) =>
@@ -153,14 +161,16 @@ export async function getBoatBySlug(slug: string): Promise<PublicBoatBySlug | nu
       const expSlug = typeof exp.slug === "string" ? exp.slug.trim() : "";
       const title = typeof exp.title === "string" ? exp.title : "";
       if (!expSlug || !title) return null;
-      return { id: expDoc.id, slug: expSlug, title };
+      const canonicalExpSlug = resolveCanonicalExperienceSlug(expSlug, expSlug);
+      return { id: expDoc.id, slug: canonicalExpSlug, title };
     })
     .filter((x): x is ExperienceRef => x !== null);
 
   return {
     id: doc.id,
     name: boat.name,
-    slug: normalizedSlug,
+    slug: canonicalSlug,
+    matchedViaPreviousSlug,
     description: boat.description,
     photos: Array.isArray(boat.photos) ? boat.photos.filter((x): x is string => typeof x === "string") : [],
     boatType: boat.boatType,

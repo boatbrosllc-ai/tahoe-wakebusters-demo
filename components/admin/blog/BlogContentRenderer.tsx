@@ -106,13 +106,80 @@ export function BlogContentRenderer({ blocks }: { blocks: ContentBlock[] }) {
         if (block.type === "divider") {
           return <hr key={block.id} className="border-brand-dark/20 my-6" />;
         }
+        if (block.type === "keyTakeaways") {
+          const items = (block as { items?: string[] }).items ?? [];
+          return (
+            <div
+              key={block.id}
+              className="mb-10 rounded-xl border-2 border-brand-primary/30 bg-brand-bg/70 px-4 py-5 sm:px-8 sm:py-8"
+              role="complementary"
+              aria-label="Key takeaways"
+            >
+              <h2 className="text-base sm:text-lg font-bold text-brand-dark mb-3">Key takeaways</h2>
+              <ul className="space-y-2.5">
+                {items.map((item, i) => (
+                  <li key={i} className="flex gap-3 text-brand-muted text-[15px] leading-relaxed">
+                    <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-primary" aria-hidden />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        }
+        if (block.type === "table") {
+          const t = block as { headers?: string[]; rows?: string[][] };
+          const headers = t.headers ?? [];
+          const rows = t.rows ?? [];
+          return (
+            <div key={block.id} className="my-6 overflow-x-auto">
+              <table className="w-full text-sm border border-brand-dark/10 rounded-lg overflow-hidden">
+                <thead>
+                  <tr className="bg-brand-bg">
+                    {headers.map((h, i) => (
+                      <th key={i} className="text-left font-semibold text-brand-dark px-3 py-2 border-b border-brand-dark/10">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, ri) => (
+                    <tr key={ri} className="border-b border-brand-dark/5 last:border-0">
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="text-brand-muted px-3 py-2 align-top">
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         if (block.type === "callout") {
           const b = block as { title?: string; body?: string; variant?: string };
           const bg = b.variant === "warning" ? "bg-amber-50 border-amber-200" : b.variant === "tip" ? "bg-emerald-50 border-emerald-200" : "bg-blue-50 border-blue-200";
+          const bodySegments = parseInlineLinks(b.body ?? "");
           return (
             <div key={block.id} className={`rounded-lg border p-4 my-6 ${bg}`}>
               {b.title && <p className="font-semibold text-brand-dark mb-2">{b.title}</p>}
-              <p className="text-brand-muted text-sm">{b.body}</p>
+              <p className="text-brand-muted text-sm">
+                {bodySegments.map((seg, i) =>
+                  typeof seg === "string" ? (
+                    <span key={i}>{seg}</span>
+                  ) : seg.external ? (
+                    <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className={linkClass}>
+                      {seg.text}
+                    </a>
+                  ) : (
+                    <Link key={i} href={seg.href} className={linkClass}>
+                      {seg.text}
+                    </Link>
+                  )
+                )}
+              </p>
             </div>
           );
         }

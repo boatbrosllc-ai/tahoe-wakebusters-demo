@@ -1,9 +1,10 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { brand } from "@/content/brand";
-import { blogPosts } from "@/content/blog";
 import { BlogCategoryFilter } from "@/components/site/BlogCategoryFilter";
+import { getBlogHubPosts } from "@/lib/blog/get-blog-hub-posts";
 import { ArrowRight, Waves } from "lucide-react";
 
 type SearchParams = { category?: string };
@@ -18,6 +19,7 @@ export default async function TheDockPage(props: PageProps) {
       ? (categoryParam as (typeof validCategories)[number])
       : "all";
 
+  const allPosts = await getBlogHubPosts();
   return (
     <div className="min-h-screen bg-white overflow-x-hidden">
       {/* Hero – server-rendered for SEO */}
@@ -67,7 +69,7 @@ export default async function TheDockPage(props: PageProps) {
           </section>
         }
       >
-        <BlogCategoryFilter allPosts={blogPosts} initialCategory={initialCategory} />
+        <BlogCategoryFilter allPosts={allPosts} initialCategory={initialCategory} />
       </Suspense>
 
       {/* CTA – server-rendered */}

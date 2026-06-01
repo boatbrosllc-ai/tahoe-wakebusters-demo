@@ -3,6 +3,8 @@
  * No backend — frontend UX only.
  */
 
+import { location } from "@/content/location";
+
 export const HERO = {
   title: "Lake Austin Pontoon Rental Experience",
   subtitle: "Captain included. Premium sound. Chill, swim, celebrate.",
@@ -37,7 +39,7 @@ export const PRICING_MAP: Record<number, number> = {
 
 export const SOCIAL_PROOF = [
   { label: "★ 5.0", sub: "rating" },
-  { label: "329+", sub: "Google reviews" },
+  { label: `${location.reviewCount}+`, sub: "5-star reviews" },
   { label: "Top-rated", sub: "on Lake Austin" },
   { label: "Captain-led", sub: "" },
   { label: "Lily pad included", sub: "" },

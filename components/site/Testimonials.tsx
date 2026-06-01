@@ -5,7 +5,7 @@ import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import { Star } from "lucide-react";
 import { testimonials } from "@/content/testimonials";
-import { location } from "@/content/location";
+import { location, reviewCountLabel } from "@/content/location";
 import { cn } from "@/lib/utils";
 
 const ROTATE_INTERVAL_MS = 5500;
@@ -33,7 +33,7 @@ export function Testimonials() {
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-brand-primary/5 via-transparent to-brand-primary/5" aria-hidden />
 
       <div className="container-wide relative z-10 px-4 sm:px-6 lg:px-8">
-        {/* Stats strip – 5.0 · 329+ reviews · Austin */}
+        {/* Stats strip – 5.0 · 470+ 5-star reviews · Austin */}
         <motion.div
           className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-center mb-10 sm:mb-12"
           initial={{ opacity: 0, y: 12 }}
@@ -59,8 +59,7 @@ export function Testimonials() {
               className="h-7 w-7 shrink-0"
               aria-hidden
             />
-            <span className="text-white">{location.reviewCount}+</span>{" "}
-            <span className="text-white/90">Google reviews</span>
+            <span className="text-white">{reviewCountLabel()}</span>
           </p>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
           <p className="text-sm sm:text-base text-white/80">

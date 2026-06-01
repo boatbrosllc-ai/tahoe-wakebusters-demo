@@ -89,7 +89,10 @@ export async function POST(
     lastPublishedAt: update.lastPublishedAt ?? data.lastPublishedAt,
     updatedAt: update.updatedAt,
   };
-  const schemaFields = buildSchemaFields(serialized as import("@/lib/blog/types").BlogPostDoc);
+  const schemaFields = buildSchemaFields({
+    ...(serialized as Record<string, unknown>),
+    seo: data.seo as import("@/lib/blog/types").BlogPostDoc["seo"],
+  } as import("@/lib/blog/types").BlogPostDoc);
   update.schema = schemaFields;
 
   await ref.update(update);

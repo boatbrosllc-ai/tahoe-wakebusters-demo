@@ -4,6 +4,9 @@ import { brand } from "@/content/brand";
 import { faqs } from "@/content/faqs";
 import { FAQsPageClient } from "./FAQsPageClient";
 
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const canonical = `${baseUrl}/faqs`;
+
 export const metadata: Metadata = {
   title: "FAQs | Lake Austin Boat Rentals",
   description:
@@ -14,9 +17,11 @@ export const metadata: Metadata = {
     "Lake Austin pontoon rental",
     "Lake Austin boat rental prices",
   ],
+  alternates: { canonical },
   openGraph: {
     title: "FAQs | Lake Austin Boat Rentals | Boat Bros",
     description: "Frequently asked questions about Lake Austin boat rentals. Captain, pricing, booking.",
+    url: canonical,
   },
 };
 

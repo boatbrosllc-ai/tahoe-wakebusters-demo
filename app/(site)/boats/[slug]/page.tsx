@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import Image from "next/image";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getBoatBySlug } from "@/lib/booking/get-boats-public";
@@ -129,8 +129,13 @@ function getSeoParagraphsForBoat(boatType: string | undefined, boatName: string)
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const boat = await getBoatBySlug(slug);
+  const requestedSlug = slug.trim().toLowerCase();
+  const boat = await getBoatBySlug(requestedSlug);
   if (!boat) return { title: "Boat" };
+
+  if (requestedSlug !== boat.slug) {
+    return {};
+  }
 
   const typeLabel = boatTypeLabel(boat.boatType);
   const title = `${boat.name} | Lake Austin ${typeLabel} Rental | Boat Bros`;
@@ -205,8 +210,13 @@ function ServiceJsonLd({
 
 export default async function BoatPillarPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const boat = await getBoatBySlug(slug);
+  const requestedSlug = slug.trim().toLowerCase();
+  const boat = await getBoatBySlug(requestedSlug);
   if (!boat) notFound();
+
+  if (requestedSlug !== boat.slug) {
+    permanentRedirect(`/boats/${encodeURIComponent(boat.slug)}`);
+  }
 
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 

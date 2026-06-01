@@ -17,6 +17,7 @@
     "check-admin-route-guards": "node scripts/check-admin-route-guards.mjs",
     "assert-no-legacy-active-holds": "node scripts/assert-no-legacy-active-holds.mjs",
     "seed": "node scripts/seed-firestore.js",
+    "seed:blog": "node scripts/seed-blog-posts.mjs",
     "postinstall": "node scripts/postinstall-next.js",
     "prepare": "husky"
   },

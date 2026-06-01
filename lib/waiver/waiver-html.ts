@@ -4,6 +4,7 @@
  */
 
 import type { WaiverClause, WaiverSignedPayload, WaiverSignatureMode } from "./types";
+import { waiverTrailPoweredByHtml } from "./waivertrail-branding";
 
 export interface BuildWaiverHtmlInput {
   template: {
@@ -105,6 +106,7 @@ export function buildWaiverHtml(input: BuildWaiverHtmlInput): string {
   ${clausesSection}
   ${signerSection}
   ${signatureSection}
+  ${waiverTrailPoweredByHtml()}
 </body>
 </html>`;
 

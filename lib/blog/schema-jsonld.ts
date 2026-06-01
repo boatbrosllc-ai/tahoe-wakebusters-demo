@@ -10,7 +10,9 @@ function stripTrailingSlash(url: string): string {
   return url.replace(/\/$/, "");
 }
 
-function postUrl(slug: string): string {
+function postUrl(slug: string, canonicalUrl?: string): string {
+  const trimmed = canonicalUrl?.trim();
+  if (trimmed) return trimmed.replace(/\/+$/, "");
   return `${stripTrailingSlash(BASE_URL)}/blog/${encodeURIComponent(slug)}`;
 }
 
@@ -19,9 +21,9 @@ export function buildArticleJsonLd(
   post: Pick<
     BlogPostDoc | BlogPostSerialized,
     "title" | "slug" | "excerpt" | "author" | "coverImage" | "ogImage" | "contentText" | "stats" | "updatedAt" | "lastPublishedAt" | "publishAt"
-  >
+  > & { seo?: { canonicalUrl?: string } }
 ): Record<string, unknown> {
-  const url = postUrl(post.slug);
+  const url = postUrl(post.slug, post.seo?.canonicalUrl);
   const datePublished =
     typeof post.lastPublishedAt === "string"
       ? post.lastPublishedAt
@@ -53,8 +55,10 @@ export function buildArticleJsonLd(
 }
 
 /** Breadcrumb: Home > Blog > [Post title]. */
-export function buildBreadcrumbJsonLd(post: Pick<BlogPostDoc | BlogPostSerialized, "title" | "slug">): Record<string, unknown> {
-  const url = postUrl(post.slug);
+export function buildBreadcrumbJsonLd(
+  post: Pick<BlogPostDoc | BlogPostSerialized, "title" | "slug"> & { seo?: { canonicalUrl?: string } }
+): Record<string, unknown> {
+  const url = postUrl(post.slug, post.seo?.canonicalUrl);
   return {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",

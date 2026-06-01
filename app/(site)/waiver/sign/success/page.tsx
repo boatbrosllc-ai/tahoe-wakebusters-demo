@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { scheduleSkipHeroEntranceOnce } from "@/lib/site/skip-hero-entrance";
+import { WaiverPoweredByFooter } from "@/components/waiver/WaiverPoweredByFooter";
 
 export default function WaiverSignSuccessPage() {
   return (
@@ -23,6 +24,7 @@ export default function WaiverSignSuccessPage() {
         >
           Back to home
         </Link>
+        <WaiverPoweredByFooter className="mt-8 border-t-0 pt-0" />
       </div>
     </div>
   );

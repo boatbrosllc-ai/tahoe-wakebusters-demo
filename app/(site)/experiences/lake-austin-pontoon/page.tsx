@@ -55,6 +55,15 @@ export default async function LakeAustinPontoonPage() {
       socialProof={socialProof}
       fromPriceCents={fromPriceCents}
       pricingDollarsByDuration={pricingDollarsByDuration}
+      eventOverrides={{
+        relatedExperiences: [
+          { href: "/pontoon-boat-rental-austin", title: "Pontoon boat rental Austin" },
+          { href: "/austin-party-boat-rentals", title: "Austin party boat rentals" },
+          { href: "/lake-austin-boat-rentals", title: "Lake Austin boat rentals" },
+          { href: "/austin-bachelorette-boat-rental", title: "Bachelorette party boat" },
+          { href: "/austin-bachelor-party-boat-rental", title: "Bachelor party boat" },
+        ],
+      }}
     />
   );
 }

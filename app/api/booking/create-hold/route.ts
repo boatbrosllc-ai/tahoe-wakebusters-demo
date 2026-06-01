@@ -24,6 +24,7 @@ import {
 import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCapacityChange } from "@/lib/booking/shared-departure-inventory";
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import { getTicketedAdminBlockImpact } from "@/lib/booking/ticketed-admin-blocks";
 import {
   assertSlotAvailable,
   SlotConflictError,
@@ -1070,17 +1071,19 @@ export async function POST(request: NextRequest) {
                 currentReserved = await getReservedSeats(tx, inventoryRef);
               }
 
-              const blockedResume = await hasOverlappingBlock({
+              const blockedResume = await getTicketedAdminBlockImpact({
                 db,
                 Timestamp,
                 experienceId: expIdForCapacity,
                 experienceIdVariants: slugVariantsList,
+                experienceSlug: experienceSlugForAssert,
                 boatId: isListingBoatFlow ? input.boatId : undefined,
                 slotStart: slotStartForBlock,
                 slotEnd: slotEndForBlock,
                 get: (q) => tx.get(q),
               });
-              if (blockedResume) throw new SlotConflictError("This slot is blocked");
+              if (blockedResume.fullBlock) throw new SlotConflictError("This slot is blocked");
+              const adminTicketsHeldBack = blockedResume.ticketsBlocked;
 
               // Explicitly clear discount fields when no discount applies (mirror charter reuse path)
               // so resuming a previously discounted hold without a discount does not retain stale discount amounts.
@@ -1132,7 +1135,9 @@ export async function POST(request: NextRequest) {
               if (delta === 0) {
                 tx.update(db.collection("holds").doc(resumeTargetId), holdUpdatePayload);
               } else {
-                applyNetCapacityChange(tx, inventoryRef, sharedCapacityLimit, sold, currentReserved, delta);
+                applyNetCapacityChange(tx, inventoryRef, sharedCapacityLimit, sold, currentReserved, delta, {
+                  adminTicketsHeldBack,
+                });
                 tx.update(db.collection("holds").doc(resumeTargetId), holdUpdatePayload);
               }
               effectiveHoldId = resumeTargetId;
@@ -1169,17 +1174,19 @@ export async function POST(request: NextRequest) {
 
         // No valid reusable hold: create new hold and reserve full party size.
         // Block overlap reads must run before any writes (Firestore: all reads before all writes).
-        const blocked = await hasOverlappingBlock({
+        const blockImpact = await getTicketedAdminBlockImpact({
           db,
           Timestamp,
           experienceId: expIdForCapacity,
           experienceIdVariants: slugVariantsList,
+          experienceSlug: experienceSlugForAssert,
           boatId: isListingBoatFlow ? input.boatId : undefined,
           slotStart: slotStartForBlock,
           slotEnd: slotEndForBlock,
           get: (q) => tx.get(q),
         });
-        if (blocked) throw new SlotConflictError("This slot is blocked");
+        if (blockImpact.fullBlock) throw new SlotConflictError("This slot is blocked");
+        const adminTicketsHeldBack = blockImpact.ticketsBlocked;
         // Read departure inventory before any writes; discount updates must not precede this read or
         // reserveCapacity would call tx.get after tx.update (Firestore: all reads before all writes).
         const inventoryReservedBeforeHold = await getReservedSeats(tx, inventoryRef);
@@ -1206,6 +1213,7 @@ export async function POST(request: NextRequest) {
         }
         await reserveCapacity(tx, inventoryRef, sharedCapacityLimit, input.partySize, sold, {
           preReadReservedSeats: inventoryReservedBeforeHold,
+          adminTicketsHeldBack,
         });
         tx.set(db.collection("holds").doc(holdId), {
           ...holdPayload,
@@ -1229,7 +1237,7 @@ export async function POST(request: NextRequest) {
       // Admin block may be written after in-tx reads but before the transaction commits; re-check once
       // outside the transaction (direct Firestore read, not tx.get) to shrink the TOCTOU window to one query RTT.
       if (slotStartForBlock && slotEndForBlock) {
-        const blockedAfterTx = await hasOverlappingBlock({
+        const blockedAfterTx = await getTicketedAdminBlockImpact({
           db,
           Timestamp,
           experienceId: expIdForCapacity,
@@ -1239,7 +1247,7 @@ export async function POST(request: NextRequest) {
           slotStart: slotStartForBlock,
           slotEnd: slotEndForBlock,
         });
-        if (blockedAfterTx) {
+        if (blockedAfterTx.fullBlock) {
           await executeReleaseHoldTransaction(db, effectiveHoldId, {
             releaseContext: "create-hold-post-tx-block-recheck",
           });

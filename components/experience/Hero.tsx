@@ -14,7 +14,12 @@ export function Hero({
   subtitle,
   introParagraph,
   imagePosition,
+  imageAlt,
+  badge,
   omitTemplateFallback,
+  mobileSafeLayout = false,
+  /** Narrower hero for SEO landing grid (booking card beside on desktop). */
+  seoLandingLayout = false,
 }: {
   /** When set (e.g. from admin pontoon listing), overrides static HERO image. */
   heroImageUrl?: string;
@@ -24,10 +29,17 @@ export function Hero({
   subtitle?: string;
   /** Optional intro paragraph below subtitle (e.g. for SEO). */
   introParagraph?: string;
+  /** Descriptive alt for hero image (SEO + a11y). */
+  imageAlt?: string;
+  /** Small pill above the title (SEO landing pages). */
+  badge?: string;
   /** Optional object-position for the hero image (e.g. "center 30%" to show more of top). */
   imagePosition?: string;
   /** When true and `heroImageUrl` is missing, show gradient-only hero (no default template image). */
   omitTemplateFallback?: boolean;
+  /** Top-align copy on small screens so long hero text is not clipped by centering + upward shift. */
+  mobileSafeLayout?: boolean;
+  seoLandingLayout?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const motionProps = reduceMotion
@@ -48,12 +60,21 @@ export function Hero({
   const heroSubtitle = subtitle ?? HERO.subtitle;
 
   return (
-    <section className="relative w-full min-h-[60vh] sm:min-h-[75vh] overflow-hidden bg-brand-dark">
+    <section
+      className={cn(
+        "relative w-full bg-brand-dark",
+        seoLandingLayout
+          ? "min-h-[52vh] sm:min-h-[58vh] lg:min-h-[68vh] overflow-hidden"
+          : mobileSafeLayout
+            ? "min-h-0 sm:min-h-[75vh] overflow-visible sm:overflow-hidden"
+            : "min-h-[60vh] sm:min-h-[75vh] overflow-hidden"
+      )}
+    >
       {heroSrc ? (
         <div className="absolute inset-0">
           <Image
             src={heroSrc}
-            alt=""
+            alt={imageAlt ?? heroTitle}
             fill
             className={cn(
               "object-cover scale-[1.02] sm:scale-105",
@@ -97,8 +118,29 @@ export function Hero({
         <ArrowLeft className="h-4 w-4" aria-hidden />
         All trips
       </Link>
-      <div className="absolute inset-0 flex flex-col justify-center items-center">
-        <div className="w-full max-w-5xl lg:max-w-7xl mx-auto px-5 sm:px-8 lg:px-12 py-8 sm:py-12 text-center -translate-y-12 sm:-translate-y-20">
+      <div
+        className={cn(
+          mobileSafeLayout
+            ? "relative z-10 flex flex-col items-center min-h-[50vh] pt-20 pb-10 sm:absolute sm:inset-0 sm:min-h-0 sm:justify-center sm:pt-0 sm:pb-0"
+            : "absolute inset-0 flex flex-col justify-center items-center"
+        )}
+      >
+        <div
+          className={cn(
+            "w-full max-w-5xl lg:max-w-7xl mx-auto px-5 sm:px-8 lg:px-12 py-8 sm:py-12 text-center",
+            mobileSafeLayout ? "sm:-translate-y-20" : "-translate-y-12 sm:-translate-y-20"
+          )}
+        >
+          {badge ? (
+            <motion.p
+              className="inline-block mb-3 rounded-full border border-white/25 bg-white/10 px-4 py-1.5 text-xs sm:text-sm font-semibold text-white/95 tracking-wide"
+              initial={motionProps.initial}
+              animate={motionProps.animate}
+              transition={{ ...motionProps.transition, delay: reduceMotion ? 0 : 0.05 }}
+            >
+              {badge}
+            </motion.p>
+          ) : null}
           <motion.h1
             className="font-display text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-snug max-w-4xl lg:max-w-6xl mx-auto [text-shadow:0_2px_4px_rgba(0,0,0,0.8),0_4px_12px_rgba(0,0,0,0.6)] sm:[text-shadow:0_2px_40px_rgba(0,0,0,0.4)]"
             initial={motionProps.initial}

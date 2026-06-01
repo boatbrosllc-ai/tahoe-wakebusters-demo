@@ -12,6 +12,7 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
+import { getCanonicalExperiencePath, isPontoonSlug } from "@/lib/booking/experience-aliases";
 
 type ListingData = {
   slug: string;
@@ -24,11 +25,18 @@ type ListingData = {
   listingCardImagePosition?: string;
 };
 const STATIC_EXPERIENCE_BY_SLUG = new Map(experiences.map((exp) => [exp.slug, exp]));
-const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday"]);
+const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday", "lake-austin-pontoon"]);
+const isAdminManagedSlug = (slug: string) =>
+  isPontoonSlug(slug) || slug === "watersports" || slug === "sunset" || slug === "holiday";
 
-export function ExperiencesListClient() {
-  const [order, setOrder] = useState<string[] | null>(null);
-  const [listings, setListings] = useState<ListingData[]>([]);
+interface ExperiencesListClientProps {
+  initialListings?: ListingData[];
+  initialOrder?: string[] | null;
+}
+
+export function ExperiencesListClient({ initialListings = [], initialOrder = null }: ExperiencesListClientProps) {
+  const [order, setOrder] = useState<string[] | null>(initialOrder);
+  const [listings, setListings] = useState<ListingData[]>(initialListings);
   const [apiError, setApiError] = useState(false);
   const { setOpen: setBookingModalOpen } = useBookingModal();
 
@@ -121,7 +129,7 @@ export function ExperiencesListClient() {
         : [];
     const merged = [...listings, ...staticFallbackListings].filter((item) => {
       if (!item.slug) return false;
-      if (ADMIN_MANAGED_STATIC_SLUGS.has(item.slug)) return activeStaticManagedSlugs.has(item.slug);
+      if (isAdminManagedSlug(item.slug)) return activeStaticManagedSlugs.has(item.slug);
       return true;
     });
     const sorted = [...merged].sort((a, b) => {
@@ -135,8 +143,8 @@ export function ExperiencesListClient() {
     return sorted.map(listingToCard);
   }, [listings, order]);
 
-  const pontoonExperience = sortedExperiences.find((e) => e.slug === "pontoon");
-  const restUnsorted = sortedExperiences.filter((e) => e.slug !== "pontoon");
+  const pontoonExperience = sortedExperiences.find((e) => isPontoonSlug(e.slug));
+  const restUnsorted = sortedExperiences.filter((e) => !isPontoonSlug(e.slug));
   // Wake Surf (watersports) always second after Pontoon on mobile and desktop
   const watersports = restUnsorted.find((e) => e.slug === "watersports");
   const restOthers = restUnsorted.filter((e) => e.slug !== "watersports");
@@ -243,13 +251,13 @@ export function ExperiencesListClient() {
               transition={{ duration: 0.45, delay: 0.1 }}
             >
               <Link
-                href={`/experiences/${firstData.slug}`}
+                href={getCanonicalExperiencePath(firstData.slug)}
                 className="group block relative rounded-2xl bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-secondary/20 hover:-translate-y-1"
                 aria-label={`${firstData.title} — view details`}
               >
                 {/* Ring overlay so pink outline stays on top of image */}
                 <div className="absolute inset-0 rounded-2xl ring-4 ring-brand-secondary pointer-events-none z-20 transition-all duration-300 group-hover:ring-brand-secondary/90" aria-hidden />
-                {firstData.slug === "pontoon" && (
+                {isPontoonSlug(firstData.slug) && (
                   <div
                     className="absolute top-0 right-0 z-30 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
                     aria-hidden
@@ -327,7 +335,7 @@ export function ExperiencesListClient() {
                   transition={{ duration: 0.4, delay: 0.15 + i * 0.06 }}
                 >
                   <Link
-                    href={`/experiences/${data.slug}`}
+                    href={getCanonicalExperiencePath(data.slug)}
                     className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1 hover:ring-brand-primary/90"
                     aria-label={`${data.title} — view details`}
                   >

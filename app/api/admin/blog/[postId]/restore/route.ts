@@ -87,6 +87,7 @@ export async function POST(
     coverImage: (merged.coverImage ?? null) as { url?: string; alt?: string } | null,
     ogImage: (merged.ogImage ?? null) as { url?: string } | null,
     excerpt: (merged.excerpt ?? "") as string,
+    seo: (merged.seo ?? { metaTitle: "", metaDescription: "", robotsIndex: true, robotsFollow: true }) as import("@/lib/blog/types").BlogPostDoc["seo"],
     publishAt: merged.publishAt,
     lastPublishedAt: merged.lastPublishedAt,
     updatedAt: merged.updatedAt,

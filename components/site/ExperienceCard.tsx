@@ -9,6 +9,7 @@ import { BookingCTA } from "./BookingCTA";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { getCanonicalExperiencePath } from "@/lib/booking/experience-aliases";
 
 export interface ExperienceCardProps {
   experience: Experience;
@@ -25,7 +26,7 @@ export function ExperienceCard({
   featured = false,
   className,
 }: ExperienceCardProps) {
-  const href = `/experiences/${experience.slug}`;
+  const href = getCanonicalExperiencePath(experience.slug);
   const router = useRouter();
   const { openWithSelection } = useBookingModal();
 

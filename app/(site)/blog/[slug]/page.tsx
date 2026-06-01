@@ -12,6 +12,8 @@ import {
   type BlogBodyBlock,
 } from "@/content/blog";
 import { getPublishedPostBySlug } from "@/lib/blog/firestore";
+import { CMS_BLOG_POST_SEEDS, getCmsBlogPostSeedBySlug } from "@/lib/blog/cms-posts";
+import { cmsSeedToViewPost } from "@/lib/blog/cms-posts/to-view-post";
 import { FirestoreBlogPostView } from "@/components/site/FirestoreBlogPostView";
 import { Clock, Anchor, ArrowLeft, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,7 +24,10 @@ const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
 type Props = { params: Promise<{ slug: string }> };
 
 export async function generateStaticParams() {
-  return blogPosts.map((p) => ({ slug: p.slug }));
+  return [
+    ...blogPosts.map((p) => ({ slug: p.slug })),
+    ...CMS_BLOG_POST_SEEDS.map((p) => ({ slug: p.slug })),
+  ];
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -53,17 +58,31 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
   const firestorePost = await getPublishedPostBySlug(slug);
   if (firestorePost) {
-    const title = `${(firestorePost.title as string) ?? "Post"} | The Dock | ${brand.companyName}`;
-    const descRaw = (firestorePost.seo as { metaDescription?: string })?.metaDescription ?? (firestorePost.excerpt as string | undefined) ?? "";
+    const seo = firestorePost.seo as {
+      metaTitle?: string;
+      metaDescription?: string;
+      canonicalUrl?: string;
+      robotsIndex?: boolean;
+      robotsFollow?: boolean;
+    };
+    const metaTitleRaw = seo?.metaTitle?.trim();
+    const title = metaTitleRaw
+      ? `${metaTitleRaw} | ${brand.companyName}`
+      : `${(firestorePost.title as string) ?? "Post"} | The Dock | ${brand.companyName}`;
+    const descRaw = seo?.metaDescription ?? (firestorePost.excerpt as string | undefined) ?? "";
     const description = String(descRaw).slice(0, 160);
-    const canonical = `${baseUrl}/blog/${firestorePost.slug}`;
+    const canonicalUrl = seo?.canonicalUrl?.trim();
+    const canonical = canonicalUrl && canonicalUrl.length > 0 ? canonicalUrl : `${baseUrl}/blog/${firestorePost.slug}`;
+    const index = seo?.robotsIndex !== false;
+    const follow = seo?.robotsFollow !== false;
+    const robots = `${index ? "index" : "noindex"}, ${follow ? "follow" : "nofollow"}`;
     const cover = firestorePost.coverImage as { url?: string } | null;
     const ogImage = cover?.url;
     return {
       title,
       description,
       openGraph: {
-        title: firestorePost.title as string,
+        title: metaTitleRaw || (firestorePost.title as string),
         description,
         url: canonical,
         type: "article",
@@ -73,7 +92,28 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         images: ogImage ? [{ url: ogImage, alt: (firestorePost.coverImage as { alt?: string })?.alt ?? (firestorePost.title as string) }] : undefined,
       },
       alternates: { canonical },
-      robots: (firestorePost.seo as { robotsIndex?: boolean })?.robotsIndex !== false ? "index, follow" : "noindex, nofollow",
+      robots,
+    };
+  }
+  const cmsSeed = getCmsBlogPostSeedBySlug(slug);
+  if (cmsSeed) {
+    const { seo } = cmsSeed;
+    const title = `${seo.metaTitle} | ${brand.companyName}`;
+    const description = seo.metaDescription.slice(0, 160);
+    const canonical = seo.canonicalUrl;
+    const ogImage = `${baseUrl}${cmsSeed.coverImage.path}`;
+    return {
+      title,
+      description,
+      openGraph: {
+        title: seo.metaTitle,
+        description,
+        url: canonical,
+        type: "article",
+        images: [{ url: ogImage, alt: cmsSeed.coverImage.alt }],
+      },
+      alternates: { canonical },
+      robots: `${seo.robotsIndex ? "index" : "noindex"}, ${seo.robotsFollow ? "follow" : "nofollow"}`,
     };
   }
   return { title: "The Dock" };
@@ -278,6 +318,16 @@ export default async function BlogPostPage({ params }: Props) {
         )}
         <ReadingProgress />
         <FirestoreBlogPostView post={firestorePost as import("@/components/site/FirestoreBlogPostView").FirestorePost} />
+      </>
+    );
+  }
+
+  const cmsPost = cmsSeedToViewPost(slug);
+  if (cmsPost) {
+    return (
+      <>
+        <ReadingProgress />
+        <FirestoreBlogPostView post={cmsPost} />
       </>
     );
   }

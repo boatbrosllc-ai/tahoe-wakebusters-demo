@@ -62,6 +62,7 @@ type BookingItem = {
     totalCents: number;
     currency: string;
   };
+  tipCents?: number | null;
   stripe?: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
@@ -1353,6 +1354,21 @@ export default function AdminBookingsPage() {
                       <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.feesCents)}</dd>
                     </div>
                   )}
+                  {typeof selectedBooking.tipCents === "number" &&
+                    selectedBooking.tipCents > 0 &&
+                    selectedBooking.pricing.subtotalCents != null &&
+                    selectedBooking.pricing.subtotalCents > 0 && (
+                      <div className="flex justify-between">
+                        <dt className="text-brand-muted">
+                          Tip (
+                          {Math.round(
+                            (selectedBooking.tipCents / selectedBooking.pricing.subtotalCents) * 100
+                          )}
+                          %)
+                        </dt>
+                        <dd className="text-brand-dark">{formatCents(selectedBooking.tipCents)}</dd>
+                      </div>
+                    )}
                   <div className="flex justify-between font-medium pt-2 border-t border-brand-dark/10">
                     <dt className="text-brand-dark">Total</dt>
                     <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.totalCents)}</dd>

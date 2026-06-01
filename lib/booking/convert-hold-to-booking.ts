@@ -803,6 +803,7 @@ export async function convertHoldToBooking(
     status: isDeposit ? "final_due" : "paid",
     stripe: stripeBlockForBooking,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
+    ...(holdTipCents > 0 ? { tipCents: holdTipCents } : {}),
     ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
     ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
     createdAt: Timestamp.now() as unknown as FirestoreTimestamp,

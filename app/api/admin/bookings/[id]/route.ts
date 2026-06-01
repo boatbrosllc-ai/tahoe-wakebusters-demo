@@ -163,6 +163,7 @@ export async function GET(
       slotId: b.slotId ?? null,
       rateId: b.rateId ?? null,
       pricing: b.pricing,
+      tipCents: (b as { tipCents?: number }).tipCents ?? null,
       status: b.status,
       stripe: b.stripe ?? undefined,
       card: bWithExt.card ?? undefined,

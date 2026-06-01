@@ -18,7 +18,11 @@ import {
 } from "@/lib/booking/legacy-hold-scan";
 import { bookingNotReadyResponse, legacyFallbackUnsafeResponse } from "@/lib/booking/booking-readiness-response";
 import { getTicketedDepartureAndDuration, isTicketedOperatingDate } from "@/lib/booking/ticketed-slot-utils";
-import { BlockCheckUnavailableError, hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
+import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
+import {
+  getTicketedAdminBlockImpact,
+  ticketedAvailableAfterAdminBlocks,
+} from "@/lib/booking/ticketed-admin-blocks";
 
 export const dynamic = "force-dynamic";
 
@@ -259,16 +263,21 @@ export async function GET(request: NextRequest) {
       const depMinute = departure.deptMinute;
       const depDuration = departure.tripDuration;
       const { start: depStart, end: depEnd } = getSlotStartEnd(date, depHour, depDuration, depMinute);
-      const blocked = await hasOverlappingBlock({
+      const blockImpact = await getTicketedAdminBlockImpact({
         db,
         Timestamp: getFirestoreExports().Timestamp,
         experienceId,
         experienceIdVariants: allExpIds,
+        experienceSlug: expSlug,
         slotStart: depStart,
         slotEnd: depEnd,
       });
-      if (blocked) {
-        available = 0;
+      available = charterLockedForDate
+        ? 0
+        : ticketedAvailableAfterAdminBlocks(total, sold, onHold, blockImpact);
+      if (blockImpact.fullBlock) {
+        adminBlocked = true;
+      } else if (blockImpact.ticketsBlocked > 0) {
         adminBlocked = true;
       }
     } catch (blockErr) {

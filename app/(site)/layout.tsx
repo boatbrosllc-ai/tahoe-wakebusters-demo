@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { brand } from "@/content/brand";
+import { locationAggregateRating } from "@/content/location";
 import { SiteChrome } from "@/components/site/SiteChrome";
 import { CommercialPageSchema } from "@/components/site/CommercialPageSchema";
 import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
@@ -22,6 +23,10 @@ export const metadata: Metadata = {
     "pontoon rental Lake Austin",
     "Lake Austin wake boat",
     "Lake Austin sunset cruise",
+    "boat rental austin",
+    "boat rental austin tx",
+    "austin party boat",
+    "pontoon boat rental austin",
   ],
   openGraph: {
     type: "website",
@@ -57,6 +62,7 @@ function localBusinessJsonLd() {
       postalCode: brand.address.zip,
     },
     areaServed: [{ "@type": "Place", name: "Lake Austin, Austin TX" }],
+    aggregateRating: locationAggregateRating(),
     openingHoursSpecification: {
       "@type": "OpeningHoursSpecification",
       dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],

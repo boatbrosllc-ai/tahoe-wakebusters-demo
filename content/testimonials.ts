@@ -1,5 +1,5 @@
 /**
- * Real Google reviews for Boat Bros – 5.0 stars, 329+ reviews.
+ * Real Google reviews for Boat Bros – 5.0 stars, 470+ reviews.
  * Rotates in the reviews section. Names and quotes from actual reviews.
  */
 

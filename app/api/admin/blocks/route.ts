@@ -7,6 +7,9 @@ import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Block } from "@/lib/booking/types";
 import { findBlockConflicts, type BlockConflict } from "@/lib/booking/block-conflict-check";
 import { findOverlappingAdminBlocksForWrite } from "@/lib/booking/admin-block-overlap";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { parseAdminTicketsBlockedInput } from "@/lib/booking/ticketed-admin-blocks";
+import type { Experience } from "@/lib/booking/types";
 
 function toIso(ts: { toDate?: () => Date; seconds?: number }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -120,6 +123,10 @@ export async function GET(request: NextRequest) {
           endAt: endAt.toISOString(),
           note: b.note ?? null,
           slotId: b.slotId ?? null,
+          ticketsBlocked:
+            typeof b.ticketsBlocked === "number" && Number.isFinite(b.ticketsBlocked) && b.ticketsBlocked > 0
+              ? Math.floor(b.ticketsBlocked)
+              : null,
           createdAt: toIso(b.createdAt as { toDate?: () => Date; seconds?: number }),
         };
       })
@@ -131,6 +138,7 @@ export async function GET(request: NextRequest) {
       endAt: string;
       note: string | null;
       slotId: string | null;
+      ticketsBlocked: number | null;
       createdAt: string | null;
     }[];
 
@@ -142,7 +150,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** POST: create one block. Body: experienceId, boatId?, startAt (ISO), endAt (ISO), note?, slotId? */
+/** POST: create one block. Body: experienceId, boatId?, startAt (ISO), endAt (ISO), note?, slotId?, ticketsBlocked? (ticketed partial) */
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
@@ -155,6 +163,10 @@ export async function POST(request: NextRequest) {
     const boatId = typeof body?.boatId === "string" ? body.boatId.trim() || null : null;
     const note = typeof body?.note === "string" ? body.note.trim() || null : null;
     const slotId = typeof body?.slotId === "string" ? body.slotId.trim() || null : null;
+    const ticketsBlockedParsed = parseAdminTicketsBlockedInput(body?.ticketsBlocked);
+    if (ticketsBlockedParsed === null) {
+      return NextResponse.json({ error: "ticketsBlocked must be a positive integer when provided" }, { status: 400 });
+    }
     if (!experienceId || !startAtRaw || !endAtRaw) {
       return NextResponse.json({ error: "experienceId, startAt, endAt required" }, { status: 400 });
     }
@@ -168,40 +180,66 @@ export async function POST(request: NextRequest) {
     const { FieldValue, Timestamp } = getFirestoreExports();
     const now = new Date();
     const expSnap = await db.collection("experiences").doc(experienceId).get();
-    const experienceSlug = expSnap.exists && typeof (expSnap.data() as { slug?: string })?.slug === "string"
-      ? (expSnap.data() as { slug: string }).slug.trim()
-      : "";
+    const expData = expSnap.exists ? (expSnap.data() as Experience & { slug?: string }) : null;
+    const experienceSlug = expData && typeof expData.slug === "string" ? expData.slug.trim() : "";
     const variantIds = getExperienceIdVariants(experienceId, experienceSlug);
-    const conflicts = await findBlockConflicts({
-      db,
-      variantIds,
-      blockStart: startAt,
-      blockEnd: endAt,
-      boatId,
-      now,
-    });
-    if (conflicts.length > 0) {
-      const conflictsDetailed = await enrichBlockConflictsWithHoldExpiry(db, conflicts);
+    const isTicketed = expData?.pricingType === "ticketed";
+    if (ticketsBlockedParsed != null && !isTicketed) {
       return NextResponse.json(
-        { error: "Block overlaps active holds or bookings", conflicts: conflictsDetailed },
-        { status: 409 }
+        { error: "ticketsBlocked is only supported for ticketed trip types" },
+        { status: 400 },
       );
     }
-    const blockOverlaps = await findOverlappingAdminBlocksForWrite({
-      db,
-      Timestamp,
-      experienceId,
-      experienceSlug,
-      variantIds,
-      intervalStart: startAt,
-      intervalEnd: endAt,
-      boatId,
-    });
-    if (blockOverlaps.length > 0) {
-      return NextResponse.json(
-        { error: "This time range overlaps an existing admin block", blockOverlaps },
-        { status: 409 }
-      );
+    if (ticketsBlockedParsed != null && expData) {
+      const maxTickets = getMaxGuestsForExperience({
+        pricingType: "ticketed",
+        maxCapacity: expData.maxCapacity,
+        maxGuests: expData.maxGuests,
+        slug: expData.slug,
+        title: expData.title,
+      });
+      if (ticketsBlockedParsed > maxTickets) {
+        return NextResponse.json(
+          { error: `Cannot hold back more than ${maxTickets} tickets for this listing` },
+          { status: 400 },
+        );
+      }
+    }
+    const isPartialTicketBlock = ticketsBlockedParsed != null;
+    if (!isPartialTicketBlock) {
+      const conflicts = await findBlockConflicts({
+        db,
+        variantIds,
+        blockStart: startAt,
+        blockEnd: endAt,
+        boatId,
+        now,
+      });
+      if (conflicts.length > 0) {
+        const conflictsDetailed = await enrichBlockConflictsWithHoldExpiry(db, conflicts);
+        return NextResponse.json(
+          { error: "Block overlaps active holds or bookings", conflicts: conflictsDetailed },
+          { status: 409 }
+        );
+      }
+    }
+    if (!isPartialTicketBlock) {
+      const blockOverlaps = await findOverlappingAdminBlocksForWrite({
+        db,
+        Timestamp,
+        experienceId,
+        experienceSlug,
+        variantIds,
+        intervalStart: startAt,
+        intervalEnd: endAt,
+        boatId,
+      });
+      if (blockOverlaps.length > 0) {
+        return NextResponse.json(
+          { error: "This time range overlaps an existing admin block", blockOverlaps },
+          { status: 409 }
+        );
+      }
     }
     const adminEmail = await getAdminEmailFromSessionCookie(request.headers.get("cookie"));
 
@@ -216,6 +254,7 @@ export async function POST(request: NextRequest) {
       endAt: Timestamp.fromDate(endAt),
       note: note ?? null,
       slotId: slotId ?? null,
+      ...(ticketsBlockedParsed != null ? { ticketsBlocked: ticketsBlockedParsed } : {}),
       createdAt: FieldValue.serverTimestamp(),
       createdBy: adminEmail ?? null,
     });
@@ -226,6 +265,7 @@ export async function POST(request: NextRequest) {
       boatId: boatId ?? null,
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
+      ...(ticketsBlockedParsed != null ? { ticketsBlocked: ticketsBlockedParsed } : {}),
       adminEmail,
     });
 
@@ -237,6 +277,7 @@ export async function POST(request: NextRequest) {
       endAt: endAt.toISOString(),
       note: note ?? null,
       slotId: slotId ?? null,
+      ...(ticketsBlockedParsed != null ? { ticketsBlocked: ticketsBlockedParsed } : {}),
     });
   } catch (err) {
     console.error("[admin/blocks POST]", err);

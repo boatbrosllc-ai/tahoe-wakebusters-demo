@@ -9,7 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/booking/firebase-admin";
+import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -20,10 +20,18 @@ import { getEffectiveBoatRatePriceCents, getEffectiveRatePriceCents, isDateInAny
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import type { BoatPriceOverride, ListingBoat } from "@/lib/booking/types";
-import { getDateStrInSlotTimezone, isSeasonalAllowed, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import { getDateStrInSlotTimezone, getSlotStartEnd, isSeasonalAllowed, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { addCalendarDaysToDateStr, bookingLookbackDaysFromMaxDuration } from "@/lib/booking/booking-interval";
 import { getExperienceIdVariants, inferSlugFromTitle, resolveExperiencePricingType } from "@/lib/booking/experience-aliases";
-import { isTicketedOperatingDate } from "@/lib/booking/ticketed-slot-utils";
+import { fetchBlockDocsOverlappingWindow } from "@/lib/booking/blocks-overlap-queries";
+import {
+  getTicketedDepartureAndDuration,
+  isTicketedOperatingDate,
+} from "@/lib/booking/ticketed-slot-utils";
+import {
+  resolveTicketedAdminBlockImpactFromDocs,
+  ticketedAvailableAfterAdminBlocks,
+} from "@/lib/booking/ticketed-admin-blocks";
 import type { Experience, ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
@@ -368,6 +376,18 @@ export async function GET(request: NextRequest) {
         heldByDate[holdDate] = (heldByDate[holdDate] ?? 0) + h.partySize;
       }
 
+      const { Timestamp } = getFirestoreExports();
+      const { start: blockWinStart } = getSlotStartEnd(startStr, 0, 0, 0);
+      const { end: blockWinEnd } = getSlotStartEnd(endStr, 23, 1, 59);
+      const { docs: ticketedBlockDocs } = await fetchBlockDocsOverlappingWindow({
+        db,
+        Timestamp,
+        windowStart: blockWinStart,
+        windowEnd: blockWinEnd,
+        experienceIds: allExpIds,
+      });
+      const departure = getTicketedDepartureAndDuration(exp, [{ id: chosenRate.id, data: () => chosenRate }]);
+
       ticketsAvailableByDate = {};
       for (const dateStr of dateStrs) {
         if (!isTicketedOperatingDate(dateStr, (exp as { ticketedWeekdays?: unknown }).ticketedWeekdays)) {
@@ -380,7 +400,22 @@ export async function GET(request: NextRequest) {
         }
         const sold = soldByDate[dateStr] ?? 0;
         const held = heldByDate[dateStr] ?? 0;
-        ticketsAvailableByDate[dateStr] = charterLockedDates.has(dateStr) ? 0 : Math.max(0, total - sold - held);
+        if (charterLockedDates.has(dateStr)) {
+          ticketsAvailableByDate[dateStr] = 0;
+          continue;
+        }
+        const { start: depStart, end: depEnd } = getSlotStartEnd(
+          dateStr,
+          departure.deptHour,
+          departure.tripDuration,
+          departure.deptMinute,
+        );
+        const blockImpact = resolveTicketedAdminBlockImpactFromDocs(
+          ticketedBlockDocs,
+          depStart.getTime(),
+          depEnd.getTime(),
+        );
+        ticketsAvailableByDate[dateStr] = ticketedAvailableAfterAdminBlocks(total, sold, held, blockImpact);
       }
     }
 

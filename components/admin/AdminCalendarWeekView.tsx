@@ -118,6 +118,8 @@ interface AdminCalendarWeekViewProps {
   experienceId?: string;
   experienceIds?: string[];
   experienceNamesById?: Record<string, string>;
+  /** Firestore experience ids with pricingType ticketed — enables partial ticket holdbacks. */
+  ticketedExperienceIds?: string[];
   boatList: { id: string; name: string }[];
   weekStart: Date;
   selectedBoatIds?: string[];
@@ -133,6 +135,7 @@ export function AdminCalendarWeekView({
   experienceId,
   experienceIds,
   experienceNamesById = {},
+  ticketedExperienceIds = [],
   boatList,
   weekStart,
   selectedBoatIds,
@@ -161,6 +164,7 @@ export function AdminCalendarWeekView({
   const [newBlockEnd, setNewBlockEnd] = useState("");
   const [newBlockBoatId, setNewBlockBoatId] = useState("");
   const [newBlockNote, setNewBlockNote] = useState("");
+  const [newBlockTicketsHeld, setNewBlockTicketsHeld] = useState("");
   const [newBlockSaving, setNewBlockSaving] = useState(false);
   const [blockNotice, setBlockNotice] = useState<string | null>(null);
   const [blockDetailOpen, setBlockDetailOpen] = useState(false);
@@ -343,6 +347,20 @@ export function AdminCalendarWeekView({
       setBlockError("Select which experience to block for this time slot.");
       return;
     }
+    const ticketsHeldRaw = newBlockTicketsHeld.trim();
+    let ticketsBlocked: number | undefined;
+    if (ticketsHeldRaw) {
+      if (!ticketedExperienceIds.includes(newBlockExperienceId)) {
+        setBlockError("Ticket holdbacks apply to ticketed trip types only.");
+        return;
+      }
+      const n = Number.parseInt(ticketsHeldRaw, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        setBlockError("Tickets to hold back must be a positive whole number.");
+        return;
+      }
+      ticketsBlocked = n;
+    }
     setNewBlockSaving(true);
     try {
       const res = await fetch("/api/admin/blocks", {
@@ -355,6 +373,7 @@ export function AdminCalendarWeekView({
           endAt: endDate.toISOString(),
           boatId: newBlockBoatId || undefined,
           note: newBlockNote.trim() || undefined,
+          ...(ticketsBlocked != null ? { ticketsBlocked } : {}),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; id?: string };
@@ -362,7 +381,11 @@ export function AdminCalendarWeekView({
       const created = data;
       const experienceLabel =
         experienceNamesById[newBlockExperienceId] ?? newBlockExperienceId;
-      setBlockNotice(`Blocked time for ${experienceLabel}.`);
+      setBlockNotice(
+        ticketsBlocked != null
+          ? `Held back ${ticketsBlocked} ticket${ticketsBlocked === 1 ? "" : "s"} for ${experienceLabel}.`
+          : `Blocked time for ${experienceLabel}.`,
+      );
       setNewBlockOpen(false);
       setNewBlockConfirmStep(false);
       if (undoBlockTimeoutRef.current) clearTimeout(undoBlockTimeoutRef.current);
@@ -748,6 +771,20 @@ export function AdminCalendarWeekView({
                   </option>
                 ))}
               </select>
+            </label>
+          )}
+          {ticketedExperienceIds.includes(newBlockExperienceId) && (
+            <label className="block">
+              <span className="text-xs font-medium text-brand-muted">Tickets to hold back (optional)</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={newBlockTicketsHeld}
+                onChange={(e) => setNewBlockTicketsHeld(e.target.value)}
+                placeholder="Leave blank to block entire departure"
+                className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+              />
             </label>
           )}
           {boatList.length > 0 && (

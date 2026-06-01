@@ -309,6 +309,11 @@ export interface Block {
   note?: string | null;
   /** When created from "block slot" UI, stored for easy unblock lookup. */
   slotId?: string | null;
+  /**
+   * Ticketed only: hold back this many tickets for overlapping departures without closing the whole departure.
+   * Omit for legacy/full blocks.
+   */
+  ticketsBlocked?: number | null;
   createdAt: FirestoreTimestamp;
   createdBy?: string | null;
 }
@@ -549,6 +554,8 @@ export interface Booking {
   discountCode?: string;
   /** Discount amount in cents (if any). */
   discountCents?: number;
+  /** Tip amount in cents (if any). */
+  tipCents?: number;
   /** When to run final charge (bookingStartAt - 48h). */
   finalChargeAt?: FirestoreTimestamp;
   /** When heads-up reminder email was sent (optional). */

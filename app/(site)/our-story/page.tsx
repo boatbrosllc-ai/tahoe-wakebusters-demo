@@ -3,6 +3,9 @@ import Image from "next/image";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const canonical = `${baseUrl}/our-story`;
+
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
@@ -10,9 +13,11 @@ export const metadata: Metadata = {
   description:
     "Meet Thomas and Nicodemus — the brothers behind Boat Bros. A legacy of lake adventure on Lake Austin.",
   keywords: ["Lake Austin boat rentals", "Boat Bros Austin", "best boat rentals Lake Austin"],
+  alternates: { canonical },
   openGraph: {
     title: "Our Story | Lake Austin Boat Rentals | Boat Bros",
     description: "Meet Thomas and Nicodemus — the brothers behind Boat Bros.",
+    url: canonical,
   },
 };
 

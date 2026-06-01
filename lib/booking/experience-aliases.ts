@@ -18,7 +18,8 @@ function watersportsAllowUntypedBoatInInventory(): boolean {
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
   ["pontoon", "lake-austin-pontoon", "pontoon-party"],
-  ["watersports", "wake-surf", "wake-surf-club", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board", "wakesurf"],
+  ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board", "wakesurf"],
+  ["wakesurfclub", "wake-surf-club", "wakesurf-club"],
   ["sunset", "sunset-cruise"],
   ["holiday"],
 ];
@@ -65,6 +66,14 @@ export function getExperienceIdVariants(expId: string, expSlug: string): string[
   const family = getFamilyVariants(slug);
   family.forEach((v) => variants.add(v));
   return Array.from(variants);
+}
+
+/**
+ * Returns true if the given slug is in the Wake Surf Club family (weekly shared session listing).
+ */
+export function isWakeSurfClubSlug(slug: string): boolean {
+  const family = getFamilyVariants(slug);
+  return family.length > 0 && family[0] === "wakesurfclub";
 }
 
 /**
@@ -208,6 +217,37 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
   return out;
 }
 
+/** Dedicated public page slug for the pontoon family (not bare `pontoon`). */
+export const PONTOON_CANONICAL_PAGE_SLUG = "lake-austin-pontoon";
+
+/**
+ * Resolve the canonical public URL slug for an experience page.
+ * Prefers the matched Firestore slug when provided; pontoon family always maps to the dedicated page.
+ */
+export function resolveCanonicalExperienceSlug(requestedSlug: string, firestoreSlug?: string): string {
+  const requested = (requestedSlug ?? "").toLowerCase().trim();
+  const docSlug = (firestoreSlug ?? "").toLowerCase().trim();
+  if (isPontoonSlug(requested) || (docSlug && isPontoonSlug(docSlug))) {
+    return PONTOON_CANONICAL_PAGE_SLUG;
+  }
+  if (docSlug) return docSlug;
+  const family = getFamilyVariants(requested);
+  if (family.length > 0) return family[0];
+  return requested;
+}
+
+/** Returns true when the requested slug is an alias that should redirect to the canonical page. */
+export function isExperienceAliasSlug(requestedSlug: string, firestoreSlug?: string): boolean {
+  const requested = (requestedSlug ?? "").toLowerCase().trim();
+  const canonical = resolveCanonicalExperienceSlug(requested, firestoreSlug);
+  return requested !== canonical;
+}
+
+/** Canonical path for linking (e.g. `/experiences/watersports`). */
+export function getCanonicalExperiencePath(requestedSlug: string, firestoreSlug?: string): string {
+  return `/experiences/${resolveCanonicalExperienceSlug(requestedSlug, firestoreSlug)}`;
+}
+
 /**
  * When slug is not in a known family (e.g. experience has no slug/title, only doc id), infer from
  * assigned boats so we never show pontoon on a wake-only listing. Use after fetching boat docs.
@@ -241,7 +281,7 @@ export function inferSlugFromAssignedBoats(
  */
 export function allowBoatTypeForSlug(slug: string): (boatType: string | undefined) => boolean {
   const s = (slug ?? "").toLowerCase().trim();
-  if (isWatersportsSlug(s)) {
+  if (isWatersportsSlug(s) || isWakeSurfClubSlug(s)) {
     return (bt) => {
       const b = (bt ?? "").toLowerCase().trim();
       if (b === "pontoon" || b === "tritoon") return false;

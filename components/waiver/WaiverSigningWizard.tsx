@@ -4,6 +4,7 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import { Stepper, type StepperStep } from "./Stepper";
 import { SignaturePad } from "./SignaturePad";
 import { TermsAccept } from "./TermsAccept";
+import { WaiverPoweredByFooter } from "./WaiverPoweredByFooter";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
 import { cn } from "@/lib/utils";
 
@@ -600,6 +601,7 @@ export function WaiverSigningWizard({
           </div>
         )}
       </Stepper>
+      <WaiverPoweredByFooter />
     </div>
   );
 }

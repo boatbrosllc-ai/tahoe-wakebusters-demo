@@ -4,14 +4,19 @@ import { brand } from "@/content/brand";
 import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
 
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const canonical = `${baseUrl}/contact`;
+
 export const metadata: Metadata = {
   title: "Contact | Lake Austin Boat Rentals",
   description:
     "Contact Boat Bros for Lake Austin boat rentals. Pontoon, wake surf, sunset cruise. Phone, email, Austin TX.",
   keywords: ["Lake Austin boat rentals", "contact boat rental Lake Austin", "Boat Bros Austin TX"],
+  alternates: { canonical },
   openGraph: {
     title: "Contact | Lake Austin Boat Rentals | Boat Bros",
     description: "Get in touch for Lake Austin boat rentals. Phone, email, address.",
+    url: canonical,
   },
 };
 

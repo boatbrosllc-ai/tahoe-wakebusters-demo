@@ -37,7 +37,7 @@ export const location = {
   areaServed: ["Austin, TX", "Lake Austin", "Mueller", "Downtown Austin", "Westlake", "Tarrytown", "The Domain", "Austin metro"],
   /** Rating/review count from GBP – for display only; no fake schema */
   rating: 5.0,
-  reviewCount: 329,
+  reviewCount: 470,
   /** Same as brand for consistency */
   sameAs: [
     "https://www.instagram.com/boatbrosatx/",
@@ -49,3 +49,24 @@ export const location = {
 };
 
 export type Location = typeof location;
+
+/** Customer-facing review count, e.g. "470+ 5-star reviews". */
+export function reviewCountLabel(): string {
+  return `${location.reviewCount}+ 5-star reviews`;
+}
+
+/** Star rating + review count for compact trust lines, e.g. "5 · 470+ 5-star reviews". */
+export function ratingWithReviewCount(): string {
+  return `${location.rating} · ${reviewCountLabel()}`;
+}
+
+/** Schema.org AggregateRating object for LocalBusiness JSON-LD. */
+export function locationAggregateRating() {
+  return {
+    "@type": "AggregateRating" as const,
+    ratingValue: location.rating,
+    reviewCount: location.reviewCount,
+    bestRating: 5,
+    worstRating: 1,
+  };
+}

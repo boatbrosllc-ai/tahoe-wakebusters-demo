@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
-import { location } from "@/content/location";
+import { location, reviewCountLabel } from "@/content/location";
 import { LOCATION_FAQ } from "@/content/location-faq";
 import { LOCATION_TESTIMONIALS } from "@/content/location-testimonials";
 import { brand } from "@/content/brand";
@@ -95,7 +95,7 @@ export default async function LocationPage() {
             <p className="text-2xl sm:text-3xl font-bold text-brand-dark">
               {location.rating} <span className="text-amber-500" aria-hidden>★★★★★</span>
             </p>
-            <p className="mt-1 text-brand-muted">{location.reviewCount} Google reviews</p>
+            <p className="mt-1 text-brand-muted">{reviewCountLabel()}</p>
             <a
               href={location.googleMapsPlaceUrl}
               target="_blank"
@@ -208,7 +208,15 @@ export default async function LocationPage() {
               ))}
             </ul>
             <p className="mt-6 text-brand-dark/90">
-              See our <Link href="/experiences" className="text-brand-primary font-medium hover:underline">experiences</Link> and <Link href="/experiences" className="text-brand-primary font-medium hover:underline">book online</Link>.
+              See our{" "}
+              <Link href="/lake-austin-boat-rentals" className="text-brand-primary font-medium hover:underline">
+                Lake Austin boat rentals
+              </Link>
+              ,{" "}
+              <Link href="/boat-rental-austin" className="text-brand-primary font-medium hover:underline">
+                boat rental Austin
+              </Link>
+              , and <Link href="/experiences" className="text-brand-primary font-medium hover:underline">book online</Link>.
             </p>
           </div>
         </section>

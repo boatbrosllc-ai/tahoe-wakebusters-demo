@@ -14,15 +14,11 @@ import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
 import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
 import { SOCIAL_PROOF_WITHOUT_LILY_PAD } from "@/lib/experience/lakeAustinPontoon.data";
+import { location, reviewCountLabel } from "@/content/location";
+import { isWakeSurfClubSlug } from "@/lib/booking/experience-aliases";
+import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
 const BOOKING_SECTION_ID = "booking-preview";
-
-/** URL / Firestore slug variants for the weekly Wake Surf Club listing. */
-const WAKESURF_CLUB_SLUGS = new Set(["wakesurfclub", "wake-surf-club", "wakesurf-club"]);
-
-function isWakeSurfClubSlug(slug) {
-  return WAKESURF_CLUB_SLUGS.has((slug ?? "").toLowerCase().trim());
-}
 
 /** Code-owned copy for /experiences/wakesurfclub (weekly shared session on Lake Austin). */
 const WAKESURF_CLUB = {
@@ -102,8 +98,8 @@ Walsh Boat Landing`,
 
 /** Default social proof for pontoon when not in Firestore. */
 const PONTOON_SOCIAL_PROOF = {
-  rating: 4.9,
-  ratingCount: "500+ 5-star days",
+  rating: location.rating,
+  ratingCount: reviewCountLabel(),
   stats: ["Top-rated on Lake Austin", "Captain-led", "Lily pad included"],
 };
 
@@ -199,6 +195,13 @@ export function ExperienceListingPageContent(props) {
   const rawGallery = experience.gallery ?? [];
   const slug = experience.slug ?? "";
   const isWakesurfClub = isWakeSurfClubSlug(slug);
+  const maxPartySize = getMaxGuestsForExperience({
+    slug: experience.slug,
+    title: experience.title,
+    maxGuests: experience.maxGuests,
+    pricingType: experience.pricingType,
+    maxCapacity: experience.maxCapacity,
+  });
 
   // Hero: use admin hero only, or first gallery image — never the static pontoon/Unsplash template.
   const rawHero = experience.heroMedia?.url?.trim();
@@ -328,6 +331,7 @@ export function ExperienceListingPageContent(props) {
           (slug === "watersports" || isWakesurfClub ? "center 30%" : undefined)
         }
         omitTemplateFallback
+        mobileSafeLayout={isWakesurfClub}
       />
 
       <section
@@ -343,6 +347,7 @@ export function ExperienceListingPageContent(props) {
               pricingType={experience.pricingType ?? "charter"}
               onCheckAvailability={handlePreviewCheckAvailability}
               fromPriceCents={experience.fromPriceCents ?? null}
+              maxPartySize={maxPartySize}
             />
           </div>
         </div>
@@ -367,12 +372,41 @@ export function ExperienceListingPageContent(props) {
       />
 
       {slug === "watersports" && (
-        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experience">
+        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences and guides">
           <p className="text-white/90 text-sm sm:text-base">
-            Prefer a pontoon for larger groups or a chill day?{" "}
-<Link href="/experiences/lake-austin-pontoon" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-                Lake Austin Pontoon Rentals
-              </Link>
+            Prefer a pontoon for larger groups?{" "}
+            <Link href="/experiences/lake-austin-pontoon" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Lake Austin Pontoon Rentals
+            </Link>
+            . Also see{" "}
+            <Link href="/wakesurfing-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              wakesurfing Austin
+            </Link>
+            ,{" "}
+            <Link href="/wake-boat-rental-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              wake boat rental Austin
+            </Link>
+            , and{" "}
+            <Link href="/wakesurf-club-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Wakesurf Club Austin
+            </Link>
+            .
+          </p>
+        </section>
+      )}
+
+      {slug === "sunset" && (
+        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences and guides">
+          <p className="text-white/90 text-sm sm:text-base">
+            Planning golden hour on the lake? See{" "}
+            <Link href="/sunset-cruise-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              sunset cruise Austin
+            </Link>{" "}
+            and{" "}
+            <Link href="/lake-austin-sunset-cruise" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Lake Austin sunset cruise
+            </Link>
+            .
           </p>
         </section>
       )}

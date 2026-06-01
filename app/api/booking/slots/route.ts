@@ -29,6 +29,7 @@ import {
 } from "@/lib/booking/ticketed-slot-utils";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { fetchBlockDocsOverlappingWindow } from "@/lib/booking/blocks-overlap-queries";
+import { resolveTicketedAdminBlockImpactFromDocs } from "@/lib/booking/ticketed-admin-blocks";
 import type { Slot } from "@/lib/booking/types";
 import type { ExperienceRate } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN, type BookingStatus } from "@/lib/booking/types";
@@ -597,18 +598,7 @@ export async function GET(request: NextRequest) {
             },
           );
         }
-        const tBlockRanges: { start: number; end: number }[] = [];
-        const tBlockRangesSeen = new Set<string>();
-        ticketedBlockDocs.forEach((doc) => {
-          const b = doc.data() as { startAt: { toDate(): Date }; endAt: { toDate(): Date } };
-          const blockStart = b.startAt?.toDate?.()?.getTime();
-          const blockEnd = b.endAt?.toDate?.()?.getTime();
-          if (blockStart == null || blockEnd == null || blockEnd < winStart.getTime()) return;
-          const key = `${blockStart}:${blockEnd}`;
-          if (tBlockRangesSeen.has(key)) return;
-          tBlockRangesSeen.add(key);
-          tBlockRanges.push({ start: blockStart, end: blockEnd });
-        });
+        const tBlockDocs = ticketedBlockDocs;
 
         // Build enriched slot rows
         type TicketedSlotRow = SlotRow & {
@@ -625,7 +615,8 @@ export async function GET(request: NextRequest) {
           const { start: slotStart, end: slotEnd } = getSlotStartEnd(dateStr, startHour, dur, startMinute);
           const slotStartMs = slotStart.getTime();
           const slotEndMs = slotEnd.getTime();
-          const isBlocked = tBlockRanges.some((r) => slotStartMs < r.end && slotEndMs > r.start);
+          const blockImpact = resolveTicketedAdminBlockImpactFromDocs(tBlockDocs, slotStartMs, slotEndMs);
+          const isFullyBlocked = blockImpact.fullBlock;
           const spotsBooked = spotsByDate.get(dateStr) ?? 0;
           // Match create-hold / date-prices: ticketed capacity uses maxCapacity when set, else maxGuests (not 0).
           const maxCapacity = getMaxGuestsForExperience({
@@ -633,11 +624,12 @@ export async function GET(request: NextRequest) {
             pricingType: "ticketed",
           });
           const holdDataMissing = holdsQueryFailed;
-          const spotsRemaining = Math.max(0, maxCapacity - spotsBooked);
+          const adminTicketsHeld = blockImpact.fullBlock ? maxCapacity : blockImpact.ticketsBlocked;
+          const spotsRemaining = Math.max(0, maxCapacity - spotsBooked - adminTicketsHeld);
           const isCharterLocked = charterLockedDates.has(dateStr);
           const showSpotsRemaining = expDataFull?.showSpotsRemaining ?? false;
           const soldOut = spotsRemaining === 0 && !isCharterLocked;
-          const rowStatus = isBlocked ? "blocked" : soldOut ? "booked" : "open";
+          const rowStatus = isFullyBlocked ? "blocked" : soldOut ? "booked" : "open";
           tSlots.push({
             id: slotId,
             dateStr,

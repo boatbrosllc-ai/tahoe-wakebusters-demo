@@ -38,9 +38,11 @@ export async function reserveCapacity(
   capacity: number,
   partySize: number,
   sold: number,
-  options?: { preReadReservedSeats?: number }
+  options?: { preReadReservedSeats?: number; adminTicketsHeldBack?: number }
 ): Promise<void> {
   const { FieldValue } = getFirestoreExports();
+  const heldBack = Math.max(0, Math.floor(options?.adminTicketsHeldBack ?? 0));
+  const effectiveCapacity = Math.max(0, capacity - heldBack);
   let reservedSeats: number;
   if (typeof options?.preReadReservedSeats === "number") {
     reservedSeats = options.preReadReservedSeats;
@@ -48,8 +50,8 @@ export async function reserveCapacity(
     const snap = await tx.get(inventoryRef);
     reservedSeats = snap.exists ? ((snap.data() as { reservedSeats?: number }).reservedSeats ?? 0) : 0;
   }
-  if (sold + reservedSeats + partySize > capacity) {
-    const available = Math.max(0, capacity - sold - reservedSeats);
+  if (sold + reservedSeats + partySize > effectiveCapacity) {
+    const available = Math.max(0, effectiveCapacity - sold - reservedSeats);
     throw new Error(
       available === 0
         ? "This date is sold out."
@@ -121,13 +123,16 @@ export function applyNetCapacityChange(
   capacity: number,
   sold: number,
   currentReserved: number,
-  delta: number
+  delta: number,
+  options?: { adminTicketsHeldBack?: number }
 ): void {
   const { FieldValue } = getFirestoreExports();
   alertNegativeReservedSeats(inventoryRef, currentReserved, "applyNetCapacityChange_pre_read");
+  const heldBack = Math.max(0, Math.floor(options?.adminTicketsHeldBack ?? 0));
+  const effectiveCapacity = Math.max(0, capacity - heldBack);
   const newReserved = Math.max(0, currentReserved + delta);
-  if (delta > 0 && sold + newReserved > capacity) {
-    const available = Math.max(0, capacity - sold - currentReserved);
+  if (delta > 0 && sold + newReserved > effectiveCapacity) {
+    const available = Math.max(0, effectiveCapacity - sold - currentReserved);
     throw new Error(
       available === 0
         ? "This date is sold out."

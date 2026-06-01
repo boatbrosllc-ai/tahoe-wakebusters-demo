@@ -10,40 +10,37 @@ import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { Clock, Users, ChevronRight } from "lucide-react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
-import { EXPERIENCE_ALIAS_FAMILIES, isWatersportsSlug } from "@/lib/booking/experience-aliases";
+import { EXPERIENCE_ALIAS_FAMILIES, isWakeSurfClubSlug, isWatersportsSlug, isPontoonSlug, getCanonicalExperiencePath } from "@/lib/booking/experience-aliases";
 
-export function ExperienceChooser() {
-  const [listings, setListings] = useState<
-    Array<{
-      slug: string;
-      title?: string;
-      subtitle?: string;
-      heroMedia?: { type?: "image" | "video"; url?: string };
-      gallery?: string[];
-      fromPriceCents?: number | null;
-      pricingType?: "charter" | "ticketed";
-      listingCardImagePosition?: string;
-    }>
-  >([]);
+export type ExperienceListingPayload = {
+  slug: string;
+  title?: string;
+  subtitle?: string;
+  heroMedia?: { type?: "image" | "video"; url?: string };
+  gallery?: string[];
+  fromPriceCents?: number | null;
+  pricingType?: "charter" | "ticketed";
+  listingCardImagePosition?: string;
+};
+
+interface ExperienceChooserProps {
+  initialListings?: ExperienceListingPayload[];
+}
+
+export function ExperienceChooser({ initialListings = [] }: ExperienceChooserProps) {
+  const [listings, setListings] = useState<ExperienceListingPayload[]>(initialListings);
   const [apiError, setApiError] = useState(false);
   const staticBySlug = new Map(experiences.map((exp) => [exp.slug, exp]));
-  const adminManagedStaticSlugs = new Set(["pontoon", "watersports", "sunset", "holiday"]);
+  const adminManagedStaticSlugs = new Set(["pontoon", "watersports", "sunset", "holiday", "lake-austin-pontoon"]);
+  const isAdminManagedSlug = (slug: string) =>
+    isPontoonSlug(slug) || slug === "watersports" || slug === "sunset" || slug === "holiday";
   useEffect(() => {
     bookingCache
       .fetchExperiences()
       .then((data) => {
         setApiError(false);
         const list = Array.isArray(data?.experiences) ? data.experiences : [];
-        const next: Array<{
-          slug: string;
-          title?: string;
-          subtitle?: string;
-          heroMedia?: { type?: "image" | "video"; url?: string };
-          gallery?: string[];
-          fromPriceCents?: number | null;
-          pricingType?: "charter" | "ticketed";
-          listingCardImagePosition?: string;
-        }> = [];
+        const next: ExperienceListingPayload[] = [];
         list.forEach((item: {
           slug?: string;
           title?: string;
@@ -127,60 +124,27 @@ export function ExperienceChooser() {
     }))
     : [];
   const cards = [...listings, ...staticFallback]
-    .filter((item) => !adminManagedStaticSlugs.has(item.slug) || activeManagedSlugs.has(item.slug))
+    .filter((item) => !isAdminManagedSlug(item.slug) || activeManagedSlugs.has(item.slug))
     .map(experienceWithListingData);
 
   type Card = (typeof cards)[number];
 
   const normSlug = (s: string) => s.trim().toLowerCase();
-  const watersportsFamily = EXPERIENCE_ALIAS_FAMILIES.find((f) => f[0] === "watersports") ?? ["watersports"];
-  const wakeFamilySlugsOrdered: string[] = [];
-  const wakeOrderSeen = new Set<string>();
-  for (const s of watersportsFamily) {
-    const n = normSlug(s);
-    if (n === "watersports") continue;
-    if (wakeOrderSeen.has(n)) continue;
-    wakeOrderSeen.add(n);
-    wakeFamilySlugsOrdered.push(n);
-  }
+  const wakeSurfClubFamily =
+    EXPERIENCE_ALIAS_FAMILIES.find((f) => f[0] === "wakesurfclub") ?? ["wakesurfclub"];
+  const wakeSurfClubSlugsOrdered = wakeSurfClubFamily.map(normSlug);
 
-  const MID_ROW_RESERVED = new Set(["pontoon", "sunset", "holiday", "watersports"].map(normSlug));
-  /** Slug/title hints for a second wake listing (slug not yet in alias family — common in CMS). */
-  const slugLooksWakeSurfClub = (slug: string): boolean => {
-    const s = normSlug(slug);
-    if (MID_ROW_RESERVED.has(s)) return false;
-    if (/wake.*surf|surf.*wake|wakesurf|surf-club|wake-club|wake_surf/.test(s)) return true;
-    return false;
-  };
-  const titleLooksWakeSurfClub = (title: string): boolean => {
-    const t = title.trim().toLowerCase();
-    if (/\bwake\s*surf\s*club\b/.test(t)) return true;
-    if (/\bwake\s*surf\b/.test(t) && /\bclub\b/.test(t)) return true;
-    if (/\bwake\s*club\b/.test(t) && /surf/.test(t)) return true;
-    return false;
-  };
-
-  /** Wake Surf Club row tile: known wake aliases first, then any other wake-family slug, then slug/title heuristics (keeps it out of `rest`). */
+  /** Wake Surf Club row tile: known alias slugs from the shared family map. */
   const pickMidRowWakeClubCard = (list: Card[]): Card | null => {
-    for (const slug of wakeFamilySlugsOrdered) {
+    for (const slug of wakeSurfClubSlugsOrdered) {
       const c = list.find((e) => normSlug(e.slug) === slug);
       if (c) return c;
     }
-    const familyExtra = list.find(
-      (e) => !MID_ROW_RESERVED.has(normSlug(e.slug)) && isWatersportsSlug(e.slug)
-    );
-    if (familyExtra) return familyExtra;
-    const bySlugHeuristic = list.find((e) => slugLooksWakeSurfClub(e.slug));
-    if (bySlugHeuristic) return bySlugHeuristic;
-    return (
-      list.find(
-        (e) => !MID_ROW_RESERVED.has(normSlug(e.slug)) && titleLooksWakeSurfClub(e.title ?? "")
-      ) ?? null
-    );
+    return list.find((e) => isWakeSurfClubSlug(e.slug)) ?? null;
   };
 
   /** Homepage: large pontoon first; one row of three (sunset, holiday, wake surf club listing); then large watersports hero. */
-  const pontoonData = cards.find((e) => normSlug(e.slug) === "pontoon") ?? null;
+  const pontoonData = cards.find((e) => isPontoonSlug(e.slug)) ?? null;
   const sunsetCard = cards.find((e) => normSlug(e.slug) === "sunset") ?? null;
   const holidayCard = cards.find((e) => normSlug(e.slug) === "holiday") ?? null;
   const watersportsFeatured = cards.find((e) => normSlug(e.slug) === "watersports") ?? null;
@@ -188,10 +152,14 @@ export function ExperienceChooser() {
   const midRowCards = [sunsetCard, holidayCard, wakeSurfClubCard].filter((e): e is Card => e != null);
 
   /** Canonical `watersports` is the big hero; mid-row wake club + other wake aliases never repeat in the grid below. */
-  const usedSlugs = new Set<string>(["pontoon", "sunset", "holiday", "watersports"]);
+  const usedSlugs = new Set<string>();
+  if (pontoonData) usedSlugs.add(pontoonData.slug);
+  if (sunsetCard) usedSlugs.add(sunsetCard.slug);
+  if (holidayCard) usedSlugs.add(holidayCard.slug);
+  if (watersportsFeatured) usedSlugs.add(watersportsFeatured.slug);
   for (const e of cards) {
     if (normSlug(e.slug) === "watersports") continue;
-    if (isWatersportsSlug(e.slug)) usedSlugs.add(e.slug);
+    if (isWatersportsSlug(e.slug) || isWakeSurfClubSlug(e.slug)) usedSlugs.add(e.slug);
   }
   if (wakeSurfClubCard) usedSlugs.add(wakeSurfClubCard.slug);
   const rest = cards.filter((e) => !usedSlugs.has(e.slug));
@@ -233,7 +201,7 @@ export function ExperienceChooser() {
             transition={{ duration: 0.45, delay: 0.1 }}
           >
             <Link
-              href={`/experiences/${pontoonData.slug}`}
+              href={getCanonicalExperiencePath(pontoonData.slug)}
               className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-secondary/20 hover:-translate-y-1 hover:ring-brand-secondary/90"
               aria-label={`${pontoonData.title} — view details`}
             >
@@ -312,7 +280,7 @@ export function ExperienceChooser() {
               transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
             >
               <Link
-                href={`/experiences/${data.slug}`}
+                href={getCanonicalExperiencePath(data.slug)}
                 className="group block relative h-full rounded-2xl bg-brand-dark ring-4 ring-brand-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1 hover:ring-brand-primary/90"
                 aria-label={`${data.title} — view details`}
               >
@@ -371,7 +339,7 @@ export function ExperienceChooser() {
             transition={{ duration: 0.45, delay: 0.12 }}
           >
             <Link
-              href={`/experiences/${watersportsFeatured.slug}`}
+              href={getCanonicalExperiencePath(watersportsFeatured.slug)}
               className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1 hover:ring-brand-primary/90"
               aria-label={`${watersportsFeatured.title} — view details`}
             >
@@ -431,7 +399,7 @@ export function ExperienceChooser() {
                 transition={{ duration: 0.4, delay: 0.15 + i * 0.06 }}
               >
                 <Link
-                  href={`/experiences/${data.slug}`}
+                  href={getCanonicalExperiencePath(data.slug)}
                   className="group block relative rounded-2xl bg-brand-dark ring-4 ring-brand-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1 hover:ring-brand-primary/90"
                   aria-label={`${data.title} — view details`}
                 >

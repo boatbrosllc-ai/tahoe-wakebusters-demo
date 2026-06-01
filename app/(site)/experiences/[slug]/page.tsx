@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
-import { notFound, redirect } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { getExperienceBySlug as getFirestoreExperience } from "@/lib/booking/get-experience-by-slug";
 import { getExperienceBySlug as getStaticExperience } from "@/content/experiences";
 import { ExperienceListingPage } from "@/components/experience/ExperienceListingPage";
 import { StaticExperienceDetail } from "@/components/experience/StaticExperienceDetail";
 import { brand } from "@/content/brand";
 import { getDb } from "@/lib/booking/firebase-admin";
-import { getSlugLookupCandidates } from "@/lib/booking/experience-aliases";
+import {
+  getSlugLookupCandidates,
+  isExperienceAliasSlug,
+  resolveCanonicalExperienceSlug,
+} from "@/lib/booking/experience-aliases";
+
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -25,12 +31,45 @@ async function getAdminManagedExperience(slug: string): Promise<{ active: boolea
   return null;
 }
 
+function experienceCanonicalUrl(canonicalSlug: string): string {
+  return `${baseUrl}/experiences/${canonicalSlug}`;
+}
+
+async function resolveExperienceRoute(slug: string) {
+  const normalized = slug.trim().toLowerCase();
+  let firestoreData = null;
+  try {
+    firestoreData = await getFirestoreExperience(normalized);
+  } catch {
+    firestoreData = null;
+  }
+  const firestoreSlug = firestoreData?.experience.slug?.trim().toLowerCase();
+  const canonicalSlug = resolveCanonicalExperienceSlug(normalized, firestoreSlug);
+  return { normalized, canonicalSlug, firestoreData, firestoreSlug };
+}
+
 export async function generateStaticParams() {
-  return FIRESTORE_SLUGS.map((slug) => ({ slug }));
+  const slugs = new Set<string>(FIRESTORE_SLUGS);
+  try {
+    const db = getDb();
+    const snap = await db.collection("experiences").where("active", "==", true).get();
+    for (const doc of snap.docs) {
+      const data = doc.data() as { slug?: string };
+      const raw = typeof data.slug === "string" ? data.slug.trim().toLowerCase() : "";
+      if (raw) {
+        slugs.add(raw);
+        slugs.add(resolveCanonicalExperienceSlug(raw, raw));
+      }
+    }
+  } catch {
+    // build without Firebase — use static slug list only
+  }
+  return Array.from(slugs, (slug) => ({ slug }));
 }
 
 const SLUG_KEYWORDS: Record<string, string[]> = {
   pontoon: ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
+  "lake-austin-pontoon": ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
   watersports: ["Lake Austin wake boat rental", "wake surf Lake Austin", "Lake Austin wakeboard rental"],
   sunset: ["Lake Austin sunset cruise", "sunset boat rental Lake Austin"],
   holiday: ["Lake Austin boat rental", "holiday boat rental Lake Austin"],
@@ -38,44 +77,44 @@ const SLUG_KEYWORDS: Record<string, string[]> = {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  if (slug === "pontoon") {
+  const { normalized, canonicalSlug, firestoreData } = await resolveExperienceRoute(slug);
+  if (isExperienceAliasSlug(normalized, firestoreData?.experience.slug)) {
+    return {};
+  }
+
+  const keywords = SLUG_KEYWORDS[canonicalSlug] ?? SLUG_KEYWORDS[normalized];
+  const canonical = experienceCanonicalUrl(canonicalSlug);
+
+  if (firestoreData) {
+    const exp = firestoreData.experience;
+    const title = exp.metaTitle?.trim() || `${exp.title} | Lake Austin Boat Rentals`;
+    const description = exp.metaDescription?.trim() || exp.subtitle;
     return {
-      title: "Lake Austin Pontoon Rentals | Captain Included",
-      description:
-        "Pontoon rentals Lake Austin. Captain included, premium sound, lily pad, cooler (ice included). Chill, swim, celebrate. Book your Lake Austin pontoon rental.",
-      keywords: ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
-      openGraph: {
-        title: "Lake Austin Pontoon Rentals | Boat Bros",
-        description: "Pontoon rentals Lake Austin. Captain included, premium sound, lily pad. Book your day.",
-      },
+      title,
+      description,
+      ...(keywords?.length ? { keywords } : {}),
+      alternates: { canonical },
+      openGraph: { title: exp.metaTitle?.trim() || `${exp.title} | ${brand.companyName}`, description, url: canonical },
     };
   }
+
   try {
-    const firestoreData = await getFirestoreExperience(slug);
-    if (firestoreData) {
-      const exp = firestoreData.experience;
-      const title = exp.metaTitle?.trim() || `${exp.title} | Lake Austin Boat Rentals`;
-      const description = exp.metaDescription?.trim() || exp.subtitle;
-      const keywords = SLUG_KEYWORDS[slug];
-      return {
-        title,
-        description,
-        ...(keywords?.length ? { keywords } : {}),
-        openGraph: { title: exp.metaTitle?.trim() || `${exp.title} | ${brand.companyName}`, description },
-      };
-    }
-    const staticExp = getStaticExperience(slug);
+    const staticExp = getStaticExperience(normalized);
     if (staticExp) {
-      const managed = await getAdminManagedExperience(slug);
+      const managed = await getAdminManagedExperience(normalized);
       if (managed && !managed.active) {
         return { title: "Experience" };
       }
-      const keywords = SLUG_KEYWORDS[slug];
       return {
         title: `${staticExp.title} | Lake Austin Boat Rentals`,
         description: staticExp.shortDescription,
         ...(keywords?.length ? { keywords } : {}),
-        openGraph: { title: `${staticExp.title} | ${brand.companyName}`, description: staticExp.shortDescription },
+        alternates: { canonical },
+        openGraph: {
+          title: `${staticExp.title} | ${brand.companyName}`,
+          description: staticExp.shortDescription,
+          url: canonical,
+        },
       };
     }
   } catch {
@@ -86,21 +125,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ExperienceDetailPage({ params }: Props) {
   const { slug } = await params;
-  if (slug === "pontoon") {
-    redirect("/experiences/lake-austin-pontoon");
+  const { normalized, canonicalSlug, firestoreData } = await resolveExperienceRoute(slug);
+
+  if (isExperienceAliasSlug(normalized, firestoreData?.experience.slug)) {
+    permanentRedirect(`/experiences/${canonicalSlug}`);
   }
-  let firestoreData;
-  try {
-    firestoreData = await getFirestoreExperience(slug);
-  } catch {
-    firestoreData = null;
-  }
+
   if (firestoreData) {
     return <ExperienceListingPage data={firestoreData} />;
   }
-  const staticExperience = getStaticExperience(slug);
+
+  const staticExperience = getStaticExperience(normalized);
   if (staticExperience) {
-    const managed = await getAdminManagedExperience(slug);
+    const managed = await getAdminManagedExperience(normalized);
     if (managed && !managed.active) {
       notFound();
     }

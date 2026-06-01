@@ -305,7 +305,7 @@ export default function CalendarsPage() {
   const [experienceDocIdBySlugOrId, setExperienceDocIdBySlugOrId] = useState<Map<string, string>>(new Map());
   const [boatList, setBoatList] = useState<BoatItem[]>([]);
   const [experienceNames, setExperienceNames] = useState<Map<string, string>>(new Map());
-  /** Firestore IDs of ticketed experiences (no listing boats required — must still appear in calendar). */
+  /** Firestore IDs of ticketed experiences (kept for slot/booking grouping; calendar includes all listings). */
   const [ticketedExperienceIds, setTicketedExperienceIds] = useState<Set<string>>(new Set());
   const [slots, setSlots] = useState<SlotDto[]>([]);
   const [bookingsBySlotId, setBookingsBySlotId] = useState<Map<string, BookingSummary>>(new Map());
@@ -331,10 +331,11 @@ export default function CalendarsPage() {
   const [rangeEnd, setRangeEnd] = useState("");
   const [rangeBoatId, setRangeBoatId] = useState("");
   const [rangeExperienceId, setRangeExperienceId] = useState("");
+  const [rangeTicketsHeld, setRangeTicketsHeld] = useState("");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [addBlockOpen, setAddBlockOpen] = useState(false);
   const [blocks, setBlocks] = useState<
-    { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null; slotId?: string | null }[]
+    { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null; slotId?: string | null; ticketsBlocked?: number | null }[]
   >([]);
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
@@ -362,6 +363,8 @@ export default function CalendarsPage() {
   const [quickBlockStart, setQuickBlockStart] = useState("");
   const [quickBlockEnd, setQuickBlockEnd] = useState("");
   const [quickBlockNote, setQuickBlockNote] = useState("");
+  /** Ticketed listings: hold back N tickets instead of closing the whole departure. */
+  const [quickBlockTicketsHeld, setQuickBlockTicketsHeld] = useState("");
   const [quickBlockSaving, setQuickBlockSaving] = useState(false);
   const [quickBlockError, setQuickBlockError] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
@@ -448,16 +451,19 @@ export default function CalendarsPage() {
   /** Unique experience Firestore document ids — resolve slug to id so slots API finds the experience. */
   const uniqueExperienceIds = useMemo(() => {
     const docIds = new Set<string>();
+    // Every admin listing (new experiences may have no boats assigned yet).
+    experienceNames.forEach((_title, docId) => docIds.add(docId));
     boatList.forEach((b) => {
       (b.experienceIds ?? []).forEach((slugOrId) => {
         const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
         docIds.add(docId);
       });
     });
-    // Ticketed experiences have no listing boats but still need calendar visibility
     ticketedExperienceIds.forEach((id) => docIds.add(id));
-    return Array.from(docIds);
-  }, [boatList, experienceDocIdBySlugOrId, ticketedExperienceIds]);
+    return Array.from(docIds).sort((a, b) =>
+      (experienceNames.get(a) ?? a).localeCompare(experienceNames.get(b) ?? b),
+    );
+  }, [boatList, experienceDocIdBySlugOrId, ticketedExperienceIds, experienceNames]);
 
   const dateRange = useMemo(() => getMonthRange(calendarMonth), [calendarMonth]);
   const visibleBlockRange = useMemo(() => {
@@ -948,7 +954,15 @@ export default function CalendarsPage() {
     try {
       const requests = uniqueExperienceIds.map(async (experienceId) => {
         const boatIds = boatIdsPayload != null
-          ? boatList.filter((b) => b.experienceIds?.includes(experienceId) && blockDayBoatIds.has(b.id)).map((b) => b.id)
+          ? boatList
+              .filter((b) =>
+                blockDayBoatIds.has(b.id) &&
+                (b.experienceIds ?? []).some((slugOrId) => {
+                  const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+                  return docId === experienceId;
+                }),
+              )
+              .map((b) => b.id)
           : undefined;
         if (boatIdsPayload != null && boatIds?.length === 0) return { skipped: true, experienceId };
         const res = await fetch("/api/admin/blocks/block-date", {
@@ -1277,6 +1291,21 @@ export default function CalendarsPage() {
       setError("Start date must be before end date.");
       return;
     }
+    const isTicketedRange = ticketedExperienceIds.has(rangeExperienceId);
+    const ticketsHeldRaw = rangeTicketsHeld.trim();
+    let ticketsBlocked: number | undefined;
+    if (ticketsHeldRaw) {
+      if (!isTicketedRange) {
+        setError("Ticket holdbacks apply to ticketed trip types only. Leave blank to block the whole day.");
+        return;
+      }
+      const n = Number.parseInt(ticketsHeldRaw, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        setError("Tickets to hold back must be a positive whole number.");
+        return;
+      }
+      ticketsBlocked = n;
+    }
     setRangeLoading(true);
     setError(null);
     setNotice(null);
@@ -1293,7 +1322,7 @@ export default function CalendarsPage() {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds }),
+              body: JSON.stringify({ experienceId, date: dateStr, action: "block", boatIds, ...(ticketsBlocked != null ? { ticketsBlocked } : {}) }),
             }).then(async (res) => {
               const data = await res.json().catch(() => ({}));
               if (!res.ok) throw new Error(data.error ?? "Failed to block date");
@@ -1382,6 +1411,7 @@ export default function CalendarsPage() {
               endAt: string;
               note: string | null;
               slotId?: string | null;
+              ticketsBlocked?: number | null;
             }) => {
               if (!seen.has(b.id)) {
                 seen.add(b.id);
@@ -1405,6 +1435,21 @@ export default function CalendarsPage() {
     if (!quickBlockExperienceId) {
       setQuickBlockError("Select an experience (use the filters above if this list is empty).");
       return;
+    }
+    const isTicketedQuickBlock = ticketedExperienceIds.has(quickBlockExperienceId);
+    const ticketsHeldRaw = quickBlockTicketsHeld.trim();
+    let ticketsBlocked: number | undefined;
+    if (ticketsHeldRaw) {
+      if (!isTicketedQuickBlock) {
+        setQuickBlockError("Ticket holdbacks apply to ticketed trip types only. Leave blank to block the whole time.");
+        return;
+      }
+      const n = Number.parseInt(ticketsHeldRaw, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        setQuickBlockError("Tickets to hold back must be a positive whole number.");
+        return;
+      }
+      ticketsBlocked = n;
     }
     const start = parseCentralDatetimeLocalInput(quickBlockStart);
     const end = parseCentralDatetimeLocalInput(quickBlockEnd);
@@ -1433,13 +1478,16 @@ export default function CalendarsPage() {
           endAt: end.toISOString(),
           boatId: quickBlockBoatId.trim() || undefined,
           note: quickBlockNote.trim() || undefined,
+          ...(ticketsBlocked != null ? { ticketsBlocked } : {}),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Failed to create block");
       setNotice({
         level: "success",
-        message: "Blocked that time for the selected boat (or whole experience if no boat).",
+        message: ticketsBlocked != null
+          ? `Held back ${ticketsBlocked} ticket${ticketsBlocked === 1 ? "" : "s"} for that departure — remaining tickets stay on sale.`
+          : "Blocked that time for the selected boat (or whole experience if no boat).",
       });
       bumpSlotCacheVersion();
       await fetchSlots();
@@ -1455,6 +1503,8 @@ export default function CalendarsPage() {
     quickBlockEnd,
     quickBlockBoatId,
     quickBlockNote,
+    quickBlockTicketsHeld,
+    ticketedExperienceIds,
     fetchSlots,
     fetchBlocks,
   ]);
@@ -1852,6 +1902,7 @@ export default function CalendarsPage() {
               experienceId={weekViewBlockExperienceId}
               experienceIds={weekViewExperienceIds}
               experienceNamesById={experienceNamesById}
+              ticketedExperienceIds={Array.from(ticketedExperienceIds)}
               boatList={boatList.map((b) => ({ id: b.id, name: b.name }))}
               weekStart={weekStart}
               selectedBoatIds={selectedBoatIds.size === 0 ? undefined : Array.from(selectedBoatIds)}
@@ -1950,6 +2001,21 @@ export default function CalendarsPage() {
                         ))}
                       </select>
                     </div>
+                    {ticketedExperienceIds.has(rangeExperienceId) && (
+                      <div className="flex flex-col gap-1 min-w-[160px]">
+                        <label htmlFor="block-range-tickets" className="text-xs text-brand-muted">Tickets to hold back</label>
+                        <input
+                          id="block-range-tickets"
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder="Optional"
+                          value={rangeTicketsHeld}
+                          onChange={(e) => setRangeTicketsHeld(e.target.value)}
+                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                        />
+                      </div>
+                    )}
                     <div className="flex flex-col gap-1">
                       <label htmlFor="block-range-from" className="text-xs text-brand-muted">From</label>
                       <input
@@ -2062,6 +2128,11 @@ export default function CalendarsPage() {
                       >
                         <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
                         <span>{blockTitle}</span>
+                        {typeof block.ticketsBlocked === "number" && block.ticketsBlocked > 0 ? (
+                          <span className="rounded bg-violet-100 text-violet-900 border border-violet-200 px-1.5 py-0.5 text-[10px] font-semibold shrink-0">
+                            {block.ticketsBlocked} ticket{block.ticketsBlocked === 1 ? "" : "s"} held
+                          </span>
+                        ) : null}
                         {showPartialBadge ? (
                           <span className="rounded bg-amber-100 text-amber-950 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0">
                             Partial
@@ -2574,6 +2645,25 @@ export default function CalendarsPage() {
                         ))}
                       </select>
                     </label>
+                    {ticketedExperienceIds.has(quickBlockExperienceId) && (
+                      <label className="block space-y-1">
+                        <span className="text-xs font-medium text-brand-muted">Tickets to hold back (optional)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          inputMode="numeric"
+                          placeholder="e.g. 5 — leave blank to block entire departure"
+                          className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
+                          value={quickBlockTicketsHeld}
+                          onChange={(e) => setQuickBlockTicketsHeld(e.target.value)}
+                          disabled={quickBlockSaving}
+                        />
+                        <p className="text-[11px] text-brand-muted">
+                          Hold back this many tickets from online sale. Example: 10 capacity, hold back 5 → customers can still buy 5 (minus any already sold).
+                        </p>
+                      </label>
+                    )}
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block space-y-1">
                         <span className="text-xs font-medium text-brand-muted">Start</span>

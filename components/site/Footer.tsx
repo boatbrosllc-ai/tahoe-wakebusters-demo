@@ -16,6 +16,15 @@ const footerLinks = [
   { href: "/contact", label: "Contact" },
 ];
 
+const seoRentalLinks = [
+  { href: "/boat-rental-austin", label: "Boat rental Austin" },
+  { href: "/lake-austin-boat-rentals", label: "Lake Austin boat rentals" },
+  { href: "/austin-party-boat-rentals", label: "Austin party boat" },
+  { href: "/pontoon-boat-rental-austin", label: "Pontoon rental Austin" },
+  { href: "/sunset-cruise-austin", label: "Sunset cruise Austin" },
+  { href: "/wakesurfing-austin", label: "Wakesurfing Austin" },
+];
+
 const linkClass =
   "text-sm text-white/80 hover:text-brand-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded";
 
@@ -26,7 +35,7 @@ export function Footer() {
   return (
     <footer className="bg-brand-dark text-white/90 mt-[-72px] lg:mt-0" role="contentinfo">
       <div className="container-wide px-5 pt-[72px] py-10 pb-24 sm:px-6 sm:py-12 lg:pt-8 lg:px-8 lg:py-16 lg:pb-16">
-        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <p className="font-semibold text-white text-lg">{brand.companyName}</p>
             <p className="mt-1 text-sm text-white/80">{brand.tagline}</p>
@@ -49,6 +58,18 @@ export function Footer() {
                       {link.label}
                     </Link>
                   )}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="font-medium text-white text-sm mb-2">Boat rentals</p>
+            <ul className="space-y-2">
+              {seoRentalLinks.map((link) => (
+                <li key={link.href}>
+                  <Link href={link.href} className={linkClass}>
+                    {link.label}
+                  </Link>
                 </li>
               ))}
             </ul>
