@@ -27,6 +27,7 @@ import {
 import { getWaiverQrLinkById } from "@/lib/waiver/waiver-qr-firestore";
 import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
+import { uploadWaiverSignatureDataUrl } from "@/lib/waiver/upload-signature-to-storage";
 import type { WaiverSignedPayload, WaiverSigned, WaiverTemplateSnapshot } from "@/lib/waiver/types";
 
 const MAX_SIGNATURE_PAYLOAD_LENGTH = 500_000; // ~500KB for data URL
@@ -294,6 +295,19 @@ export async function POST(request: NextRequest) {
     delete signedPayloadForFirestore.signatureDataUrl;
 
     const bucket = getStorageBucket();
+
+    let signatureStoragePath: string | null = null;
+    try {
+      signatureStoragePath = await uploadWaiverSignatureDataUrl(
+        bucket,
+        requestIdForStorage,
+        signedPayload.signatureDataUrl
+      );
+    } catch (sigErr) {
+      const msg = sigErr instanceof Error ? sigErr.message : String(sigErr);
+      console.warn("[waiver/submit] signature image storage failed (typed name only in admin)", msg);
+    }
+
     let pdfStoragePath: string | null = null;
     let htmlStoragePath: string | null = null;
 
@@ -361,6 +375,7 @@ export async function POST(request: NextRequest) {
       contentHash,
       pdfStoragePath,
       htmlStoragePath,
+      ...(signatureStoragePath ? { signatureStoragePath } : {}),
       signedPayload: signedPayloadForFirestore,
       ...(manualReviewCandidate ? { requiresManualReview: { ...manualReviewCandidate, at: now } } : {}),
     };

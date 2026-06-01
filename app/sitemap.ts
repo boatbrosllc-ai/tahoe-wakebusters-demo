@@ -44,6 +44,7 @@ const staticPaths = [
   "/austin-bachelor-party-boat-rental",
   ...SEO_PHASE_1_PATHS,
   ...SEO_PHASE_2_4_PATHS,
+  "/austin-boat-rental",
   "/location",
   "/boats",
   "/faqs",
@@ -65,6 +66,7 @@ function staticPriority(path: string): number {
     path === "/location" ||
     path === "/austin-bachelorette-boat-rental" ||
     path === "/austin-bachelor-party-boat-rental" ||
+    path === "/austin-boat-rental" ||
     SEO_PHASE_1_PATHS.includes(path as (typeof SEO_PHASE_1_PATHS)[number])
   ) {
     return 0.9;
@@ -80,6 +82,7 @@ function staticChangeFreq(path: string): ChangeFreq {
     path === "/location" ||
     path === "/austin-bachelorette-boat-rental" ||
     path === "/austin-bachelor-party-boat-rental" ||
+    path === "/austin-boat-rental" ||
     SEO_PHASE_1_PATHS.includes(path as (typeof SEO_PHASE_1_PATHS)[number])
   ) {
     return "weekly";

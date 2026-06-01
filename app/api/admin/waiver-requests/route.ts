@@ -5,6 +5,7 @@ import { listRequests, listRequestsByBookingId } from "@/lib/waiver/firestore";
 import { listWaiverRequestsQuerySchema } from "@/lib/waiver/schema";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { waiverRequestDocToAdminJson } from "@/lib/waiver/admin-api-serialize";
 
 type RequestWithId = Awaited<ReturnType<typeof listRequests>>[number];
 
@@ -96,7 +97,8 @@ export async function GET(request: NextRequest) {
       limit: filters.limit,
     });
     const enriched = await enrichWithBookingSummary(requests);
-    return NextResponse.json({ requests: enriched });
+    const serialized = enriched.map((r) => waiverRequestDocToAdminJson(r));
+    return NextResponse.json({ requests: serialized });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const isFirebase = /firebase|FIREBASE|config missing|credential|private.?key|service.?account/i.test(message);

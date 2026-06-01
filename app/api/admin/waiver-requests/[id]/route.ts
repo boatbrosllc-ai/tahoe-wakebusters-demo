@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getRequestById, updateRequest } from "@/lib/waiver/firestore";
+import { waiverRequestDocToAdminJson } from "@/lib/waiver/admin-api-serialize";
 
 export async function GET(
   _request: NextRequest,
@@ -47,7 +48,10 @@ export async function GET(
       };
     }
 
-    return NextResponse.json({ ...req, bookingSummary });
+    return NextResponse.json({
+      ...waiverRequestDocToAdminJson(req),
+      bookingSummary,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const isFirebase = /firebase|FIREBASE|config missing|credential/i.test(message);
@@ -83,7 +87,7 @@ export async function PATCH(
   try {
     await updateRequest(id, { status: b.status as "void" | "expired" });
     const req = await getRequestById(id);
-    return NextResponse.json(req ?? { id });
+    return NextResponse.json(req ? waiverRequestDocToAdminJson(req) : { id });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });

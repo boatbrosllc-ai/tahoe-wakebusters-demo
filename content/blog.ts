@@ -3,6 +3,8 @@
  * Posts can be moved to CMS/MDX later.
  */
 
+import { dateIdeasClusterPosts } from "./blog-date-ideas-cluster";
+
 export type BlogCategory = "boat-tips" | "austin-events" | "lake-news" | "general";
 
 export type BlogBodyBlock = { type: "p"; content: string } | { type: "h2"; content: string } | { type: "h3"; content: string } | { type: "ul"; items: string[] };
@@ -81,7 +83,7 @@ export const blogPosts: BlogPost[] = [
       { q: "What should we bring for a bachelorette boat party on Lake Austin?", a: "Sunscreen, water, a soft-sided cooler with drinks and snacks (no glass), towels, waterproof phone cases or bags, and dry clothes for the ride back. Decorations like banners or balloons are fine if they're secure. Life jackets are provided." },
     ],
     body: [
-      { type: "p", content: "So you're planning a Lake Austin bachelorette—good call. A [boat day on the lake](/experiences) is one of those things that actually lives up to the hype: you get the crew on a pontoon, someone else drives, and you just swim, snack, and take way too many photos. I've put together what actually works: what to book, what to bring, pontoon party ideas that don't flop, and—because the day doesn't end when you dock—where to eat and what to do after the boat so the whole trip feels like one solid celebration." },
+      { type: "p", content: "So you're planning a Lake Austin bachelorette—good call. For the full picture on captained rentals, see our [Austin boat rental](/austin-boat-rental) guide. A [boat day on the lake](/experiences) is one of those things that actually lives up to the hype: you get the crew on a pontoon, someone else drives, and you just swim, snack, and take way too many photos. I've put together what actually works: what to book, what to bring, pontoon party ideas that don't flop, and—because the day doesn't end when you dock—where to eat and what to do after the boat so the whole trip feels like one solid celebration." },
       { type: "h2", content: "Why a Lake Austin Boat Rental for a Bachelorette?" },
       { type: "p", content: "Lake Austin is one of the best lakes in Texas for a group day. The water's constant-level (no weird low-water surprises), there are coves everywhere for swimming and anchoring, and the hills in the background make the photos actually good. A [Lake Austin party boat rental](/experiences/lake-austin-pontoon) is usually a pontoon—enough room for everyone to move around, hang out, and not feel cramped. Book it with a captain and nobody has to worry about driving or docking; the bride can actually relax and the rest of you can focus on making it fun." },
       { type: "h2", content: "What to Book: Pontoon, Captain & How Long" },
@@ -104,6 +106,7 @@ export const blogPosts: BlogPost[] = [
       { type: "p", content: "[Book your Lake Austin boat rental](/booking) for the bachelorette as early as you can—weekends and summer dates fill up. When you book, confirm group size, how long you want, and whether you're doing morning, afternoon, or sunset. At [Boat Bros](/experiences) we run captained Lake Austin pontoon rentals that work really well for bachelorette parties—you bring the crew and the vibes, we handle the boat and the route. Once that's set, lock in dinner (and maybe brunch) so the whole day flows. Ready to plan? [Book your Lake Austin pontoon party](/booking) and we'll see you on the water." },
     ],
     relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
       { href: "/experiences", text: "Lake Austin boat rentals – pontoon, wake, sunset", external: false },
       { href: "/experiences/lake-austin-pontoon", text: "Lake Austin pontoon rental", external: false },
       { href: "/experiences/sunset", text: "Lake Austin sunset cruise", external: false },
@@ -146,7 +149,7 @@ export const blogPosts: BlogPost[] = [
       { q: "Do we need a captain for our Lake Austin bachelorette boat day?", a: "Yes. A captained Lake Austin pontoon rental means the captain handles navigation, positioning, and safety—your group's only job is to enjoy the moment. BoatBros runs captained pontoon rentals that launch directly on Lake Austin." },
     ],
     body: [
-      { type: "p", content: "If you pay attention in Austin on any spring or summer weekend, you will notice a pattern. Around late morning, groups start arriving at brunch spots in East Austin and South Congress. Brides in white boots. Matching swimsuits tucked into tote bags. Everyone excited, but saving their energy for later. Because everyone knows what the real event is: the boat day on Lake Austin." },
+      { type: "p", content: "Planning around the water? Start with our [Austin boat rental](/austin-boat-rental) guide for captained Lake Austin options. If you pay attention in Austin on any spring or summer weekend, you will notice a pattern. Around late morning, groups start arriving at brunch spots in East Austin and South Congress. Brides in white boots. Matching swimsuits tucked into tote bags. Everyone excited, but saving their energy for later. Because everyone knows what the real event is: the boat day on Lake Austin." },
       { type: "p", content: "By early afternoon, those same groups are stepping onto pontoon boats, music already playing, drinks open, the Texas sun high overhead. For the next four hours, nothing else matters. No reservations. No crowds. No waiting in lines. Just your group, the water, and the moment you came for. This is why Austin has quietly become one of the best bachelorette destinations in the country—not because of the bars alone, but because the lake transforms the entire weekend into something that feels effortless, elevated, and unforgettable. Everything else you do in Austin revolves around that experience." },
       { type: "h2", content: "Why Lake Austin Is the Foundation of the Perfect Austin Bachelorette Weekend" },
       { type: "p", content: "Lake Austin is not just another lake outside the city. It is part of the city itself. Within ten minutes of downtown and East Austin, the road winds down toward the water. As you arrive, the energy shifts immediately. The air feels warmer. Music carries across the water. Boats drift past slowly, filled with groups celebrating birthdays, engagements, and bachelorette weekends just like yours." },
@@ -173,6 +176,7 @@ export const blogPosts: BlogPost[] = [
       { type: "p", content: "Years later, people rarely remember which bar they went to or what they ordered at dinner. They remember the lake. They remember floating in the water with their closest friends. They remember the music, the sun, and the feeling that everything was exactly as it should be. That is why Lake Austin has become the center of the Austin bachelorette experience—and why planning your weekend around the right boat makes all the difference. [Book your Lake Austin boat day](/booking) and we will see you on the water." },
     ],
     relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
       { href: "/experiences/lake-austin-pontoon", text: "Lake Austin pontoon rentals – BoatBros", external: false },
       { href: "/location", text: "Lake Austin boat rentals – pontoon, wake, sunset", external: false },
       { href: "/experiences/lake-austin-pontoon", text: "Lake Austin pontoon charter experience", external: false },
@@ -220,7 +224,7 @@ export const blogPosts: BlogPost[] = [
       { q: "What should I not bring on a boat rental?", a: "Avoid glass bottles, hard coolers that can scratch the boat, drones (unless you have permission), and anything that can't get wet. Assume everything may get splashed." },
     ],
     body: [
-      { type: "p", content: "Booking a Lake Austin boat rental is the easy part. The real win is showing up prepared—so you spend the day swimming, cruising, and relaxing instead of worrying you forgot something. Whether you’re on a pontoon, wake boat, or sunset cruise, this checklist covers everything you need for a perfect day on the water." },
+      { type: "p", content: "Booking a [Austin boat rental](/austin-boat-rental) on Lake Austin is the easy part. The real win is showing up prepared—so you spend the day swimming, cruising, and relaxing instead of worrying you forgot something. Whether you’re on a pontoon, wake boat, or sunset cruise, this checklist covers everything you need for a perfect day on the water." },
       { type: "h2", content: "Essentials for Every Lake Austin Boat Rental" },
       { type: "p", content: "Sunscreen (reef-safe if you’re swimming), sunglasses, a hat, and a reusable water bottle are non-negotiable. Lake Austin sun is intense even on cloudy days. Bring more water than you think you need—hydration keeps the crew happy and safe." },
       { type: "h3", content: "What to Bring for a Pontoon or Party Boat" },
@@ -232,6 +236,12 @@ export const blogPosts: BlogPost[] = [
       { type: "h2", content: "What Not to Bring on Your Boat Rental" },
       { type: "ul", items: ["Glass bottles or containers (use cans, plastic, or reusable)", "Hard coolers that scratch the boat", "Drones (unless you have permission and know the rules)", "Anything that can’t get wet—assume everything might get splashed"] },
       { type: "p", content: "When you book with Boat Bros, we’ll send you a reminder with the essentials and any trip-specific tips. Show up with this list covered and you’re set for an unforgettable Lake Austin boat day." },
+    ],
+    relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
+      { href: "/experiences/lake-austin-pontoon", text: "Lake Austin pontoon rental", external: false },
+      { href: "/booking", text: "Book a boat rental", external: false },
+      { href: "/blog/what-to-wear-lake-austin-boat-rental", text: "What to wear on a boat rental", external: false },
     ],
   },
   {
@@ -267,7 +277,7 @@ export const blogPosts: BlogPost[] = [
       { q: "What is the best time to go to Lake Austin coves?", a: "Weekends get busy near 360; going early or later in the day often means calmer water and fewer boats. Mid-week and mid-lake coves tend to be quieter year-round." },
     ],
     body: [
-      { type: "p", content: "Lake Austin is one of the best lakes in Texas for a pontoon day—clear water, scenic hills, and plenty of coves to drop anchor and swim. Whether you’re on a Lake Austin boat rental for a bachelorette party, family day, or just friends and coolers, knowing where to go makes the day even better. Here are our favorite spots for pontoon parties and swimming on Lake Austin." },
+      { type: "p", content: "Lake Austin is one of the best lakes in Texas for a pontoon day—clear water, scenic hills, and plenty of coves to drop anchor and swim. For captained options and pricing, see our [Austin boat rental](/austin-boat-rental) guide. Whether you’re on a Lake Austin boat rental for a bachelorette party, family day, or just friends and coolers, knowing where to go makes the day even better. Here are our favorite spots for pontoon parties and swimming on Lake Austin." },
       { type: "h2", content: "Why Lake Austin for Pontoon Rentals?" },
       { type: "p", content: "Lake Austin is a constant-level reservoir fed by the Colorado River and managed by the Lower Colorado River Authority (LCRA). Water levels stay stable year-round, so the shoreline is predictable and coves don't dry up. The lake runs roughly 20 miles from Tom Miller Dam near downtown Austin up toward the Hill Country, with a mix of quiet coves and open water. Pontoon rentals can comfortably explore the main body and tuck into coves for swimming, lunch, and floating." },
       { type: "h2", content: "Best Coves & Areas for Swimming and Anchoring" },
@@ -281,6 +291,12 @@ export const blogPosts: BlogPost[] = [
       { type: "ul", items: ["Anchor only in safe, open areas—avoid private docks, no-wake zones, and marked restricted areas.", "Bring a float or two for swimming; Lake Austin water is clean and inviting.", "Respect other boats and shoreline residents; keep music at a reasonable level.", "Pack out what you pack in; leave no trash to keep Lake Austin clean.", "Sunscreen and water: even in coves, Texas sun is strong—stay hydrated and protected."] },
       { type: "h2", content: "Booking a Lake Austin Boat Rental for Coves & Swimming" },
       { type: "p", content: "When you book a Lake Austin boat rental with Boat Bros, our captains know these waters. We'll help you choose the best spots for your group size, vibe, and the day's conditions. Ready to find your favorite cove? Book your pontoon, wake boat, or sunset cruise and we'll see you on the water." },
+    ],
+    relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
+      { href: "/experiences/lake-austin-pontoon", text: "Lake Austin pontoon rental", external: false },
+      { href: "/booking", text: "Book a boat rental", external: false },
+      { href: "/blog/best-things-to-do-lake-austin", text: "Best things to do on Lake Austin", external: false },
     ],
   },
   {
@@ -316,7 +332,7 @@ export const blogPosts: BlogPost[] = [
       { q: "What should I bring on a Lake Austin sunset cruise?", a: "Sunscreen (you're still in the sun until sunset), a light layer for after dark, sunglasses, and a camera or phone. Soft-sided cooler with drinks and snacks if your operator allows it. Life jackets are provided. Avoid glass containers." },
     ],
     body: [
-      { type: "p", content: "A Lake Austin sunset cruise is one of the best ways to cap a day in Austin—golden light over the water, the Hill Country in the background, and no driving or docking stress when you book a captained boat. Whether you're celebrating something special or just want a relaxed evening on the water, here's what you need to know: best time to go, where to cruise, and what to expect from a sunset boat rental on Lake Austin." },
+      { type: "p", content: "A Lake Austin sunset cruise is one of the best ways to cap a day in Austin—golden light over the water, the Hill Country in the background, and no driving or docking stress when you book a captained boat. Compare all options in our [Austin boat rental](/austin-boat-rental) guide. Whether you're celebrating something special or just want a relaxed evening on the water, here's what you need to know: best time to go, where to cruise, and what to expect from a sunset boat rental on Lake Austin." },
       { type: "h2", content: "Why Lake Austin for a Sunset Cruise?" },
       { type: "p", content: "Lake Austin is a constant-level reservoir, so water levels stay predictable and the shoreline stays scenic year-round. The lake runs from Tom Miller Dam near downtown Austin up into the Hill Country, giving you a mix of open water and tree-lined coves. Because it's managed by the LCRA, you get consistent conditions—unlike some Texas lakes that fluctuate with drought. For a sunset boat rental, that means reliable routes and photo-ready backdrops every time." },
       { type: "h2", content: "Best Time for a Lake Austin Sunset Cruise" },
@@ -332,6 +348,11 @@ export const blogPosts: BlogPost[] = [
       { type: "p", content: "Leave glass bottles, hard coolers, and anything that can't get wet at home. Pack out what you pack in to keep Lake Austin clean." },
       { type: "h2", content: "Booking a Lake Austin Sunset Cruise" },
       { type: "p", content: "Sunset slots fill fast in spring and summer, especially for weekends and holidays. Book your Lake Austin sunset cruise in advance. At Boat Bros, we offer captained sunset boat rentals on Lake Austin—you show up, we handle the rest. Ready for golden hour? Book your sunset cruise and we'll see you on the water." },
+    ],
+    relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
+      { href: "/experiences/sunset", text: "Lake Austin sunset cruise", external: false },
+      { href: "/booking", text: "Book a boat rental", external: false },
     ],
   },
   {
@@ -369,7 +390,7 @@ export const blogPosts: BlogPost[] = [
       { q: "How do I add a restaurant stop to my Lake Austin boat rental?", a: "Book a captained Lake Austin rental (e.g. with BoatBros). Your captain can help you incorporate stops at Ski Shores, Hula Hut, or County Line naturally, without disrupting the flow of the day." },
     ],
     body: [
-      { type: "p", content: "There is a moment that happens on almost every Lake Austin boat day. You have been on the water for a few hours. Everyone has swum, floated, and relaxed. The music is still playing, but now people are starting to talk about food. Not because they need to leave the lake, but because some of Austin's best waterfront restaurants are part of the lake itself." },
+      { type: "p", content: "Pair your meal with an [Austin boat rental](/austin-boat-rental) on Lake Austin—captain included. There is a moment that happens on almost every Lake Austin boat day. You have been on the water for a few hours. Everyone has swum, floated, and relaxed. The music is still playing, but now people are starting to talk about food. Not because they need to leave the lake, but because some of Austin's best waterfront restaurants are part of the lake itself." },
       { type: "p", content: "One of the things that makes Lake Austin so special is that you do not have to choose between a boat day and a great meal. The restaurants are built directly into the shoreline. Boats pull up. Groups step off the dock. Lunch turns into another highlight of the day." },
       { type: "p", content: "When your lake day is planned correctly, stopping at one of these restaurants becomes part of the experience, not a break from it." },
       { type: "p", content: "This is especially true when your day is built around a centrally located Lake Austin operator like BoatBros Lake Austin Pontoon Rentals, which allows easy access to the most iconic waterfront restaurants without long detours or complicated planning." },
@@ -406,9 +427,11 @@ export const blogPosts: BlogPost[] = [
       { type: "p", content: "Restaurants like Ski Shores, Hula Hut, and County Line are not separate from the lake day. They are part of it. They give structure to the day without interrupting its rhythm. And when the experience is built around the right boat and the right location, everything flows exactly the way it should." },
     ],
     relatedLinks: [
+      { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
       { href: "/experiences/lake-austin-pontoon", text: "Pontoon boat rentals Lake Austin", external: false },
       { href: "/experiences/lake-austin-pontoon", text: "Lake Austin boat rentals – availability", external: false },
       { href: "/experiences", text: "Lake Austin experiences – pontoon, wake, sunset", external: false },
+      { href: "/blog/lake-austin-bachelorette-boat-rental-guide", text: "Lake Austin bachelorette boat rental guide", external: false },
       { href: "/blog", text: "The Dock – more boat tips & lake news", external: false },
       { href: "https://www.skishores.com/", text: "Ski Shores Cafe", external: true },
       { href: "https://www.hulahut.com/location/austin/", text: "Hula Hut Austin", external: true },
@@ -665,6 +688,7 @@ export const blogPosts: BlogPost[] = [
       { href: "https://www.lcra.org/water/recreation/lake-austin/", text: "LCRA – Lake Austin recreation rules", external: true },
     ],
   },
+  ...dateIdeasClusterPosts,
 ];
 
 export function getBlogPostBySlug(slug: string): BlogPost | undefined {

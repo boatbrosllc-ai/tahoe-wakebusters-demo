@@ -173,3 +173,13 @@ export async function getPublishedPostBySlug(slug: string): Promise<({ id: strin
   if (!doc?.exists) return null;
   return toSerializedPost(doc);
 }
+
+export type SerializedFirestorePost = { id: string } & Record<string, unknown>;
+
+/** List all published CMS posts (for public blog hub and sitemap). */
+export async function listPublishedPosts(): Promise<SerializedFirestorePost[]> {
+  const snap = await getBlogPostsRef().where("status", "==", "published").get();
+  return snap.docs
+    .map((doc) => toSerializedPost(doc))
+    .filter((p): p is SerializedFirestorePost => p != null);
+}

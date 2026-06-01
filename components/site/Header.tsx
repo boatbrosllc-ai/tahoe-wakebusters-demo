@@ -16,6 +16,7 @@ import BookingModal from "@/components/site/BookingModal";
 
 const navLinks = [
   { href: "/experiences", label: "Experiences" },
+  { href: "/austin-boat-rental", label: "Austin Boat Rental" },
   { href: "/boats", label: "Our Boats" },
   { href: "/our-story", label: "Our Story" },
   { href: "/blog", label: "The Dock" },

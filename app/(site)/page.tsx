@@ -18,8 +18,10 @@ const canonical = baseUrl;
 export const metadata: Metadata = {
   title: "Lake Austin Boat Rentals | Pontoon, Wake Surf & Sunset Cruises",
   description:
-    "Lake Austin boat rentals with captain included. Pontoon rentals, wake boat & surf, sunset cruises. Book online — Boat Bros ATX. Austin TX.",
+    "Austin boat rentals and boat rentals Austin TX on Lake Austin—captain included. Pontoon, wake surf, sunset cruises. Book online — Boat Bros ATX.",
   keywords: [
+    "austin boat rental",
+    "boat rentals austin tx",
     "Lake Austin boat rentals",
     "boat rentals Lake Austin",
     "Lake Austin pontoon rentals",

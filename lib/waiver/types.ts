@@ -116,6 +116,8 @@ export interface WaiverSigned {
   pdfStoragePath?: string | null;
   /** Stored signed HTML when PDF is unavailable (e.g. serverless); admin route may serve as .html download. */
   htmlStoragePath?: string | null;
+  /** Drawn signature image in Storage (`waivers/{id}-signature.{ext}`); data URL is not stored in Firestore. */
+  signatureStoragePath?: string | null;
   contentHash: string;
   signedPayload: WaiverSignedPayload;
   /** Optional operator-required manual review metadata. */

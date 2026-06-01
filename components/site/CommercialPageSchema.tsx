@@ -24,6 +24,7 @@ const COMMERCIAL_PATHS = new Set([
   "/sunset-cruise-austin",
   "/lake-austin-sunset-cruise",
   "/lake-austin-vs-lake-travis-boat-rental",
+  "/austin-boat-rental",
 ]);
 
 function isCommercialPath(pathname: string | null): boolean {

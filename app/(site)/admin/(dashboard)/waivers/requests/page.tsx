@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Send, Copy, ExternalLink, FileText, Search, CheckCircle2, Clock, User, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatAdminDateTime } from "@/lib/format-firestore-timestamp";
+import { isWalkInWaiverRequest, waiverSigningChannelLabel } from "@/lib/waiver/signing-channel-label";
 
 type RequestItem = {
   id: string;
@@ -14,41 +16,13 @@ type RequestItem = {
   signerName?: string;
   signerEmail?: string;
   signingUrl: string;
+  signingChannel?: string;
   sent?: { initialSentAt?: unknown; lastSentAt?: unknown; reminder1SentAt?: unknown };
   signed?: { signedAt?: unknown };
   createdAt: unknown;
   bookingSummary?: { tripDate: string; experienceName: string; startTime?: string; endTime?: string; partySize?: number; signedCount?: number };
+  templateSnapshot?: { title?: string };
 };
-
-function formatDate(v: unknown): string {
-  if (!v) return "—";
-  if (typeof (v as { toDate?: () => Date }).toDate === "function") {
-    return (v as { toDate: () => Date }).toDate().toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-  if (typeof (v as { seconds?: number }).seconds === "number") {
-    return new Date((v as { seconds: number }).seconds * 1000).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-  return "—";
-}
-
-function formatDateTime(v: unknown): string {
-  if (!v) return "—";
-  if (typeof (v as { toDate?: () => Date }).toDate === "function") {
-    return (v as { toDate: () => Date }).toDate().toLocaleString("en-US");
-  }
-  if (typeof (v as { seconds?: number }).seconds === "number") {
-    return new Date((v as { seconds: number }).seconds * 1000).toLocaleString("en-US");
-  }
-  return "—";
-}
 
 type RequestDetail = {
   id: string;
@@ -59,25 +33,41 @@ type RequestDetail = {
   signerPhone?: string;
   signerDob?: string;
   signingUrl: string;
+  signingChannel?: string;
   sent?: { initialSentAt?: unknown; lastSentAt?: unknown; reminder1SentAt?: unknown };
   signed?: {
     signedAt?: unknown;
+    signatureStoragePath?: string | null;
     signedPayload?: {
       signerName: string;
       signerEmail: string;
       signerPhone: string;
+      signerAddress?: string | null;
       signerDob: string | null;
+      bookingDate?: string | null;
       initials: Record<string, string>;
-      signatureDataUrl: string;
+      signatureDataUrl?: string;
       typedName?: string;
+      termsAcceptedAtIso?: string;
+      termsContentHash?: string;
     };
-    /** Set when PDF was generated; used for "View PDF" link. */
     pdfStoragePath?: string | null;
-    /** Stored signed HTML (always when submit succeeded storing HTML); PDF may be missing on serverless. */
     htmlStoragePath?: string | null;
   };
   bookingSummary?: { experienceName?: string; tripDate?: string; startTime?: string; endTime?: string };
+  templateSnapshot?: { title?: string };
+  qrLinkId?: string;
 };
+
+/** Invite email sent time, or walk-in explanation when no email was sent. */
+function formatInviteSentLabel(detail: RequestDetail): string {
+  const last = detail.sent?.lastSentAt;
+  const initial = detail.sent?.initialSentAt;
+  if (isWalkInWaiverRequest(detail) && last == null && initial == null) {
+    return "Not applicable (walk-in / QR — no invite email)";
+  }
+  return formatAdminDateTime(last ?? initial);
+}
 
 function daysUntil(tripDateStr: string): number | null {
   if (!tripDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(tripDateStr)) return null;
@@ -437,6 +427,9 @@ export default function WaiverRequestsPage() {
                         {r.signerName ?? "Guest"}
                       </p>
                       <p className="truncate text-sm text-brand-muted">{r.signerEmail ?? ""}</p>
+                      {r.templateSnapshot?.title && (
+                        <p className="truncate text-xs text-brand-muted mt-0.5">{r.templateSnapshot.title}</p>
+                      )}
                       {r.bookingSummary && (
                         <p className="mt-1 truncate text-sm text-brand-dark">
                           {r.bookingSummary.experienceName}
@@ -483,12 +476,19 @@ export default function WaiverRequestsPage() {
                         {days === 0 ? "Today" : days === 1 ? "Tomorrow" : `${days} days until trip`}
                       </span>
                     )}
+                    <span className="rounded-full px-2.5 py-1 text-xs font-medium bg-brand-bg text-brand-muted">
+                      {waiverSigningChannelLabel(r.signingChannel, r.bookingId)}
+                    </span>
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-brand-muted">
-                    <span>Sent: {formatDate(r.sent?.lastSentAt ?? r.sent?.initialSentAt)}</span>
+                    {isWalkInWaiverRequest(r) && r.sent?.lastSentAt == null && r.sent?.initialSentAt == null ? (
+                      <span>No invite email (walk-in / QR)</span>
+                    ) : (
+                      <span>Sent: {formatAdminDateTime(r.sent?.lastSentAt ?? r.sent?.initialSentAt)}</span>
+                    )}
                     {r.status === "signed" && (
-                      <span>· Signed: {formatDate(r.signed?.signedAt)}</span>
+                      <span>· Signed: {formatAdminDateTime(r.signed?.signedAt)}</span>
                     )}
                   </div>
                 </div>
@@ -507,9 +507,10 @@ export default function WaiverRequestsPage() {
                       href={`/api/waiver/pdf/${r.id}`}
                       target="_blank"
                       rel="noopener noreferrer"
+                      title="Opens stored PDF or HTML signed waiver"
                     >
                       <Button variant="outline" size="sm" className="gap-1.5">
-                        <ExternalLink className="h-3.5 w-3.5" /> PDF
+                        <ExternalLink className="h-3.5 w-3.5" /> Signed copy
                       </Button>
                     </a>
                   )}
@@ -579,33 +580,57 @@ export default function WaiverRequestsPage() {
               </div>
 
               <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Waiver</h3>
+                <p className="text-sm font-medium text-brand-dark">{viewDetail.templateSnapshot?.title ?? "—"}</p>
+                <p className="text-xs text-brand-muted mt-1">
+                  {waiverSigningChannelLabel(viewDetail.signingChannel, viewDetail.bookingId)}
+                </p>
+                {viewDetail.qrLinkId ? (
+                  <p className="text-xs font-mono text-brand-muted mt-1 break-all">QR link: {viewDetail.qrLinkId}</p>
+                ) : null}
+              </section>
+
+              <section>
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Dates</h3>
                 <dl className="grid gap-2 text-sm">
                   <div className="flex justify-between gap-4">
-                    <dt className="text-brand-muted">Date sent</dt>
-                    <dd className="text-brand-dark text-right">
-                      {formatDateTime(viewDetail.sent?.lastSentAt ?? viewDetail.sent?.initialSentAt)}
-                      {viewDetail.sent?.lastSentAt != null && viewDetail.sent?.initialSentAt != null && (
-                        <span className="text-brand-muted text-xs block">Initial: {formatDateTime(viewDetail.sent.initialSentAt)}</span>
+                    <dt className="text-brand-muted shrink-0">Invite sent</dt>
+                    <dd className="text-brand-dark text-right min-w-0">
+                      {formatInviteSentLabel(viewDetail)}
+                      {!isWalkInWaiverRequest(viewDetail) &&
+                        viewDetail.sent?.lastSentAt != null &&
+                        viewDetail.sent?.initialSentAt != null && (
+                        <span className="text-brand-muted text-xs block">
+                          Initial: {formatAdminDateTime(viewDetail.sent.initialSentAt)}
+                        </span>
                       )}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-brand-muted">Date signed</dt>
-                    <dd className="text-brand-dark text-right">
-                      {viewDetail.status === "signed" ? formatDateTime(viewDetail.signed?.signedAt) : "—"}
+                    <dt className="text-brand-muted shrink-0">Signed at</dt>
+                    <dd className="text-brand-dark text-right font-medium">
+                      {viewDetail.status === "signed" ? formatAdminDateTime(viewDetail.signed?.signedAt) : "—"}
                     </dd>
                   </div>
+                  {viewDetail.status === "signed" && viewDetail.signed?.signedPayload?.termsAcceptedAtIso && (
+                    <div className="flex justify-between gap-4">
+                      <dt className="text-brand-muted shrink-0">Terms accepted</dt>
+                      <dd className="text-brand-dark text-right">
+                        {formatAdminDateTime(viewDetail.signed.signedPayload.termsAcceptedAtIso)}
+                      </dd>
+                    </div>
+                  )}
                 </dl>
               </section>
 
-              {viewDetail.bookingSummary && (
+              {(viewDetail.bookingSummary || viewDetail.signed?.signedPayload?.bookingDate) && (
                 <section>
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Booking</h3>
-                  <p className="text-sm text-brand-dark">{viewDetail.bookingSummary.experienceName ?? "—"}</p>
+                  <p className="text-sm text-brand-dark">{viewDetail.bookingSummary?.experienceName ?? "—"}</p>
                   <p className="text-sm text-brand-muted">
-                    {viewDetail.bookingSummary.tripDate ?? "—"}
-                    {[viewDetail.bookingSummary.startTime, viewDetail.bookingSummary.endTime].filter(Boolean).length > 0 &&
+                    {viewDetail.bookingSummary?.tripDate ?? viewDetail.signed?.signedPayload?.bookingDate ?? "—"}
+                    {viewDetail.bookingSummary &&
+                      [viewDetail.bookingSummary.startTime, viewDetail.bookingSummary.endTime].filter(Boolean).length > 0 &&
                       ` · ${[viewDetail.bookingSummary.startTime, viewDetail.bookingSummary.endTime].filter(Boolean).join(" – ")}`}
                   </p>
                   <p className="text-brand-muted font-mono text-xs mt-1">{viewDetail.bookingId}</p>
@@ -618,7 +643,16 @@ export default function WaiverRequestsPage() {
                   <div><dt className="text-brand-muted inline">Name: </dt><dd className="inline text-brand-dark">{viewDetail.signerName ?? viewDetail.signed?.signedPayload?.signerName ?? "—"}</dd></div>
                   <div><dt className="text-brand-muted inline">Email: </dt><dd className="inline text-brand-dark">{viewDetail.signerEmail ?? viewDetail.signed?.signedPayload?.signerEmail ?? "—"}</dd></div>
                   <div><dt className="text-brand-muted inline">Phone: </dt><dd className="inline text-brand-dark">{viewDetail.signerPhone ?? viewDetail.signed?.signedPayload?.signerPhone ?? "—"}</dd></div>
-                  <div><dt className="text-brand-muted inline">DOB: </dt><dd className="inline text-brand-dark">{viewDetail.signerDob ?? viewDetail.signed?.signedPayload?.signerDob ?? "—"}</dd></div>
+                  {(viewDetail.signerDob ?? viewDetail.signed?.signedPayload?.signerDob) != null &&
+                    String(viewDetail.signerDob ?? viewDetail.signed?.signedPayload?.signerDob).length > 0 && (
+                    <div><dt className="text-brand-muted inline">DOB: </dt><dd className="inline text-brand-dark">{viewDetail.signerDob ?? viewDetail.signed?.signedPayload?.signerDob ?? "—"}</dd></div>
+                  )}
+                  {viewDetail.signed?.signedPayload?.signerAddress?.trim() ? (
+                    <div><dt className="text-brand-muted inline">Address: </dt><dd className="inline text-brand-dark">{viewDetail.signed.signedPayload.signerAddress}</dd></div>
+                  ) : null}
+                  {viewDetail.signed?.signedPayload?.bookingDate?.trim() ? (
+                    <div><dt className="text-brand-muted inline">Booking date: </dt><dd className="inline text-brand-dark">{viewDetail.signed.signedPayload.bookingDate}</dd></div>
+                  ) : null}
                 </dl>
               </section>
 
@@ -626,7 +660,17 @@ export default function WaiverRequestsPage() {
                 <section>
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-muted mb-2">Signature</h3>
                   <div className="rounded-xl border border-brand-dark/10 bg-white p-4">
-                    {viewDetail.signed.signedPayload.signatureDataUrl && (
+                    {viewDetail.signed.signatureStoragePath ? (
+                      <div className="mb-3">
+                        <p className="text-xs text-brand-muted mb-1">Drawn signature</p>
+                        <img
+                          src={`/api/admin/waiver-requests/${viewDetail.id}/signature-image`}
+                          alt="Guest signature"
+                          className="max-h-32 w-auto border border-brand-dark/10 rounded bg-white"
+                        />
+                      </div>
+                    ) : null}
+                    {viewDetail.signed.signedPayload.signatureDataUrl ? (
                       <div className="mb-3">
                         <p className="text-xs text-brand-muted mb-1">Signed signature</p>
                         <img
@@ -635,7 +679,7 @@ export default function WaiverRequestsPage() {
                           className="max-h-24 w-auto border border-brand-dark/10 rounded"
                         />
                       </div>
-                    )}
+                    ) : null}
                     {viewDetail.signed.signedPayload.typedName && (
                       <p className="text-sm"><span className="text-brand-muted">Printed name: </span><span className="text-brand-dark font-medium">{viewDetail.signed.signedPayload.typedName}</span></p>
                     )}
@@ -711,6 +755,14 @@ export default function WaiverRequestsPage() {
                       {regeneratePdfBusyId === viewDetail.id ? "Generating…" : "Generate PDF"}
                     </Button>
                   )}
+                {viewDetail.status === "signed" &&
+                  viewDetail.signed?.htmlStoragePath &&
+                  !viewDetail.signed?.pdfStoragePath && (
+                  <p className="w-full text-xs text-brand-muted border-t border-brand-dark/10 pt-3 mt-1">
+                    Use <strong>Download waiver (HTML)</strong> for the full signed document (terms + signature). PDF
+                    can be wired up later.
+                  </p>
+                )}
               </div>
             </>
           )}

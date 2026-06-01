@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { formatAdminDateTime } from "@/lib/format-firestore-timestamp";
+import { isWalkInWaiverRequest, waiverSigningChannelLabel } from "@/lib/waiver/signing-channel-label";
 
 type RequestDetail = {
   id: string;
@@ -14,6 +16,9 @@ type RequestDetail = {
   signerPhone?: string;
   signerDob?: string;
   signingUrl: string;
+  signingChannel?: string;
+  qrLinkId?: string;
+  templateSnapshot?: { title?: string };
   sent?: { initialSentAt?: unknown; lastSentAt?: unknown; reminder1SentAt?: unknown };
   signed?: {
     signedAt?: unknown;
@@ -21,21 +26,19 @@ type RequestDetail = {
     userAgent?: string;
     pdfStoragePath?: string;
     htmlStoragePath?: string;
+    signatureStoragePath?: string | null;
     contentHash?: string;
+    signedPayload?: {
+      signerAddress?: string | null;
+      bookingDate?: string | null;
+      termsAcceptedAtIso?: string;
+      typedName?: string;
+      signatureDataUrl?: string;
+      initials?: Record<string, string>;
+    };
   };
   bookingSummary?: { experienceName?: string; tripDate?: string; startTime?: string; endTime?: string };
 };
-
-function formatDate(v: unknown): string {
-  if (!v) return "—";
-  if (typeof (v as { toDate?: () => Date }).toDate === "function") {
-    return (v as { toDate: () => Date }).toDate().toLocaleString("en-US");
-  }
-  if (typeof (v as { seconds?: number }).seconds === "number") {
-    return new Date((v as { seconds: number }).seconds * 1000).toLocaleString("en-US");
-  }
-  return "—";
-}
 
 export default function WaiverRequestDetailPage() {
   const params = useParams();
@@ -184,12 +187,21 @@ export default function WaiverRequestDetailPage() {
           </span>
         </section>
 
-        {req.bookingSummary && (
+        <section>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Waiver</h2>
+          <p><strong>Template:</strong> {req.templateSnapshot?.title ?? "—"}</p>
+          <p><strong>Signed via:</strong> {waiverSigningChannelLabel(req.signingChannel, req.bookingId)}</p>
+          {req.qrLinkId ? (
+            <p className="text-xs font-mono text-brand-muted break-all mt-1">QR link ID: {req.qrLinkId}</p>
+          ) : null}
+        </section>
+
+        {(req.bookingSummary || req.signed?.signedPayload?.bookingDate) && (
           <section>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Booking</h2>
-            <p><strong>Experience:</strong> {req.bookingSummary.experienceName ?? "—"}</p>
-            <p><strong>Trip date:</strong> {req.bookingSummary.tripDate ?? "—"}</p>
-            <p><strong>Time:</strong> {[req.bookingSummary.startTime, req.bookingSummary.endTime].filter(Boolean).join(" – ") || "—"}</p>
+            <p><strong>Experience:</strong> {req.bookingSummary?.experienceName ?? "—"}</p>
+            <p><strong>Trip date:</strong> {req.bookingSummary?.tripDate ?? req.signed?.signedPayload?.bookingDate ?? "—"}</p>
+            <p><strong>Time:</strong> {[req.bookingSummary?.startTime, req.bookingSummary?.endTime].filter(Boolean).join(" – ") || "—"}</p>
             <p className="text-brand-muted font-mono text-xs">Booking ID: {req.bookingId}</p>
           </section>
         )}
@@ -200,23 +212,78 @@ export default function WaiverRequestDetailPage() {
           <p><strong>Email:</strong> {req.signerEmail ?? "—"}</p>
           <p><strong>Phone:</strong> {req.signerPhone ?? "—"}</p>
           <p><strong>DOB:</strong> {req.signerDob ?? "—"}</p>
+          {req.signed?.signedPayload?.signerAddress?.trim() ? (
+            <p><strong>Address:</strong> {req.signed.signedPayload.signerAddress}</p>
+          ) : null}
+          {req.signed?.signedPayload?.bookingDate?.trim() ? (
+            <p><strong>Booking date (form):</strong> {req.signed.signedPayload.bookingDate}</p>
+          ) : null}
         </section>
 
         <section>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Sent</h2>
-          <p>Initial: {formatDate(req.sent?.initialSentAt)}</p>
-          <p>Last sent: {formatDate(req.sent?.lastSentAt)}</p>
-          <p>Reminder: {formatDate((req.sent as { reminder1SentAt?: unknown })?.reminder1SentAt) || "—"}</p>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Emails</h2>
+          {isWalkInWaiverRequest(req) ? (
+            <p className="text-brand-dark">No invite emails — walk-in / QR signing.</p>
+          ) : (
+            <>
+              <p><strong>Initial sent:</strong> {formatAdminDateTime(req.sent?.initialSentAt)}</p>
+              <p><strong>Last sent:</strong> {formatAdminDateTime(req.sent?.lastSentAt ?? req.sent?.initialSentAt)}</p>
+              <p><strong>Reminder:</strong> {formatAdminDateTime((req.sent as { reminder1SentAt?: unknown })?.reminder1SentAt)}</p>
+            </>
+          )}
         </section>
 
         {req.status === "signed" && req.signed && (
           <section>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Signed</h2>
-            <p>Signed at: {formatDate(req.signed.signedAt)}</p>
-            <p>IP: {req.signed.ip ?? "—"}</p>
-            <p className="text-xs text-brand-muted break-all">User-Agent: {req.signed.userAgent ?? "—"}</p>
+            <p><strong>Signed at:</strong> {formatAdminDateTime(req.signed.signedAt)}</p>
+            {req.signed.signedPayload?.termsAcceptedAtIso ? (
+              <p><strong>Terms accepted at:</strong> {formatAdminDateTime(req.signed.signedPayload.termsAcceptedAtIso)}</p>
+            ) : null}
+            <p><strong>IP:</strong> {req.signed.ip ?? "—"}</p>
+            <p className="text-xs text-brand-muted break-all"><strong>User-Agent:</strong> {req.signed.userAgent ?? "—"}</p>
             <p className="text-xs font-mono text-brand-muted">Content hash: {req.signed.contentHash ?? "—"}</p>
           </section>
+        )}
+
+        {req.status === "signed" && req.signed?.signedPayload && (
+          <section>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted mb-2">Signature</h2>
+            <div className="rounded-xl border border-brand-dark/10 bg-white p-4 space-y-3">
+              {req.signed?.signatureStoragePath ? (
+                <div>
+                  <p className="text-xs text-brand-muted mb-1">Drawn signature</p>
+                  <img
+                    src={`/api/admin/waiver-requests/${req.id}/signature-image`}
+                    alt="Guest signature"
+                    className="max-h-36 w-auto border border-brand-dark/10 rounded bg-white"
+                  />
+                </div>
+              ) : null}
+              {req.signed.signedPayload.typedName ? (
+                <p><strong>Printed name:</strong> {req.signed.signedPayload.typedName}</p>
+              ) : null}
+              {req.signed.signedPayload.initials && Object.keys(req.signed.signedPayload.initials).length > 0 ? (
+                <div className="mt-3 pt-3 border-t border-brand-dark/10">
+                  <p className="text-xs text-brand-muted mb-2">Clause initials</p>
+                  <ul className="space-y-1 text-sm">
+                    {Object.entries(req.signed.signedPayload.initials).map(([key, val]) => (
+                      <li key={key} className="flex justify-between gap-2">
+                        <span className="text-brand-muted truncate">{key}</span>
+                        <span className="text-brand-dark font-medium uppercase shrink-0">{val}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
+
+        {req.status === "signed" && req.signed?.htmlStoragePath && !req.signed?.pdfStoragePath && (
+          <p className="text-sm text-brand-muted">
+            Official signed copy: use <strong>Download waiver (HTML)</strong> above. PDF export can be added later.
+          </p>
         )}
       </div>
     </div>

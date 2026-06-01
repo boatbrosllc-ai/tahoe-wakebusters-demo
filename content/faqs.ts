@@ -8,6 +8,10 @@ export interface FaqItem {
   answer: string;
 }
 
+export function getFaqById(id: string): FaqItem | undefined {
+  return faqs.find((f) => f.id === id);
+}
+
 export const faqs: FaqItem[] = [
   {
     id: "cancellation-policy",

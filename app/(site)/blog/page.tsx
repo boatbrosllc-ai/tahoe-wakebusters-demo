@@ -91,13 +91,22 @@ export default async function TheDockPage(props: PageProps) {
           <p className="mt-3 sm:mt-4 text-white/90 max-w-lg mx-auto text-base sm:text-lg leading-relaxed">
             Pontoon, wake surf, sunset cruise — book your boat rental and get on the water.
           </p>
-          <Link
-            href="/experiences"
-            className="mt-8 sm:mt-10 inline-flex items-center justify-center gap-2 min-h-[48px] w-full sm:w-auto touch-manipulation rounded-2xl bg-brand-primary px-6 sm:px-8 py-4 text-white font-bold text-base sm:text-lg shadow-[0_8px_28px_rgba(80,189,186,0.4)] hover:bg-brand-primary/90 hover:shadow-[0_12px_36px_rgba(80,189,186,0.45)] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-          >
-            See experiences
-            <ArrowRight className="h-5 w-5 shrink-0" aria-hidden />
-          </Link>
+          <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row flex-wrap items-center justify-center gap-3 sm:gap-4">
+            <Link
+              href="/austin-boat-rental"
+              className="inline-flex items-center justify-center gap-2 min-h-[48px] w-full sm:w-auto touch-manipulation rounded-2xl border-2 border-white/50 px-6 sm:px-8 py-4 text-white font-bold text-base sm:text-lg hover:bg-white/10 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+            >
+              Austin boat rental guide
+              <ArrowRight className="h-5 w-5 shrink-0" aria-hidden />
+            </Link>
+            <Link
+              href="/experiences"
+              className="inline-flex items-center justify-center gap-2 min-h-[48px] w-full sm:w-auto touch-manipulation rounded-2xl bg-brand-primary px-6 sm:px-8 py-4 text-white font-bold text-base sm:text-lg shadow-[0_8px_28px_rgba(80,189,186,0.4)] hover:bg-brand-primary/90 hover:shadow-[0_12px_36px_rgba(80,189,186,0.45)] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+            >
+              See experiences
+              <ArrowRight className="h-5 w-5 shrink-0" aria-hidden />
+            </Link>
+          </div>
         </div>
       </section>
     </div>

@@ -7,6 +7,7 @@ import { useBookingModal } from "@/components/site/BookingModalContext";
 
 const footerLinks = [
   { href: "/experiences", label: "Experiences" },
+  { href: "/austin-boat-rental", label: "Austin Boat Rental" },
   { href: "/boats", label: "Our Boats" },
   { href: "/location", label: "Location" },
   { href: "/booking", label: "Book" },

@@ -14,6 +14,7 @@ const CRITICAL_ROUTES = [
   "/contact",
   "/austin-bachelorette-boat-rental",
   "/austin-bachelor-party-boat-rental",
+  "/austin-boat-rental",
   "/location",
 ] as const;
 
