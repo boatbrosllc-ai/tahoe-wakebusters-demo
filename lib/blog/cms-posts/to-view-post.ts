@@ -12,5 +12,7 @@ export function cmsSeedToViewPost(slug: string): FirestorePost | null {
     coverImage: { url: seed.coverImage.path, alt: seed.coverImage.alt },
     author: { name: "Boat Bros" },
     content: seed.content,
+    categories: seed.taxonomy.categories,
+    tags: seed.taxonomy.tags,
   };
 }

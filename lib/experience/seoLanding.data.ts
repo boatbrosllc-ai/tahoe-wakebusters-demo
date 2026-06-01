@@ -189,7 +189,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
       "Lake Austin offers clear, calm water compared to busier reservoirs, with no-wake zones perfect for swimming and floating. Our captains know the coves, Party Cove timing, and the best spots for photos and sunsets.",
     overviewSeoParagraphs: [
       "Unlike open-lake party barges, our charters are private to your group. Pontoon rentals include premium Bluetooth sound, a lily pad, and cooler with ice. Wake boat charters are built for wakesurfing and wakeboarding. Sunset cruises run most evenings — public shared trips or private bookings.",
-      "We're minutes from downtown Austin, making Lake Austin the top choice for locals and visitors who want a full day on the water without a long drive to Lake Travis.",
+      "We're minutes from downtown Austin, making Lake Austin the top choice for locals and visitors who want a full day on the water without a long drive to Lake Travis. Many groups pair a captained rental with waterfront stops — see our guide to [Austin Hula Hut by boat](/blog/austin-hula-hut-lake-austin-guide) or [Ski Shores by boat](/blog/ski-shores-lake-austin-guide) to build a full Lake Austin day around your rental. You can also plan a [Lake Austin boat day near Ski Shores](/blog/ski-shores-lake-austin-guide) with dock tips and a sample itinerary.",
     ],
     showMap: true,
     faq: [

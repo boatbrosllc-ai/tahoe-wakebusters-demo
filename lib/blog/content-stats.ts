@@ -36,6 +36,12 @@ function blockToText(b: ContentBlock): string {
         .join(" ");
     case "keyTakeaways":
       return ((b as { items?: string[] }).items ?? []).join(" ");
+    case "quickAnswer": {
+      const q = b as { title?: string; summary?: string; headers?: string[]; rows?: string[][] };
+      const h = (q.headers ?? []).join(" ");
+      const r = (q.rows ?? []).flat().join(" ");
+      return (q.title ?? "") + " " + (q.summary ?? "") + " " + h + " " + r;
+    }
     default:
       return "";
   }

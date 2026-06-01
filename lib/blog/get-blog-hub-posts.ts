@@ -1,6 +1,10 @@
 import "server-only";
 import { blogPosts, type BlogCategory, type BlogPost } from "@/content/blog";
+import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
 import { getDb } from "@/lib/booking/firebase-admin";
+
+/** Display date for repo CMS seeds until Firestore publish dates exist. */
+const CMS_SEED_HUB_DATE = "2025-06-01";
 
 const VALID_CATEGORIES: readonly BlogCategory[] = ["boat-tips", "austin-events", "lake-news", "general"];
 
@@ -67,16 +71,34 @@ export async function getPublishedFirestoreBlogHubPosts(): Promise<BlogPost[]> {
   return posts;
 }
 
-/** Merge static and Firestore blog posts for the hub; Firestore wins slug collisions. */
+/** CMS seed files in repo — shown on hub until Firestore has a published doc for the slug. */
+function getCmsSeedHubPosts(): BlogPost[] {
+  return CMS_BLOG_POST_SEEDS.filter((seed) => seed.seo.robotsIndex !== false).map((seed) => ({
+    slug: seed.slug,
+    title: seed.title,
+    excerpt: seed.excerpt,
+    date: CMS_SEED_HUB_DATE,
+    author: "Boat Bros",
+    image: seed.coverImage.path,
+    imageAlt: seed.coverImage.alt,
+    category: mapFirestoreCategory(seed.taxonomy.categories),
+    body: [],
+  }));
+}
+
+/** Merge static, CMS seeds, and Firestore blog posts for the hub; Firestore wins slug collisions. */
 export async function getBlogHubPosts(): Promise<BlogPost[]> {
   let firestorePosts: BlogPost[] = [];
   try {
     firestorePosts = await getPublishedFirestoreBlogHubPosts();
   } catch {
-    // Firebase unavailable — static posts only
+    // Firebase unavailable — static + CMS seeds only
   }
   const bySlug = new Map<string, BlogPost>();
   for (const post of blogPosts) bySlug.set(post.slug, post);
+  for (const post of getCmsSeedHubPosts()) {
+    if (!bySlug.has(post.slug)) bySlug.set(post.slug, post);
+  }
   for (const post of firestorePosts) bySlug.set(post.slug, post);
   return Array.from(bySlug.values()).sort((a, b) => b.date.localeCompare(a.date));
 }

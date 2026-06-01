@@ -118,15 +118,13 @@ export async function middleware(request: NextRequest) {
   return res;
 }
 
-/** Build Content-Security-Policy with nonce for script-src to avoid 'unsafe-inline'. Third-party domains kept for Stripe/GA/Firebase. */
+/** Build Content-Security-Policy with nonce for inline scripts. Host allowlist covers Stripe/GA/Firebase; 'self' covers Next.js chunks. */
 function buildCsp(nonce: string): string {
   const isDev = process.env.NODE_ENV !== "production";
   // script-src: nonce only for inline scripts (no 'unsafe-inline' in production). Third-party scripts are allowlisted.
   const scriptSrc = [
     "'self'",
     `'nonce-${nonce}'`,
-    // Allow scripts loaded by nonce-trusted scripts (gtag.js injects further tags; host allowlists alone miss edge cases).
-    "'strict-dynamic'",
     "https://js.stripe.com",
     "https://*.stripe.com",
     "https://checkout.stripe.com",

@@ -1,5 +1,6 @@
 import "server-only";
 import { blogPosts } from "@/content/blog";
+import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { resolveCanonicalExperienceSlug } from "@/lib/booking/experience-aliases";
 
@@ -75,11 +76,20 @@ export async function getPublishedBlogPostsForSitemap(): Promise<SitemapBlogPost
 
 /** Static blog posts for sitemap fallback and dedupe. */
 export function getStaticBlogPostsForSitemap(): SitemapBlogPost[] {
-  return blogPosts.map((post) => ({
-    slug: post.slug,
-    publishedAt: post.date,
-    updatedAt: post.dateModified ?? post.date,
-  }));
+  const bySlug = new Map<string, SitemapBlogPost>();
+  for (const post of blogPosts) {
+    bySlug.set(post.slug, {
+      slug: post.slug,
+      publishedAt: post.date,
+      updatedAt: post.dateModified ?? post.date,
+    });
+  }
+  for (const seed of CMS_BLOG_POST_SEEDS) {
+    if (!bySlug.has(seed.slug)) {
+      bySlug.set(seed.slug, { slug: seed.slug });
+    }
+  }
+  return Array.from(bySlug.values());
 }
 
 /** Active experience canonical page slugs from Firestore for `/experiences/{slug}` sitemap entries. */

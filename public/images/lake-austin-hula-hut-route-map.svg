@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" role="img" aria-labelledby="mapTitle mapDesc">
+  <title id="mapTitle">Lake Austin boat day route: BoatBros pickup, Ski Shores, Hula Hut, and Mozart's</title>
+  <desc id="mapDesc">Schematic map showing BoatBros ATX pickup on Lake Austin, a cruise route along the lake, and waterfront stops at Ski Shores Café on Pearce Road, Austin Hula Hut, and Mozart's Coffee.</desc>
+  <defs>
+    <linearGradient id="water" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7ec8e3"/>
+      <stop offset="100%" stop-color="#4a9fd4"/>
+    </linearGradient>
+    <linearGradient id="land" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e8f0e6"/>
+      <stop offset="100%" stop-color="#c8dcc4"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#0d9488"/>
+    </marker>
+  </defs>
+  <!-- Background -->
+  <rect width="800" height="520" fill="#f8fafc"/>
+  <!-- Land masses -->
+  <path d="M0,0 L800,0 L800,120 L680,140 L620,100 L520,130 L400,90 L280,120 L160,80 L0,110 Z" fill="url(#land)"/>
+  <path d="M0,400 L120,380 L220,420 L340,390 L480,410 L600,380 L720,400 L800,390 L800,520 L0,520 Z" fill="url(#land)"/>
+  <!-- Lake Austin -->
+  <path d="M180,130 C240,160 280,200 300,260 C320,320 340,360 380,400 C420,440 480,450 540,420 C600,390 640,340 660,280 C680,220 700,170 720,140 L640,150 C600,200 560,280 500,330 C440,380 360,390 320,340 C280,290 240,220 200,170 Z" fill="url(#water)" stroke="#2b7a9e" stroke-width="2"/>
+  <!-- Route: pickup toward Oyster Landing stops -->
+  <path d="M420,420 C400,380 360,320 340,280 C320,240 310,210 320,180" fill="none" stroke="#0d9488" stroke-width="3" stroke-dasharray="10,6" marker-end="url(#arrow)"/>
+  <!-- Route: pickup toward Ski Shores (Pearce Rd) -->
+  <path d="M420,420 C380,380 340,340 300,300 C280,280 260,260 240,240" fill="none" stroke="#059669" stroke-width="3" stroke-dasharray="10,6" marker-end="url(#arrow)"/>
+  <!-- BoatBros pickup -->
+  <circle cx="420" cy="420" r="14" fill="#0d9488" stroke="#fff" stroke-width="3"/>
+  <text x="420" y="455" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#1e293b">BoatBros ATX pickup</text>
+  <text x="420" y="472" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">5019 N Capital of Texas Hwy</text>
+  <!-- Ski Shores -->
+  <circle cx="240" cy="240" r="12" fill="#059669" stroke="#fff" stroke-width="3"/>
+  <text x="240" y="218" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#1e293b">Ski Shores Café</text>
+  <text x="240" y="203" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">2905 Pearce Rd</text>
+  <!-- Hula Hut -->
+  <circle cx="320" cy="180" r="12" fill="#f97316" stroke="#fff" stroke-width="3"/>
+  <text x="320" y="158" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#1e293b">Austin Hula Hut</text>
+  <text x="320" y="143" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">3825 Lake Austin Blvd</text>
+  <!-- Mozart's -->
+  <circle cx="370" cy="200" r="10" fill="#8b5cf6" stroke="#fff" stroke-width="2"/>
+  <text x="430" y="205" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#1e293b">Mozart's Coffee</text>
+  <text x="430" y="220" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">Nearby waterfront stop</text>
+  <!-- Legend -->
+  <rect x="24" y="24" width="220" height="132" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="40" y="48" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#1e293b">Sample boat-day routes</text>
+  <line x1="40" y1="68" x2="70" y2="68" stroke="#0d9488" stroke-width="3" stroke-dasharray="6,4"/>
+  <text x="78" y="72" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Toward Hula Hut / Mozart's</text>
+  <line x1="40" y1="88" x2="70" y2="88" stroke="#059669" stroke-width="3" stroke-dasharray="6,4"/>
+  <text x="78" y="92" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Toward Ski Shores</text>
+  <circle cx="48" cy="108" r="6" fill="#0d9488"/>
+  <text x="62" y="112" font-family="system-ui,sans-serif" font-size="11" fill="#475569">BoatBros pickup</text>
+  <circle cx="48" cy="128" r="6" fill="#059669"/>
+  <text x="62" y="132" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Ski Shores (Pearce Rd)</text>
+  <circle cx="48" cy="148" r="6" fill="#f97316"/>
+  <text x="62" y="152" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Hula Hut dock stop</text>
+  <!-- Compass -->
+  <text x="760" y="40" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#64748b">N</text>
+  <line x1="760" y1="48" x2="760" y2="72" stroke="#94a3b8" stroke-width="2"/>
+</svg>

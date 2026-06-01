@@ -14,6 +14,8 @@ import { austinActivities } from "./austin-activities";
 import { thingsToDoInDowntownAustin } from "./things-to-do-in-downtown-austin";
 import { familyFriendlyThingsToDoInAustin } from "./family-friendly-things-to-do-in-austin";
 import { austinAttractions } from "./austin-attractions";
+import { austinHulaHutLakeAustinGuide } from "./austin-hula-hut-lake-austin-guide";
+import { skiShoresLakeAustinGuide } from "./ski-shores-lake-austin-guide";
 import type { CmsBlogPostSeed } from "./helpers";
 
 /** SEO cluster articles for Firestore CMS — seed via POST /api/admin/seed/blog */
@@ -36,6 +38,10 @@ export const CMS_BLOG_POST_SEEDS: CmsBlogPostSeed[] = [
   thingsToDoInDowntownAustin,
   familyFriendlyThingsToDoInAustin,
   austinAttractions,
+  // Phase 2
+  austinHulaHutLakeAustinGuide,
+  // Phase 3
+  skiShoresLakeAustinGuide,
 ];
 
 export function getCmsBlogPostSeedBySlug(slug: string): CmsBlogPostSeed | undefined {

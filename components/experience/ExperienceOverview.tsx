@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { EXPERIENCE_OVERVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { InlineMarkdownLinks } from "@/lib/markdown-inline-links";
 
 const ease = [0.22, 1, 0.36, 1];
 
@@ -100,7 +101,7 @@ export function ExperienceOverview({
                     viewport={{ once: true, amount: 0.2 }}
                     transition={{ duration: 0.5, delay: 0.12 + 0.05 * i, ease }}
                   >
-                    {paragraph}
+                    <InlineMarkdownLinks content={paragraph} />
                   </motion.p>
                 ))}
               </div>

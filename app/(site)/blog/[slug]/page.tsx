@@ -14,6 +14,7 @@ import {
 import { getPublishedPostBySlug } from "@/lib/blog/firestore";
 import { CMS_BLOG_POST_SEEDS, getCmsBlogPostSeedBySlug } from "@/lib/blog/cms-posts";
 import { cmsSeedToViewPost } from "@/lib/blog/cms-posts/to-view-post";
+import { getRelatedCmsGuides } from "@/lib/blog/cms-posts/related-guides";
 import { FirestoreBlogPostView } from "@/components/site/FirestoreBlogPostView";
 import { Clock, Anchor, ArrowLeft, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -317,7 +318,12 @@ export default async function BlogPostPage({ params }: Props) {
           <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.faqJsonLd) }} />
         )}
         <ReadingProgress />
-        <FirestoreBlogPostView post={firestorePost as import("@/components/site/FirestoreBlogPostView").FirestorePost} />
+        <FirestoreBlogPostView
+          post={firestorePost as import("@/components/site/FirestoreBlogPostView").FirestorePost}
+          relatedArticles={
+            typeof firestorePost.slug === "string" ? getRelatedCmsGuides(firestorePost.slug) : []
+          }
+        />
       </>
     );
   }
@@ -327,7 +333,7 @@ export default async function BlogPostPage({ params }: Props) {
     return (
       <>
         <ReadingProgress />
-        <FirestoreBlogPostView post={cmsPost} />
+        <FirestoreBlogPostView post={cmsPost} relatedArticles={getRelatedCmsGuides(slug)} />
       </>
     );
   }

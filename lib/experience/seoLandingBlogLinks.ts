@@ -25,6 +25,8 @@ const RELATED_SLUGS: Partial<Record<SeoLandingPageId, string[]>> = {
     "best-coves-spots-lake-austin-pontoon-swimming",
   ],
   "lake-austin-boat-rentals": [
+    "austin-hula-hut-lake-austin-guide",
+    "ski-shores-lake-austin-guide",
     "lake-austin-boat-guide",
     "outdoor-things-to-do-in-austin",
     "austin-activities",

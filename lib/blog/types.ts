@@ -69,7 +69,9 @@ export type BlockType =
   | "callout"
   | "faq"
   | "divider"
-  | "keyTakeaways";
+  | "keyTakeaways"
+  | "quickAnswer"
+  | "mapEmbed";
 
 export interface BaseBlock {
   id: string;
@@ -150,6 +152,22 @@ export interface KeyTakeawaysBlock extends BaseBlock {
   items: string[];
 }
 
+export interface QuickAnswerBlock extends BaseBlock {
+  type: "quickAnswer";
+  title: string;
+  summary: string;
+  headers: string[];
+  rows: string[][];
+}
+
+export interface MapEmbedBlock extends BaseBlock {
+  type: "mapEmbed";
+  embedSrc: string;
+  title: string;
+  viewOnMapsUrl: string;
+  caption?: string;
+}
+
 export type ContentBlock =
   | ParagraphBlock
   | HeadingBlock
@@ -162,7 +180,9 @@ export type ContentBlock =
   | CalloutBlock
   | FaqBlock
   | DividerBlock
-  | KeyTakeawaysBlock;
+  | KeyTakeawaysBlock
+  | QuickAnswerBlock
+  | MapEmbedBlock;
 
 /** Firestore Timestamp-like (seconds/nanoseconds); server uses getFirestoreExports().Timestamp. */
 export interface TimestampLike {
