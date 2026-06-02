@@ -20,6 +20,7 @@ import { ADMIN_BOOKING_VISIBILITY_SLA_MS } from "@/lib/admin-booking-visibility-
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { buildSlotId, parseSlotId } from "@/lib/booking/experience-slots";
 import { getAdminBookingStatusBadgeClass } from "@/lib/admin/admin-booking-status-badge";
+import { formatAdminFinancialExportDiscount } from "@/lib/booking/admin-booking-discount-fields";
 
 type StripeEventItem = {
   id: string;
@@ -63,6 +64,8 @@ type BookingItem = {
     currency: string;
   };
   tipCents?: number | null;
+  discountCode?: string | null;
+  discountCents?: number | null;
   stripe?: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
@@ -499,6 +502,8 @@ export default function AdminBookingsPage() {
       "Subtotal (USD)",
       "Tax (USD)",
       "Fees (USD)",
+      "Discount code",
+      "Discount (USD)",
       "Total (USD)",
       "Status",
       "Stripe Payment Intent ID",
@@ -509,6 +514,7 @@ export default function AdminBookingsPage() {
       const subtotal = b.pricing?.subtotalCents != null ? (b.pricing.subtotalCents / 100).toFixed(2) : "";
       const tax = b.pricing?.taxCents != null ? (b.pricing.taxCents / 100).toFixed(2) : "";
       const fees = b.pricing?.feesCents != null ? (b.pricing.feesCents / 100).toFixed(2) : "";
+      const { discountCode, discountUsd: discount } = formatAdminFinancialExportDiscount(b);
       const total = b.pricing?.totalCents != null ? (b.pricing.totalCents / 100).toFixed(2) : "";
       const piId = b.stripe?.paymentIntentId ?? b.stripe?.finalPaymentIntentId ?? b.stripe?.depositPaymentIntentId ?? "";
       return [
@@ -525,6 +531,8 @@ export default function AdminBookingsPage() {
         subtotal,
         tax,
         fees,
+        discountCode,
+        discount,
         total,
         b.status ?? "",
         piId,
@@ -1352,6 +1360,14 @@ export default function AdminBookingsPage() {
                     <div className="flex justify-between">
                       <dt className="text-brand-muted">Fees</dt>
                       <dd className="text-brand-dark">{formatCents(selectedBooking.pricing.feesCents)}</dd>
+                    </div>
+                  )}
+                  {typeof selectedBooking.discountCents === "number" && selectedBooking.discountCents > 0 && (
+                    <div className="flex justify-between">
+                      <dt className="text-brand-muted">
+                        Discount{selectedBooking.discountCode ? ` (${selectedBooking.discountCode})` : ""}
+                      </dt>
+                      <dd className="text-brand-dark">−{formatCents(selectedBooking.discountCents)}</dd>
                     </div>
                   )}
                   {typeof selectedBooking.tipCents === "number" &&

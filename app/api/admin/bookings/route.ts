@@ -34,6 +34,7 @@ import {
 } from "@/lib/booking/shared-departure-inventory";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import type { Hold } from "@/lib/booking/types";
+import { pickAdminBookingDiscountFields } from "@/lib/booking/admin-booking-discount-fields";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -251,6 +252,7 @@ export async function GET(request: NextRequest) {
             rateId: b.rateId ?? null,
             pricing: b.pricing,
             tipCents: (b as { tipCents?: number }).tipCents ?? null,
+            ...pickAdminBookingDiscountFields(b as { discountCode?: string; discountCents?: number }),
             status: b.status,
             stripe: b.stripe ?? undefined,
             createdAt,
@@ -435,6 +437,7 @@ export async function GET(request: NextRequest) {
         rateId: b.rateId ?? null,
         pricing: b.pricing,
         tipCents: (b as { tipCents?: number }).tipCents ?? null,
+        ...pickAdminBookingDiscountFields(b as { discountCode?: string; discountCents?: number }),
         status: b.status,
         stripe: b.stripe ?? undefined,
         card: bWithExt.card ?? undefined,

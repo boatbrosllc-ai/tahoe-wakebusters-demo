@@ -9,7 +9,14 @@
  * rebook without the discount.
  */
 
+import { getCentralCalendarDayBounds, getDateStrInSlotTimezone } from "./experience-slots";
 import type { Discount } from "./types";
+
+/** Expiry is inclusive through end of the selected calendar day (America/Chicago). */
+export function getDiscountExpiryInstant(expiresAt: Date): Date {
+  const dateStr = getDateStrInSlotTimezone(expiresAt);
+  return getCentralCalendarDayBounds(dateStr).dayEnd;
+}
 
 export interface DiscountValidationResult {
   valid: true;
@@ -36,9 +43,10 @@ export function validateAndApplyDiscount(
   if (!discount) return { valid: false, error: "Invalid or expired code" };
   if (!discount.active) return { valid: false, error: "This code is no longer active" };
   if (discount.expiresAt) {
-    const expiresAt = typeof discount.expiresAt === "object" && "toDate" in discount.expiresAt
+    const expiresAtRaw = typeof discount.expiresAt === "object" && "toDate" in discount.expiresAt
       ? (discount.expiresAt as { toDate(): Date }).toDate()
       : new Date(0);
+    const expiresAt = getDiscountExpiryInstant(expiresAtRaw);
     if (now > expiresAt) return { valid: false, error: "This code has expired" };
   }
   if (typeof discount.maxRedemptions === "number" && discount.usedCount >= discount.maxRedemptions) {

@@ -7,6 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import type { HoldLike } from "../lib/booking/checkout-session-helpers";
+import { computeAdminHoldPaymentDisplayTotalCents } from "../lib/booking/admin-booking-discount-fields";
 
 function restoredUsedCount(current: number): number {
   return Math.max(0, current - 1);
@@ -38,6 +39,22 @@ describe("checkout rollback discount restoration", () => {
     // inside the transaction, confirms status === 'active', then expires hold, releases slot/capacity,
     // and when hold.discountCode is set, decrements that discount's usedCount.
     assert.strictEqual(restoredUsedCount(1), 0, "one reservation restored so usedCount back to 0");
+  });
+
+  it("hold payment display total matches pricing + tip − discount for discounted holds", () => {
+    const pricing = {
+      subtotalCents: 9000,
+      taxCents: 743,
+      feesCents: 0,
+      totalCents: 9743 + 500 - 1000,
+      currency: "usd" as const,
+    };
+    const tipCents = 500;
+    const discountCents = 1000;
+    assert.strictEqual(
+      computeAdminHoldPaymentDisplayTotalCents({ pricing, tipCents, discountCents }),
+      9743 + 500 - 1000
+    );
   });
 
   it("checkout line-item sum + coupon aligns with hold pricing + tip − discount (sanity identity)", () => {

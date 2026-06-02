@@ -7,6 +7,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { sharedHoldResumeHasActiveDiscount } from "../lib/booking/hold-resume-discount";
+import { computeCreateHoldPricingTotalCents } from "../lib/booking/admin-booking-discount-fields";
+import { computeFinalChargeTotalCentsFromHoldPricing } from "../lib/booking/hold-pricing-final-total";
 
 describe("create-hold shared hold resume discount cleanup", () => {
   it("no discount on resume returns false so route clears discountCode, discountCents, stripeCouponId", () => {
@@ -49,6 +51,25 @@ describe("create-hold resume discount scenarios (regression: atomic new-code inc
     // On resume with B: old A is decremented, new B is validated and incremented in same transaction.
     assert.strictEqual(sharedHoldResumeHasActiveDiscount(codeB, 100), true, "new code applied");
     assert.strictEqual(sharedHoldResumeHasActiveDiscount(codeA, 0), false, "old code no longer applied");
+  });
+
+  it("2-character discount on resume keeps payment total aligned with create-hold formula", () => {
+    const pricingBaseTotalCents = 10_825;
+    const tipCents = 0;
+    const discountCents = 500;
+    const storedTotal = computeCreateHoldPricingTotalCents(pricingBaseTotalCents, tipCents, discountCents);
+    const pricing = {
+      subtotalCents: 10_000,
+      taxCents: 825,
+      feesCents: 0,
+      totalCents: storedTotal,
+      currency: "usd" as const,
+    };
+    assert.strictEqual(sharedHoldResumeHasActiveDiscount("AB", discountCents), true);
+    assert.strictEqual(
+      computeFinalChargeTotalCentsFromHoldPricing(pricing, tipCents, discountCents),
+      storedTotal
+    );
   });
 
   it("discount removal: resume with no discount must decrement old code only, no new increment", () => {

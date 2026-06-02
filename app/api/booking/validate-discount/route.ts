@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
+import {
+  normalizeDiscountCodeInput,
+  validateDiscountCodeLength,
+} from "@/lib/booking/discount-code-input";
 import { checkRateLimitValidateDiscount, getClientKey } from "@/lib/booking/rate-limit";
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { computeValidateDiscountTotalCents } from "@/lib/booking/compute-validate-discount-total";
 import type { BookingPricing, Discount, Hold } from "@/lib/booking/types";
 
 export const dynamic = "force-dynamic";
-
-/** Minimum code length to reduce enumeration and avoid timing oracles on very short inputs. */
-const MIN_CODE_LENGTH = 4;
 
 /** Constant-time delay (ms) when returning invalid to avoid timing-based oracles. */
 const INVALID_RESPONSE_DELAY_MS = 80;
@@ -39,8 +40,8 @@ export async function POST(request: NextRequest) {
   }
   try {
     const body = await request.json().catch(() => ({}));
-    const codeRaw = typeof body.code === "string" ? body.code.trim() : "";
-    const code = codeRaw.toUpperCase();
+    const codeRaw = typeof body.code === "string" ? body.code : "";
+    const code = normalizeDiscountCodeInput(codeRaw);
 
     const slotId = typeof body.slotId === "string" ? body.slotId.trim() : "";
     const rateId = typeof body.rateId === "string" ? body.rateId.trim() : "";
@@ -73,9 +74,10 @@ export async function POST(request: NextRequest) {
           .filter((x): x is { addonId: string; qty: number } => x != null)
       : [];
 
-    if (!code || code.length < MIN_CODE_LENGTH) {
+    const codeLengthCheck = validateDiscountCodeLength(code);
+    if (!codeLengthCheck.ok) {
       await new Promise((r) => setTimeout(r, INVALID_RESPONSE_DELAY_MS));
-      return NextResponse.json({ valid: false, error: "Enter a discount code" }, { status: 400 });
+      return NextResponse.json({ valid: false, error: codeLengthCheck.error }, { status: 400 });
     }
 
     const db = getDb();

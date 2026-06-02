@@ -4,6 +4,7 @@ import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking, AddonSelection } from "@/lib/booking/types";
 import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
+import { pickAdminBookingDiscountFields } from "@/lib/booking/admin-booking-discount-fields";
 
 function toDate(ts: { seconds?: number; nanoseconds?: number; toDate?: () => Date }): string | null {
   if (ts.toDate) return ts.toDate().toISOString();
@@ -164,6 +165,7 @@ export async function GET(
       rateId: b.rateId ?? null,
       pricing: b.pricing,
       tipCents: (b as { tipCents?: number }).tipCents ?? null,
+      ...pickAdminBookingDiscountFields(b as { discountCode?: string; discountCents?: number }),
       status: b.status,
       stripe: b.stripe ?? undefined,
       card: bWithExt.card ?? undefined,
