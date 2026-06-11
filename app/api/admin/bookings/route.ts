@@ -14,7 +14,10 @@ import {
 import { formatBookingTimeSafe } from "@/lib/booking/format-booking-datetime";
 import { DEFAULT_EXPERIENCE_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import { applyExperienceRevenueDelta } from "@/lib/booking/summary-revenue";
-import { addConfirmationOutboxInTransaction } from "@/lib/booking/notification-outbox";
+import {
+  confirmationOutboxDocId,
+  createPendingConfirmationPayload,
+} from "@/lib/booking/notification-outbox";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
 import { computePricing } from "@/lib/booking/pricing";
@@ -702,10 +705,24 @@ export async function POST(request: NextRequest) {
     const now = new Date();
 
     await db.runTransaction(async (tx) => {
+      // Firestore: all reads before any writes.
       const expInTx = await tx.get(db.collection("experiences").doc(experienceId));
       if (!expInTx.exists) throw new Error("EXPERIENCE_NOT_FOUND");
       const expTx = expInTx.data() as Experience;
       const sharedTicketedInTx = expTx.pricingType === "ticketed" && adminBookingMode === "shared";
+
+      const slotSnapBeforeWrite = await tx.get(slotRef);
+      if (!sharedTicketedInTx && slotSnapBeforeWrite.exists) {
+        const slotStatus = (slotSnapBeforeWrite.data() as { status?: string }).status;
+        if (slotStatus === "held") {
+          throw Object.assign(
+            new Error(
+              "This slot is currently on hold. Release the hold or wait for it to expire before adding a manual booking."
+            ),
+            { code: "SLOT_CONFLICT" }
+          );
+        }
+      }
 
       if (sharedTicketedInTx) {
         await reserveSharedTicketedCapacityAdminTx(tx, db, Timestamp, {
@@ -750,21 +767,11 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const slotSnapBeforeWrite = await tx.get(slotRef);
-      if (!sharedTicketedInTx && slotSnapBeforeWrite.exists) {
-        const slotStatus = (slotSnapBeforeWrite.data() as { status?: string }).status;
-        if (slotStatus === "held") {
-          throw Object.assign(
-            new Error(
-              "This slot is currently on hold. Release the hold or wait for it to expire before adding a manual booking."
-            ),
-            { code: "SLOT_CONFLICT" }
-          );
-        }
-      }
-
       tx.set(bookingRef, booking);
-      await addConfirmationOutboxInTransaction(tx, db, bookingId);
+      tx.set(
+        db.collection("notificationOutbox").doc(confirmationOutboxDocId(bookingId)),
+        createPendingConfirmationPayload(bookingId)
+      );
       if (pricing.totalCents > 0) {
         const summaryRef = db.collection("summaries").doc("revenue");
         tx.set(

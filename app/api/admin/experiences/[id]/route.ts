@@ -21,6 +21,7 @@ import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
 import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/lib/booking/ticketed-slot-utils";
 import { sanitizeCssObjectPosition } from "@/lib/image-position";
+import { getChicagoToday } from "@/lib/booking/booking-date-range";
 
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
 function stripUndefined<T>(obj: T): T {
@@ -527,30 +528,75 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         (typeof parsed.departureMinute === "number" && parsed.departureMinute !== expData.departureMinute) ||
         (typeof parsed.tripDurationHours === "number" && parsed.tripDurationHours !== expData.tripDurationHours));
     if (departureConfigChanged) {
+      const todayStr = getChicagoToday();
+      const variants = experienceIdVariants.slice(0, 10);
       const [bookingSnap, holdsSnap] = await Promise.all([
         db
           .collection("bookings")
-          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("experienceId", "in", variants)
           .where("status", "in", Array.from(BOOKING_STATUSES_SLOT_TAKEN))
+          .where("startDateStr", ">=", todayStr)
           .limit(25)
           .get(),
         db
           .collection("holds")
-          .where("experienceId", "in", experienceIdVariants.slice(0, 10))
+          .where("experienceId", "in", variants)
           .where("status", "==", "active")
+          .where("startDateStr", ">=", todayStr)
           .limit(25)
           .get(),
       ]);
-      if (!bookingSnap.empty || !holdsSnap.empty) {
+      const bookingIds = bookingSnap.docs.map((d) => d.id);
+      const nowMs = Date.now();
+      const upcomingHoldDocs = holdsSnap.docs.filter((d) => {
+        const expiresAt = (d.data() as { expiresAt?: { toMillis?: () => number } }).expiresAt;
+        const expiresMs = expiresAt?.toMillis?.();
+        return typeof expiresMs !== "number" || expiresMs > nowMs;
+      });
+      const holdIds = upcomingHoldDocs.map((d) => d.id);
+
+      if (bookingIds.length > 0) {
         return NextResponse.json(
           {
             error:
-              "Cannot change departure time or trip duration while active bookings/holds exist. Cancel or reschedule reservations first.",
-            bookingIds: bookingSnap.docs.map((d) => d.id),
-            holdIds: holdsSnap.docs.map((d) => d.id),
+              "Cannot change departure time or trip duration while upcoming bookings exist. Cancel or reschedule those trips in Admin → Bookings first.",
+            bookingIds,
+            ...(holdIds.length > 0 ? { holdIds } : {}),
           },
           { status: 409 }
         );
+      }
+
+      if (holdIds.length > 0 && !force) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change departure time or trip duration while customers have active checkout holds for upcoming trips. Confirm to release those holds and save.",
+            holdIds,
+            activeHoldCount: holdIds.length,
+            forceRequired: true,
+          },
+          { status: 409 }
+        );
+      }
+
+      if (holdIds.length > 0 && force) {
+        for (const holdDoc of upcomingHoldDocs) {
+          try {
+            const releaseResult = await runExpiredHoldReleaseTransaction(db, FieldValue, holdDoc.ref);
+            await writeAdminAuditLog("experience_departure_config_release_hold", {
+              experienceId: id,
+              holdId: holdDoc.id,
+              releaseResult,
+            });
+          } catch (releaseErr) {
+            console.error("[admin/experiences/:id] departure-config release hold failed", {
+              experienceId: id,
+              holdId: holdDoc.id,
+              error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+            });
+          }
+        }
       }
     }
 
