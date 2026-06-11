@@ -7,9 +7,7 @@
 import type { Rate, Addon, AddonSelection, BookingPricing, ExperienceHolidayDate, BoatPriceOverride } from "./types";
 import type { ExperienceAddon } from "./types";
 import { getDateStrInSlotTimezone } from "./experience-slots";
-import { TAX_RATE } from "./constants";
-
-const FEE_CENTS = 0; // optional booking fee
+import { TAX_RATE, PROCESSING_FEE_RATE } from "./constants";
 
 type RateLike = { basePriceCents?: number; priceCents?: number; priceWeekendCents?: number; priceHolidayCents?: number };
 type AddonLike = Addon | ExperienceAddon;
@@ -190,7 +188,7 @@ export function computePricing(params: {
     subtotalCents += addon.priceCents * safeQty;
   }
   const taxCents = Math.round(subtotalCents * TAX_RATE);
-  const feesCents = FEE_CENTS;
+  const feesCents = Math.round(subtotalCents * PROCESSING_FEE_RATE);
   const totalCents = subtotalCents + taxCents + feesCents;
   return {
     subtotalCents,

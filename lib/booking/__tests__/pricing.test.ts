@@ -9,7 +9,7 @@ import {
   getCalendarOverridePriceCents,
   getEffectiveBoatRatePriceCents,
 } from "../pricing";
-import { TAX_RATE } from "../constants";
+import { TAX_RATE, PROCESSING_FEE_RATE } from "../constants";
 import type { ExperienceHolidayDate } from "../types";
 
 describe("isDefaultUSHoliday", () => {
@@ -37,9 +37,11 @@ describe("computePricing", () => {
     const rate = { priceCents: 10000 };
     const result = computePricing({ rate, addons: [], qty: 1 });
     const expectedTax = Math.round(10000 * TAX_RATE);
+    const expectedFees = Math.round(10000 * PROCESSING_FEE_RATE);
     assert.strictEqual(result.subtotalCents, 10000);
     assert.strictEqual(result.taxCents, expectedTax);
-    assert.strictEqual(result.totalCents, 10000 + expectedTax);
+    assert.strictEqual(result.feesCents, expectedFees);
+    assert.strictEqual(result.totalCents, 10000 + expectedTax + expectedFees);
     assert.strictEqual(result.currency, "usd");
   });
 
@@ -49,9 +51,11 @@ describe("computePricing", () => {
     const result = computePricing({ rate, addons: [], qty: 4 });
     const expectedSubtotal = priceCents * 4;
     const expectedTax = Math.round(expectedSubtotal * TAX_RATE);
+    const expectedFees = Math.round(expectedSubtotal * PROCESSING_FEE_RATE);
     assert.strictEqual(result.subtotalCents, expectedSubtotal);
     assert.strictEqual(result.taxCents, expectedTax);
-    assert.strictEqual(result.totalCents, expectedSubtotal + expectedTax);
+    assert.strictEqual(result.feesCents, expectedFees);
+    assert.strictEqual(result.totalCents, expectedSubtotal + expectedTax + expectedFees);
   });
 
   it("when priceCents is undefined, treats as 0 and returns zero subtotal/tax/total", () => {
@@ -75,8 +79,10 @@ describe("computePricing", () => {
     const rate = { priceCents: subtotalCents };
     const result = computePricing({ rate, addons: [], qty: 1 });
     const expectedTax = Math.round(subtotalCents * TAX_RATE);
+    const expectedFees = Math.round(subtotalCents * PROCESSING_FEE_RATE);
     assert.strictEqual(result.taxCents, expectedTax);
-    assert.strictEqual(result.totalCents, subtotalCents + expectedTax);
+    assert.strictEqual(result.feesCents, expectedFees);
+    assert.strictEqual(result.totalCents, subtotalCents + expectedTax + expectedFees);
   });
 
 });

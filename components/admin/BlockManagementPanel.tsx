@@ -8,6 +8,9 @@ import { getCentralCalendarDayBounds, getSlotStartEnd, SLOT_TIMEZONE } from "@/l
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { bumpSlotCacheVersion } from "@/lib/booking/booking-data-cache";
 
+/** `<input type="time" />` / `datetime-local` step in seconds — 10-minute increments for block start/end. */
+const BLOCK_TIME_STEP_SECONDS = 600;
+
 interface BlockItem {
   id: string;
   experienceId: string;
@@ -431,6 +434,7 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
               <input
                 id="bmp-add-start-time"
                 type="time"
+                step={BLOCK_TIME_STEP_SECONDS}
                 className={inputClass}
                 value={addStartTime}
                 onChange={(e) => setAddStartTime(e.target.value)}
@@ -444,6 +448,7 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
               <input
                 id="bmp-add-end-time"
                 type="time"
+                step={BLOCK_TIME_STEP_SECONDS}
                 className={inputClass}
                 value={addEndTime}
                 onChange={(e) => setAddEndTime(e.target.value)}
@@ -581,6 +586,7 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
                         <span className="block mb-0.5">Start</span>
                         <input
                           type="datetime-local"
+                          step={BLOCK_TIME_STEP_SECONDS}
                           className={inputClass}
                           value={editStartLocal}
                           onChange={(e) => setEditStartLocal(e.target.value)}
@@ -590,6 +596,7 @@ export function BlockManagementPanel({ experienceId, experienceName }: BlockMana
                         <span className="block mb-0.5">End</span>
                         <input
                           type="datetime-local"
+                          step={BLOCK_TIME_STEP_SECONDS}
                           className={inputClass}
                           value={editEndLocal}
                           onChange={(e) => setEditEndLocal(e.target.value)}

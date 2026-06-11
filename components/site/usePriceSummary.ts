@@ -3,7 +3,7 @@
  * Keeps BookingModal lean and allows reuse if needed.
  */
 import { useMemo } from "react";
-import { TAX_RATE, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
+import { TAX_RATE, PROCESSING_FEE_RATE, TIP_MAX_PERCENT_SERVER } from "@/lib/booking/constants";
 import type { RateOption, AddonOption } from "@/lib/booking/booking-modal-types";
 
 export interface PriceSummaryLine {
@@ -19,6 +19,8 @@ export interface PriceSummary {
   /** Rate + add-ons before tax (for display of zero-tax / free tiers). */
   subtotalBeforeTaxCents: number;
   salesTaxCents: number;
+  processingFeeCents: number;
+  taxAndFeesCents: number;
   tipCents: number;
   discountCents: number;
   totalCents: number;
@@ -68,12 +70,13 @@ export function usePriceSummary({
     const addonsTotalCents = addonLines.reduce((s, l) => s + l.priceCents, 0);
     const subtotalBeforeTax = rateCents + addonsTotalCents;
     const salesTaxCents = Math.round(subtotalBeforeTax * TAX_RATE);
-    const subtotalAfterTax = subtotalBeforeTax + salesTaxCents;
+    const processingFeeCents = Math.round(subtotalBeforeTax * PROCESSING_FEE_RATE);
+    const taxAndFeesCents = salesTaxCents + processingFeeCents;
     const discountCents = appliedDiscount?.discountCents ?? 0;
     const postDiscountBase = Math.max(0, subtotalBeforeTax + salesTaxCents - discountCents);
     const pct = Math.min(TIP_MAX_PERCENT_SERVER, Math.max(20, tipPercent));
     const tipCents = tipChoice === "now" ? Math.round(postDiscountBase * (pct / 100)) : 0;
-    const totalCents = Math.max(0, subtotalAfterTax + tipCents - discountCents);
+    const totalCents = Math.max(0, subtotalBeforeTax + taxAndFeesCents + tipCents - discountCents);
     const baseLabel = selectedRate?.displayName ?? (selectedRate?.durationHours ? `${selectedRate.durationHours} hr` : "Rental");
     const rateLabel = isTicketed
       ? `${ticketCount} ticket${ticketCount !== 1 ? "s" : ""} × $${(unitCents / 100).toFixed(0)}/ticket`
@@ -84,6 +87,8 @@ export function usePriceSummary({
       addonLines,
       subtotalBeforeTaxCents: subtotalBeforeTax,
       salesTaxCents,
+      processingFeeCents,
+      taxAndFeesCents,
       tipCents,
       discountCents,
       totalCents,

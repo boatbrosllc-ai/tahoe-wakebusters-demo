@@ -190,7 +190,9 @@ function getSlotCalendarDate(slot: SlotDto): string {
   return `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(startDate.getDate()).padStart(2, "0")}`;
 }
 
-/** Chicago wall time for `<input type="datetime-local" />` (matches Admin week view block dialog). */
+/** Chicago wall time and 10-minute step for admin block `<input type="datetime-local" />` fields. */
+const BLOCK_DATETIME_LOCAL_STEP_SECONDS = 600;
+
 function formatDateAsCentralDatetimeLocal(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Chicago",
@@ -2669,6 +2671,7 @@ export default function CalendarsPage() {
                         <span className="text-xs font-medium text-brand-muted">Start</span>
                         <input
                           type="datetime-local"
+                          step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
                           className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
                           value={quickBlockStart}
                           onChange={(e) => setQuickBlockStart(e.target.value)}
@@ -2678,6 +2681,7 @@ export default function CalendarsPage() {
                         <span className="text-xs font-medium text-brand-muted">End</span>
                         <input
                           type="datetime-local"
+                          step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
                           className="w-full rounded-lg border border-brand-dark/15 bg-white px-3 py-2 text-sm text-brand-dark"
                           value={quickBlockEnd}
                           onChange={(e) => setQuickBlockEnd(e.target.value)}

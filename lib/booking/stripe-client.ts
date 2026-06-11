@@ -68,25 +68,14 @@ export function buildLineItems(params: {
       quantity: qty,
     });
   }
-  if (pricing.taxCents > 0) {
+  const taxAndFeesCents = pricing.taxCents + pricing.feesCents;
+  if (taxAndFeesCents > 0) {
     lineItems.push({
       price_data: {
         currency: pricing.currency,
-        unit_amount: pricing.taxCents,
+        unit_amount: taxAndFeesCents,
         product_data: {
-          name: "Tax",
-        },
-      },
-      quantity: 1,
-    });
-  }
-  if (pricing.feesCents > 0) {
-    lineItems.push({
-      price_data: {
-        currency: pricing.currency,
-        unit_amount: pricing.feesCents,
-        product_data: {
-          name: "Booking fee",
+          name: "Tax & Fees",
         },
       },
       quantity: 1,
@@ -214,22 +203,13 @@ export function buildLineItemsFromHoldPricing(params: {
       quantity: 1,
     });
   }
-  if (pricing.taxCents > 0) {
+  const taxAndFeesCents = pricing.taxCents + pricing.feesCents;
+  if (taxAndFeesCents > 0) {
     lineItems.push({
       price_data: {
         currency: pricing.currency,
-        unit_amount: pricing.taxCents,
-        product_data: { name: "Tax" },
-      },
-      quantity: 1,
-    });
-  }
-  if (pricing.feesCents > 0) {
-    lineItems.push({
-      price_data: {
-        currency: pricing.currency,
-        unit_amount: pricing.feesCents,
-        product_data: { name: "Booking fee" },
+        unit_amount: taxAndFeesCents,
+        product_data: { name: "Tax & Fees" },
       },
       quantity: 1,
     });

@@ -51,7 +51,7 @@ import { loadConfetti } from "@/lib/client/load-confetti";
 import { analytics } from "@/lib/analytics";
 import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
 import { ratingWithReviewCount } from "@/content/location";
-import { DEPOSIT_FRACTION, TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
+import { DEPOSIT_FRACTION, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
@@ -3155,8 +3155,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           })}
                         {priceReady && (
                           <div className="flex justify-between items-baseline text-sm">
-                            <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
-                            <span className="font-medium text-brand-dark">+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
+                            <span className="text-brand-muted">Tax & Fees</span>
+                            <span className="font-medium text-brand-dark">+${(priceSummary.taxAndFeesCents / 100).toFixed(2)}</span>
                           </div>
                         )}
                         {priceSummary.tipCents > 0 && (
@@ -3916,8 +3916,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       ))}
                       {priceReady && (
                         <div className="flex justify-between text-brand-dark">
-                          <span className="text-brand-muted">Sales tax ({(TAX_RATE * 100).toFixed(2)}%)</span>
-                          <span>+${(priceSummary.salesTaxCents / 100).toFixed(2)}</span>
+                          <span className="text-brand-muted">Tax & Fees</span>
+                          <span>+${(priceSummary.taxAndFeesCents / 100).toFixed(2)}</span>
                         </div>
                       )}
                       {priceSummary.tipCents > 0 && (

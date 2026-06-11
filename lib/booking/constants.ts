@@ -6,6 +6,9 @@
 /** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
 export const TAX_RATE = 0.0825;
 
+/** Processing fee rate applied to subtotal (rate + addons, excluding tip). */
+export const PROCESSING_FEE_RATE = 0.06;
+
 /**
  * Default deposit = this fraction of total (when deposit checkout is allowed).
  * Must match `amountIntegrityMismatch` deposit math in `convertHoldToBooking` — keep in sync.

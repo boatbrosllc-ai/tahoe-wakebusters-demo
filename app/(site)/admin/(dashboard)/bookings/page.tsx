@@ -10,7 +10,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
-import { getMonthRange } from "@/lib/booking/booking-date-range";
+import { getChicagoToday, getMonthRange, toDateStr } from "@/lib/booking/booking-date-range";
 import { formatTripDateYyyyMmDd, formatTripDateYyyyMmDdShort } from "@/lib/booking/format-booking-datetime";
 import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet, Mail, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -94,6 +94,33 @@ type BookingItem = {
   waiver?: { requestId: string; status: string; templateId: string; templateVersion: number };
   confirmationSentAt?: string | null;
 };
+
+type TripQuickFilter = "today" | "tomorrow" | "next7";
+
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return toDateStr(new Date(y, m - 1, d + days));
+}
+
+function resolveTripQuickFilter(fromTrip: string, toTrip: string): TripQuickFilter | null {
+  const today = getChicagoToday();
+  if (fromTrip === today && toTrip === today) return "today";
+  const tomorrow = addDaysToDateStr(today, 1);
+  if (fromTrip === tomorrow && toTrip === tomorrow) return "tomorrow";
+  const next7End = addDaysToDateStr(today, 6);
+  if (fromTrip === today && toTrip === next7End) return "next7";
+  return null;
+}
+
+function getTripQuickFilterRange(filter: TripQuickFilter): { from: string; to: string } {
+  const today = getChicagoToday();
+  if (filter === "today") return { from: today, to: today };
+  if (filter === "tomorrow") {
+    const tomorrow = addDaysToDateStr(today, 1);
+    return { from: tomorrow, to: tomorrow };
+  }
+  return { from: today, to: addDaysToDateStr(today, 6) };
+}
 
 function mergeBookingLists(prev: BookingItem[], fresh: BookingItem[], order: "trip" | "created"): BookingItem[] {
   const byId = new Map(prev.map((b) => [b.id, b]));
@@ -671,6 +698,17 @@ export default function AdminBookingsPage() {
   const showInitialLoading = loading && list.length === 0;
   const showFatalBlock = loadError && list.length === 0 && !loading;
 
+  const activeTripQuickFilter = useMemo(
+    () => resolveTripQuickFilter(fromTripDate, toTripDate),
+    [fromTripDate, toTripDate]
+  );
+
+  const applyTripQuickFilter = useCallback((filter: TripQuickFilter) => {
+    const { from, to } = getTripQuickFilterRange(filter);
+    setFromTripDate(from);
+    setToTripDate(to);
+  }, []);
+
   const inputClass =
     "rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary min-h-[40px] sm:min-h-[36px] transition-colors duration-200";
 
@@ -833,6 +871,30 @@ export default function AdminBookingsPage() {
           </div>
           <div className="border-l border-brand-dark/15 pl-4 sm:pl-6 flex flex-wrap items-end gap-3 sm:gap-4">
             <span className="text-xs font-medium text-brand-muted uppercase tracking-wide w-full sm:w-auto">Trip date</span>
+            <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+              {(
+                [
+                  { key: "today" as const, label: "Today" },
+                  { key: "tomorrow" as const, label: "Tomorrow" },
+                  { key: "next7" as const, label: "Next 7 days" },
+                ] as const
+              ).map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => applyTripQuickFilter(key)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors shadow-sm",
+                    activeTripQuickFilter === key
+                      ? "border-brand-primary bg-brand-primary/10 text-brand-primary"
+                      : "border-brand-dark/20 bg-white text-brand-dark hover:border-brand-primary/60 hover:bg-brand-primary/5 hover:text-brand-primary"
+                  )}
+                  aria-pressed={activeTripQuickFilter === key}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-2">
               <label htmlFor="fromTrip" className="text-sm text-brand-muted sr-only sm:not-sr-only sm:whitespace-nowrap">From</label>
               <input

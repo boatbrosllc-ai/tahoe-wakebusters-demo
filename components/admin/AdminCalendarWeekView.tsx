@@ -8,6 +8,8 @@ import { Dialog } from "@/components/ui/dialog";
 import { getSlotStartEnd, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
 
 const CHICAGO = "America/Chicago";
+/** `<input type="datetime-local" />` step in seconds — 10-minute increments for block start/end. */
+const BLOCK_DATETIME_LOCAL_STEP_SECONDS = 600;
 const HOUR_START = 7;
 const HOUR_END = 21; // 9 pm
 const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i);
@@ -742,6 +744,7 @@ export function AdminCalendarWeekView({
             <span className="text-xs font-medium text-brand-muted">Start</span>
             <input
               type="datetime-local"
+              step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
               value={newBlockStart}
               onChange={(e) => setNewBlockStart(e.target.value)}
               className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
@@ -751,6 +754,7 @@ export function AdminCalendarWeekView({
             <span className="text-xs font-medium text-brand-muted">End</span>
             <input
               type="datetime-local"
+              step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
               value={newBlockEnd}
               onChange={(e) => setNewBlockEnd(e.target.value)}
               className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
@@ -919,6 +923,7 @@ function BlockEditForm({
         <span className="text-xs font-medium text-brand-muted">Start</span>
         <input
           type="datetime-local"
+          step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
           value={start}
           onChange={(e) => setStart(e.target.value)}
           className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
@@ -928,6 +933,7 @@ function BlockEditForm({
         <span className="text-xs font-medium text-brand-muted">End</span>
         <input
           type="datetime-local"
+          step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
           value={end}
           onChange={(e) => setEnd(e.target.value)}
           className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
