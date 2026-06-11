@@ -2,8 +2,8 @@ import type { BookingPricing } from "./types";
 import { computeFinalChargeTotalCentsFromHoldPricing } from "./hold-pricing-final-total";
 
 export type BookingDiscountSource = {
-  discountCode?: string;
-  discountCents?: number;
+  discountCode?: string | null;
+  discountCents?: number | null;
 };
 
 /** Mirrors admin bookings list/detail API serialization (`discountCode` / `discountCents` → null when absent). */
