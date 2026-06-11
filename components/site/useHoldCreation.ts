@@ -498,10 +498,9 @@ export function useHoldCreation(
     const tipCentsToSend = tipChoice === "now" ? priceSummary.tipCents : 0;
     if (tipCentsToSend > 0) {
       const subtotalBeforeTaxCents = priceSummary.subtotalBeforeTaxCents ?? 0;
-      const salesTaxCents = priceSummary.salesTaxCents ?? 0;
       const discountCents = priceSummary.discountCents ?? 0;
-      const postDiscountBase = Math.max(0, subtotalBeforeTaxCents + salesTaxCents - discountCents);
-      const maxTipCentsClient = Math.round(postDiscountBase * (TIP_MAX_PERCENT_SERVER / 100));
+      const postDiscountSubtotal = Math.max(0, subtotalBeforeTaxCents - discountCents);
+      const maxTipCentsClient = Math.round(postDiscountSubtotal * (TIP_MAX_PERCENT_SERVER / 100));
       if (tipCentsToSend > maxTipCentsClient) {
         opts.setPaymentPhase("form");
         opts.setPaymentError(

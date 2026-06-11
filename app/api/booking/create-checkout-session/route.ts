@@ -26,6 +26,7 @@ import { signReleaseToken, verifyReleaseToken, hasReleaseTokenSecret } from "@/l
 import { writeOperationalAlert } from "@/lib/booking/operational-alerts";
 import { signReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { HOLD_PAYMENT_ATTEMPT_VERSION_META } from "@/lib/booking/constants";
+import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { buildCheckoutSessionIdempotencyKey } from "@/lib/booking/stripe-idempotency-keys";
 import { HOLD_CHECKOUT_SESSION_EXTENSION_MINUTES, MAX_HOLD_LIFETIME_FROM_CREATED_MS } from "@/lib/booking/hold-expiry";
 import type { Hold, Rate, ExperienceRate } from "@/lib/booking/types";
@@ -241,9 +242,15 @@ export async function POST(request: NextRequest) {
       const q = typeof li.quantity === "number" && Number.isFinite(li.quantity) ? li.quantity : 1;
       return acc + (typeof u === "number" && Number.isFinite(u) ? u * q : 0);
     }, 0);
-    // Compare line items to pre-discount total: the Stripe coupon (session `discounts`) applies the discount, not a negative line.
-    const expectedLineItemsCents = pricing.totalCents + tipCentsSanity;
-    const expectedPerHoldTotalCents = pricing.totalCents + tipCentsSanity - holdDiscountCents;
+    // Compare line items to pre-discount total: coupon applies the discount, not a negative line.
+    // `pricing.totalCents` on holds may already include tip − discount; use base components + tip for line-item sum.
+    const pricingBaseCents = pricing.subtotalCents + pricing.taxCents + pricing.feesCents;
+    const expectedLineItemsCents = pricingBaseCents + tipCentsSanity;
+    const expectedPerHoldTotalCents = computeFinalChargeTotalCentsFromHoldPricing(
+      pricing,
+      tipCentsSanity,
+      holdDiscountCents
+    );
     if (Math.abs(lineItemSumCents - expectedLineItemsCents) > 1) {
       const diagnostic = {
         lineItemSumCents,
@@ -405,11 +412,11 @@ export async function POST(request: NextRequest) {
           if (existingSession.status === "open") {
             const holdDiscountEarly = (holdFresh as { discountCents?: number }).discountCents ?? 0;
             const tipEarly = (holdFresh as { tipCents?: number }).tipCents ?? 0;
-            const pricingEarly = holdFresh.pricing as { totalCents?: number } | undefined;
-            const pricingTotalEarly =
-              pricingEarly && typeof pricingEarly.totalCents === "number" ? pricingEarly.totalCents : null;
+            const pricingEarly = holdFresh.pricing;
             const expectedPerHoldTotalCentsEarly =
-              pricingTotalEarly != null ? pricingTotalEarly + tipEarly - holdDiscountEarly : null;
+              pricingEarly != null
+                ? computeFinalChargeTotalCentsFromHoldPricing(pricingEarly, tipEarly, holdDiscountEarly)
+                : null;
             const amountTotalEarly = existingSession.amount_total;
             const sessionAmountMismatch =
               expectedPerHoldTotalCentsEarly != null &&
