@@ -12,7 +12,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { AdminBookingCalendar, type AdminBookingCalendarItem } from "@/components/booking/AdminBookingCalendar";
 import { getChicagoToday, getMonthRange, toDateStr } from "@/lib/booking/booking-date-range";
 import { formatTripDateYyyyMmDd, formatTripDateYyyyMmDdShort } from "@/lib/booking/format-booking-datetime";
-import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet, Mail, Ban } from "lucide-react";
+import { List, CalendarDays, ChevronDown, ChevronUp, AlertCircle, Plus, Search, FileSpreadsheet, Mail, Ban, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AddBookingModal } from "./AddBookingModal";
 import { AdminSessionRedirectError, subscribeAdminAuthRevalidate, throwIfAdminApiError } from "@/lib/admin-auth-client";
@@ -96,6 +96,10 @@ type BookingItem = {
 };
 
 type TripQuickFilter = "today" | "tomorrow" | "next7";
+type BookingSortField = "trip" | "created";
+type BookingSortDirection = "asc" | "desc";
+
+type ExperienceOption = { id: string; title: string };
 
 function addDaysToDateStr(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -122,24 +126,56 @@ function getTripQuickFilterRange(filter: TripQuickFilter): { from: string; to: s
   return { from: today, to: addDaysToDateStr(today, 6) };
 }
 
-function mergeBookingLists(prev: BookingItem[], fresh: BookingItem[], order: "trip" | "created"): BookingItem[] {
-  const byId = new Map(prev.map((b) => [b.id, b]));
-  for (const b of fresh) byId.set(b.id, b);
-  const merged = Array.from(byId.values());
-  merged.sort((a, b) => {
-    if (order === "trip") {
-      const da = a.startDate ?? "";
-      const db = b.startDate ?? "";
-      const c = db.localeCompare(da);
-      if (c !== 0) return c;
+function parseDisplayTimeToMinutes(time: string | null | undefined): number {
+  if (!time || time === "—") return 0;
+  const m = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!m) return 0;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ampm = m[3].toUpperCase();
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+/** Sortable trip instant: YYYY-MM-DD + start time (Chicago display strings from API). */
+function tripSortKey(b: BookingItem): number {
+  const date = b.startDate?.trim();
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return Number.MAX_SAFE_INTEGER;
+  const [y, mo, d] = date.split("-").map(Number);
+  const dayMs = Date.UTC(y, mo - 1, d);
+  return dayMs + parseDisplayTimeToMinutes(b.startTime) * 60_000;
+}
+
+function sortBookingsList(
+  items: BookingItem[],
+  field: BookingSortField,
+  direction: BookingSortDirection
+): BookingItem[] {
+  const mult = direction === "asc" ? 1 : -1;
+  return [...items].sort((a, b) => {
+    if (field === "trip") {
+      const ka = tripSortKey(a);
+      const kb = tripSortKey(b);
+      if (ka !== kb) return (ka - kb) * mult;
     } else {
       const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      if (tb !== ta) return tb - ta;
+      if (ta !== tb) return (ta - tb) * mult;
     }
     return b.id.localeCompare(a.id);
   });
-  return merged;
+}
+
+function mergeBookingLists(
+  prev: BookingItem[],
+  fresh: BookingItem[],
+  field: BookingSortField,
+  direction: BookingSortDirection
+): BookingItem[] {
+  const byId = new Map(prev.map((b) => [b.id, b]));
+  for (const b of fresh) byId.set(b.id, b);
+  return sortBookingsList(Array.from(byId.values()), field, direction);
 }
 
 function intersectMonthWithTripFilters(
@@ -210,6 +246,10 @@ export default function AdminBookingsPage() {
   const [addBookingOpen, setAddBookingOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [experienceFilter, setExperienceFilter] = useState("");
+  const [experiences, setExperiences] = useState<ExperienceOption[]>([]);
+  const [sortField, setSortField] = useState<BookingSortField>("created");
+  const [sortDirection, setSortDirection] = useState<BookingSortDirection>("desc");
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
@@ -254,9 +294,30 @@ export default function AdminBookingsPage() {
     if (v === "true") setRequiresManualReviewOnly(true);
   }, []);
 
+  useEffect(() => {
+    fetch("/api/admin/experiences", { credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throwIfAdminApiError(res, data);
+        return data;
+      })
+      .then((data) => {
+        const rows = Array.isArray(data) ? data : [];
+        setExperiences(
+          rows
+            .filter((e: { id?: string; title?: string }) => typeof e.id === "string" && typeof e.title === "string")
+            .map((e: { id: string; title: string }) => ({ id: e.id, title: e.title }))
+        );
+      })
+      .catch(() => {
+        // Non-fatal — experience filter stays empty
+      });
+  }, []);
+
   const buildParams = useCallback((cursor?: string | null) => {
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
+    if (experienceFilter) params.set("experienceId", experienceFilter);
     if (fromDate) params.set("from", fromDate);
     if (toDate) params.set("to", toDate);
     if (fromTripDate) params.set("fromTripDate", fromTripDate);
@@ -265,10 +326,7 @@ export default function AdminBookingsPage() {
     params.set("limit", "50");
     if (cursor) params.set("cursor", cursor);
     return params.toString();
-  }, [statusFilter, fromDate, toDate, fromTripDate, toTripDate, requiresManualReviewOnly]);
-
-  const hasTripFilter = Boolean(fromTripDate || toTripDate);
-  const listOrder: "trip" | "created" = hasTripFilter ? "trip" : "created";
+  }, [statusFilter, experienceFilter, fromDate, toDate, fromTripDate, toTripDate, requiresManualReviewOnly]);
 
   const silentMergeFirstPage = useCallback(async () => {
     const genSnapshot = listFetchGenRef.current;
@@ -282,7 +340,7 @@ export default function AdminBookingsPage() {
       if (!res.ok) throwIfAdminApiError(res, data);
       if (genSnapshot !== listFetchGenRef.current) return;
       const fresh = Array.isArray(data) ? data : (data.bookings ?? []);
-      setList((prev) => mergeBookingLists(prev, fresh, listOrder));
+      setList((prev) => mergeBookingLists(prev, fresh, sortField, sortDirection));
       setNextCursor(data.nextCursor ?? null);
       setLoadError(null);
     } catch (e) {
@@ -290,7 +348,7 @@ export default function AdminBookingsPage() {
       if (genSnapshot !== listFetchGenRef.current) return;
       setLoadError(e instanceof Error ? e.message : "Error");
     }
-  }, [buildParams, listOrder]);
+  }, [buildParams, sortField, sortDirection]);
 
   useEffect(() => {
     const gen = ++listFetchGenRef.current;
@@ -310,7 +368,8 @@ export default function AdminBookingsPage() {
       })
       .then((data) => {
         if (gen !== listFetchGenRef.current) return;
-        setList(Array.isArray(data) ? data : (data.bookings ?? []));
+        const rows = Array.isArray(data) ? data : (data.bookings ?? []);
+        setList(sortBookingsList(rows, sortField, sortDirection));
         setNextCursor(data.nextCursor ?? null);
         setLoadError(null);
       })
@@ -325,6 +384,11 @@ export default function AdminBookingsPage() {
       });
     return () => ac.abort();
   }, [buildParams, refreshKey]);
+
+  /** Re-sort loaded rows when the user toggles column headers (no refetch). */
+  useEffect(() => {
+    setList((prev) => (prev.length === 0 ? prev : sortBookingsList(prev, sortField, sortDirection)));
+  }, [sortField, sortDirection]);
 
   useEffect(() => {
     if (!loading) setListLastUpdatedAt(new Date());
@@ -346,7 +410,8 @@ export default function AdminBookingsPage() {
       })
       .then((data) => {
         if (gen !== loadMoreGenRef.current) return;
-        setList((prev) => [...prev, ...(Array.isArray(data) ? data : (data.bookings ?? []))]);
+        const fresh = Array.isArray(data) ? data : (data.bookings ?? []);
+        setList((prev) => mergeBookingLists(prev, fresh, sortField, sortDirection));
         setNextCursor(data.nextCursor ?? null);
         setLoadMoreError(null);
       })
@@ -359,7 +424,7 @@ export default function AdminBookingsPage() {
       .finally(() => {
         if (gen === loadMoreGenRef.current) setLoadingMore(false);
       });
-  }, [nextCursor, loadingMore, buildParams]);
+  }, [nextCursor, loadingMore, buildParams, sortField, sortDirection]);
 
   const handleCalendarMonthChange = useCallback((year: number, month: number) => {
     setCalendarMonth({ year, month });
@@ -379,6 +444,7 @@ export default function AdminBookingsPage() {
     }
     const params = new URLSearchParams({ from: range.start, to: range.end });
     if (statusFilter) params.set("status", statusFilter);
+    if (experienceFilter) params.set("experienceId", experienceFilter);
     const url = `/api/admin/calendar-events?${params.toString()}`;
     fetch(url, { credentials: "include", signal: ac.signal })
       .then(async (res) => {
@@ -403,7 +469,7 @@ export default function AdminBookingsPage() {
         if (gen === calendarFetchGenRef.current) setCalendarLoading(false);
       });
     return () => ac.abort();
-  }, [viewMode, calendarMonth, fromTripDate, toTripDate, statusFilter, calendarPollTick]);
+  }, [viewMode, calendarMonth, fromTripDate, toTripDate, statusFilter, experienceFilter, calendarPollTick]);
 
   useEffect(() => {
     if (!autoBackgroundRefresh) return;
@@ -488,7 +554,7 @@ export default function AdminBookingsPage() {
 
   function exportCsv() {
     const headers = ["Date", "Trip date", "Experience", "Party (guests)", "Customer name", "Email", "Phone", "Amount (USD)", "Status"];
-    const rows = filteredList.map((b) => {
+    const rows = sortedFilteredList.map((b) => {
       const date = b.createdAt ? new Date(b.createdAt).toISOString() : "";
       const tripDate = b.startDate ?? "";
       const party = b.partySize != null ? String(b.partySize) : "";
@@ -535,7 +601,7 @@ export default function AdminBookingsPage() {
       "Status",
       "Stripe Payment Intent ID",
     ];
-    const rows = filteredList.map((b) => {
+    const rows = sortedFilteredList.map((b) => {
       const created = b.createdAt ? new Date(b.createdAt).toISOString().slice(0, 10) : "";
       const tripTime = [b.startTime, b.endTime].filter(Boolean).join(" – ") || "";
       const subtotal = b.pricing?.subtotalCents != null ? (b.pricing.subtotalCents / 100).toFixed(2) : "";
@@ -683,6 +749,31 @@ export default function AdminBookingsPage() {
     });
   }, [list, customerSearch]);
 
+  const sortedFilteredList = useMemo(
+    () => sortBookingsList(filteredList, sortField, sortDirection),
+    [filteredList, sortField, sortDirection]
+  );
+
+  const toggleSort = useCallback((field: BookingSortField) => {
+    if (sortField === field) {
+      setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+  }, [sortField]);
+
+  const renderSortIcon = (field: BookingSortField) => {
+    if (sortField !== field) {
+      return <ArrowUpDown className="w-3.5 h-3.5 shrink-0 text-brand-muted/70" aria-hidden />;
+    }
+    return sortDirection === "asc" ? (
+      <ChevronUp className="w-3.5 h-3.5 shrink-0 text-brand-primary" aria-hidden />
+    ) : (
+      <ChevronDown className="w-3.5 h-3.5 shrink-0 text-brand-primary" aria-hidden />
+    );
+  };
+
   const filteredCalendarEvents = useMemo(() => {
     const q = customerSearch.trim().toLowerCase();
     if (!q) return calendarEvents;
@@ -806,6 +897,22 @@ export default function AdminBookingsPage() {
             </span>
           </div>
           <div className="flex flex-wrap items-end gap-3 sm:gap-4">
+            <label htmlFor="experience-filter" className="text-sm font-medium text-brand-dark">Experience</label>
+            <select
+              id="experience-filter"
+              value={experienceFilter}
+              onChange={(e) => setExperienceFilter(e.target.value)}
+              className={cn(inputClass, "min-w-[180px] sm:min-w-[220px]")}
+            >
+              <option value="">All experiences</option>
+              {experiences.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap items-end gap-3 sm:gap-4">
             <label htmlFor="status" className="text-sm font-medium text-brand-dark">Status</label>
             <select
               id="status"
@@ -919,7 +1026,7 @@ export default function AdminBookingsPage() {
             </div>
             <p className="w-full text-xs text-brand-muted max-w-2xl leading-relaxed">
               <strong>Booking date</strong> filters when the reservation was created. <strong>Trip date</strong> filters when the charter starts; you can set only &quot;from&quot;, only &quot;to&quot;, or both.
-              If both booking-date and trip-date filters are set, a booking must match <em>both</em> (trip range is queried first, then booking created date is applied). The &quot;By day&quot; calendar loads by trip month and status; it does not use booking-date filters.
+              If both booking-date and trip-date filters are set, a booking must match <em>both</em> (trip range is queried first, then booking created date is applied). The &quot;By day&quot; calendar loads by trip month, status, and experience; it does not use booking-date filters. Click <strong>Trip</strong> or <strong>Booked</strong> column headers to sort chronologically.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 ml-auto">
@@ -972,28 +1079,54 @@ export default function AdminBookingsPage() {
         </div>
       )}
 
-      {!loading && !loadError && list.length > 0 && filteredList.length === 0 && viewMode === "list" && (
+      {!loading && !loadError && list.length > 0 && sortedFilteredList.length === 0 && viewMode === "list" && (
         <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 p-8 text-center">
-          <p className="text-brand-muted text-sm">No bookings match your customer search.</p>
-          <p className="mt-1 text-brand-muted text-xs">Try a different name, email, or phone number, or clear the search box.</p>
+          <p className="text-brand-muted text-sm">No bookings match your filters.</p>
+          <p className="mt-1 text-brand-muted text-xs">Try clearing customer search, experience, or date filters.</p>
         </div>
       )}
 
-      {!loading && !loadError && list.length > 0 && filteredList.length > 0 && viewMode === "list" && (
+      {!loading && !loadError && list.length > 0 && sortedFilteredList.length > 0 && viewMode === "list" && (
         <>
           {/* Desktop table */}
           <div className="hidden md:block rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden transition-shadow duration-200 hover:shadow-md">
             {customerSearch.trim() && (
               <p className="px-4 py-2 text-xs text-brand-muted bg-brand-bg/50 border-b border-brand-dark/10">
-                Showing {filteredList.length} of {list.length} bookings
+                Showing {sortedFilteredList.length} of {list.length} bookings
               </p>
             )}
             <div className="overflow-x-auto -mx-px">
               <table className="w-full min-w-[800px] text-sm">
                 <thead>
                   <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Trip</th>
-                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Booked</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort("trip")}
+                        className={cn(
+                          "inline-flex items-center gap-1 transition-colors",
+                          sortField === "trip" ? "text-brand-primary font-semibold" : "text-brand-dark hover:text-brand-primary"
+                        )}
+                        aria-sort={sortField === "trip" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                      >
+                        Trip
+                        {renderSortIcon("trip")}
+                      </button>
+                    </th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort("created")}
+                        className={cn(
+                          "inline-flex items-center gap-1 transition-colors",
+                          sortField === "created" ? "text-brand-primary font-semibold" : "text-brand-dark hover:text-brand-primary"
+                        )}
+                        aria-sort={sortField === "created" ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                      >
+                        Booked
+                        {renderSortIcon("created")}
+                      </button>
+                    </th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Experience</th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Party</th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Customer</th>
@@ -1002,7 +1135,7 @@ export default function AdminBookingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredList.map((b) => (
+                  {sortedFilteredList.map((b) => (
                     <tr
                       key={b.id}
                       onClick={() => openBookingDetailFromList(b)}
@@ -1054,10 +1187,10 @@ export default function AdminBookingsPage() {
           <div className="md:hidden space-y-3">
             {customerSearch.trim() && (
               <p className="text-xs text-brand-muted">
-                Showing {filteredList.length} of {list.length} bookings
+                Showing {sortedFilteredList.length} of {list.length} bookings
               </p>
             )}
-            {filteredList.map((b) => (
+            {sortedFilteredList.map((b) => (
               <button
                 key={b.id}
                 type="button"
@@ -1115,7 +1248,7 @@ export default function AdminBookingsPage() {
           <div>
             <h2 className="text-lg font-semibold text-brand-dark">Bookings by day</h2>
             <p className="text-sm text-brand-muted mt-0.5">
-              Loaded for the visible month from the server (not limited to the list page size). Trip date and status filters apply; booking-date filters do not. Click any booking to open details.
+              Loaded for the visible month from the server (not limited to the list page size). Trip date, experience, and status filters apply; booking-date filters do not. Click any booking to open details.
             </p>
           </div>
           {calendarError && (

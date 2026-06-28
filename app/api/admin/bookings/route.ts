@@ -17,6 +17,7 @@ import { applyExperienceRevenueDelta } from "@/lib/booking/summary-revenue";
 import {
   confirmationOutboxDocId,
   createPendingConfirmationPayload,
+  tryImmediateConfirmationSendForBooking,
 } from "@/lib/booking/notification-outbox";
 import { BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { fetchListingBoatsForExperience } from "@/lib/booking/listing-boat-resolution";
@@ -276,6 +277,8 @@ export async function GET(request: NextRequest) {
     const toParam = request.nextUrl.searchParams.get("to"); // booking date (createdAt)
     const fromTripParam = request.nextUrl.searchParams.get("fromTripDate"); // trip date (startDate from slotId)
     const toTripParam = request.nextUrl.searchParams.get("toTripDate"); // trip date
+    const sortByParam = request.nextUrl.searchParams.get("sortBy");
+    const sortDirParam = request.nextUrl.searchParams.get("sortDir");
 
     const fromDateVal = fromParam ? new Date(fromParam) : null;
     const toDateVal = toParam ? new Date(toParam) : null;
@@ -285,6 +288,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "fromTripDate must be on or before toTripDate" }, { status: 400 });
     }
     const hasTripFilter = !!(fromTripDate || toTripDate);
+    const sortByTrip = sortByParam === "trip" || (!sortByParam && hasTripFilter);
+    const sortDesc = sortDirParam !== "asc";
     if (fromDateVal && isNaN(fromDateVal.getTime())) return NextResponse.json({ error: "Invalid from date" }, { status: 400 });
     if (toDateVal && isNaN(toDateVal.getTime())) return NextResponse.json({ error: "Invalid to date" }, { status: 400 });
 
@@ -317,13 +322,17 @@ export async function GET(request: NextRequest) {
       if (statusFilter) query = query.where("status", "==", statusFilter);
       if (fromTripDate) query = query.where("startDateStr", ">=", fromTripDate);
       if (toTripDate) query = query.where("startDateStr", "<=", toTripDate);
-      query = query.orderBy("startDateStr", "desc");
+      query = query.orderBy("startDateStr", sortByTrip && !sortDesc ? "asc" : "desc");
     } else {
       if (experienceIdInValues) query = query.where("experienceId", "in", experienceIdInValues);
       if (statusFilter) query = query.where("status", "==", statusFilter);
-      query = query.orderBy("createdAt", "desc");
-      if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
-      if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
+      if (sortByTrip) {
+        query = query.orderBy("startDateStr", sortDesc ? "desc" : "asc");
+      } else {
+        query = query.orderBy("createdAt", sortDesc ? "desc" : "asc");
+        if (fromDateVal) query = query.where("createdAt", ">=", Timestamp.fromDate(fromDateVal));
+        if (toDateVal) query = query.where("createdAt", "<=", Timestamp.fromDate(endOfDay(toDateVal)));
+      }
     }
 
     if (cursorParam) {
@@ -461,6 +470,15 @@ export async function GET(request: NextRequest) {
         if (fromDateVal && created < fromDateVal) return false;
         if (toDateVal && created > endOfDay(toDateVal)) return false;
         return true;
+      });
+    }
+
+    if (hasTripFilter && !sortByTrip) {
+      list.sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (ta !== tb) return sortDesc ? tb - ta : ta - tb;
+        return b.id.localeCompare(a.id);
       });
     }
 
@@ -816,7 +834,8 @@ export async function POST(request: NextRequest) {
       const wStack = waiverErr instanceof Error ? waiverErr.stack : undefined;
       console.warn("[admin/bookings] waiver creation failed:", wMsg, wStack ?? "");
     }
-    // Confirmation email (+ SMS) is sent by the process-confirmation-outbox cron
+    // Same as online checkout: send guest confirmation + staff/admin alert immediately (cron retries on failure).
+    await tryImmediateConfirmationSendForBooking(db, bookingId);
     return NextResponse.json({
       id: bookingId,
       pricing,
