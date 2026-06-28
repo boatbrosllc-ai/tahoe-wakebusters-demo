@@ -612,20 +612,39 @@ export function ExperienceForm({
           friSunDays: initialDataSnapshot.friSunDays,
           holidayDates: initialDataSnapshot.holidayDates,
         });
-      if (experienceId && pricingChanged) {
-        const checkRes = await fetch(`/api/admin/bookings?experienceId=${encodeURIComponent(experienceId)}&limit=1`, {
+      const departureScheduleChanged =
+        data.pricingType === "ticketed" &&
+        (data.departureHour !== initialDataSnapshot.departureHour ||
+          data.departureMinute !== initialDataSnapshot.departureMinute ||
+          data.tripDurationHours !== initialDataSnapshot.tripDurationHours);
+      if (experienceId && (pricingChanged || departureScheduleChanged)) {
+        const checkRes = await fetch(`/api/admin/bookings?experienceId=${encodeURIComponent(experienceId)}&limit=50`, {
           credentials: "include",
         });
         if (checkRes.ok) {
-          const payload = (await checkRes.json()) as { bookings?: { status?: string }[] };
-          const hasActiveBookings =
-            Array.isArray(payload.bookings) &&
-            payload.bookings.some((b) =>
-              ["paid", "final_due", "final_paid", "final_processing", "final_requires_action", "final_failed"].includes(
-                String(b.status ?? "")
-              )
+          const payload = (await checkRes.json()) as { bookings?: { status?: string; startDate?: string | null }[] };
+          const activeStatuses = new Set([
+            "paid",
+            "final_due",
+            "final_paid",
+            "final_processing",
+            "final_requires_action",
+            "final_failed",
+          ]);
+          const activeBookings = (payload.bookings ?? []).filter((b) => activeStatuses.has(String(b.status ?? "")));
+          const hasActiveBookings = activeBookings.length > 0;
+          if (departureScheduleChanged && hasActiveBookings) {
+            const confirmed = window.confirm(
+              "You're changing the departure time or trip length.\n\n" +
+                "Existing confirmed bookings keep their original trip time (see Admin → Bookings).\n" +
+                "New customers will see the updated time when they book.\n\n" +
+                "Save this change?"
             );
-          if (hasActiveBookings) {
+            if (!confirmed) {
+              setLoading(false);
+              return;
+            }
+          } else if (pricingChanged && hasActiveBookings) {
             const confirmed = window.confirm(
               "Pricing changes apply to new holds created after saving. Active holds already in progress will use their original quoted price. Customers currently selecting a date but not yet in checkout may see the new price when they proceed."
             );

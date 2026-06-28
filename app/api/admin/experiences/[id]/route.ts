@@ -555,16 +555,20 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       });
       const holdIds = upcomingHoldDocs.map((d) => d.id);
 
+      // Existing bookings store their trip time on booking.slotId — changing experience departure
+      // only affects new availability; no reschedule required.
       if (bookingIds.length > 0) {
-        return NextResponse.json(
-          {
-            error:
-              "Cannot change departure time or trip duration while upcoming bookings exist. Cancel or reschedule those trips in Admin → Bookings first.",
-            bookingIds,
-            ...(holdIds.length > 0 ? { holdIds } : {}),
-          },
-          { status: 409 }
-        );
+        await writeAdminAuditLog("experience_departure_config_with_upcoming_bookings", {
+          experienceId: id,
+          upcomingBookingCount: bookingIds.length,
+          bookingIds: bookingIds.slice(0, 10),
+          previousDepartureHour: expData.departureHour,
+          previousDepartureMinute: expData.departureMinute,
+          previousTripDurationHours: expData.tripDurationHours,
+          newDepartureHour: parsed.departureHour ?? expData.departureHour,
+          newDepartureMinute: parsed.departureMinute ?? expData.departureMinute,
+          newTripDurationHours: parsed.tripDurationHours ?? expData.tripDurationHours,
+        });
       }
 
       if (holdIds.length > 0 && !force) {
