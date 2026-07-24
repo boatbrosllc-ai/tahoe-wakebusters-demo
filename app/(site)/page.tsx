@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Hero } from "@/components/site/Hero";
+import { LakeAustinClosureBanner } from "@/components/site/LakeAustinClosureBanner";
 import { ExperienceChooser } from "@/components/site/ExperienceChooser";
 import { HomeOurBoats } from "@/components/site/HomeOurBoats";
 import { HowItWorks } from "@/components/site/HowItWorks";
@@ -62,6 +63,7 @@ export default async function HomePage() {
   return (
     <>
       <PrefetchCriticalRoutes />
+      <LakeAustinClosureBanner />
       <Hero />
       <ExperienceChooser
         initialListings={initialListings.map((item) => ({
