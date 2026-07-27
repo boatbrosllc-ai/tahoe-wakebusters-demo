@@ -336,6 +336,8 @@ export default function CalendarsPage() {
   const [rangeTicketsHeld, setRangeTicketsHeld] = useState("");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [addBlockOpen, setAddBlockOpen] = useState(false);
+  /** Collapsed by default so a long block list does not push the calendar off-screen. */
+  const [blocksListOpen, setBlocksListOpen] = useState(false);
   const [blocks, setBlocks] = useState<
     { id: string; boatId: string | null; startAt: string; endAt: string; note: string | null; slotId?: string | null; ticketsBlocked?: number | null }[]
   >([]);
@@ -1922,249 +1924,6 @@ export default function CalendarsPage() {
             )
           ) : (
           <>
-          {/* Blocked dates panel */}
-          <div ref={blockPanelRef} className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
-
-            {/* ── Header ── */}
-            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
-              <div className="flex items-center gap-2">
-                <Ban className="h-4 w-4 text-red-400 shrink-0" aria-hidden />
-                <span className="text-sm font-semibold text-brand-dark">Blocked dates</span>
-                {blocks.length > 0 && (
-                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 leading-none tabular-nums">
-                    {blocks.length}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {blocks.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={deleteAllBlocks}
-                    disabled={deletingAll}
-                    className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline disabled:opacity-50 transition-colors"
-                  >
-                    {deletingAll ? "Removing…" : "Unblock all"}
-                  </button>
-                )}
-                <Button
-                  variant={addBlockOpen ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setAddBlockOpen((o) => !o)}
-                  className="gap-1.5 text-xs shrink-0"
-                >
-                  <Lock className="h-3.5 w-3.5" />
-                  {addBlockOpen ? "Close" : "Block dates"}
-                </Button>
-              </div>
-            </div>
-
-            {/* ── Quick-add form ── */}
-            {addBlockOpen && (
-              <div className="border-t border-brand-dark/10 bg-brand-bg/30 px-4 py-4 sm:px-6 space-y-4">
-
-                {/* Quick shortcuts */}
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Quick block</p>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { label: "Today", action: quickBlockToday },
-                      { label: "This weekend", action: quickBlockWeekend },
-                      { label: "This week", action: quickBlockThisWeek },
-                    ].map(({ label, action }) => (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={action}
-                        className="rounded-full border border-brand-dark/20 bg-white px-3 py-1.5 text-xs font-medium text-brand-dark hover:border-brand-primary/60 hover:bg-brand-primary/5 hover:text-brand-primary transition-colors shadow-sm"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Date range + boat + submit */}
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Custom range</p>
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex flex-col gap-1 min-w-[200px]">
-                      <label htmlFor="block-range-experience" className="text-xs text-brand-muted">Trip type</label>
-                      <select
-                        id="block-range-experience"
-                        value={rangeExperienceId}
-                        onChange={(e) => setRangeExperienceId(e.target.value)}
-                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
-                      >
-                        {uniqueExperienceIds.map((id) => (
-                          <option key={id} value={id}>
-                            {experienceNames.get(id) ?? id}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {ticketedExperienceIds.has(rangeExperienceId) && (
-                      <div className="flex flex-col gap-1 min-w-[160px]">
-                        <label htmlFor="block-range-tickets" className="text-xs text-brand-muted">Tickets to hold back</label>
-                        <input
-                          id="block-range-tickets"
-                          type="number"
-                          min={1}
-                          step={1}
-                          placeholder="Optional"
-                          value={rangeTicketsHeld}
-                          onChange={(e) => setRangeTicketsHeld(e.target.value)}
-                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
-                        />
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-1">
-                      <label htmlFor="block-range-from" className="text-xs text-brand-muted">From</label>
-                      <input
-                        id="block-range-from"
-                        type="date"
-                        value={rangeStart}
-                        aria-label="Block start date"
-                        onChange={(e) => {
-                          setRangeStart(e.target.value);
-                          if (!rangeEnd || e.target.value > rangeEnd) setRangeEnd(e.target.value);
-                        }}
-                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label htmlFor="block-range-to" className="text-xs text-brand-muted">To</label>
-                      <input
-                        id="block-range-to"
-                        type="date"
-                        value={rangeEnd}
-                        min={rangeStart}
-                        aria-label="Block end date"
-                        onChange={(e) => setRangeEnd(e.target.value)}
-                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
-                      />
-                    </div>
-                    {boatList.length > 0 && (
-                      <div className="flex flex-col gap-1">
-                        <label htmlFor="block-boat-select" className="text-xs text-brand-muted">Boat</label>
-                        <select
-                          id="block-boat-select"
-                          value={rangeBoatId}
-                          onChange={(e) => setRangeBoatId(e.target.value)}
-                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
-                        >
-                          <option value="">All boats</option>
-                          {boatList
-                            .filter((b) =>
-                              (b.experienceIds ?? []).some((slugOrId) => {
-                                const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
-                                return docId === rangeExperienceId;
-                              }),
-                            )
-                            .map((b) => (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <Button
-                      size="sm"
-                      onClick={blockRange}
-                      disabled={rangeLoading || !rangeStart || !rangeEnd || !rangeExperienceId}
-                      className="gap-1.5 min-h-[36px]"
-                    >
-                      <Lock className="h-3.5 w-3.5" />
-                      {rangeLoading ? "Blocking…" : "Block"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => { setAddBlockOpen(false); setRangeStart(""); setRangeEnd(""); }}
-                      className="min-h-[36px] text-brand-muted"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-xs text-brand-muted">
-                    Pick the trip type customers book on the site. Blocking a specific boat applies on every trip type for that boat.
-                  </p>
-                  {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-                </div>
-              </div>
-            )}
-
-            {/* ── Blocks list as chips ── */}
-            <div className="border-t border-brand-dark/10 px-4 py-4 sm:px-6">
-              {blocksLoading ? (
-                <div className="flex items-center gap-2 text-sm text-brand-muted">
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  Loading…
-                </div>
-              ) : blocks.length === 0 ? (
-                <p className="text-sm text-brand-muted">
-                  No upcoming blocks. Use <strong>Block dates</strong> above to block time off.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {blocks.map((block) => {
-                    const boatLabel = block.boatId
-                      ? (boatNames.get(block.boatId) ?? block.boatId)
-                      : null;
-                    const isDeleting = deletingBlockId === block.id;
-                    const blockTitle = block.note?.trim() || "Blocked";
-                    const sDay = getDateStrInSlotTimezone(new Date(block.startAt));
-                    const eDay = getDateStrInSlotTimezone(new Date(block.endAt));
-                    const showPartialBadge =
-                      (block.slotId ?? null) !== null ||
-                      sDay !== eDay ||
-                      !isSingleCentralFullDayBlock(block.startAt, block.endAt);
-                    return (
-                      <div
-                        key={block.id}
-                        className={cn(
-                          "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
-                          isDeleting
-                            ? "border-brand-dark/10 bg-brand-bg/50 text-brand-muted opacity-60"
-                            : "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100"
-                        )}
-                      >
-                        <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
-                        <span>{blockTitle}</span>
-                        {typeof block.ticketsBlocked === "number" && block.ticketsBlocked > 0 ? (
-                          <span className="rounded bg-violet-100 text-violet-900 border border-violet-200 px-1.5 py-0.5 text-[10px] font-semibold shrink-0">
-                            {block.ticketsBlocked} ticket{block.ticketsBlocked === 1 ? "" : "s"} held
-                          </span>
-                        ) : null}
-                        {showPartialBadge ? (
-                          <span className="rounded bg-amber-100 text-amber-950 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0">
-                            Partial
-                          </span>
-                        ) : null}
-                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
-                        {boatLabel && (
-                          <span className="opacity-60">· {boatLabel}</span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => deleteBlock(block.id)}
-                          disabled={isDeleting}
-                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt, block.slotId)})`}
-                          className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
-                        >
-                          {isDeleting ? (
-                            <RefreshCw className="h-2.5 w-2.5 animate-spin" />
-                          ) : (
-                            <span className="text-[10px] font-bold leading-none">✕</span>
-                          )}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Calendar card */}
           <div className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
             <div className="sticky top-0 z-10 px-4 py-4 sm:px-6 sm:py-4 border-b border-brand-dark/10 bg-white/95 backdrop-blur-sm flex flex-wrap items-center justify-between gap-4">
@@ -2436,6 +2195,275 @@ export default function CalendarsPage() {
                 </>
               )}
             </div>
+          </div>
+
+          {/* Blocked dates panel */}
+          <div ref={blockPanelRef} className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft overflow-hidden">
+
+            {/* ── Header ── */}
+            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
+              <button
+                type="button"
+                onClick={() => setBlocksListOpen((o) => !o)}
+                className="flex items-center gap-2 min-w-0 text-left rounded-lg -ml-1 px-1 py-0.5 hover:bg-brand-bg/60 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
+                aria-expanded={blocksListOpen}
+                aria-controls="blocked-dates-list"
+              >
+                {blocksListOpen ? (
+                  <ChevronUp className="h-4 w-4 text-brand-muted shrink-0" aria-hidden />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-brand-muted shrink-0" aria-hidden />
+                )}
+                <Ban className="h-4 w-4 text-red-400 shrink-0" aria-hidden />
+                <span className="text-sm font-semibold text-brand-dark">Blocked dates</span>
+                {blocks.length > 0 && (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 leading-none tabular-nums">
+                    {blocks.length}
+                  </span>
+                )}
+                {!blocksListOpen && blocks.length > 0 && (
+                  <span className="hidden sm:inline text-xs text-brand-muted font-normal truncate">
+                    · Click to view
+                  </span>
+                )}
+              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {blocks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={deleteAllBlocks}
+                    disabled={deletingAll}
+                    className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline disabled:opacity-50 transition-colors"
+                  >
+                    {deletingAll ? "Removing…" : "Unblock all"}
+                  </button>
+                )}
+                <Button
+                  variant={addBlockOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setAddBlockOpen((o) => {
+                      const next = !o;
+                      if (next) setBlocksListOpen(true);
+                      return next;
+                    });
+                  }}
+                  className="gap-1.5 text-xs shrink-0"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  {addBlockOpen ? "Close" : "Block dates"}
+                </Button>
+              </div>
+            </div>
+
+            {/* ── Quick-add form ── */}
+            {addBlockOpen && (
+              <div className="border-t border-brand-dark/10 bg-brand-bg/30 px-4 py-4 sm:px-6 space-y-4">
+
+                {/* Quick shortcuts */}
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Quick block</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "Today", action: quickBlockToday },
+                      { label: "This weekend", action: quickBlockWeekend },
+                      { label: "This week", action: quickBlockThisWeek },
+                    ].map(({ label, action }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={action}
+                        className="rounded-full border border-brand-dark/20 bg-white px-3 py-1.5 text-xs font-medium text-brand-dark hover:border-brand-primary/60 hover:bg-brand-primary/5 hover:text-brand-primary transition-colors shadow-sm"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Date range + boat + submit */}
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted mb-2">Custom range</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex flex-col gap-1 min-w-[200px]">
+                      <label htmlFor="block-range-experience" className="text-xs text-brand-muted">Trip type</label>
+                      <select
+                        id="block-range-experience"
+                        value={rangeExperienceId}
+                        onChange={(e) => setRangeExperienceId(e.target.value)}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      >
+                        {uniqueExperienceIds.map((id) => (
+                          <option key={id} value={id}>
+                            {experienceNames.get(id) ?? id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {ticketedExperienceIds.has(rangeExperienceId) && (
+                      <div className="flex flex-col gap-1 min-w-[160px]">
+                        <label htmlFor="block-range-tickets" className="text-xs text-brand-muted">Tickets to hold back</label>
+                        <input
+                          id="block-range-tickets"
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder="Optional"
+                          value={rangeTicketsHeld}
+                          onChange={(e) => setRangeTicketsHeld(e.target.value)}
+                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="block-range-from" className="text-xs text-brand-muted">From</label>
+                      <input
+                        id="block-range-from"
+                        type="date"
+                        value={rangeStart}
+                        aria-label="Block start date"
+                        onChange={(e) => {
+                          setRangeStart(e.target.value);
+                          if (!rangeEnd || e.target.value > rangeEnd) setRangeEnd(e.target.value);
+                        }}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="block-range-to" className="text-xs text-brand-muted">To</label>
+                      <input
+                        id="block-range-to"
+                        type="date"
+                        value={rangeEnd}
+                        min={rangeStart}
+                        aria-label="Block end date"
+                        onChange={(e) => setRangeEnd(e.target.value)}
+                        className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                      />
+                    </div>
+                    {boatList.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        <label htmlFor="block-boat-select" className="text-xs text-brand-muted">Boat</label>
+                        <select
+                          id="block-boat-select"
+                          value={rangeBoatId}
+                          onChange={(e) => setRangeBoatId(e.target.value)}
+                          className="rounded-lg border border-brand-dark/20 bg-white px-3 py-1.5 text-sm text-brand-dark focus:border-brand-primary focus:outline-none min-h-[36px]"
+                        >
+                          <option value="">All boats</option>
+                          {boatList
+                            .filter((b) =>
+                              (b.experienceIds ?? []).some((slugOrId) => {
+                                const docId = experienceDocIdBySlugOrId.get(slugOrId) ?? slugOrId;
+                                return docId === rangeExperienceId;
+                              }),
+                            )
+                            .map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={blockRange}
+                      disabled={rangeLoading || !rangeStart || !rangeEnd || !rangeExperienceId}
+                      className="gap-1.5 min-h-[36px]"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      {rangeLoading ? "Blocking…" : "Block"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => { setAddBlockOpen(false); setRangeStart(""); setRangeEnd(""); }}
+                      className="min-h-[36px] text-brand-muted"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-brand-muted">
+                    Pick the trip type customers book on the site. Blocking a specific boat applies on every trip type for that boat.
+                  </p>
+                  {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+                </div>
+              </div>
+            )}
+
+            {/* ── Blocks list as chips (collapsible + scroll-capped) ── */}
+            {blocksListOpen && (
+            <div id="blocked-dates-list" className="border-t border-brand-dark/10 px-4 py-4 sm:px-6">
+              {blocksLoading ? (
+                <div className="flex items-center gap-2 text-sm text-brand-muted">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  Loading…
+                </div>
+              ) : blocks.length === 0 ? (
+                <p className="text-sm text-brand-muted">
+                  No upcoming blocks. Use <strong>Block dates</strong> above to block time off.
+                </p>
+              ) : (
+                <div className="max-h-40 sm:max-h-48 overflow-y-auto overscroll-contain pr-1">
+                  <div className="flex flex-wrap gap-2">
+                  {blocks.map((block) => {
+                    const boatLabel = block.boatId
+                      ? (boatNames.get(block.boatId) ?? block.boatId)
+                      : null;
+                    const isDeleting = deletingBlockId === block.id;
+                    const blockTitle = block.note?.trim() || "Blocked";
+                    const sDay = getDateStrInSlotTimezone(new Date(block.startAt));
+                    const eDay = getDateStrInSlotTimezone(new Date(block.endAt));
+                    const showPartialBadge =
+                      (block.slotId ?? null) !== null ||
+                      sDay !== eDay ||
+                      !isSingleCentralFullDayBlock(block.startAt, block.endAt);
+                    return (
+                      <div
+                        key={block.id}
+                        className={cn(
+                          "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
+                          isDeleting
+                            ? "border-brand-dark/10 bg-brand-bg/50 text-brand-muted opacity-60"
+                            : "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100"
+                        )}
+                      >
+                        <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                        <span>{blockTitle}</span>
+                        {typeof block.ticketsBlocked === "number" && block.ticketsBlocked > 0 ? (
+                          <span className="rounded bg-violet-100 text-violet-900 border border-violet-200 px-1.5 py-0.5 text-[10px] font-semibold shrink-0">
+                            {block.ticketsBlocked} ticket{block.ticketsBlocked === 1 ? "" : "s"} held
+                          </span>
+                        ) : null}
+                        {showPartialBadge ? (
+                          <span className="rounded bg-amber-100 text-amber-950 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0">
+                            Partial
+                          </span>
+                        ) : null}
+                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
+                        {boatLabel && (
+                          <span className="opacity-60">· {boatLabel}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => deleteBlock(block.id)}
+                          disabled={isDeleting}
+                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt, block.slotId)})`}
+                          className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
+                        >
+                          {isDeleting ? (
+                            <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+                          ) : (
+                            <span className="text-[10px] font-bold leading-none">✕</span>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  </div>
+                </div>
+              )}
+            </div>
+            )}
           </div>
 
           {/* Day detail modal: timeline of time slots + bookings + actions */}
