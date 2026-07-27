@@ -294,6 +294,13 @@ function hexToRgb(hex: string): string {
   return `rgb(${r} ${g} ${b})`;
 }
 
+/** rgb(r g b) -> rgba(...) for translucent chip/pill backgrounds. */
+function rgbWithAlpha(rgb: string, alpha: number): string {
+  const m = rgb.match(/rgb\((\d+)\s+(\d+)\s+(\d+)\)/);
+  if (!m) return rgb;
+  return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${alpha})`;
+}
+
 /** Boat with experienceIds for block-by-experience logic. Optional color (hex) from boat document for calendar. */
 interface BoatItem {
   id: string;
@@ -424,6 +431,17 @@ export default function CalendarsPage() {
       return boatColors[boat.id] ?? getBoatColor(boatIndex);
     },
     [boatColors]
+  );
+
+  /** Boat calendar color for a block, or null when the block applies to all boats. */
+  const getBlockBoatColor = useCallback(
+    (boatId: string | null | undefined): string | null => {
+      if (!boatId) return null;
+      const boatIdx = boatList.findIndex((b) => b.id === boatId);
+      if (boatIdx < 0) return null;
+      return getBoatColorResolved(boatList[boatIdx], boatIdx);
+    },
+    [boatList, getBoatColorResolved]
   );
 
   /** Load boat colors from localStorage on mount. */
@@ -2147,25 +2165,62 @@ export default function CalendarsPage() {
                                     const dayBlocks = blocks.filter(
                                       (b) => blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr) != null
                                     );
-                                    const partialSummaries = dayBlocks
-                                      .filter((b) => isNonFullDayBlockOnDate(b, cell.dateStr))
-                                      .map((b) => {
-                                        const seg = blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr)!;
-                                        return `${formatBookingTimeFromIso(seg.clipStart.toISOString())}–${formatBookingTimeFromIso(seg.clipEnd.toISOString())}`;
-                                      });
-                                    const pillLabel =
-                                      partialSummaries.length > 0
-                                        ? `Blocked · ${partialSummaries.slice(0, 2).join(", ")}${partialSummaries.length > 2 ? ` +${partialSummaries.length - 2}` : ""}`
-                                        : "Blocked · All day";
-                                    return (
-                                      <span
-                                        className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-full max-w-full"
-                                        title={pillLabel}
-                                      >
-                                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" aria-hidden />
-                                        <span className="truncate">{pillLabel}</span>
-                                      </span>
-                                    );
+                                    // One pill per boat (or "all boats") so blocked days match boat colors.
+                                    const byBoatKey = new Map<string, typeof dayBlocks>();
+                                    for (const b of dayBlocks) {
+                                      const key = b.boatId?.trim() || "__all__";
+                                      const list = byBoatKey.get(key);
+                                      if (list) list.push(b);
+                                      else byBoatKey.set(key, [b]);
+                                    }
+                                    const entries = Array.from(byBoatKey.entries());
+                                    return entries.map(([boatKey, boatBlocks]) => {
+                                      const boatId = boatKey === "__all__" ? null : boatKey;
+                                      const boatColor = getBlockBoatColor(boatId);
+                                      const boatName = boatId
+                                        ? (boatNames.get(boatId) ?? boatList.find((b) => b.id === boatId)?.name ?? "Boat")
+                                        : null;
+                                      const partialSummaries = boatBlocks
+                                        .filter((b) => isNonFullDayBlockOnDate(b, cell.dateStr))
+                                        .map((b) => {
+                                          const seg = blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr)!;
+                                          return `${formatBookingTimeFromIso(seg.clipStart.toISOString())}–${formatBookingTimeFromIso(seg.clipEnd.toISOString())}`;
+                                        });
+                                      const timePart =
+                                        partialSummaries.length > 0
+                                          ? partialSummaries.slice(0, 2).join(", ") +
+                                            (partialSummaries.length > 2 ? ` +${partialSummaries.length - 2}` : "")
+                                          : "All day";
+                                      const pillLabel = boatName
+                                        ? `Blocked · ${boatName} · ${timePart}`
+                                        : `Blocked · All boats · ${timePart}`;
+                                      return (
+                                        <span
+                                          key={`block-${cell.dateStr}-${boatKey}`}
+                                          className={cn(
+                                            "inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full max-w-full border",
+                                            !boatColor && "text-slate-500 bg-slate-100 border-slate-200"
+                                          )}
+                                          style={
+                                            boatColor
+                                              ? {
+                                                  color: "rgb(15 23 42)",
+                                                  backgroundColor: rgbWithAlpha(boatColor, 0.12),
+                                                  borderColor: rgbWithAlpha(boatColor, 0.45),
+                                                }
+                                              : undefined
+                                          }
+                                          title={pillLabel}
+                                        >
+                                          <span
+                                            className={cn("h-1.5 w-1.5 rounded-full shrink-0", !boatColor && "bg-slate-400")}
+                                            style={boatColor ? { backgroundColor: boatColor } : undefined}
+                                            aria-hidden
+                                          />
+                                          <span className="truncate">{pillLabel}</span>
+                                        </span>
+                                      );
+                                    });
                                   })()}
                                 </div>
                               )}
@@ -2186,7 +2241,26 @@ export default function CalendarsPage() {
                           })}
                           {bookedForDay.length + ticketedForDay.length > 4 && <span className="text-[9px] text-brand-muted">+{bookedForDay.length + ticketedForDay.length - 4}</span>}
                           {!isPast && cell.heldCount > 0 && <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-label="Held" />}
-                          {!isPast && cell.isBlocked && <span className="h-2 w-2 rounded-full shrink-0 bg-slate-400" aria-label="Blocked" />}
+                          {!isPast && cell.isBlocked && (() => {
+                            const dayBlocks = blocks.filter(
+                              (b) => blockSegmentOnCentralDay(b.startAt, b.endAt, cell.dateStr) != null
+                            );
+                            const boatKeys = Array.from(
+                              new Set(dayBlocks.map((b) => b.boatId?.trim() || "__all__"))
+                            );
+                            return boatKeys.slice(0, 3).map((boatKey) => {
+                              const boatId = boatKey === "__all__" ? null : boatKey;
+                              const boatColor = getBlockBoatColor(boatId);
+                              return (
+                                <span
+                                  key={`m-block-${boatKey}`}
+                                  className={cn("h-2 w-2 rounded-full shrink-0", !boatColor && "bg-slate-400")}
+                                  style={boatColor ? { backgroundColor: boatColor } : undefined}
+                                  aria-label={boatId ? `Blocked · ${boatNames.get(boatId) ?? "boat"}` : "Blocked · all boats"}
+                                />
+                              );
+                            });
+                          })()}
                         </div>
                       </div>
                     );
@@ -2409,6 +2483,7 @@ export default function CalendarsPage() {
                     const boatLabel = block.boatId
                       ? (boatNames.get(block.boatId) ?? block.boatId)
                       : null;
+                    const boatColor = getBlockBoatColor(block.boatId);
                     const isDeleting = deletingBlockId === block.id;
                     const blockTitle = block.note?.trim() || "Blocked";
                     const sDay = getDateStrInSlotTimezone(new Date(block.startAt));
@@ -2422,12 +2497,27 @@ export default function CalendarsPage() {
                         key={block.id}
                         className={cn(
                           "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
-                          isDeleting
-                            ? "border-brand-dark/10 bg-brand-bg/50 text-brand-muted opacity-60"
-                            : "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100"
+                          isDeleting && "opacity-60",
+                          !boatColor && !isDeleting && "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100",
+                          !boatColor && isDeleting && "border-brand-dark/10 bg-brand-bg/50 text-brand-muted"
                         )}
+                        style={
+                          boatColor && !isDeleting
+                            ? {
+                                borderColor: boatColor,
+                                backgroundColor: rgbWithAlpha(boatColor, 0.12),
+                                color: "rgb(15 23 42)",
+                              }
+                            : boatColor && isDeleting
+                              ? {
+                                  borderColor: rgbWithAlpha(boatColor, 0.35),
+                                  backgroundColor: rgbWithAlpha(boatColor, 0.06),
+                                  color: "rgb(15 23 42)",
+                                }
+                              : undefined
+                        }
                       >
-                        <Ban className="h-3 w-3 shrink-0 opacity-60" aria-hidden />
+                        <Ban className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
                         <span>{blockTitle}</span>
                         {typeof block.ticketsBlocked === "number" && block.ticketsBlocked > 0 ? (
                           <span className="rounded bg-violet-100 text-violet-900 border border-violet-200 px-1.5 py-0.5 text-[10px] font-semibold shrink-0">
@@ -2439,16 +2529,27 @@ export default function CalendarsPage() {
                             Partial
                           </span>
                         ) : null}
-                        <span className="opacity-60">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
+                        <span className="opacity-70">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
                         {boatLabel && (
-                          <span className="opacity-60">· {boatLabel}</span>
+                          <span className="opacity-70">· {boatLabel}</span>
+                        )}
+                        {!boatLabel && (
+                          <span className="opacity-70">· All boats</span>
                         )}
                         <button
                           type="button"
                           onClick={() => deleteBlock(block.id)}
                           disabled={isDeleting}
                           aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt, block.slotId)})`}
-                          className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-red-200 text-red-700 opacity-0 group-hover:opacity-100 hover:bg-red-400 hover:text-white transition-all disabled:opacity-40"
+                          className={cn(
+                            "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:text-white transition-all disabled:opacity-40",
+                            boatColor ? "text-inherit hover:opacity-90" : "bg-red-200 text-red-700 hover:bg-red-400"
+                          )}
+                          style={
+                            boatColor
+                              ? { backgroundColor: rgbWithAlpha(boatColor, 0.25) }
+                              : undefined
+                          }
                         >
                           {isDeleting ? (
                             <RefreshCw className="h-2.5 w-2.5 animate-spin" />
