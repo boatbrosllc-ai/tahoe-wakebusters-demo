@@ -235,7 +235,7 @@ export const blogPosts: BlogPost[] = [
       { type: "p", content: "Life jackets are provided by your Lake Austin boat rental operator, but if you have kids or prefer a specific fit, you can bring your own USCG-approved vests. Motion-sickness medication is a good idea if anyone in your group is prone to it. A small first-aid kit with bandages and antiseptic doesn’t take much space and can save the day." },
       { type: "h2", content: "What Not to Bring on Your Boat Rental" },
       { type: "ul", items: ["Glass bottles or containers (use cans, plastic, or reusable)", "Hard coolers that scratch the boat", "Drones (unless you have permission and know the rules)", "Anything that can’t get wet—assume everything might get splashed"] },
-      { type: "p", content: "When you book with Boat Bros, we’ll send you a reminder with the essentials and any trip-specific tips. Show up with this list covered and you’re set for an unforgettable Lake Austin boat day." },
+      { type: "p", content: "When you book with Boat Bros, we’ll send you a reminder with the essentials and any trip-specific tips—plus a digital waiver link through [WaiverTrail](https://waivertrail.com/) so everyone can sign before you reach the dock. Show up with this list covered and you’re set for an unforgettable Lake Austin boat day." },
     ],
     relatedLinks: [
       { href: "/austin-boat-rental", text: "Austin boat rental – complete guide", external: false },
@@ -548,7 +548,7 @@ export const blogPosts: BlogPost[] = [
       { type: "h2", content: "Step 5 — Book Online and Confirm" },
       { type: "p", content: "Most Lake Austin operators, including Boat Bros, let you book online in minutes. Choose your date, duration, and boat type, then confirm group size and any add-ons. You'll get a confirmation email with dock location, check-in time, and what to bring. [Book your Lake Austin boat rental online](/booking) and you're set." },
       { type: "h2", content: "What to Expect on the Day" },
-      { type: "ul", items: ["Arrive at the dock 10–15 minutes before your scheduled time.", "Check in with the operator and sign any required waivers.", "Safety briefing covering life jackets, emergency procedures, and boat rules.", "Meet your captain—they'll walk you through the boat and answer questions.", "Push off and enjoy—your captain handles everything from here."] },
+      { type: "ul", items: ["Arrive at the dock 10–15 minutes before your scheduled time.", "Check in with the operator—Boat Bros guests usually finish waivers ahead of time on [WaiverTrail](https://waivertrail.com/), so dock check-in stays quick.", "Safety briefing covering life jackets, emergency procedures, and boat rules.", "Meet your captain—they'll walk you through the boat and answer questions.", "Push off and enjoy—your captain handles everything from here."] },
       { type: "h2", content: "What to Bring" },
       { type: "ul", items: ["Sunscreen (reef-safe if swimming) and a hat", "Soft-sided cooler with drinks and snacks—no glass", "Towels and a change of dry clothes", "Valid photo ID", "Waterproof bag or case for phone and keys", "Sunglasses and swimwear"] },
       { type: "h2", content: "Rules on Lake Austin You Should Know" },

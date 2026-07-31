@@ -101,6 +101,7 @@ export const austinBachelorPartyIdeas: CmsBlogPostSeed = {
       "Book wake charter early — instructors and boats are limited peak season.",
       "Designate sober driver or rideshare from dock — no drinking and driving.",
       "Sunscreen and hydration matter more than extra beer on the boat.",
+      "Forward the [WaiverTrail](https://waivertrail.com/) signing link so everyone finishes waivers before dock time — Boat Bros sends it after booking.",
       "Compare [Austin party boat rentals](/austin-party-boat-rentals) if group size grows last minute.",
     ]),
     b.p(

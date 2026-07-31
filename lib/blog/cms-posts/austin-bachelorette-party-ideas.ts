@@ -43,7 +43,7 @@ export const austinBachelorettePartyIdeas: CmsBlogPostSeed = {
     ),
     b.h3("What to Expect, Logistics, Tips"),
     b.p(
-      "Meet at the operator's dock (details after booking), bring soft coolers, no glass, secure decorations, and waterproof phone cases. Tip captain if you had a great day. Schedule dinner reservations before you launch — groups are tired and hungry at dock time. [Captained boat rental Austin](/captained-boat-rental-austin) pages spell out capacity and add-ons."
+      "Meet at the operator's dock (details after booking), bring soft coolers, no glass, secure decorations, and waterproof phone cases. Tip captain if you had a great day. Schedule dinner reservations before you launch — groups are tired and hungry at dock time. With Boat Bros, the group gets [WaiverTrail](https://waivertrail.com/) signing links after booking — have everyone finish before you leave the hotel so dock check-in stays quick. [Captained boat rental Austin](/captained-boat-rental-austin) pages spell out capacity and add-ons."
     ),
     b.h2("Austin Bachelorette Brunch Ideas"),
     b.p(

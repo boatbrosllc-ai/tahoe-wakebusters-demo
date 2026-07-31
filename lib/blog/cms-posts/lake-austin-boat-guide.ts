@@ -93,7 +93,7 @@ export const lakeAustinBoatGuide: CmsBlogPostSeed = {
     ),
     b.h3("Rules and Safety"),
     b.p(
-      "Listen to captain instructions, wear life jackets when required, no glass, and pack out trash. Alcohol policies vary — stay responsible; designate dock transportation. Water activities are at-your-own-risk; weather cancellations should be clear in your booking terms."
+      "Listen to captain instructions, wear life jackets when required, no glass, and pack out trash. Alcohol policies vary — stay responsible; designate dock transportation. Water activities are at-your-own-risk; weather cancellations should be clear in your booking terms. At Boat Bros, guests sign liability waivers digitally through [WaiverTrail](https://waivertrail.com/) before arrival so check-in at the dock stays short."
     ),
     b.h3("Waterfront Food"),
     b.p(

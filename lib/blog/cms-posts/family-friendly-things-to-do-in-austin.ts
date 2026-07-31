@@ -39,7 +39,7 @@ export const familyFriendlyThingsToDoInAustin: CmsBlogPostSeed = {
     ),
     b.h3("Lake Austin Family Boat Day"),
     b.p(
-      "A captained [pontoon boat rental Austin](/pontoon-boat-rental-austin) is one of the easiest family water days — no license needed, captain anchors in calm coves for swimming, lily pad time, and photos. Daytime charters (not party boats) work best for kids. See [Lake Austin boat rentals](/lake-austin-boat-rentals) and [captained boat rental Austin](/captained-boat-rental-austin) for capacity and inclusions. Pack using [what to bring on a Lake Austin boat rental](/blog/what-to-bring-lake-austin-boat-rental); swim spots in [best swimming coves on Lake Austin](/blog/best-coves-spots-lake-austin-pontoon-swimming)."
+      "A captained [pontoon boat rental Austin](/pontoon-boat-rental-austin) is one of the easiest family water days — no license needed, captain anchors in calm coves for swimming, lily pad time, and photos. Daytime charters (not party boats) work best for kids. See [Lake Austin boat rentals](/lake-austin-boat-rentals) and [captained boat rental Austin](/captained-boat-rental-austin) for capacity and inclusions. Pack using [what to bring on a Lake Austin boat rental](/blog/what-to-bring-lake-austin-boat-rental); swim spots in [best swimming coves on Lake Austin](/blog/best-coves-spots-lake-austin-pontoon-swimming). Parents and guardians complete digital waivers ahead of time — Boat Bros uses [WaiverTrail](https://waivertrail.com/) so you can sign from your phone before you meet the captain."
     ),
     b.h3("Barton Creek Greenbelt (Kid-Friendly Sections)"),
     b.p(
