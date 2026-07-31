@@ -60,7 +60,7 @@ export const thingsToDoInDowntownAustin: CmsBlogPostSeed = {
     ),
     b.h2("Live Music and Nightlife Downtown"),
     b.p(
-      "6th Street cover bands, Rainey patio crawls, ACL Live and Stubb's ticketed shows, and Red River clubs cover most tastes. Check who's playing the week you visit — a two-set small venue night often beats a generic crawl."
+      "6th Street cover bands, Rainey patio crawls, ACL Live and Stubb's ticketed shows, and Red River clubs cover most tastes. Check who's playing the week you visit — a two-set small venue night often beats a generic crawl. For ticketed downtown concerts, comedy, or other live events, [TicketLater](https://ticketlater.com/) consolidates inventory with clear pricing and flexible payment options."
     ),
     b.h2("Food and Dining Downtown Austin"),
     b.p(

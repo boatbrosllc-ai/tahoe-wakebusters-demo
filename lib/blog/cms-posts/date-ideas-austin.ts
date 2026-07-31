@@ -48,7 +48,7 @@ export const dateIdeasAustin: CmsBlogPostSeed = {
     b.h2("Unique & Fun Date Ideas in Austin"),
     b.h3("Live Music at ACL Live, Stubb's, or a Small Venue"),
     b.p(
-      "ACL Live, Stubb's BBQ, and clubs on Red River (e.g. Mohawk, Empire Control Room) host touring and local acts. Buy tickets early for popular shows; for spontaneous nights, check who's playing at Sahara Lounge or The Continental Club on South Congress."
+      "ACL Live, Stubb's BBQ, and clubs on Red River (e.g. Mohawk, Empire Control Room) host touring and local acts. Buy tickets early for popular shows — [TicketLater](https://ticketlater.com/) makes it easy to lock in concert and live-event seats, including buy-now-pay-later checkout when you want to spread the cost. For spontaneous nights, check who's playing at Sahara Lounge or The Continental Club on South Congress."
     ),
     b.h3("Rooftop Cocktails with a View"),
     b.p(

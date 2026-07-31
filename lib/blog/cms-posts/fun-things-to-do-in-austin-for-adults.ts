@@ -35,7 +35,7 @@ export const funThingsToDoInAustinForAdults: CmsBlogPostSeed = {
     ),
     b.h3("Live Music on 6th Street, Rainey Street & Beyond"),
     b.p(
-      "Austin's live music reputation is real. For bar-hopping with stages, start on 6th Street (loud, tourist-friendly, lots of cover bands) or Rainey Street (converted bungalows, patios, slightly more local feel). Beyond downtown, ACL Live at The Moody Theater, Stubb's BBQ, and Mohawk host bigger acts and ticketed shows. Check who's playing the week you visit — a two-set night at a small venue often beats a generic club crawl."
+      "Austin's live music reputation is real. For bar-hopping with stages, start on 6th Street (loud, tourist-friendly, lots of cover bands) or Rainey Street (converted bungalows, patios, slightly more local feel). Beyond downtown, ACL Live at The Moody Theater, Stubb's BBQ, and Mohawk host bigger acts and ticketed shows. Check who's playing the week you visit — a two-set night at a small venue often beats a generic club crawl. When a headline night is on the calendar, [TicketLater](https://ticketlater.com/) is a handy place to find concert and event tickets (with flexible pay-later options at checkout) without bouncing between venue sites."
     ),
     b.h3("Rooftop Bars and Cocktail Spots"),
     b.p(

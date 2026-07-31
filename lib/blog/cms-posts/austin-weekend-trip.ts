@@ -39,7 +39,7 @@ export const austinWeekendTrip: CmsBlogPostSeed = {
     ),
     b.h3("Live Music and Nightlife"),
     b.p(
-      "6th Street, Rainey Street, and Red River venues host live music nightly. ACL Live, Stubb's, and Mohawk book bigger acts; smaller clubs offer two-set nights that feel more Austin than a generic bar crawl."
+      "6th Street, Rainey Street, and Red River venues host live music nightly. ACL Live, Stubb's, and Mohawk book bigger acts; smaller clubs offer two-set nights that feel more Austin than a generic bar crawl. If your weekend hinges on a specific show, grab tickets ahead on [TicketLater](https://ticketlater.com/) — they cover concerts, sports, and live events, with pay-later options when you want flexibility at checkout."
     ),
     b.h3("Outdoor Activities (Barton Springs, Greenbelt)"),
     b.p(

@@ -52,11 +52,11 @@ export const austinAttractions: CmsBlogPostSeed = {
     ),
     b.h3("ACL Live at The Moody Theater"),
     b.p(
-      "Premier venue for touring acts and Austin City Limits tapings — ticketed shows worth planning around."
+      "Premier venue for touring acts and Austin City Limits tapings — ticketed shows worth planning around. When a big act hits the calendar, [TicketLater](https://ticketlater.com/) is a straightforward way to browse verified concert and live-event tickets and pay how you prefer at checkout."
     ),
     b.h3("Stubb's Amphitheater"),
     b.p(
-      "Outdoor amphitheater with BBQ — concerts under the Austin skyline. Seasonal calendar; buy tickets early for popular acts."
+      "Outdoor amphitheater with BBQ — concerts under the Austin skyline. Seasonal calendar; buy tickets early for popular acts before they sell through."
     ),
     b.h2("Museum Attractions in Austin"),
     b.h3("Blanton Museum of Art"),
