@@ -15,7 +15,7 @@ import { formatBookingTime, formatBookingTimeFromIso, formatBookingDate } from "
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bumpSlotCacheVersion } from "@/lib/booking/booking-data-cache";
 import Link from "next/link";
-import { Calendar as CalendarIcon, ChevronDown, ChevronUp, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette, Ban, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, User, Ship, DollarSign, Lock, Unlock, Mail, ExternalLink, LayoutGrid, CalendarDays, FileCheck, Palette, Ban, Plus, Trash2, RefreshCw, Pencil } from "lucide-react";
 import { AdminCalendarWeekView } from "@/components/admin/AdminCalendarWeekView";
 import { AddBookingModal } from "@/app/(site)/admin/(dashboard)/bookings/AddBookingModal";
 import {
@@ -351,6 +351,22 @@ export default function CalendarsPage() {
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
+  /** Edit a single block from the Blocked dates chip list (PATCH /api/admin/blocks/:id). */
+  const [editBlockOpen, setEditBlockOpen] = useState(false);
+  const [editingBlock, setEditingBlock] = useState<{
+    id: string;
+    boatId: string | null;
+    startAt: string;
+    endAt: string;
+    note: string | null;
+    slotId?: string | null;
+    ticketsBlocked?: number | null;
+  } | null>(null);
+  const [editStartLocal, setEditStartLocal] = useState("");
+  const [editEndLocal, setEditEndLocal] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editBlockSaving, setEditBlockSaving] = useState(false);
+  const [editBlockError, setEditBlockError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ level: "success" | "warning"; message: string } | null>(null);
   /** Confirms destructive calendar actions (block/unblock date or slot, release hold) before calling APIs. */
@@ -1562,6 +1578,10 @@ export default function CalendarsPage() {
         return;
       }
       setBlocks((prev) => prev.filter((b) => b.id !== id));
+      if (editingBlock?.id === id) {
+        setEditBlockOpen(false);
+        setEditingBlock(null);
+      }
       bumpSlotCacheVersion();
       await fetchSlots();
       await fetchBlocks();
@@ -1570,6 +1590,69 @@ export default function CalendarsPage() {
       await fetchBlocks();
     }
     finally { setDeletingBlockId(null); }
+  };
+
+  const openEditBlock = (block: {
+    id: string;
+    boatId: string | null;
+    startAt: string;
+    endAt: string;
+    note: string | null;
+    slotId?: string | null;
+    ticketsBlocked?: number | null;
+  }) => {
+    setEditingBlock(block);
+    setEditStartLocal(formatDateAsCentralDatetimeLocal(new Date(block.startAt)));
+    setEditEndLocal(formatDateAsCentralDatetimeLocal(new Date(block.endAt)));
+    setEditNote(block.note ?? "");
+    setEditBlockError(null);
+    setEditBlockOpen(true);
+  };
+
+  const saveEditBlock = async () => {
+    if (!editingBlock) return;
+    const start = parseCentralDatetimeLocalInput(editStartLocal);
+    const end = parseCentralDatetimeLocalInput(editEndLocal);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      setEditBlockError("Enter valid start and end times.");
+      return;
+    }
+    if (start >= end) {
+      setEditBlockError("End must be after start.");
+      return;
+    }
+    setEditBlockSaving(true);
+    setEditBlockError(null);
+    try {
+      const res = await fetch(`/api/admin/blocks/${editingBlock.id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startAt: start.toISOString(),
+          endAt: end.toISOString(),
+          note: editNote.trim() || null,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setEditBlockError(data.error ?? "Failed to update block");
+        return;
+      }
+      setEditBlockOpen(false);
+      setEditingBlock(null);
+      setNotice({
+        level: "success",
+        message: "Block updated — customers will see the new unavailable window immediately.",
+      });
+      bumpSlotCacheVersion();
+      await fetchSlots();
+      await fetchBlocks();
+    } catch {
+      setEditBlockError("Failed to update block");
+    } finally {
+      setEditBlockSaving(false);
+    }
   };
 
   const deleteAllBlocks = async () => {
@@ -2492,12 +2575,27 @@ export default function CalendarsPage() {
                       (block.slotId ?? null) !== null ||
                       sDay !== eDay ||
                       !isSingleCentralFullDayBlock(block.startAt, block.endAt);
+                    const dateLabel = fmtBlockDate(block.startAt, block.endAt, block.slotId);
                     return (
                       <div
                         key={block.id}
+                        role="button"
+                        tabIndex={isDeleting ? -1 : 0}
+                        onClick={() => {
+                          if (!isDeleting) openEditBlock(block);
+                        }}
+                        onKeyDown={(e) => {
+                          if (isDeleting) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openEditBlock(block);
+                          }
+                        }}
+                        aria-label={`Edit block ${blockTitle}, ${dateLabel}`}
+                        title="Click to edit"
                         className={cn(
-                          "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
-                          isDeleting && "opacity-60",
+                          "group inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40",
+                          isDeleting && "opacity-60 cursor-not-allowed",
                           !boatColor && !isDeleting && "border-red-200 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100",
                           !boatColor && isDeleting && "border-brand-dark/10 bg-brand-bg/50 text-brand-muted"
                         )}
@@ -2529,20 +2627,29 @@ export default function CalendarsPage() {
                             Partial
                           </span>
                         ) : null}
-                        <span className="opacity-70">· {fmtBlockDate(block.startAt, block.endAt, block.slotId)}</span>
+                        <span className="opacity-70">· {dateLabel}</span>
                         {boatLabel && (
                           <span className="opacity-70">· {boatLabel}</span>
                         )}
                         {!boatLabel && (
                           <span className="opacity-70">· All boats</span>
                         )}
+                        <span
+                          className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+                          aria-hidden
+                        >
+                          <Pencil className="h-2.5 w-2.5" />
+                        </span>
                         <button
                           type="button"
-                          onClick={() => deleteBlock(block.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteBlock(block.id);
+                          }}
                           disabled={isDeleting}
-                          aria-label={`Unblock ${blockTitle} (${fmtBlockDate(block.startAt, block.endAt, block.slotId)})`}
+                          aria-label={`Unblock ${blockTitle} (${dateLabel})`}
                           className={cn(
-                            "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full opacity-0 group-hover:opacity-100 hover:text-white transition-all disabled:opacity-40",
+                            "ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-white transition-all disabled:opacity-40",
                             boatColor ? "text-inherit hover:opacity-90" : "bg-red-200 text-red-700 hover:bg-red-400"
                           )}
                           style={
@@ -2566,6 +2673,104 @@ export default function CalendarsPage() {
             </div>
             )}
           </div>
+
+          {/* Edit blocked date from chip list */}
+          <Dialog
+            open={editBlockOpen}
+            onOpenChange={(open) => {
+              setEditBlockOpen(open);
+              if (!open) {
+                setEditingBlock(null);
+                setEditBlockError(null);
+              }
+            }}
+            title="Edit blocked date"
+            description={
+              editingBlock
+                ? `${editingBlock.note?.trim() || "Blocked"} · ${
+                    editingBlock.boatId
+                      ? (boatNames.get(editingBlock.boatId) ?? editingBlock.boatId)
+                      : "All boats"
+                  }`
+                : undefined
+            }
+            fullScreenOnMobile
+          >
+            {editingBlock && (
+              <div className="space-y-4">
+                <p className="text-xs text-brand-muted">
+                  Times are America/Chicago. Saving updates Firestore and the public booking calendar immediately.
+                </p>
+                <label className="block">
+                  <span className="text-xs font-medium text-brand-muted">Start</span>
+                  <input
+                    type="datetime-local"
+                    step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
+                    value={editStartLocal}
+                    onChange={(e) => setEditStartLocal(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-brand-muted">End</span>
+                  <input
+                    type="datetime-local"
+                    step={BLOCK_DATETIME_LOCAL_STEP_SECONDS}
+                    value={editEndLocal}
+                    onChange={(e) => setEditEndLocal(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-brand-muted">Note</span>
+                  <input
+                    type="text"
+                    value={editNote}
+                    onChange={(e) => setEditNote(e.target.value)}
+                    placeholder="e.g. Anthony, maintenance, private charter"
+                    className="mt-1 w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm"
+                  />
+                </label>
+                {editBlockError && (
+                  <p className="text-xs text-red-600">{editBlockError}</p>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                    disabled={editBlockSaving || deletingBlockId === editingBlock.id}
+                    onClick={() => {
+                      if (!confirm("Remove this block? That time will become available again.")) return;
+                      void deleteBlock(editingBlock.id);
+                    }}
+                  >
+                    {deletingBlockId === editingBlock.id ? "Removing…" : "Unblock"}
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={editBlockSaving}
+                      onClick={() => setEditBlockOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={editBlockSaving}
+                      onClick={() => void saveEditBlock()}
+                    >
+                      {editBlockSaving ? "Saving…" : "Save changes"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </Dialog>
 
           {/* Day detail modal: timeline of time slots + bookings + actions */}
           <Dialog
