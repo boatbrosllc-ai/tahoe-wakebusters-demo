@@ -14,6 +14,7 @@ import { Elements } from "@stripe/react-stripe-js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
+import { bundlePresets, type BundleId, type BundlePreset } from "@/content/bundle-presets";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import {
   parseSlotId,
@@ -172,6 +173,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
   const selectedExperienceIdRef = useRef<string | undefined>(undefined);
   selectedExperienceIdRef.current = selectedExperience?.id;
+  /** Package ladder selection (Nasty / Nastier / Nastiest) — drives duration + addon preselect. */
+  const [selectedBundleId, setSelectedBundleId] = useState<BundleId | null>(null);
+  const [packageDurationHours, setPackageDurationHours] = useState<number | null>(null);
+  const [packageAddonCatalogKeys, setPackageAddonCatalogKeys] = useState<string[] | null>(null);
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   /** Bumped every minute and at business midnight (see midnight effect after data hook) so month guards stay accurate. */
@@ -460,17 +465,30 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
-  // When rates first load (from hook), set calendar rate if none selected. Prefer initial `durationHours`, then 3-hour.
+  // When rates first load, set calendar rate. Prefer package / initial duration, then NSF defaults (5h half / 8h full).
   useEffect(() => {
     if (ratesForSelection.length === 0 || selectedRateIdForCalendar) return;
-    const fromPreview =
-      initialSelection?.durationHours != null
-        ? ratesForSelection.find((r) => r.durationHours === initialSelection.durationHours)
+    const preferredHours = packageDurationHours ?? initialSelection?.durationHours ?? null;
+    const fromPreferred =
+      preferredHours != null
+        ? ratesForSelection.find((r) => r.durationHours === preferredHours)
         : undefined;
-    const threeHourRate = ratesForSelection.find((r) => r.durationHours === 3);
-    const defaultRate = fromPreview ?? threeHourRate ?? ratesForSelection[0];
+    const slug = selectedExperience?.slug ?? initialSelection?.experienceSlug ?? "";
+    const nsfDefaultHours = /water|full/i.test(slug) ? 8 : /pontoon|half/i.test(slug) ? 5 : null;
+    const nsfDefault =
+      nsfDefaultHours != null
+        ? ratesForSelection.find((r) => r.durationHours === nsfDefaultHours)
+        : undefined;
+    const defaultRate = fromPreferred ?? nsfDefault ?? ratesForSelection[0];
     setSelectedRateIdForCalendar(defaultRate.id);
-  }, [ratesForSelection, selectedRateIdForCalendar, initialSelection?.durationHours]);
+  }, [
+    ratesForSelection,
+    selectedRateIdForCalendar,
+    packageDurationHours,
+    initialSelection?.durationHours,
+    initialSelection?.experienceSlug,
+    selectedExperience?.slug,
+  ]);
 
   /** Clearing the slot matters: charter sync effect below otherwise snaps calendar duration back to the old slot's tier. */
   const selectCharterCalendarRate = useCallback((rateId: string) => {
@@ -565,6 +583,37 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           setViewMonthYear(year);
           setViewMonthMonth(month);
         }
+      }
+      // Keep package highlight in sync when opened from BundleChooser
+      const selKeys = (initialSelection.addonCatalogKeys ?? [])
+        .map((k) => k.toLowerCase().trim())
+        .filter(Boolean)
+        .sort()
+        .join(",");
+      const matched = bundlePresets.find((b) => {
+        const opt = b.charterOptions[b.defaultOptionIndex] ?? b.charterOptions[0];
+        if (!opt || !initialSelection.experienceSlug) return false;
+        if (!slugMatches(initialSelection.experienceSlug, opt.experienceSlug)) return false;
+        if (
+          initialSelection.durationHours != null &&
+          initialSelection.durationHours !== opt.durationHours
+        ) {
+          return false;
+        }
+        const bundleKeys = b.addonCatalogKeys
+          .map((k) => k.toLowerCase().trim())
+          .filter(Boolean)
+          .sort()
+          .join(",");
+        return selKeys === bundleKeys;
+      });
+      if (matched) {
+        const opt = matched.charterOptions[matched.defaultOptionIndex] ?? matched.charterOptions[0];
+        setSelectedBundleId(matched.id);
+        if (opt) setPackageDurationHours(opt.durationHours);
+        setPackageAddonCatalogKeys(
+          matched.addonCatalogKeys.length ? [...matched.addonCatalogKeys] : []
+        );
       }
     }
   }, [open, initialSelection, initialSelection?.date, experiences]);
@@ -906,7 +955,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   // Bundle presets: preselect add-ons by catalogKey once detail loads (still priced via create-hold).
   useEffect(() => {
-    const keys = initialSelection?.addonCatalogKeys;
+    const keys = packageAddonCatalogKeys ?? initialSelection?.addonCatalogKeys;
     if (!keys?.length || addons.length === 0) return;
     const keySet = new Set(keys.map((k) => k.toLowerCase().trim()).filter(Boolean));
     if (keySet.size === 0) return;
@@ -924,7 +973,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }
       return changed ? next : prev;
     });
-  }, [addons, initialSelection?.addonCatalogKeys]);
+  }, [addons, packageAddonCatalogKeys, initialSelection?.addonCatalogKeys]);
 
   const emailValid = useMemo(
     () => BOOKING_EMAIL_REGEX.test(customerEmail.trim()),
@@ -1400,6 +1449,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setStep(1);
       }
       setSelectedExperience(null);
+      setSelectedBundleId(null);
+      setPackageDurationHours(null);
+      setPackageAddonCatalogKeys(null);
       resetBookingDataForModalOpen();
       setSelectedBoat(null);
       setSelectedDate(null);
@@ -2435,7 +2487,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   };
 
-  const handleSelectCategory = (exp: ExperienceItem) => {
+  const handleSelectPackage = (bundle: BundlePreset) => {
+    const option = bundle.charterOptions[bundle.defaultOptionIndex] ?? bundle.charterOptions[0];
+    if (!option || !experiences?.length) return;
+    const exp = experiences.find((e) => slugMatches(option.experienceSlug, e.slug ?? ""));
+    if (!exp) return;
     setSelectedDate(null);
     setSelectedSlot(null);
     setSelectedRateIdForCalendar(null);
@@ -2445,7 +2501,12 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setViewMonthYear(year);
       setViewMonthMonth(month);
     }
+    setSelectedBundleId(bundle.id);
+    setPackageDurationHours(option.durationHours);
+    setPackageAddonCatalogKeys(bundle.addonCatalogKeys.length ? [...bundle.addonCatalogKeys] : []);
+    setAddonSelections({});
     setSelectedExperience(exp);
+    setBookingMode("charter");
     setStep(2);
     analytics.bookingStep1CategorySelected();
   };
@@ -2675,7 +2736,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       fullScreenOnMobile
       bodyScroll={!step4UsesInnerScroll}
       className={cn(
-        "sm:max-w-md md:max-w-2xl lg:max-w-3xl",
+        // Desktop: wider for 3 package cards; height stays content-driven (not viewport-tall)
+        "sm:max-w-xl md:max-w-3xl lg:max-w-4xl sm:max-h-[85vh]",
         // Step 4 (details & payment): taller panel on phone so more form fields are visible before scrolling.
         step === 4 &&
           "max-sm:h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))] max-sm:max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))]",
@@ -2831,8 +2893,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 loading={loading}
                 experiences={experiences}
                 experiencesLoadError={experiencesLoadError}
-                selectedExperience={selectedExperience}
-                onSelectCategory={handleSelectCategory}
+                selectedBundleId={selectedBundleId}
+                onSelectPackage={handleSelectPackage}
                 panel1Collapsed={panel1Collapsed}
               />
             </div>

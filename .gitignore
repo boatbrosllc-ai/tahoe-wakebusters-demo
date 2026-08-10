@@ -17,6 +17,7 @@ yarn-error.log*
 # Env
 .env
 .env.local
+netlify-env-import.env
 firebase-private-key.pem
 *-service-account*.json
 .env.development.local
