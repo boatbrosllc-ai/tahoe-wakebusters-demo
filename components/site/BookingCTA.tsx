@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { Phone } from "lucide-react";
+import { getPublicPhone } from "@/lib/seo/public-contact";
 
 export interface BookingCTAProps {
   source: string;
@@ -56,6 +56,25 @@ export function BookingCTA({
     : "/booking";
 
   const primaryButtonLabel = primaryLabel?.trim() || "Book now";
+  const phone = getPublicPhone();
+  const showCallButton = Boolean(showCall);
+  const callHref = phone ? `tel:${phone.tel}` : "/contact";
+  const callAriaLabel = phone ? `Call ${phone.display}` : "Contact us to call";
+
+  const callButtonClass = (size: "inline" | "primary" | "secondary") =>
+    cn(
+      "inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 font-medium transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 shrink-0",
+      size === "inline" &&
+        "h-11 sm:h-12 min-h-[44px] px-4 sm:px-6 text-sm sm:text-base border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary",
+      size === "primary" && "h-14 text-base sm:text-lg px-5 sm:px-10",
+      size === "secondary" && "h-12 px-4 sm:px-8 text-sm sm:text-base",
+      size !== "inline" &&
+        (callPinkOnDark && onDark
+          ? "border-brand-secondary bg-brand-secondary text-white hover:bg-brand-secondary/90 hover:border-brand-secondary/90 focus-visible:ring-brand-secondary focus-visible:ring-offset-brand-dark"
+          : onDark
+            ? "border-white text-white hover:bg-white hover:text-brand-dark focus-visible:ring-white focus-visible:ring-offset-brand-dark"
+            : "border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary focus-visible:ring-offset-white")
+    );
 
   if (variant === "inline") {
     const buttonClass = dense
@@ -83,17 +102,28 @@ export function BookingCTA({
             </Link>
           </Button>
         )}
-        {showCall && (
-          <a
-            href={`tel:${siteConfig.phoneTel}`}
-            onClick={handleCallClick}
-            className="shrink-0 inline-flex items-center justify-center gap-1.5 h-11 sm:h-12 min-h-[44px] px-4 sm:px-6 text-sm sm:text-base font-medium rounded-xl text-brand-primary hover:text-brand-muted transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 border-2 border-brand-primary hover:bg-brand-primary/10"
-            aria-label={`Call ${siteConfig.phone}`}
-          >
-            <Phone className="h-4 w-4" aria-hidden />
-            Call Now
-          </a>
-        )}
+        {showCallButton &&
+          (phone ? (
+            <a
+              href={callHref}
+              onClick={handleCallClick}
+              className={callButtonClass("inline")}
+              aria-label={callAriaLabel}
+            >
+              <Phone className="h-4 w-4" aria-hidden />
+              Call Now
+            </a>
+          ) : (
+            <Link
+              href="/contact"
+              onClick={handleCallClick}
+              className={callButtonClass("inline")}
+              aria-label={callAriaLabel}
+            >
+              <Phone className="h-4 w-4" aria-hidden />
+              Call Now
+            </Link>
+          ))}
       </div>
     );
   }
@@ -106,7 +136,7 @@ export function BookingCTA({
             variant="default"
             size={variant === "primary" ? "xl" : "lg"}
             className={cn(
-              "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
+              "flex-1 sm:flex-initial min-w-0 sm:min-w-[10.5rem] rounded-xl shrink-0",
               variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
             )}
             onClick={() => {
@@ -122,7 +152,7 @@ export function BookingCTA({
             variant="default"
             size={variant === "primary" ? "xl" : "lg"}
             className={cn(
-              "flex-1 sm:flex-initial min-w-0 rounded-xl shrink-0",
+              "flex-1 sm:flex-initial min-w-0 sm:min-w-[10.5rem] rounded-xl shrink-0",
               variant === "primary" ? "text-base sm:text-lg" : "text-sm sm:text-base"
             )}
           >
@@ -131,32 +161,44 @@ export function BookingCTA({
             </Link>
           </Button>
         )}
-        {showCall && (
-          <a
-            href={`tel:${siteConfig.phoneTel}`}
-            onClick={handleCallClick}
-            className={cn(
-              "inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 font-medium px-4 sm:px-6 transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 shrink-0 text-sm sm:text-base",
-              variant === "primary"
-                ? "h-14 text-base sm:text-lg px-5 sm:px-10"
-                : "h-12 px-4 sm:px-8",
-              callPinkOnDark && onDark
-                ? "border-brand-secondary bg-brand-secondary text-white hover:bg-brand-secondary/90 hover:border-brand-secondary/90 focus-visible:ring-brand-secondary focus-visible:ring-offset-brand-dark"
-                : onDark
-                  ? "border-white text-white hover:bg-white hover:text-brand-dark focus-visible:ring-white focus-visible:ring-offset-brand-dark"
-                  : "border-brand-primary text-brand-primary hover:bg-brand-primary/10 focus-visible:ring-brand-primary focus-visible:ring-offset-white"
-            )}
-            aria-label={`Call ${siteConfig.phone}`}
-          >
-            <Phone className="h-4 w-4" aria-hidden />
-            Call Now
-          </a>
-        )}
+        {showCallButton &&
+          (phone ? (
+            <a
+              href={callHref}
+              onClick={handleCallClick}
+              className={cn(
+                callButtonClass(variant === "primary" ? "primary" : "secondary"),
+                "flex-1 sm:flex-initial sm:min-w-[10.5rem]"
+              )}
+              aria-label={callAriaLabel}
+            >
+              <Phone className="h-4 w-4" aria-hidden />
+              Call Now
+            </a>
+          ) : (
+            <Link
+              href="/contact"
+              onClick={handleCallClick}
+              className={cn(
+                callButtonClass(variant === "primary" ? "primary" : "secondary"),
+                "flex-1 sm:flex-initial sm:min-w-[10.5rem]"
+              )}
+              aria-label={callAriaLabel}
+            >
+              <Phone className="h-4 w-4" aria-hidden />
+              Call Now
+            </Link>
+          ))}
       </div>
-      {(primaryHint || callHint) && (
-        <p className={cn("text-xs max-w-md", onDark ? "text-white/70" : "text-brand-muted")}>
+      {(primaryHint || (showCallButton && callHint)) && (
+        <p
+          className={cn(
+            "text-xs max-w-md mx-auto text-center leading-relaxed",
+            onDark ? "text-white/70" : "text-brand-muted"
+          )}
+        >
           {primaryHint}
-          {showCall && callHint ? ` · ${callHint}` : ""}
+          {showCallButton && callHint ? ` · ${callHint}` : ""}
         </p>
       )}
     </div>

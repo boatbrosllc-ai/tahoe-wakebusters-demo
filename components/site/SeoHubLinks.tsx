@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
 const HOMEPAGE_SEO_LINKS: { href: string; label: string }[] = [
   { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas fishing charters" },
   { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
   { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
+  { href: "/cabo-fish-processing", label: "Cabo fish processing" },
   { href: "/cabo-marlin-fishing", label: "Marlin fishing Cabo" },
   { href: "/cabo-fishing-calendar", label: "Cabo fishing calendar" },
   { href: "/fishing-reports", label: "Fishing reports" },
@@ -17,7 +19,7 @@ const EXPERIENCES_HUB_SEO_LINKS: { href: string; label: string }[] = [
   { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
   { href: "/best-fishing-charters-cabo-san-lucas", label: "How to choose a charter" },
   { href: "/packages", label: "Multi-day packages" },
-  { href: "/boats", label: "Our fishing boat" },
+  { href: OUR_BOAT_PATH, label: "Our fishing boat" },
   { href: "/faqs", label: "Charter FAQs" },
   { href: "/contact", label: "Contact" },
 ];

@@ -33,9 +33,9 @@ export function FAQsPageClient({ faqs }: { faqs: FaqItem[] }) {
       <section className="relative overflow-hidden bg-brand-dark py-16 sm:py-20 lg:py-24">
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 via-transparent to-brand-muted/10" aria-hidden />
         <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-brand-dark to-transparent" aria-hidden />
-        <div className="container-narrow relative z-10 px-4 sm:px-6 lg:px-8 text-center">
+        <div className="container-narrow relative z-10 mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center text-center">
           <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-brand-primary mb-4">
-            Lake Austin boat rentals
+            Cabo San Lucas sport fishing
           </p>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white tracking-tight mb-4">
             Frequently asked questions

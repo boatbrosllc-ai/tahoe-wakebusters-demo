@@ -9,6 +9,7 @@ export const SEO_COMMERCIAL_PATHS = [
   "/los-cabos-fishing-charters",
   "/cabo-fishing-charter-prices",
   "/best-fishing-charters-cabo-san-lucas",
+  "/cabo-fish-processing",
 ] as const;
 
 export const SEO_AUTHORITY_PATHS = [

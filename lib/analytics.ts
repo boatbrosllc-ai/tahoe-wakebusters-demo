@@ -20,7 +20,28 @@ export type AnalyticsEvent =
   | { name: "booking_step_1_category_selected"; payload: Record<string, never> }
   | { name: "booking_step_2_date_selected"; payload: Record<string, never> }
   | { name: "booking_step_4_payment_started"; payload: Record<string, never> }
-  | { name: "booking_completed"; payload: { booking_id?: string; receipt_token?: string } };
+  | { name: "booking_completed"; payload: { booking_id?: string; receipt_token?: string } }
+  | { name: "fish_processing_calculator_started"; payload: { page: string } }
+  | { name: "fish_processing_species_selected"; payload: { page: string; species: string } }
+  | { name: "fish_processing_weight_changed"; payload: { page: string; weight_lb: number } }
+  | {
+      name: "fish_processing_estimate_completed";
+      payload: {
+        page: string;
+        species: string;
+        weight_lb: number;
+        finished_low_lb: number;
+        finished_high_lb: number;
+        processing_low_usd: number;
+        processing_high_usd: number;
+      };
+    }
+  | { name: "fish_processing_process_cta_clicked"; payload: { page: string; source: string } }
+  | { name: "fish_processing_pack_cta_clicked"; payload: { page: string; source: string } }
+  | { name: "fish_processing_shipping_started"; payload: { page: string; source: string } }
+  | { name: "fish_processing_shipping_lead_submitted"; payload: { page: string; source: string } }
+  | { name: "fish_processing_charter_cta_clicked"; payload: { page: string; source: string } }
+  | { name: "fish_processing_outside_charter_lead_clicked"; payload: { page: string; source: string } };
 
 type GtagFn = (...args: unknown[]) => void;
 
@@ -95,5 +116,59 @@ export const analytics = {
     if (payload?.bookingId) p.booking_id = payload.bookingId;
     if (payload?.receiptToken) p.receipt_token = payload.receiptToken;
     logEvent({ name: "booking_completed", payload: p });
+  },
+  fishProcessingCalculatorStarted(page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_calculator_started", payload: { page } });
+  },
+  fishProcessingSpeciesSelected(species: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_species_selected", payload: { page, species } });
+  },
+  fishProcessingWeightChanged(weightLb: number, page = "cabo_fish_processing") {
+    logEvent({
+      name: "fish_processing_weight_changed",
+      payload: { page, weight_lb: weightLb },
+    });
+  },
+  fishProcessingEstimateCompleted(
+    payload: {
+      species: string;
+      weightLb: number;
+      finishedLowLb: number;
+      finishedHighLb: number;
+      processingLowUsd: number;
+      processingHighUsd: number;
+    },
+    page = "cabo_fish_processing"
+  ) {
+    logEvent({
+      name: "fish_processing_estimate_completed",
+      payload: {
+        page,
+        species: payload.species,
+        weight_lb: payload.weightLb,
+        finished_low_lb: payload.finishedLowLb,
+        finished_high_lb: payload.finishedHighLb,
+        processing_low_usd: payload.processingLowUsd,
+        processing_high_usd: payload.processingHighUsd,
+      },
+    });
+  },
+  fishProcessingProcessCtaClicked(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_process_cta_clicked", payload: { page, source } });
+  },
+  fishProcessingPackCtaClicked(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_pack_cta_clicked", payload: { page, source } });
+  },
+  fishProcessingShippingStarted(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_shipping_started", payload: { page, source } });
+  },
+  fishProcessingShippingLeadSubmitted(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_shipping_lead_submitted", payload: { page, source } });
+  },
+  fishProcessingCharterCtaClicked(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_charter_cta_clicked", payload: { page, source } });
+  },
+  fishProcessingOutsideCharterLeadClicked(source: string, page = "cabo_fish_processing") {
+    logEvent({ name: "fish_processing_outside_charter_lead_clicked", payload: { page, source } });
   },
 };

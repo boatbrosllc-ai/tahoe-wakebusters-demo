@@ -15,13 +15,21 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { formatExperiencePriceLabel } from "@/content/experiences";
 import { bundlePresets, type BundleId, type BundlePreset } from "@/content/bundle-presets";
-import { cn, getDisplayImageUrl } from "@/lib/utils";
 import {
-  parseSlotId,
-  parseSlotIdRelaxed,
-  isMonthInSeasonalRange,
-  shouldUseWakeBoardCharterGrid,
-} from "@/lib/booking/experience-slots";
+  buildNsfSlotId,
+  isNsfFullDayBundle,
+  isNsfHalfDayBundle,
+  nsfCharterSlotsConflict,
+  nsfDurationHours,
+  nsfWindowsForBundle,
+  NSF_WINDOW_AM,
+  NSF_WINDOW_FULL,
+  NSF_WINDOW_PM,
+  type NsfExtensionHours,
+  type NsfWindowId,
+} from "@/content/charter-windows";
+import { buildSlotId, getSlotStartEnd, parseSlotId, parseSlotIdRelaxed, isMonthInSeasonalRange, shouldUseWakeBoardCharterGrid } from "@/lib/booking/experience-slots";
+import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { slugMatches, isTicketedExperienceForBooking, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
@@ -177,6 +185,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [selectedBundleId, setSelectedBundleId] = useState<BundleId | null>(null);
   const [packageDurationHours, setPackageDurationHours] = useState<number | null>(null);
   const [packageAddonCatalogKeys, setPackageAddonCatalogKeys] = useState<string[] | null>(null);
+  const [selectedNsfWindowId, setSelectedNsfWindowId] = useState<NsfWindowId | null>(null);
+  const [nsfExtensionHours, setNsfExtensionHours] = useState<NsfExtensionHours>(0);
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   /** Bumped every minute and at business midnight (see midnight effect after data hook) so month guards stay accurate. */
@@ -280,6 +290,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   releaseTokenRef.current = releaseToken;
   /** Ticketed mode: per-ticket pricing, fixed departure, no boat picker — only after experience detail loads. */
   const isTicketed = selectedExperience != null && isTicketedExperienceForBooking(selectedExperience);
+  const nsfMode = selectedBundleId != null && (isNsfHalfDayBundle(selectedBundleId) || isNsfFullDayBundle(selectedBundleId));
+  const nsfWindows = useMemo(() => nsfWindowsForBundle(selectedBundleId), [selectedBundleId]);
   /** Listing hint before `selectedExperience` is set; do not use for booking logic or data effects. */
   const isTicketedFromSelection =
     initialSelection?.pricingType === "ticketed" ||
@@ -465,21 +477,33 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
   }, [isTicketed, ratesForSelection, selectedRateIdForCalendar]);
 
-  // When rates first load, set calendar rate. Prefer package / initial duration, then NSF defaults (5h half / 8h full).
+  // When rates first load, set calendar rate. Prefer package / extension duration, then NSF defaults.
   useEffect(() => {
-    if (ratesForSelection.length === 0 || selectedRateIdForCalendar) return;
-    const preferredHours = packageDurationHours ?? initialSelection?.durationHours ?? null;
+    if (ratesForSelection.length === 0) return;
+    let preferredHours = packageDurationHours ?? initialSelection?.durationHours ?? null;
+    if (nsfMode && isNsfFullDayBundle(selectedBundleId)) {
+      preferredHours = nsfDurationHours(NSF_WINDOW_FULL, nsfExtensionHours);
+    } else if (nsfMode && isNsfHalfDayBundle(selectedBundleId)) {
+      preferredHours = 5;
+    }
     const fromPreferred =
       preferredHours != null
         ? ratesForSelection.find((r) => r.durationHours === preferredHours)
         : undefined;
+    if (fromPreferred) {
+      if (selectedRateIdForCalendar !== fromPreferred.id) {
+        setSelectedRateIdForCalendar(fromPreferred.id);
+      }
+      return;
+    }
+    if (selectedRateIdForCalendar) return;
     const slug = selectedExperience?.slug ?? initialSelection?.experienceSlug ?? "";
     const nsfDefaultHours = /water|full/i.test(slug) ? 8 : /pontoon|half/i.test(slug) ? 5 : null;
     const nsfDefault =
       nsfDefaultHours != null
         ? ratesForSelection.find((r) => r.durationHours === nsfDefaultHours)
         : undefined;
-    const defaultRate = fromPreferred ?? nsfDefault ?? ratesForSelection[0];
+    const defaultRate = nsfDefault ?? ratesForSelection[0];
     setSelectedRateIdForCalendar(defaultRate.id);
   }, [
     ratesForSelection,
@@ -488,6 +512,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     initialSelection?.durationHours,
     initialSelection?.experienceSlug,
     selectedExperience?.slug,
+    nsfMode,
+    selectedBundleId,
+    nsfExtensionHours,
   ]);
 
   /** Clearing the slot matters: charter sync effect below otherwise snaps calendar duration back to the old slot's tier. */
@@ -495,6 +522,15 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setSelectedRateIdForCalendar(rateId);
     setSelectedSlot(null);
     setSelectedBoat(null);
+  }, []);
+
+  const handleSelectNsfWindow = useCallback((id: NsfWindowId) => {
+    setSelectedNsfWindowId(id);
+    if (id !== "full") setNsfExtensionHours(0);
+  }, []);
+
+  const handleSelectNsfExtension = useCallback((hours: NsfExtensionHours) => {
+    setNsfExtensionHours(hours);
   }, []);
 
   const dateOptions = useMemo(
@@ -614,6 +650,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         setPackageAddonCatalogKeys(
           matched.addonCatalogKeys.length ? [...matched.addonCatalogKeys] : []
         );
+        setNsfExtensionHours(0);
+        setSelectedNsfWindowId(isNsfFullDayBundle(matched.id) ? "full" : null);
       }
     }
   }, [open, initialSelection, initialSelection?.date, experiences]);
@@ -845,6 +883,86 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     }
     return map;
   }, [monthSlots, isTicketed]);
+
+  const nsfWindowOpen = useMemo(() => {
+    const out: Partial<Record<NsfWindowId, boolean>> = {};
+    if (!nsfMode || !selectedDate) return out;
+    const daySlots = monthSlots.filter((s) => {
+      const day = isoToChicagoDateStr(s.startAt);
+      return day === selectedDate;
+    });
+    const taken = daySlots
+      .filter((s) => s.status === "booked" || s.status === "held")
+      .map((s) => parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))
+      .filter(Boolean) as NonNullable<ReturnType<typeof parseSlotId>>[];
+
+    for (const w of nsfWindows) {
+      const ext = w.id === "full" ? nsfExtensionHours : 0;
+      const id = buildNsfSlotId(selectedDate, w, ext);
+      const parsed = parseSlotId(id);
+      if (!parsed) {
+        out[w.id] = false;
+        continue;
+      }
+      const conflicts = taken.some((t) => nsfCharterSlotsConflict(parsed, t));
+      const row = daySlots.find((s) => s.id === id);
+      const rowOk = !row || row.status === "open";
+      // If API hasn't emitted this discrete window yet, still allow when no NSF conflicts.
+      out[w.id] = !conflicts && rowOk;
+    }
+    return out;
+  }, [nsfMode, selectedDate, monthSlots, nsfWindows, nsfExtensionHours]);
+
+  // NSF: resolve selectedSlot from date + window + extension (no hourly grid / boat pick).
+  useEffect(() => {
+    if (!nsfMode || !selectedDate || !selectedNsfWindowId) {
+      return;
+    }
+    const window =
+      selectedNsfWindowId === "am"
+        ? NSF_WINDOW_AM
+        : selectedNsfWindowId === "pm"
+          ? NSF_WINDOW_PM
+          : NSF_WINDOW_FULL;
+    const ext = selectedNsfWindowId === "full" ? nsfExtensionHours : 0;
+    if (nsfWindowOpen[selectedNsfWindowId] === false) {
+      setSelectedSlot(null);
+      return;
+    }
+    const slotId = buildNsfSlotId(selectedDate, window, ext);
+    const fromApi = monthSlots.find((s) => s.id === slotId);
+    const { start, end } = getSlotStartEnd(
+      selectedDate,
+      window.startHour,
+      nsfDurationHours(window, ext),
+      window.startMinute
+    );
+    const boatId = boats.length === 1 ? boats[0]?.id : selectedBoat?.id;
+    if (boats.length === 1 && boats[0] && selectedBoat?.id !== boats[0].id) {
+      setSelectedBoat(boats[0]);
+    }
+    const next: SlotDto = {
+      id: slotId,
+      startAt: fromApi?.startAt ?? start.toISOString(),
+      endAt: fromApi?.endAt ?? end.toISOString(),
+      status: fromApi?.status === "open" || !fromApi ? "open" : fromApi.status,
+      boatId: fromApi?.boatId ?? boatId,
+      bookingId: fromApi?.bookingId,
+      spotsBooked: fromApi?.spotsBooked,
+      spotsRemaining: fromApi?.spotsRemaining,
+    };
+    setSelectedSlot((prev) => (prev?.id === next.id && prev.startAt === next.startAt ? prev : next));
+  }, [
+    nsfMode,
+    selectedDate,
+    selectedNsfWindowId,
+    nsfExtensionHours,
+    nsfWindowOpen,
+    monthSlots,
+    boats,
+    selectedBoat?.id,
+  ]);
+
   /**
    * Wake charter Step 2: boats that share the wake board grid rules (matches GET /api/booking/slots).
    * `null` while boats are still loading (`boats.length === 0`) — skip scoping until then.
@@ -1452,6 +1570,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       setSelectedBundleId(null);
       setPackageDurationHours(null);
       setPackageAddonCatalogKeys(null);
+      setSelectedNsfWindowId(null);
+      setNsfExtensionHours(0);
       resetBookingDataForModalOpen();
       setSelectedBoat(null);
       setSelectedDate(null);
@@ -2504,6 +2624,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     setSelectedBundleId(bundle.id);
     setPackageDurationHours(option.durationHours);
     setPackageAddonCatalogKeys(bundle.addonCatalogKeys.length ? [...bundle.addonCatalogKeys] : []);
+    setNsfExtensionHours(0);
+    setSelectedNsfWindowId(isNsfFullDayBundle(bundle.id) ? "full" : null);
     setAddonSelections({});
     setSelectedExperience(exp);
     setBookingMode("charter");
@@ -2524,12 +2646,18 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
           (openSlotsForDate.length > 0 &&
             selectedSlot != null &&
             openSlotsForDate.some((s) => s.id === selectedSlot.id))));
-  const canGoFromStep2 =
-    !!(selectedDate && selectedSlot) &&
-    (!slotsPartialData || selectedSlotVerifiedOpen) &&
-    !slotsLoading &&
-    !confirmingAvailability &&
-    (!isTicketed || (!ticketCountsLoading && ticketedDateStepCountsOk));
+  const canGoFromStep2 = nsfMode
+    ? !!(
+        selectedDate &&
+        selectedSlot &&
+        selectedNsfWindowId &&
+        nsfWindowOpen[selectedNsfWindowId] !== false
+      ) && !slotsLoading && !confirmingAvailability
+    : !!(selectedDate && selectedSlot) &&
+      (!slotsPartialData || selectedSlotVerifiedOpen) &&
+      !slotsLoading &&
+      !confirmingAvailability &&
+      (!isTicketed || (!ticketCountsLoading && ticketedDateStepCountsOk));
   const handleStep2Next = async () => {
     if (!canGoFromStep2) return;
     if (selectedExperience?.id) {
@@ -2543,16 +2671,28 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         }
         const { slots } = fresh;
         if (selectedSlot && selectedDate) {
-          const stillOpen = slots.some((s) => {
-            if (s.id !== selectedSlot.id || s.status !== "open") return false;
-            if (isoToChicagoDateStr(s.startAt) !== selectedDate) return false;
-            if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0)
-              return false;
-            return true;
-          });
-          if (!stillOpen) {
-            setPaymentError("That time slot is no longer available. Please choose another time.");
-            return;
+          if (nsfMode) {
+            const parsed = parseSlotIdRelaxed(selectedSlot.id) ?? parseSlotId(selectedSlot.id);
+            const taken = slots
+              .filter((s) => s.status === "booked" || s.status === "held")
+              .map((s) => parseSlotIdRelaxed(s.id) ?? parseSlotId(s.id))
+              .filter(Boolean) as NonNullable<ReturnType<typeof parseSlotId>>[];
+            if (parsed && taken.some((t) => nsfCharterSlotsConflict(parsed, t))) {
+              setPaymentError("That departure is no longer available. Please choose another date or window.");
+              return;
+            }
+          } else {
+            const stillOpen = slots.some((s) => {
+              if (s.id !== selectedSlot.id || s.status !== "open") return false;
+              if (isoToChicagoDateStr(s.startAt) !== selectedDate) return false;
+              if (isTicketed && typeof s.spotsRemaining === "number" && s.spotsRemaining === 0)
+                return false;
+              return true;
+            });
+            if (!stillOpen) {
+              setPaymentError("That time slot is no longer available. Please choose another time.");
+              return;
+            }
           }
         }
       } finally {
@@ -2563,7 +2703,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     if (isTicketed) {
       setStep(4);
       setPaymentPhase("form");
-    } else if (boats.length === 1) {
+    } else if (nsfMode || boats.length <= 1) {
+      if (boats.length === 1 && boats[0]) setSelectedBoat(boats[0]);
       setStep(4);
       setPaymentPhase("form");
     } else {
@@ -2640,14 +2781,20 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
 
   const stepTitles = showTicketedFlow
     ? ["Pick category", "Pick date", "Details & payment", "Details & payment"]
-    : ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
-  // Ticketed: 3 steps; charter with one boat: 3 steps (skip boat); charter with multiple boats: 4 steps
-  const stepCount = isCalendarFirstFlow ? 2 : showTicketedFlow ? 3 : boats.length === 1 ? 3 : 4;
+    : nsfMode
+      ? ["Pick package", "Pick date & departure", "Details & payment", "Details & payment"]
+      : ["Pick category", "Pick date & time", "Choose your boat", "Details & payment"];
+  // Ticketed / NSF / single-boat charter: 3 chrome steps (skip boat); multi-boat: 4
+  const stepCount = isCalendarFirstFlow
+    ? 2
+    : showTicketedFlow || nsfMode || boats.length === 1
+      ? 3
+      : 4;
   const stepIndex = isCalendarFirstFlow
     ? (step === 3 ? 1 : 2)
     : showTicketedFlow
       ? (step === 1 ? 1 : step === 2 ? 2 : 3)
-      : boats.length === 1
+      : nsfMode || boats.length === 1
         ? (step === 4 ? 3 : step)
         : step;
   const stepTitle = isCalendarFirstFlow
@@ -2969,6 +3116,13 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 wakeCharterBoatIdsForStep2={wakeCharterBoatIdsForStep2}
                 selectedBoat={selectedBoat}
                 noRateForSelectedSlot={noRateForSelectedSlot}
+                nsfMode={nsfMode}
+                nsfWindows={nsfWindows}
+                selectedNsfWindowId={selectedNsfWindowId}
+                onSelectNsfWindow={handleSelectNsfWindow}
+                nsfWindowOpen={nsfWindowOpen}
+                nsfExtensionHours={nsfExtensionHours}
+                onSelectNsfExtension={handleSelectNsfExtension}
               />
               <button
                 type="button"
@@ -2985,7 +3139,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   "Continue"
                 )}
               </button>
-              {!isTicketed && boats.length > 1 && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
+              {!isTicketed && !nsfMode && boats.length > 1 && <p className="text-center text-[11px] text-brand-muted mt-2 pb-2">Then choose your boat</p>}
             </div>
 
             {/* Step 3: Boat — only boats available for the selected date/time */}
@@ -3380,7 +3534,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           value={customerPhone}
                           onChange={(e) => setCustomerPhone(e.target.value)}
                           required
-                          placeholder="(555) 000-0000"
+                          placeholder="Phone number"
                           className={cn("w-full rounded-xl border-2 bg-white px-3 py-2.5 text-base min-h-[44px] touch-manipulation placeholder:text-brand-muted/70 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 focus:outline-none transition-colors", customerPhone.length > 0 && phoneError ? "border-red-500" : "border-brand-dark/15")}
                         />
                         {customerPhone.length > 0 && phoneError && (

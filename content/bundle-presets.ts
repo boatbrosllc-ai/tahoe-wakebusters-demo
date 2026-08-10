@@ -49,14 +49,14 @@ export type BundlePreset = {
   recommended?: boolean;
 };
 
-/** Mid-range display seeds for add-on marketing math (not charged totals). */
+/** Display seeds for add-on marketing math (not charged totals) — mid/suggested from content/upsells. */
 const ADDON_DISPLAY_CENTS: Record<string, number> = {
-  "resort-transportation": 200_00,
-  "premium-breakfast": 100_00,
-  "beverage-package": 145_00,
-  "premium-lunch": 175_00,
-  "fish-processing-delivery": 125_00,
-  "nasty-gear-pack": 100_00,
+  "resort-transportation": 174_00,
+  "premium-breakfast": 129_00,
+  "premium-lunch": 199_00,
+  "fish-processing": 30_00,
+  "resort-fish-delivery": 64_00,
+  "nasty-gear-pack": 119_00,
 };
 
 function sumAddonDisplay(keys: string[]): number {
@@ -66,11 +66,15 @@ function sumAddonDisplay(keys: string[]): number {
 const nastyHalf = getActiveCatalogRateCents("half");
 const nastyFull = getActiveCatalogRateCents("full");
 
+/**
+ * Nastiest all-in preselects (Beer/Seltzer omitted until licensing).
+ * catalogKeys must match content/upsells.ts.
+ */
 const NASTIEST_ADDONS = [
   "resort-transportation",
   "premium-lunch",
-  "beverage-package",
-  "fish-processing-delivery",
+  "fish-processing",
+  "resort-fish-delivery",
   "nasty-gear-pack",
 ] as const;
 
@@ -84,10 +88,10 @@ export const bundlePresets: BundlePreset[] = [
     description: "5-hour private Cabo charter. Captain, crew, tackle, bait, and provisions. Add upgrades a la carte at checkout.",
     includes: [
       "5-hour private charter",
+      "Morning (6:00 AM) or Afternoon (2:00 PM)",
       "Captain & mate",
       "Tackle, bait & licenses",
       "Snacks, water & soft drinks",
-      "A la carte upgrades available",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastyHalf)}`,
     charterOptions: [
@@ -101,13 +105,13 @@ export const bundlePresets: BundlePreset[] = [
     id: "nastier",
     title: "Nastier",
     tagline: "Full Day",
-    description: "8-hour private offshore charter — more range when the bite is on. Same boat. Add upgrades a la carte at checkout.",
+    description: "8-hour private offshore charter departing 6:00 AM — optional +1/+2/+3 hours to stay until 5:00 PM. Same boat. Add upgrades a la carte at checkout.",
     includes: [
-      "8-hour private charter",
+      "8-hour private charter (6:00 AM start)",
+      "Optional +1 to +3 hours",
       "Captain & mate",
       "Tackle, bait & licenses",
       "Snacks, water & soft drinks",
-      "A la carte upgrades available",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastyFull)}`,
     charterOptions: [
@@ -121,13 +125,14 @@ export const bundlePresets: BundlePreset[] = [
     id: "nastiest",
     title: "Nastiest",
     tagline: "Full Day All-In",
-    description: "Full Day charter with transport, premium food & drinks, catch processing, and gear — the done-for-you Cabo fishing day.",
+    description: "Full Day charter with private resort transport, premium offshore lunch, catch processing + resort delivery, and gear — optional +1/+2/+3 hours. The done-for-you Cabo fishing day.",
     includes: [
-      "8-hour private charter",
-      "Resort transportation",
-      "Premium lunch & beverage package",
-      "Fish processing & delivery",
-      "Nasty gear pack",
+      "8-hour private charter (6:00 AM start)",
+      "Optional +1 to +3 hours",
+      "Private resort transportation",
+      "Premium offshore lunch",
+      "Fish processing + resort delivery",
+      "Nasty Gear Pack",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastiestFrom)}+`,
     charterOptions: [

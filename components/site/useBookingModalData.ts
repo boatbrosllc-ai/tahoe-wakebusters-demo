@@ -503,7 +503,17 @@ export function useBookingModalData(
           const parts = [msg, apiBody?.hint, apiBody?.firebaseDetail?.summary].filter(Boolean);
           setSlotsLoadError(parts.join(" "));
         }
-        if (lastSlotsRetryForRef.current !== rangeKey) {
+        if (status === 429) {
+          const retryAfterMs = (err as { retryAfterMs?: number }).retryAfterMs;
+          const waitSec =
+            typeof retryAfterMs === "number" && retryAfterMs > 0
+              ? Math.max(1, Math.ceil(retryAfterMs / 1000))
+              : 60;
+          setSlotsLoadError(
+            `Too many availability requests — wait about ${waitSec}s and try again.`
+          );
+          // Do not auto-retry 429s immediately; that worsens shared rate-limit buckets.
+        } else if (lastSlotsRetryForRef.current !== rangeKey) {
           lastSlotsRetryForRef.current = rangeKey;
           retryTimer = setTimeout(() => setSlotsRetryTrigger((t) => t + 1), 1500);
         }
@@ -741,12 +751,9 @@ export function useBookingModalData(
       setSlotsPartialData(partialData);
       setSlotsFetchedAt(Date.now());
       setSlotsLoadError(null);
-      if (partialData) {
-        return {
-          ok: false,
-          error: "Availability data is still loading — please wait a moment and try again.",
-        };
-      }
+      // Partial responses still include usable open slots (e.g. missing composite index while
+      // legacy/fallback coverage works). Callers verify the selected slot remains open —
+      // see booking-partial-slots-progression.contract.test.ts.
       return { ok: true, slots };
     } catch (err: unknown) {
       if ((err as { name?: string })?.name === "AbortError") {

@@ -5,8 +5,9 @@ import { locationAggregateRating } from "@/content/location";
 import { SiteChrome } from "@/components/site/SiteChrome";
 import { CommercialPageSchema } from "@/components/site/CommercialPageSchema";
 import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
+import { buildLocalBusinessJsonLd } from "@/lib/seo/public-contact";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
@@ -50,46 +51,12 @@ export const metadata: Metadata = {
 };
 
 function localBusinessJsonLd() {
-  const aggregateRating = locationAggregateRating();
-  return {
-    "@context": "https://schema.org",
-    "@type": "LocalBusiness",
-    name: brand.companyName,
+  return buildLocalBusinessJsonLd({
+    baseUrl,
     description:
       "Cabo San Lucas sport fishing charters: marlin, tuna, dorado, and wahoo. Licensed captain and crew. Book online.",
-    url: baseUrl,
-    telephone: brand.phoneTel,
-    email: brand.email,
-    address: {
-      "@type": "PostalAddress",
-      streetAddress: brand.address.line1,
-      addressLocality: brand.address.city,
-      addressRegion: brand.address.state,
-      postalCode: brand.address.zip,
-      addressCountry: "MX",
-    },
-    areaServed: [
-      { "@type": "Place", name: "Cabo San Lucas" },
-      { "@type": "Place", name: "Los Cabos" },
-      { "@type": "Place", name: "Sea of Cortez" },
-    ],
-    ...(aggregateRating ? { aggregateRating } : {}),
-    openingHoursSpecification: {
-      "@type": "OpeningHoursSpecification",
-      dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-      opens: "05:00",
-      closes: "20:00",
-    },
-    hasOfferCatalog: {
-      "@type": "OfferCatalog",
-      name: "Cabo sport fishing charters",
-      itemListElement: [
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Half-day Cabo fishing charter" } },
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Full-day Cabo fishing charter" } },
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Sunset fishing charter Cabo" } },
-      ],
-    },
-  };
+    aggregateRating: locationAggregateRating(),
+  });
 }
 
 export default async function SiteLayout({

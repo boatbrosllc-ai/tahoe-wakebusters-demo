@@ -238,9 +238,20 @@ function fetchCached<T>(
             } catch {
               // ignore
             }
-            const e = new Error(body.error ?? `HTTP ${res.status}`) as Error & { apiBody?: typeof body; status?: number };
+            const e = new Error(body.error ?? `HTTP ${res.status}`) as Error & {
+              apiBody?: typeof body;
+              status?: number;
+              retryAfterMs?: number;
+            };
             e.apiBody = body;
-            (e as Error & { status?: number }).status = res.status;
+            e.status = res.status;
+            const retryAfter = res.headers.get("Retry-After");
+            if (retryAfter) {
+              const sec = Number(retryAfter);
+              if (Number.isFinite(sec) && sec >= 0) {
+                e.retryAfterMs = Math.round(sec * 1000);
+              }
+            }
             throw e;
           }
           const data = (await res.json()) as T;

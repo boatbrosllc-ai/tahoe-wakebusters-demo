@@ -96,3 +96,39 @@ export function articleJsonLd(input: {
     dateModified: input.dateModified,
   };
 }
+
+export function serviceJsonLd(input: {
+  name: string;
+  description: string;
+  path: string;
+  areaServed?: string;
+  priceCurrency?: string;
+  /** Free-form offer description (e.g. "$2.00 per finished processed pound"). */
+  priceDescription?: string;
+}): object {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Service",
+    name: input.name,
+    description: input.description,
+    url: `${baseUrl}${input.path}`,
+    provider: {
+      "@type": "LocalBusiness",
+      name: "Nasty Sport Fishing",
+      url: baseUrl,
+      address: {
+        "@type": "PostalAddress",
+        addressLocality: "Cabo San Lucas",
+        addressRegion: "Baja California Sur",
+        addressCountry: "MX",
+      },
+    },
+    areaServed: input.areaServed ?? "Cabo San Lucas",
+    offers: {
+      "@type": "Offer",
+      priceCurrency: input.priceCurrency ?? "USD",
+      description: input.priceDescription,
+      url: `${baseUrl}${input.path}`,
+    },
+  };
+}

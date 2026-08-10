@@ -507,11 +507,11 @@ export default async function BlogPostPage({ params }: Props) {
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-brand-dark">{post.author ?? brand.companyName}</p>
                     <p className="text-sm text-brand-muted mt-1">
-                      Ready for your Lake Austin day? Book a pontoon, wake boat, or sunset cruise.
+                      Ready for Cabo? Book Nasty Half Day or Nasty Full Day.
                     </p>
                   </div>
                   <Button asChild size="lg" className="rounded-xl shrink-0 w-full sm:w-fit min-h-[48px] touch-manipulation bg-brand-primary hover:bg-brand-primary/90 text-white shadow-[0_4px_14px_rgba(80,189,186,0.35)]">
-                    <Link href="/experiences" className="w-full justify-center">Book a boat rental</Link>
+                    <Link href="/experiences" className="w-full justify-center">Book a Cabo charter</Link>
                   </Button>
                 </div>
               </div>

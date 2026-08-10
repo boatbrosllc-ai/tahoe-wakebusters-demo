@@ -1,52 +1,68 @@
 /**
  * Brand content – logo path, contact, socials.
- * Single place for public company identity. Do not invent ops facts — use placeholders until confirmed.
+ * Do not invent ops facts. Leave phone / street / ZIP / hours empty until verified.
  */
 
 export const brand = {
-  /** Logo on light backgrounds (header desktop) */
+  /** Logo on light backgrounds (header desktop) — colored lockup */
   logoPath: "/logos/NSF_Logo.png",
   /** Main logo – desktop navbar */
-  logoDesktopPath: "/logos/NSF_Logo.png",
-  /** Logo on mobile header */
-  logoMonogramPath: "/logos/NSF_Logo.png",
-  /** Navbar logo – mobile and desktop */
-  logoNavbarPath: "/logos/NSF_Logo.png",
+  logoDesktopPath: "/logos/NSF_White.png",
+  /** Logo on mobile header — NASTY wordmark only */
+  logoMonogramPath: "/logos/NSF_White_Mark.png",
+  /** Navbar logo – mobile and desktop (white NASTY mark on cyan bar) */
+  logoNavbarPath: "/logos/NSF_White_Mark.png",
   /** Accent / hover logo */
-  logoPinkPath: "/logos/NSF_Logo.png",
+  logoPinkPath: "/logos/NSF_White_Mark.png",
   /** Logo on dark backgrounds (footer) */
-  logoDarkPath: "/logos/NSF_Logo.png",
-  /** All transactional emails */
+  logoDarkPath: "/logos/NSF_White.png",
+  /** All transactional emails — keep colored for light email clients */
   logoEmailPath: "/logos/NSF_Logo.png",
   /** Hero section – primary lockup */
-  logoHeroPath: "/logos/NSF_Logo.png",
+  logoHeroPath: "/logos/NSF_White.png",
+  /** Hero logo hover — NASTY orange, SPORT FISHING cyan */
+  logoHeroHoverPath: "/logos/NSF_Hover.png",
   logoAlt: "Nasty Sport Fishing",
   companyName: "Nasty Sport Fishing",
   publicName: "Nasty Sport Fishing",
-  tagline: "Cabo San Lucas sport fishing charters — marlin, tuna, dorado & more. Book your trip.",
+  tagline:
+    "Private Cabo San Lucas fishing charters — Half Day & Full Day with captain, crew, tackle & bait.",
   /** Business / departure timezone for new listings (seed). */
   timezone: "America/Mazatlan",
   currency: "USD",
   country: "MX",
   locale: "en-US",
   domain: "nastysportfishing.com",
-  phone: "(555) 000-0000",
-  phoneTel: "+15550000000",
+  /**
+   * Public phone — empty until verified.
+   * Do not use 555 placeholders; UI/schema omit phone when blank.
+   */
+  phone: "",
+  phoneTel: "",
   email: "info@nastysportfishing.com",
   address: {
-    line1: "Marina Cabo San Lucas",
+    /**
+     * Street / slip — empty until verified.
+     * Do not put "Marina Cabo San Lucas" here as a fake streetAddress.
+     */
+    line1: "",
     city: "Cabo San Lucas",
-    state: "BCS",
-    zip: "23450",
+    state: "Baja California Sur",
+    zip: "",
     country: "Mexico",
   },
-  hours: "Daily — trips depart by reservation",
+  /** Customer meet-up note (not schema streetAddress). */
+  marinaMeetNote:
+    "Meet at Marina Cabo San Lucas — exact slip and check-in details arrive after booking.",
+  /** Public hours string — empty until verified (trips by reservation). */
+  hours: "",
   socials: {
-    instagram: "https://www.instagram.com/",
-    facebook: "https://www.facebook.com/",
-    tiktok: "https://www.tiktok.com/",
-    yelp: "https://www.yelp.com/",
-    tripadvisor: "https://www.tripadvisor.com/",
+    /** Set full profile URLs when live. Empty = header shows icon placeholders only (not linked). */
+    instagram: "",
+    facebook: "",
+    tiktok: "",
+    yelp: "",
+    tripadvisor: "",
   },
 };
 

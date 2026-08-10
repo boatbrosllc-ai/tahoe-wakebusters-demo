@@ -74,7 +74,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "An Offshore Run Upgrade may appear as an optional add-on when available for your date. It is not automatic on every booking and is not a claim about a specific bank or mileage. If you want extra range, ask when booking or select the add-on in checkout when it is offered.",
+          text: "Longer runs depend on conditions, fuel planning, and captain judgment — they are not automatic on every booking and are not a claim about a specific bank or mileage. If you want extra range, ask when booking so we can plan the day.",
         },
         {
           type: "h2",
@@ -116,7 +116,7 @@ export default function Page() {
         { href: "/cabo-marlin-fishing", label: "Marlin fishing" },
         { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
         { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
-        { href: "/boats", label: "Boats" },
+        { href: "/boats/cabo-40-express", label: "Boats" },
       ]}
     />
   );

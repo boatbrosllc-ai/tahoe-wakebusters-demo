@@ -1,15 +1,15 @@
 /**
  * Single configuration for phone, booking provider, and brand.
- * TODO: Plug in real NSF phone / SMS when available.
+ * Phone/SMS stay empty until a verified NSF number is available.
  */
 
 export const siteConfig = {
-  /** Primary phone number – used for click-to-call and display */
-  phone: "(555) 000-0000",
-  /** E.164 for tel: links */
-  phoneTel: "+15550000000",
-  /** Optional SMS number (same as phone if not set) */
-  sms: "+15550000000",
+  /** Primary phone — empty until verified (UI omits call CTAs). */
+  phone: "",
+  /** E.164 for tel: links — empty until verified. */
+  phoneTel: "",
+  /** Optional SMS number — empty until verified. */
+  sms: "",
 
   /** Booking: use custom flow at /booking */
   booking: {
@@ -18,7 +18,7 @@ export const siteConfig = {
     /** "embed" = show iframe; "link" = show deep link button(s) — used on /book if you keep it */
     mode: "link" as "embed" | "link",
     /** Legacy / external URL; unused when path is /booking */
-    providerUrl: "https://example.com/nasty-sport-fishing-booking",
+    providerUrl: "",
     /** Optional: direct embed iframe src when mode === "embed" */
     embedSrc: "",
   },

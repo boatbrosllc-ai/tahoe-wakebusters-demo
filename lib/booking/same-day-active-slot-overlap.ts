@@ -22,7 +22,8 @@ export function transactionGetQueryOrDoc(
     import("firebase-admin/firestore").DocumentSnapshot | import("firebase-admin/firestore").QuerySnapshot
   >;
 }
-import { getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
+import { getCentralCalendarDayBounds, parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
+import { nsfCharterSlotsConflict } from "@/content/charter-windows";
 import type { Hold } from "@/lib/booking/types";
 import type { Slot } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -111,7 +112,21 @@ export async function assertNoOverlappingActiveSameDaySlots(
       }
       const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
       const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-      if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+      const timeOverlap = slotStartMs < existingEnd && slotEndMs > existingStart;
+      const existingParsed =
+        parseSlotIdRelaxed(doc.id) ??
+        (typeof (data as { slotId?: string }).slotId === "string"
+          ? parseSlotIdRelaxed((data as { slotId?: string }).slotId!)
+          : null);
+      const nsfOverlap =
+        existingParsed != null &&
+        nsfCharterSlotsConflict(parsed, {
+          dateStr: existingParsed.dateStr,
+          startHour: existingParsed.startHour,
+          startMinute: existingParsed.startMinute ?? 0,
+          durationHours: existingParsed.durationHours,
+        });
+      if (timeOverlap || nsfOverlap) {
         throw new SlotConflictError("Slot no longer available");
       }
     }

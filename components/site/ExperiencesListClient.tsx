@@ -13,6 +13,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 import { getCanonicalExperiencePath, isPontoonSlug, isWakeSurfClubSlug } from "@/lib/booking/experience-aliases";
+import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
 const FALLBACK_CARD_IMAGE = "/photos/nsf/cabo-40-express.png";
 
@@ -194,8 +195,8 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
           <Image src="/photos/nsf/cabo-40-express.png" alt="" fill className="object-cover object-[center_50%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 from-30% via-black/25 to-transparent" />
-        <div className="absolute inset-0 flex flex-col justify-center items-center sm:justify-end sm:items-stretch pb-0 sm:pb-12 sm:pb-16 lg:pb-20">
-          <div className={contentWidth + " relative text-center sm:text-left w-full"}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8">
+          <div className={contentWidth + " relative text-center w-full mx-auto"}>
             <motion.h1
               className="font-display text-4xl sm:text-5xl md:text-6xl font-bold text-white tracking-tight leading-tight"
               initial={reduceMotion ? false : { opacity: 0, y: 20 }}
@@ -205,7 +206,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               Cabo charters
             </motion.h1>
             <motion.p
-              className="mt-4 text-lg text-white/90 max-w-lg sm:max-w-lg mx-auto sm:mx-0"
+              className="mt-4 text-lg text-white/90 max-w-lg mx-auto"
               initial={reduceMotion ? false : { opacity: 0, y: 16 }}
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1, ease: easing }}
@@ -259,7 +260,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               </Link>
               <span aria-hidden>·</span>
               <Link
-                href="/boats"
+                href={OUR_BOAT_PATH}
                 className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
               >
                 Meet our boat

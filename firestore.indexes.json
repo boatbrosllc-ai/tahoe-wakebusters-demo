@@ -10,7 +10,6 @@
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "expiresAt", "order": "ASCENDING" }] },
-    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "boatId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
 
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "ASCENDING" }] },
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "startDateStr", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
@@ -43,8 +42,7 @@
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "startDateStr", "order": "DESCENDING" }] },
 
     { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
-    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "experienceId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
-    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "rollbackPending", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
+    { "collectionGroup": "holds", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "rollbackPending", "order": "ASCENDING" }] },
 
     { "collectionGroup": "bookings", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "finalChargeAt", "order": "ASCENDING" }] },
 
@@ -55,7 +53,7 @@
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }] },
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "claimExpiresAt", "order": "ASCENDING" }] },
     { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "bookingId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }] },
-    { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }, { "fieldPath": "__name__", "order": "ASCENDING" }] },
+    { "collectionGroup": "notificationOutbox", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }] },
 
     { "collectionGroup": "reminderRetryQueue", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "templateKey", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "lastAttemptAt", "order": "DESCENDING" }] },
 

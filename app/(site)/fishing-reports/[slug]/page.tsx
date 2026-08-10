@@ -86,12 +86,12 @@ export default async function FishingReportPage({ params }: Props) {
           <Image src={hero} alt="" fill className="object-cover opacity-35" sizes="100vw" priority />
           <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/70 via-brand-dark/85 to-brand-dark" />
         </div>
-        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 max-w-4xl">
+        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 max-w-4xl mx-auto text-center">
           <p className="text-sm text-white/60 tabular-nums">{report.date}</p>
           <h1 className="mt-2 font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight">
             {report.title}
           </h1>
-          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl">{report.catchSummary}</p>
+          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">{report.catchSummary}</p>
         </div>
       </header>
 

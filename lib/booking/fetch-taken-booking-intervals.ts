@@ -5,6 +5,8 @@ import {
   bookingLookbackDaysFromMaxDuration,
   intervalsOverlapMs,
 } from "@/lib/booking/booking-interval";
+import { nsfCharterSlotsConflict } from "@/content/charter-windows";
+import { parseSlotIdRelaxed } from "@/lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { bookingWarn } from "@/lib/booking/debug";
 
@@ -21,6 +23,8 @@ export async function fetchTakenBookingIntervals(params: {
   targetEndMs: number;
   /** When set, excludes this booking doc id from overlap detection (e.g. during reschedule). */
   excludeBookingId?: string;
+  /** Preferred for NSF full-day vs PM half conflict (adjacent clock times). */
+  targetParsed?: { dateStr: string; startHour: number; startMinute?: number; durationHours: number };
 }): Promise<Array<{ bookingId: string; startMs: number; endMs: number }>> {
   const {
     db,
@@ -32,6 +36,7 @@ export async function fetchTakenBookingIntervals(params: {
     targetStartMs,
     targetEndMs,
     excludeBookingId,
+    targetParsed,
   } = params;
   const lookbackDays = bookingLookbackDaysFromMaxDuration(durationHours);
   const startDateLower = addCalendarDaysToDateStr(centerDateStr, -lookbackDays);
@@ -80,7 +85,13 @@ export async function fetchTakenBookingIntervals(params: {
       if (boatId && d.boatId !== boatId) continue;
       const iv = bookingIntervalMsFromSlotFields(d.slotId, d.slot_id);
       if (!iv) continue;
-      if (!intervalsOverlapMs(targetStartMs, targetEndMs, iv.startMs, iv.endMs)) continue;
+      const bookingParsed = parseSlotIdRelaxed(String(d.slotId ?? d.slot_id ?? ""));
+      const timeOverlap = intervalsOverlapMs(targetStartMs, targetEndMs, iv.startMs, iv.endMs);
+      const nsfOverlap =
+        targetParsed != null &&
+        bookingParsed != null &&
+        nsfCharterSlotsConflict(targetParsed, bookingParsed);
+      if (!timeOverlap && !nsfOverlap) continue;
       intervals.push({ bookingId: doc.id, startMs: iv.startMs, endMs: iv.endMs });
     }
   }

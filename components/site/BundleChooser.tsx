@@ -63,7 +63,7 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.4 }}
         >
-          Choose how nasty you want to get
+          Make it Nasty
         </motion.h2>
         <motion.p
           className="text-center text-brand-muted max-w-2xl mx-auto mb-8 sm:mb-10"
@@ -97,18 +97,19 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-30px" }}
                 transition={{ duration: 0.35, delay: 0.05 * i }}
+                whileHover={{ y: -10, transition: { type: "spring", stiffness: 380, damping: 22 } }}
               >
                 <div
                   className={cn(
-                    "relative flex flex-1 flex-col overflow-visible rounded-2xl bg-white border-2 transition-shadow",
+                    "relative flex flex-1 flex-col overflow-visible rounded-2xl bg-white border-2 transition-[border-color,box-shadow] duration-300 ease-out",
                     bundle.recommended
-                      ? "border-brand-primary shadow-lg shadow-brand-primary/15 ring-1 ring-brand-primary/25 md:-translate-y-1"
-                      : "border-brand-dark/10 shadow-sm"
+                      ? "border-brand-primary shadow-lg shadow-brand-primary/15 ring-1 ring-brand-primary/25 md:-translate-y-1 group-hover:shadow-xl group-hover:shadow-brand-primary/30 group-hover:ring-brand-primary/45"
+                      : "border-brand-dark/10 shadow-sm group-hover:border-brand-primary/45 group-hover:shadow-lg group-hover:shadow-brand-dark/10"
                   )}
                 >
                   {isNastiest && (
                     <div
-                      className="pointer-events-none absolute top-0 right-0 z-30 h-40 w-40 sm:h-52 sm:w-52 lg:h-64 lg:w-64 translate-x-[28%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
+                      className="pointer-events-none absolute top-0 right-0 z-30 h-40 w-40 sm:h-52 sm:w-52 lg:h-64 lg:w-64 translate-x-[28%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-110 group-hover:rotate-[22deg]"
                       aria-hidden
                     >
                       <Image
@@ -126,10 +127,10 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
                       src={getDisplayImageUrl(hero)}
                       alt=""
                       fill
-                      className="object-cover object-center"
+                      className="object-cover object-center transition-transform duration-700 ease-out group-hover:scale-[1.08]"
                       sizes="(max-width: 768px) 100vw, 33vw"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent transition-opacity duration-300 group-hover:from-black/80" />
                     <div className="absolute bottom-3 left-3 right-3 z-10">
                       <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary">
                         {bundle.tagline}
@@ -142,7 +143,9 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
 
                   <div className="flex flex-1 flex-col overflow-hidden rounded-b-2xl p-5 sm:p-6">
                     <p className="text-sm text-brand-muted leading-relaxed">{bundle.description}</p>
-                    <p className="mt-4 text-xl font-bold text-brand-dark tabular-nums">{bundle.fromPriceLabel}</p>
+                    <p className="mt-4 text-xl font-bold text-brand-dark tabular-nums transition-colors duration-300 group-hover:text-brand-primary">
+                      {bundle.fromPriceLabel}
+                    </p>
                     <p className="mt-1 text-xs text-brand-muted">{tripLabel}</p>
 
                     <ul className="mt-5 space-y-2.5 flex-1">
@@ -158,10 +161,10 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
                       type="button"
                       onClick={() => startBooking(bundle)}
                       className={cn(
-                        "mt-6 inline-flex w-full items-center justify-center rounded-xl px-6 py-3.5 text-sm font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2",
+                        "mt-6 inline-flex w-full items-center justify-center rounded-xl px-6 py-3.5 text-sm font-bold transition-all duration-300 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 group-hover:-translate-y-0.5 group-hover:scale-[1.02] active:scale-[0.98]",
                         bundle.recommended
-                          ? "bg-brand-primary text-white shadow-md shadow-brand-primary/25 hover:brightness-105"
-                          : "bg-brand-dark text-white hover:bg-brand-dark/90"
+                          ? "bg-brand-primary text-white shadow-md shadow-brand-primary/25 group-hover:brightness-110 group-hover:shadow-lg group-hover:shadow-brand-primary/40"
+                          : "bg-brand-dark text-white group-hover:bg-brand-primary group-hover:shadow-md group-hover:shadow-brand-primary/30"
                       )}
                     >
                       {bundle.ctaLabel}

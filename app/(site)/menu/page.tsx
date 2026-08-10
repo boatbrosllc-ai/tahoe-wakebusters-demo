@@ -12,10 +12,11 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { brand } from "@/content/brand";
-import { siteConfig } from "@/config/site";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CallCard } from "@/components/site/CallCard";
+import { getPublicPhone } from "@/lib/seo/public-contact";
+import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
 const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
@@ -41,7 +42,7 @@ const pageLinks = [
     description: "Half-day, full-day & sunset fishing trips",
   },
   {
-    href: "/boats",
+    href: OUR_BOAT_PATH,
     label: "Our Boat",
     icon: Ship,
     description: "Meet the boat for your Cabo charter",
@@ -121,7 +122,10 @@ export default function MenuPage() {
         </nav>
 
         <div className="mt-14 sm:mt-8 space-y-8 sm:space-y-3">
-          <CallCard phone={siteConfig.phone} phoneTel={siteConfig.phoneTel} />
+          {(() => {
+            const phone = getPublicPhone();
+            return phone ? <CallCard phone={phone.display} phoneTel={phone.tel} /> : null;
+          })()}
 
           <Link href="/experiences" className="block">
             <Button

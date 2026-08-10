@@ -135,7 +135,7 @@ export default function Page() {
         { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
         { href: "/cabo-marlin-fishing", label: "Cabo marlin fishing" },
         { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
-        { href: "/boats", label: "Boats" },
+        { href: "/boats/cabo-40-express", label: "Boats" },
         { href: "/packages", label: "Multi-day packages" },
         { href: "/contact", label: "Contact" },
       ]}

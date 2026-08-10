@@ -12,6 +12,8 @@ import type { ExperienceItem, BoatOption, SlotDto, RateOption } from "@/lib/book
 import type { BookingModalInitialSelection } from "@/components/site/BookingModalContext";
 import type { SlotDayCounts } from "@/lib/booking/aggregate-slots-by-date";
 import type { SlotLikeForCalendar } from "@/lib/booking/partial-slots-calendar-derivation";
+import { BookingNsfWindowPicker } from "@/components/site/booking-modal-steps/BookingNsfWindowPicker";
+import type { NsfCharterWindow, NsfExtensionHours, NsfWindowId } from "@/content/charter-windows";
 
 type Step3Cell = { dateStr: string; label: string; weekday: string } | null;
 
@@ -79,6 +81,14 @@ export type BookingStep2CalendarProps = {
   wakeCharterBoatIdsForStep2: Set<string> | null;
   selectedBoat: BoatOption | null;
   noRateForSelectedSlot: boolean;
+  /** NSF simplified charter: package → date → AM/PM or full+extension (no hourly grid). */
+  nsfMode?: boolean;
+  nsfWindows?: NsfCharterWindow[];
+  selectedNsfWindowId?: NsfWindowId | null;
+  onSelectNsfWindow?: (id: NsfWindowId) => void;
+  nsfWindowOpen?: Partial<Record<NsfWindowId, boolean>>;
+  nsfExtensionHours?: NsfExtensionHours;
+  onSelectNsfExtension?: (hours: NsfExtensionHours) => void;
 };
 
 export function BookingStep2Calendar({
@@ -138,6 +148,13 @@ export function BookingStep2Calendar({
   wakeCharterBoatIdsForStep2,
   selectedBoat,
   noRateForSelectedSlot,
+  nsfMode = false,
+  nsfWindows = [],
+  selectedNsfWindowId = null,
+  onSelectNsfWindow,
+  nsfWindowOpen = {},
+  nsfExtensionHours = 0,
+  onSelectNsfExtension,
 }: BookingStep2CalendarProps) {
   return (
               <div className="space-y-2 sm:space-y-3 md:space-y-4 min-w-0">
@@ -185,7 +202,7 @@ export function BookingStep2Calendar({
                     </button>
                   </div>
                 )}
-                      {ratesForSelection.length > 0 && !isTicketed && (
+                      {ratesForSelection.length > 0 && !isTicketed && !nsfMode && (
                   <div className="min-w-0">
                     <p className="text-xs sm:text-sm font-semibold text-brand-dark mb-1.5 sm:mb-2 md:mb-3">Duration</p>
                     <div className="grid grid-cols-3 gap-1.5 sm:gap-2 sm:flex sm:flex-wrap md:gap-3">
@@ -215,6 +232,11 @@ export function BookingStep2Calendar({
                 )}
                 {selectedRateIdForCalendar && (
                   <>
+                  {nsfMode && (
+                    <p className="text-[11px] sm:text-xs text-brand-muted -mt-1 mb-1">
+                      Pick a date — morning and afternoon half days can both book the same day when available.
+                    </p>
+                  )}
                   <div className="relative w-full min-w-0 max-w-full overflow-x-clip">
                   <div className="flex flex-col items-center gap-1.5 sm:gap-2 mb-2 sm:mb-3 md:mb-3">
                     <p className="text-[11px] sm:text-xs font-semibold text-brand-dark w-full">Date</p>
@@ -519,6 +541,20 @@ export function BookingStep2Calendar({
                         </div>
                       ) : (
                         slotsLoading ? <p className="text-xs text-brand-muted">Loading times…</p> : null
+                      )
+                    ) : nsfMode && onSelectNsfWindow && onSelectNsfExtension ? (
+                      slotsLoading ? (
+                        <p className="text-xs text-brand-muted">Loading departures…</p>
+                      ) : (
+                        <BookingNsfWindowPicker
+                          windows={nsfWindows}
+                          selectedWindowId={selectedNsfWindowId}
+                          onSelectWindow={onSelectNsfWindow}
+                          windowOpen={nsfWindowOpen}
+                          showExtensions={nsfWindows.some((w) => w.id === "full")}
+                          extensionHours={nsfExtensionHours}
+                          onSelectExtension={onSelectNsfExtension}
+                        />
                       )
                     ) : (
                       <>

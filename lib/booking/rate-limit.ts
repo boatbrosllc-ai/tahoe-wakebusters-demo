@@ -1,7 +1,8 @@
 /**
  * Rate limiter for booking endpoints.
  * - Client identity: derived from trusted platform-set headers only (x-real-ip,
- *   x-nf-client-connection-ip). Does not use x-forwarded-for to avoid spoofing.
+ *   x-nf-client-connection-ip). On Netlify, falls back to the first x-forwarded-for
+ *   hop when those are missing. Does not use x-forwarded-for off-Netlify (spoofing).
  * - Store: when RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN (or
  *   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN) are set, uses Redis so
  *   limits persist across instances and cold starts.
@@ -26,8 +27,8 @@ const MAX_REQUESTS = 30; // per window per key (Redis)
  * Public GET availability (date-prices, slots, effective-price): separate bucket so calendar prefetch
  * does not share the 30/min budget with checkout/hold mutations.
  */
-const MAX_REQUESTS_PUBLIC_READ = 120;
-const MAX_REQUESTS_PUBLIC_READ_UNKNOWN = 40;
+const MAX_REQUESTS_PUBLIC_READ = 180;
+const MAX_REQUESTS_PUBLIC_READ_UNKNOWN = 90;
 /** Local dev: every request looks like `*:unknown` (no x-real-ip). Calendar + date-prices + HMR/Strict Mode can exceed the unknown bucket; do not throttle dev like anonymous prod traffic. */
 const MAX_REQUESTS_PUBLIC_READ_DEV = 10_000;
 /** Shared "unknown" IP bucket (Redis) when proxy headers are missing — aligned with known-IP limit; mutation routes use stricter checks via `RATE_LIMIT_MUTATION_FAIL_CLOSED`. */
@@ -52,14 +53,27 @@ let unknownIpWarned = false;
 
 /**
  * Derive client key from trusted platform headers only (x-real-ip, then
- * x-nf-client-connection-ip). Fallback is "unknown"; x-forwarded-for is not
- * used to avoid spoofing. When the IP resolves to "unknown", a one-time
- * warning is logged in production and MAX_REQUESTS_UNKNOWN_BUCKET applies.
+ * x-nf-client-connection-ip). On Netlify, fall back to the first
+ * x-forwarded-for hop when those are missing (Netlify sets/appends the
+ * connection IP). Fallback is "unknown"; raw x-forwarded-for is not used
+ * off-Netlify to avoid spoofing.
  */
 export function getClientKey(request: Request): string {
   const xRealIp = request.headers.get("x-real-ip");
   const nfConnIp = request.headers.get("x-nf-client-connection-ip");
-  const ip = (xRealIp ?? nfConnIp ?? "").trim() || "unknown";
+  let ip = (xRealIp ?? nfConnIp ?? "").trim();
+
+  // Netlify Next runtime sometimes omits x-nf-client-connection-ip on App Router
+  // handlers while still providing x-forwarded-for. Prefer that over a shared
+  // "unknown" bucket that starves calendar reads for every visitor.
+  if (!ip && isNetlifyRuntime()) {
+    const xff = request.headers.get("x-forwarded-for");
+    const first = xff?.split(",")[0]?.trim() ?? "";
+    if (first && isPlausibleIp(first)) ip = first;
+  }
+
+  if (!ip) ip = "unknown";
+
   if (ip === "unknown" && process.env.NODE_ENV === "production") {
     if (!unknownIpWarned) {
       unknownIpWarned = true;
@@ -77,6 +91,23 @@ export function getClientKey(request: Request): string {
     }
   }
   return `booking:${ip}`;
+}
+
+function isNetlifyRuntime(): boolean {
+  return (
+    process.env.NETLIFY === "true" ||
+    Boolean(process.env.CONTEXT?.trim()) ||
+    Boolean(process.env.NETLIFY_DEV?.trim())
+  );
+}
+
+/** Reject obvious non-IP spoof values before using XFF on Netlify. */
+function isPlausibleIp(value: string): boolean {
+  // IPv4
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return true;
+  // Rough IPv6 (includes compressed forms)
+  if (value.includes(":") && /^[0-9a-fA-F:]+$/.test(value)) return true;
+  return false;
 }
 
 /**

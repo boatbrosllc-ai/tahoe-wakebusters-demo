@@ -14,10 +14,10 @@ import { useBookingModal } from "./BookingModalContext";
 const HERO_IMAGE = "/photos/stock/cabo/el-arco-sunset-jarvis.jpg";
 
 const bullets = [
-  "Cabo San Lucas",
-  "Marlin · Tuna · Dorado · Wahoo",
+  "Cabo San Lucas marina",
+  "Half Day & Full Day trips",
+  "10+ payment options · BNPL",
   "Captain & crew included",
-  "Licensed charters",
 ];
 
 export function Hero() {
@@ -71,17 +71,25 @@ export function Hero() {
           >
             <Link
               href="/"
-              className="group block w-full max-w-[80vw] lg:max-w-[820px] xl:max-w-[900px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
+              className="group block w-full max-w-[92vw] lg:max-w-[980px] xl:max-w-[1100px] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
               aria-label={`${brand.logoAlt} home`}
             >
-              <span className="relative block w-full max-h-[140px] sm:max-h-[175px] md:max-h-[210px] lg:max-h-[260px] xl:max-h-[300px] aspect-[1010/511] max-w-full">
+              <span className="relative block w-full max-h-[200px] sm:max-h-[250px] md:max-h-[300px] lg:max-h-[360px] xl:max-h-[420px] aspect-[974/574] max-w-full">
                 <Image
                   src={brand.logoHeroPath ?? brand.logoDarkPath}
                   alt={brand.logoAlt}
                   fill
-                  className="object-contain object-center"
-                  sizes="(max-width: 1024px) 90vw, 1000px"
+                  className="object-contain object-center transition-opacity duration-300 group-hover:opacity-0"
+                  sizes="(max-width: 1024px) 95vw, 1100px"
                   priority
+                />
+                <Image
+                  src={brand.logoHeroHoverPath}
+                  alt=""
+                  fill
+                  aria-hidden
+                  className="object-contain object-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+                  sizes="(max-width: 1024px) 95vw, 1100px"
                 />
               </span>
             </Link>
@@ -95,7 +103,7 @@ export function Hero() {
             transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.1 }}
           >
             <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
-              Cabo sport fishing that hits different.
+              Private Cabo Fishing Charters
             </h1>
             <motion.p
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
@@ -103,7 +111,8 @@ export function Hero() {
               animate={{ opacity: 1, y: 0 }}
               transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.18 }}
             >
-              {brand.tagline}
+              Half Day &amp; Full Day sportfishing in Cabo San Lucas — captain, crew, tackle &amp;
+              bait included. Marlin, tuna, dorado &amp; wahoo.
             </motion.p>
           </motion.div>
 
@@ -134,7 +143,7 @@ export function Hero() {
 
           {/* CTAs */}
           <motion.div
-            className="mt-4 w-full max-w-sm mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
+            className="mt-4 w-full max-w-md mx-auto sm:mt-5 lg:mt-6 lg:max-w-xl"
             initial={skipEntrance ? false : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.35 }}
@@ -147,8 +156,9 @@ export function Hero() {
                   variant="primary"
                   onDark
                   callPinkOnDark
+                  showCall
                   onBookNowClick={() => setBookingModalOpen(true)}
-                  className="w-full text-center [&>p]:text-center [&>p]:text-xs lg:[&>p]:text-sm"
+                  className="w-full"
                   primaryHint="Instant confirmation · Easy reschedule"
                   callHint="Text or call for same-day questions"
                 />

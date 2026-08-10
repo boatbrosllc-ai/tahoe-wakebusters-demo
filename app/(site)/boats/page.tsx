@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
+import { redirect } from "next/navigation";
 import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
 import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { normalizeBoatPhotoForRender } from "@/lib/boats/validation";
 import { brand } from "@/content/brand";
+import { OUR_BOAT_PATH } from "@/content/launch-boat";
 import { ChevronRight } from "lucide-react";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
 
@@ -45,20 +47,22 @@ function shortDescription(description: string | undefined): string {
 
 export default async function BoatsHubPage() {
   const boats = await getListingBoatsForPublic();
-  const single = boats.length === 1 ? boats[0] : null;
+  // Single-boat fleet (or empty): send "Our Boat" traffic straight to the detail page.
+  if (boats.length <= 1) {
+    const slug = boats[0]?.slug;
+    redirect(slug ? `/boats/${encodeURIComponent(slug)}` : OUR_BOAT_PATH);
+  }
 
   return (
     <div className="min-h-screen bg-white">
       <section className="relative bg-brand-dark px-5 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20" aria-labelledby="boats-hero-heading">
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/20 via-transparent to-brand-secondary/10" />
-        <div className="container-narrow relative z-10 mx-auto text-center">
+        <div className="container-narrow relative z-10 mx-auto flex flex-col items-center justify-center text-center">
           <h1 id="boats-hero-heading" className="text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-            Our Boat
+            Our Boats
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-            {single
-              ? `${single.name} — every Cabo charter includes a licensed captain and crew.`
-              : "Our Cabo sport fishing boat—every charter includes a licensed captain and crew."}
+            Our Cabo sport fishing boats—every charter includes a licensed captain and crew.
           </p>
         </div>
       </section>
@@ -66,100 +70,55 @@ export default async function BoatsHubPage() {
       <section className="section-padding bg-white" aria-labelledby="boats-grid-heading">
         <div className="container-wide px-4 sm:px-6 lg:px-8">
           <h2 id="boats-grid-heading" className="sr-only">
-            {single ? single.name : "Our Cabo fishing boat"}
+            Our Cabo fishing boats
           </h2>
-          {boats.length === 0 ? (
-            <p className="text-center text-brand-muted">No boat is listed at the moment. Check back soon or contact us.</p>
-          ) : single ? (
-            <div className="mx-auto max-w-4xl">
-              <div className="group relative flex flex-col overflow-hidden rounded-2xl bg-brand-dark ring-2 ring-brand-primary/80">
-                <Link
-                  href={`/boats/${single.slug}`}
-                  className={`block relative overflow-hidden aspect-[16/10] min-h-[220px] sm:min-h-[300px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark ${
-                    single.firstLinkedExperienceSlug ? "rounded-t-2xl" : "rounded-2xl"
-                  }`}
-                  aria-label={`${single.name} — view boat details`}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+            {boats.map((boat) => {
+              const safePhoto = normalizeBoatPhotoForRender(boat.photos[0]);
+              const imageUrl = getDisplayImageUrl(safePhoto);
+              const desc = shortDescription(getDisplayDescription(boat));
+              return (
+                <div
+                  key={boat.id}
+                  className="group relative flex flex-col rounded-xl bg-brand-dark ring-2 ring-brand-primary/80 transition-all duration-300 hover:shadow-lg hover:shadow-brand-primary/20 hover:-translate-y-0.5 hover:ring-brand-primary"
                 >
-                  <Image
-                    src={getDisplayImageUrl(normalizeBoatPhotoForRender(single.photos[0]))}
-                    alt={`${single.name} — Cabo San Lucas sport fishing charter boat`}
-                    fill
-                    className="object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
-                    sizes="(max-width: 896px) 100vw, 896px"
-                    priority
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-15% via-black/35 to-transparent" />
-                  <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-7 lg:p-8">
-                    <h3 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-snug">
-                      {single.name}
-                    </h3>
-                    <p className="mt-2 sm:mt-3 text-white/90 text-sm sm:text-base max-w-2xl leading-relaxed">
-                      {shortDescription(getDisplayDescription(single))}
-                    </p>
-                    <span className="mt-4 inline-flex items-center gap-1.5 text-white font-semibold text-sm sm:text-base group-hover:gap-2.5 transition-[gap] duration-200">
-                      Full details <ChevronRight className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
-                    </span>
-                  </div>
-                </Link>
-                {single.firstLinkedExperienceSlug && (
-                  <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3 p-4 sm:p-5 border-t border-white/10 bg-brand-dark/95 rounded-b-2xl">
-                    <BoatBookNowButton
-                      showCalendarIcon={false}
-                      className="inline-flex items-center justify-center rounded-full min-h-[44px] px-6 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
-              {boats.map((boat) => {
-                const safePhoto = normalizeBoatPhotoForRender(boat.photos[0]);
-                const imageUrl = getDisplayImageUrl(safePhoto);
-                const desc = shortDescription(getDisplayDescription(boat));
-                return (
-                  <div
-                    key={boat.id}
-                    className="group relative flex flex-col rounded-xl bg-brand-dark ring-2 ring-brand-primary/80 transition-all duration-300 hover:shadow-lg hover:shadow-brand-primary/20 hover:-translate-y-0.5 hover:ring-brand-primary"
+                  <Link
+                    href={`/boats/${boat.slug}`}
+                    className={`block relative overflow-hidden aspect-[16/10] min-h-[160px] sm:min-h-[180px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark ${
+                      boat.firstLinkedExperienceSlug ? "rounded-t-xl" : "rounded-xl"
+                    }`}
+                    aria-label={`${boat.name} — view boat details`}
                   >
-                    <Link
-                      href={`/boats/${boat.slug}`}
-                      className={`block relative overflow-hidden aspect-[16/10] min-h-[160px] sm:min-h-[180px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark ${
-                        boat.firstLinkedExperienceSlug ? "rounded-t-xl" : "rounded-xl"
-                      }`}
-                      aria-label={`${boat.name} — view boat details`}
-                    >
-                      <Image
-                        src={imageUrl}
-                        alt=""
-                        fill
-                        className="object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
-                        sizes="(max-width: 640px) 100vw, 50vw"
+                    <Image
+                      src={imageUrl}
+                      alt=""
+                      fill
+                      className="object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
+                      sizes="(max-width: 640px) 100vw, 50vw"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-20% via-black/40 to-transparent" />
+                    <div className="absolute inset-0 flex flex-col items-center justify-end p-4 sm:p-5 text-center">
+                      <h3 className="font-display text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
+                        {boat.name}
+                      </h3>
+                      <p className="mt-1.5 text-white/90 text-xs sm:text-sm line-clamp-2 leading-snug mx-auto max-w-md">{desc}</p>
+                      <span className="mt-2 sm:mt-2.5 inline-flex items-center justify-center gap-1.5 text-white font-medium text-xs sm:text-sm">
+                        View boat <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden />
+                      </span>
+                    </div>
+                  </Link>
+                  {boat.firstLinkedExperienceSlug && (
+                    <div className="flex flex-wrap items-center justify-end gap-2 p-3 sm:p-4 pt-3 border-t border-white/10 bg-brand-dark/95 rounded-b-xl">
+                      <BoatBookNowButton
+                        showCalendarIcon={false}
+                        className="inline-flex items-center justify-center rounded-full min-h-[44px] px-5 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-20% via-black/40 to-transparent" />
-                      <div className="absolute inset-0 flex flex-col justify-end p-4 sm:p-5">
-                        <h3 className="font-display text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
-                          {boat.name}
-                        </h3>
-                        <p className="mt-1.5 text-white/90 text-xs sm:text-sm line-clamp-2 leading-snug">{desc}</p>
-                        <span className="mt-2 sm:mt-2.5 inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm">
-                          View boat <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden />
-                        </span>
-                      </div>
-                    </Link>
-                    {boat.firstLinkedExperienceSlug && (
-                      <div className="flex flex-wrap items-center justify-end gap-2 p-3 sm:p-4 pt-3 border-t border-white/10 bg-brand-dark/95 rounded-b-xl">
-                        <BoatBookNowButton
-                          showCalendarIcon={false}
-                          className="inline-flex items-center justify-center rounded-full min-h-[44px] px-5 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 

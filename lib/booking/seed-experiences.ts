@@ -18,6 +18,8 @@ import {
   PEAK_FULL_DAY_CENTS,
   STANDARD_RATE_CENTS,
 } from "@/content/catalog-pricing";
+import { NSF_EXTENSION_HOUR_CENTS } from "@/content/charter-windows";
+import { CHARTER_UPSELLS } from "@/content/upsells";
 
 const CANCELLATION_POLICY = {
   freeCancelDays: 30,
@@ -34,122 +36,98 @@ const RULES = ["Follow captain instructions", "No glass on deck", "Release billf
 type RateSeed = Omit<ExperienceRate, "active"> & { active: boolean };
 type AddonSeed = Omit<ExperienceAddon, "active"> & { active: boolean; catalogKey: string };
 
-const CATALOG_ADDONS: AddonSeed[] = [
+/** Current bookable / catalog upsells from content/upsells.ts */
+const ACTIVE_UPSELL_ADDONS: AddonSeed[] = CHARTER_UPSELLS.map((u) => ({
+  catalogKey: u.catalogKey,
+  name: u.name,
+  description: u.howItWorks,
+  priceCents: u.seedPriceCents,
+  type: u.seedType,
+  ...(u.maxQty != null ? { maxQty: u.maxQty } : {}),
+  active: true,
+  ...(u.bookable ? {} : { hiddenFromBookingUI: true as const }),
+  ...(u.partnerFulfilled ? { partnerFulfilled: true as const } : {}),
+  ...(u.highlight ? { highlight: true as const } : {}),
+}));
+
+/** Legacy keys kept in Firestore (reconcile updates) but deactivated. */
+const LEGACY_ADDONS: AddonSeed[] = [
   {
     catalogKey: "extra-fishing-hour",
     name: "Extra Fishing Hour",
-    description:
-      "Add additional fishing time when the boat schedule, captain, and conditions allow. Subject to same-day availability.",
-    priceCents: 300_00, // mid of $250–$350
+    description: "Superseded by Full Day +1/+2/+3 hour extensions.",
+    priceCents: 300_00,
     type: "toggle",
-    active: true,
-    highlight: true,
-  },
-  {
-    catalogKey: "resort-transportation",
-    name: "Resort / Airport Transportation",
-    description: "Private transportation between Cabo accommodations and the marina. Partner fulfilled.",
-    priceCents: 225_00, // mid of $150–$300
-    type: "toggle",
-    active: true,
-    partnerFulfilled: true,
+    active: false,
+    hiddenFromBookingUI: true,
   },
   {
     catalogKey: "offshore-run",
     name: "Offshore Run Upgrade",
-    description: "Additional fuel allowance for significantly longer runs to distant fishing grounds.",
-    priceCents: 450_00, // mid of $300–$600
+    description: "Ask when booking if you want additional fuel range for longer runs.",
+    priceCents: 450_00,
     type: "toggle",
-    active: true,
-  },
-  {
-    catalogKey: "premium-breakfast",
-    name: "Premium Breakfast",
-    description: "Upgraded breakfast spread for the crew and anglers.",
-    priceCents: 110_00, // mid of $75–$150
-    type: "toggle",
-    active: true,
-  },
-  {
-    catalogKey: "beverage-package",
-    name: "Beverage Package",
-    description: "Expanded soft drinks and non-alcoholic refreshments for the trip.",
-    priceCents: 145_00, // mid of $95–$195
-    type: "toggle",
-    active: true,
-  },
-  {
-    catalogKey: "premium-lunch",
-    name: "Premium Lunch",
-    description: "Heartier lunch provisioning for a full day offshore.",
-    priceCents: 185_00, // mid of $125–$250
-    type: "toggle",
-    active: true,
+    active: false,
+    hiddenFromBookingUI: true,
   },
   {
     catalogKey: "celebration-package",
     name: "Celebration Package",
-    description: "Onboard celebration touches for birthdays, proposals, and special occasions.",
-    priceCents: 225_00, // mid of $149–$299
+    description: "Legacy celebration add-on — no longer offered.",
+    priceCents: 225_00,
     type: "toggle",
-    active: true,
-    highlight: true,
+    active: false,
+    hiddenFromBookingUI: true,
   },
   {
     catalogKey: "cook-your-catch",
     name: "Cook Your Catch",
-    description: "Partner-fulfilled cook-your-catch experience after the trip (availability varies).",
-    priceCents: 125_00, // mid of $95–$150
+    description: "Legacy partner cook-your-catch — no longer offered at checkout.",
+    priceCents: 125_00,
     type: "toggle",
-    active: true,
+    active: false,
+    hiddenFromBookingUI: true,
     partnerFulfilled: true,
   },
   {
     catalogKey: "fish-processing-delivery",
     name: "Fish Processing & Delivery",
-    description: "Partner-fulfilled processing and local delivery when available.",
-    priceCents: 135_00, // mid of $75–$200
+    description: "Replaced by Nasty In-House Fish Processing + Resort Fish Delivery.",
+    priceCents: 135_00,
     type: "toggle",
-    active: true,
-    partnerFulfilled: true,
-  },
-  {
-    catalogKey: "nasty-gear-pack",
-    name: "Nasty Gear Pack",
-    description: "Per-person gear pack (hat, buff, and trip essentials). Select quantity for your group.",
-    priceCents: 110_00, // mid of $75–$150 per person
-    type: "quantity",
-    maxQty: 8,
-    active: true,
+    active: false,
+    hiddenFromBookingUI: true,
   },
   {
     catalogKey: "framed-catch-print",
     name: "Framed Catch Print",
-    description: "Framed print of your catch photo — produced after the trip.",
-    priceCents: 149_00, // mid of $99–$199
+    description: "Replaced by Trophy Replica Concierge.",
+    priceCents: 149_00,
     type: "toggle",
-    active: true,
+    active: false,
+    hiddenFromBookingUI: true,
   },
-  // Legacy addons kept available but de-emphasized
   {
     catalogKey: "extra-ice",
     name: "Extra ice",
     description: "Additional ice for the cooler",
     priceCents: 1000,
     type: "toggle",
-    active: true,
+    active: false,
     hiddenFromBookingUI: true,
   },
   {
     catalogKey: "fish-cleaning",
     name: "Fish cleaning",
-    description: "Filet service when available — prefer Fish Processing & Delivery for full service.",
+    description: "Prefer Nasty In-House Fish Processing for full service.",
     priceCents: 2500,
     type: "toggle",
-    active: true,
+    active: false,
     hiddenFromBookingUI: true,
   },
 ];
+
+const CATALOG_ADDONS: AddonSeed[] = [...ACTIVE_UPSELL_ADDONS, ...LEGACY_ADDONS];
 
 function halfDayRates(): RateSeed[] {
   const priceCents = getActiveCatalogRateCents("half");
@@ -168,18 +146,38 @@ function halfDayRates(): RateSeed[] {
 }
 
 function fullDayRates(): RateSeed[] {
-  const priceCents = getActiveCatalogRateCents("full");
+  const base = getActiveCatalogRateCents("full");
   return [
     {
       durationHours: 8,
       displayName: "Nasty Full Day (8 Hours)",
-      priceCents,
+      priceCents: base,
       priceHolidayCents: PEAK_FULL_DAY_CENTS,
+      active: true,
+    },
+    {
+      durationHours: 9,
+      displayName: "Full Day +1 Hour (until ~3:00 PM)",
+      priceCents: base + NSF_EXTENSION_HOUR_CENTS,
+      priceHolidayCents: PEAK_FULL_DAY_CENTS + NSF_EXTENSION_HOUR_CENTS,
+      active: true,
+    },
+    {
+      durationHours: 10,
+      displayName: "Full Day +2 Hours (until ~4:00 PM)",
+      priceCents: base + 2 * NSF_EXTENSION_HOUR_CENTS,
+      priceHolidayCents: PEAK_FULL_DAY_CENTS + 2 * NSF_EXTENSION_HOUR_CENTS,
+      active: true,
+    },
+    {
+      durationHours: 11,
+      displayName: "Full Day +3 Hours (until ~5:00 PM)",
+      priceCents: base + 3 * NSF_EXTENSION_HOUR_CENTS,
+      priceHolidayCents: PEAK_FULL_DAY_CENTS + 3 * NSF_EXTENSION_HOUR_CENTS,
       active: true,
     },
     { durationHours: 4, displayName: "Half-Day (4 Hours)", priceCents: STANDARD_RATE_CENTS.half, active: false },
     { durationHours: 5, displayName: "Half-Day (5 Hours)", priceCents: STANDARD_RATE_CENTS.half, active: false },
-    { durationHours: 10, displayName: "Full-Day (10 Hours)", priceCents: STANDARD_RATE_CENTS.full, active: false },
   ];
 }
 

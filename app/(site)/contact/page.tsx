@@ -3,6 +3,12 @@ import Link from "next/link";
 import { brand } from "@/content/brand";
 import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
+import {
+  getMarinaMeetNote,
+  getPublicAreaLabel,
+  getPublicPhone,
+  getVerifiedHours,
+} from "@/lib/seo/public-contact";
 
 const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 const canonical = `${baseUrl}/contact`;
@@ -10,55 +16,65 @@ const canonical = `${baseUrl}/contact`;
 export const metadata: Metadata = {
   title: "Contact | Cabo Sport Fishing",
   description:
-    "Contact Nasty Sport Fishing for Cabo San Lucas sport fishing charters. Phone, email, Marina Cabo San Lucas.",
+    "Contact Nasty Sport Fishing for Cabo San Lucas sport fishing charters. Email us or send a message — Marina Cabo San Lucas meet-ups.",
   keywords: ["Cabo fishing charter contact", "Nasty Sport Fishing", "Marina Cabo San Lucas"],
   alternates: { canonical },
   openGraph: {
     title: "Contact | Cabo Sport Fishing | Nasty Sport Fishing",
-    description: "Get in touch for Cabo fishing charters. Phone, email, marina.",
+    description: "Get in touch for Cabo fishing charters. Email or send a message.",
     url: canonical,
   },
 };
 
-const address = `${brand.address.line1}, ${brand.address.city}, ${brand.address.state} ${brand.address.zip}`;
-const mapQuery = encodeURIComponent(address);
-const mapUrl = `https://www.google.com/maps/search/?api=1&query=${mapQuery}`;
+export default function ContactPage() {
+  const phone = getPublicPhone();
+  const area = getPublicAreaLabel();
+  const marinaNote = getMarinaMeetNote();
+  const hours = getVerifiedHours();
 
-const contactItems = [
-  {
-    label: "Phone",
-    value: brand.phone,
-    href: `tel:${brand.phoneTel}`,
-    icon: Phone,
-    description: "Call us anytime",
-  },
-  {
+  const contactItems: {
+    label: string;
+    value: string;
+    href: string;
+    icon: typeof Phone;
+    description?: string;
+    external?: boolean;
+  }[] = [];
+
+  if (phone) {
+    contactItems.push({
+      label: "Phone",
+      value: phone.display,
+      href: `tel:${phone.tel}`,
+      icon: Phone,
+      description: "Call or text for booking questions",
+    });
+  }
+
+  contactItems.push({
     label: "Email",
     value: brand.email,
     href: `mailto:${brand.email}`,
     icon: Mail,
     description: "We reply within a few hours",
-  },
-  {
-    label: "Address & hours",
-    value: address,
-    href: mapUrl,
-    icon: MapPin,
-    description: brand.hours,
-    external: true,
-  },
-];
+  });
 
-export default function ContactPage() {
+  contactItems.push({
+    label: "Location",
+    value: area,
+    href: "/location",
+    icon: MapPin,
+    description: hours ? `${marinaNote} · ${hours}` : marinaNote,
+  });
+
   return (
     <div className="min-h-screen bg-white">
-      {/* Hero strip */}
       <section
         className="relative overflow-hidden bg-brand-dark px-5 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20"
         aria-labelledby="contact-heading"
       >
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/20 via-transparent to-brand-secondary/10" />
-        <div className="container-narrow relative z-10 mx-auto text-center">
+        <div className="container-narrow relative z-10 mx-auto flex flex-col items-center text-center">
           <h1
             id="contact-heading"
             className="text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl"
@@ -66,29 +82,28 @@ export default function ContactPage() {
             Get in touch
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-lg text-white/90 sm:text-xl">
-            Call, email, or send a message. We&apos;re here to help with bookings and questions.
+            Email or send a message. We&apos;re here to help with Cabo charter bookings and questions.
           </p>
           <p className="mt-3">
             <Link
               href="/location"
               className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark rounded"
             >
-              View our location, map & hours →
+              View marina meet-up details →
             </Link>
           </p>
         </div>
       </section>
 
-      {/* Main content */}
       <section className="section-padding bg-brand-bg/50">
         <div className="container-narrow mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
           <div className="grid gap-8 lg:grid-cols-[1fr_1.1fr] lg:gap-12">
-            {/* Contact cards */}
             <div className="flex flex-col gap-4 sm:gap-5">
               {contactItems.map((item) => {
                 const Icon = item.icon;
+                const Comp = item.href.startsWith("/") ? Link : "a";
                 return (
-                  <a
+                  <Comp
                     key={item.label}
                     href={item.href}
                     target={item.external ? "_blank" : undefined}
@@ -111,12 +126,11 @@ export default function ContactPage() {
                         </span>
                       )}
                     </div>
-                  </a>
+                  </Comp>
                 );
               })}
             </div>
 
-            {/* Form card */}
             <div className="rounded-2xl border border-brand-dark/5 bg-white p-6 shadow-soft-lg sm:p-8 lg:shadow-premium">
               <h2 className="text-xl font-semibold text-brand-dark sm:text-2xl">
                 Send a message

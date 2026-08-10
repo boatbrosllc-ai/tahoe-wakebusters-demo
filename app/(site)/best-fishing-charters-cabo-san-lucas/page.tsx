@@ -138,7 +138,7 @@ export default function Page() {
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
         { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
         { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
-        { href: "/boats", label: "Boats" },
+        { href: "/boats/cabo-40-express", label: "Boats" },
         { href: "/packages", label: "Packages" },
         { href: "/los-cabos-fishing-charters", label: "Los Cabos overview" },
         { href: "/contact", label: "Contact" },

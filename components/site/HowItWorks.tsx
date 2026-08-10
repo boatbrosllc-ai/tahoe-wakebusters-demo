@@ -1,113 +1,154 @@
 "use client";
 
-import { useState } from "react";
 import { motion } from "framer-motion";
-import { Calendar, MousePointerClick, Anchor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 
 const steps = [
   {
-    icon: Calendar,
-    title: "Choose experience & date",
-    description: "Pick pontoon, wake, sunset, or another package and your preferred date.",
-    iconHover: { scale: [1, 1.35, 1], y: [0, -6, 0], transition: { duration: 0.45 } },
+    n: "01",
+    label: "Pick",
+    title: "Choose your charter & date",
+    description: "Nasty Half Day or Full Day. Pick the day you want on Cabo water.",
   },
   {
-    icon: MousePointerClick,
-    title: "Book now",
-    description: "See real-time availability and book in a few clicks.",
-    highlight: "Instant confirmation.",
-    iconHover: { y: [0, 8, 0], scale: [1, 1.2, 1], transition: { duration: 0.4 } },
+    n: "02",
+    label: "Lock",
+    title: "Book online",
+    description: "Live availability. A few clicks. Instant confirmation on your private charter.",
   },
   {
-    icon: Anchor,
-    title: "Show up & enjoy",
-    description: "We'll send details and meet you at the dock.",
-    highlight: "Life vests and safety briefing included.",
-    iconHover: { rotate: [0, -18, 18, 0], scale: [1, 1.15, 1], transition: { duration: 0.5 } },
+    n: "03",
+    label: "Fish",
+    title: "Meet us at the marina",
+    description: "Check-in details in your inbox. Captain, crew, tackle, bait, and licenses ready.",
   },
 ];
 
 export function HowItWorks() {
   const { setOpen: setBookingModalOpen } = useBookingModal();
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   return (
-    <section className="section-padding bg-brand-bg" aria-labelledby="how-it-works-heading">
-      <div className="container-wide px-4 sm:px-6 lg:px-8">
-        <h2 id="how-it-works-heading" className="text-2xl sm:text-3xl lg:text-4xl font-bold text-brand-dark text-center mb-3 sm:mb-4">
-          How it works
-        </h2>
-        <p className="text-base sm:text-lg text-brand-muted text-center max-w-2xl mx-auto mb-8 sm:mb-12">
-          Three simple steps from choosing your trip to being on the water.
-        </p>
+    <section
+      className="relative overflow-hidden section-padding bg-brand-bg"
+      aria-labelledby="how-it-works-heading"
+    >
+      {/* Atmosphere — no photos, just brand light */}
+      <div
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,_rgba(242,122,10,0.12),_transparent_55%)]"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute -left-20 bottom-0 h-64 w-64 rounded-full bg-brand-primary/10 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute -right-16 top-1/3 h-52 w-52 rounded-full bg-brand-primary/15 blur-3xl"
+        aria-hidden
+      />
 
-        <ol className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-6 max-w-5xl mx-auto list-none">
-          {steps.map((step, i) => (
-            <li key={step.title} className="relative h-full">
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-24px" }}
-                transition={{ duration: 0.35, delay: i * 0.1 }}
-                whileHover={{ y: -4, scale: 1.02, transition: { duration: 0.25 } }}
-                onHoverStart={() => setHoveredIndex(i)}
-                onHoverEnd={() => setHoveredIndex(null)}
-                className="relative w-full h-full max-w-sm rounded-2xl ring-4 ring-brand-primary bg-white p-6 shadow-soft hover:shadow-xl hover:ring-offset-2 transition-all duration-300 cursor-default flex gap-4 sm:gap-4 flex-row items-start text-left"
-              >
-                {/* Left: step number + icon – fixed width so they always fit */}
-                <div className="flex shrink-0 flex-col items-center gap-3">
-                  <motion.span
-                    className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-primary text-white text-sm font-bold"
-                    aria-hidden
-                    whileHover={{ scale: 1.08 }}
-                    transition={{ type: "spring", stiffness: 400, damping: 17 }}
-                  >
-                    {i + 1}
-                  </motion.span>
-                  <motion.div
-                    className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-primary/10 text-brand-primary flex-shrink-0"
-                    aria-hidden
-                    animate={hoveredIndex === i ? step.iconHover : { scale: 1, rotate: 0, y: 0 }}
-                    transition={hoveredIndex === i ? (step.iconHover.transition ?? { duration: 0.3 }) : { duration: 0.25 }}
-                  >
-                    <step.icon className="h-6 w-6" />
-                  </motion.div>
-                </div>
-                {/* Right: title + description + highlight */}
-                <div className="min-w-0 flex-1 pt-0.5">
-                  <h3 className="text-lg font-semibold text-brand-dark mb-2">{step.title}</h3>
-                  <p className="text-sm text-brand-muted mb-1">{step.description}</p>
-                  {step.highlight ? (
-                    <p className="text-sm font-medium text-brand-primary">{step.highlight}</p>
-                  ) : (
-                    <p className="text-sm font-medium text-transparent select-none" aria-hidden="true">
-                      {"\u00A0"}
-                    </p>
-                  )}
-                </div>
-              </motion.div>
-            </li>
-          ))}
-        </ol>
-
-        <div className="mt-10 sm:mt-12 text-center">
+      <div className="relative container-wide px-4 sm:px-6 lg:px-8">
+        <div className="max-w-6xl mx-auto mb-12 sm:mb-16 lg:mb-20">
           <motion.div
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            className="inline-block"
+            className="flex flex-col items-center text-center"
+            initial={{ opacity: 0, y: 18 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-40px" }}
+            transition={{ duration: 0.45 }}
           >
-            <Button
-              size="lg"
-              className="rounded-xl bg-brand-primary hover:bg-brand-primary/90 text-white font-semibold px-8 shadow-soft"
-              onClick={() => setBookingModalOpen(true)}
+            <div className="inline-flex items-center gap-3 mb-4">
+              <span className="h-px w-8 bg-brand-secondary" aria-hidden />
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-secondary">
+                Three easy steps
+              </p>
+            </div>
+            <h2
+              id="how-it-works-heading"
+              className="font-display text-4xl sm:text-5xl lg:text-[3.5rem] xl:text-6xl font-bold text-brand-dark tracking-tight leading-[1.05]"
             >
-              Book now
-            </Button>
+              How it works
+            </h2>
           </motion.div>
-          <p className="mt-3 text-sm text-brand-muted">No hidden fees. Free cancellation up to 30 days before. 50% refund 15–30 days · No refund within 14 days.</p>
         </div>
+
+        {/* Journey rail */}
+        <div className="relative max-w-6xl mx-auto">
+          {/* Desktop progress line */}
+          <div
+            className="pointer-events-none absolute left-[16%] right-[16%] top-[1.35rem] hidden sm:block h-[2px] overflow-hidden"
+            aria-hidden
+          >
+            <motion.div
+              className="h-full origin-left bg-gradient-to-r from-brand-secondary via-brand-primary to-brand-secondary"
+              initial={{ scaleX: 0 }}
+              whileInView={{ scaleX: 1 }}
+              viewport={{ once: true, margin: "-60px" }}
+              transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
+            />
+          </div>
+
+          <ol className="grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-6 lg:gap-10 list-none">
+            {steps.map((step, i) => (
+              <motion.li
+                key={step.n}
+                className="relative group"
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-30px" }}
+                transition={{ duration: 0.5, delay: 0.12 + i * 0.1, ease: [0.22, 1, 0.36, 1] }}
+              >
+                {/* Mobile connector */}
+                {i < steps.length - 1 ? (
+                  <div
+                    className="absolute left-[1.15rem] top-12 bottom-[-2rem] w-px bg-gradient-to-b from-brand-secondary/70 to-brand-primary/40 sm:hidden"
+                    aria-hidden
+                  />
+                ) : null}
+
+                <div className="flex sm:flex-col gap-5 sm:gap-0 sm:items-center sm:text-center">
+                  <div className="relative z-[1] flex h-11 w-11 sm:h-12 sm:w-12 shrink-0 items-center justify-center rounded-full bg-brand-dark text-[13px] font-bold tracking-[0.12em] text-white shadow-[0_10px_28px_rgba(4,36,74,0.28)] ring-[6px] ring-brand-bg transition-transform duration-300 group-hover:scale-110 group-hover:bg-brand-secondary">
+                    {step.n}
+                  </div>
+
+                  <div className="min-w-0 sm:mt-8">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brand-primary mb-2 sm:mb-3">
+                      {step.label}
+                    </p>
+                    <h3 className="font-display text-xl sm:text-2xl font-bold text-brand-dark tracking-tight leading-snug">
+                      {step.title}
+                    </h3>
+                    <p className="mt-3 text-[15px] sm:text-base text-brand-muted leading-relaxed sm:max-w-[17.5rem] sm:mx-auto">
+                      {step.description}
+                    </p>
+                    <div
+                      className="mt-5 hidden sm:block mx-auto h-1 w-10 rounded-full bg-brand-secondary/80 transition-all duration-300 group-hover:w-16 group-hover:bg-brand-secondary"
+                      aria-hidden
+                    />
+                  </div>
+                </div>
+              </motion.li>
+            ))}
+          </ol>
+        </div>
+
+        <motion.div
+          className="mt-14 sm:mt-16 flex flex-col items-center gap-4 text-center"
+          initial={{ opacity: 0, y: 14 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-40px" }}
+          transition={{ duration: 0.4, delay: 0.35 }}
+        >
+          <Button
+            size="lg"
+            className="rounded-xl bg-brand-secondary hover:bg-brand-secondary/90 text-white font-bold px-9 shadow-[0_12px_32px_rgba(242,122,10,0.32)] transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98]"
+            onClick={() => setBookingModalOpen(true)}
+          >
+            Book a Nasty charter
+          </Button>
+          <p className="text-sm text-brand-muted">
+            Private boat · Captain &amp; crew included · Free cancellation up to 30 days before
+          </p>
+        </motion.div>
       </div>
     </section>
   );

@@ -159,6 +159,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     targetStartMs: slotStartMs,
     targetEndMs: slotEndMs,
     excludeBookingId,
+    targetParsed: parsed,
   });
   if (takenIntervals.length > 0) {
     throw new SlotConflictError("Slot no longer available");

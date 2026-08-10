@@ -81,12 +81,12 @@ export function SeoGuideLayout({
           <Image src={heroImage} alt="" fill className="object-cover opacity-35" sizes="100vw" priority />
           <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/70 via-brand-dark/85 to-brand-dark" />
         </div>
-        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 max-w-4xl">
+        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 max-w-4xl mx-auto text-center">
           <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight">
             {h1}
           </h1>
-          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl">{lede}</p>
-          <div className="mt-8 max-w-md">
+          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">{lede}</p>
+          <div className="mt-8 max-w-md mx-auto">
             <SeoCheckAvailabilityCta page={pageKey} source="seo_hero" />
           </div>
         </div>

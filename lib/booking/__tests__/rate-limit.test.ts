@@ -21,14 +21,39 @@ describe("getClientKey", () => {
     assert.strictEqual(getClientKey(req), "booking:10.0.0.2");
   });
 
-  it("returns booking:unknown when neither x-real-ip nor x-nf-client-connection-ip is set (even if x-forwarded-for present)", () => {
-    const req = new Request("https://example.com", {
-      headers: { "x-forwarded-for": "1.2.3.4" },
-    });
-    assert.strictEqual(getClientKey(req), "booking:unknown");
+  it("returns booking:unknown when neither x-real-ip nor x-nf-client-connection-ip is set (even if x-forwarded-for present off-Netlify)", () => {
+    const prevNetlify = process.env.NETLIFY;
+    const prevContext = process.env.CONTEXT;
+    delete process.env.NETLIFY;
+    delete process.env.CONTEXT;
+    try {
+      const req = new Request("https://example.com", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      });
+      assert.strictEqual(getClientKey(req), "booking:unknown");
+    } finally {
+      if (prevNetlify !== undefined) process.env.NETLIFY = prevNetlify;
+      else delete process.env.NETLIFY;
+      if (prevContext !== undefined) process.env.CONTEXT = prevContext;
+      else delete process.env.CONTEXT;
+    }
   });
 
-  it("does not use x-forwarded-for for client key (anti-spoofing: only trusted headers)", () => {
+  it("on Netlify uses first x-forwarded-for hop when trusted IP headers are missing", () => {
+    const prevNetlify = process.env.NETLIFY;
+    process.env.NETLIFY = "true";
+    try {
+      const req = new Request("https://example.com", {
+        headers: { "x-forwarded-for": "203.0.113.9, 10.0.0.1" },
+      });
+      assert.strictEqual(getClientKey(req), "booking:203.0.113.9");
+    } finally {
+      if (prevNetlify !== undefined) process.env.NETLIFY = prevNetlify;
+      else delete process.env.NETLIFY;
+    }
+  });
+
+  it("does not use x-forwarded-for for client key when x-real-ip is set (anti-spoofing: only trusted headers)", () => {
     const req = new Request("https://example.com", {
       headers: { "x-forwarded-for": "9.9.9.9", "x-real-ip": "192.168.1.10" },
     });

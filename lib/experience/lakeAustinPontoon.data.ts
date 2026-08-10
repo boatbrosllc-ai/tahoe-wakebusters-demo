@@ -1,61 +1,61 @@
 /**
- * Placeholder data for Lake Austin Pontoon premium listing page.
- * No backend — frontend UX only.
+ * Shared listing-page fallbacks for experience UI components.
+ * Defaults are Cabo / NSF-safe. Prefer Firestore experience overrides when present.
  */
 
 import { location } from "@/content/location";
 
 export const HERO = {
-  title: "Lake Austin Pontoon Rental Experience",
-  subtitle: "Captain included. Premium sound. Chill, swim, celebrate.",
-  /** SEO intro for hero (Lake Austin pontoon rentals, captained, Austin TX). */
+  title: "Cabo Sport Fishing Charter",
+  subtitle: "Captain & crew included. Book your Nasty Half Day or Full Day.",
   introParagraph:
-    "Our Lake Austin pontoon rentals are captained pontoon rental experiences in Austin, TX. No boating license required—relax with your group while a licensed captain runs the boat. Book your Lake Austin pontoon rental below.",
+    "Private Cabo San Lucas sportfishing charters with licensed captain and mate. Check availability below.",
   primaryCta: "Check Availability",
   secondaryCta: "View Gallery",
-  /** Hero image — local pontoon photo (same as pontoon experience in content/experiences). */
-  imageFallback: "/photos/pontoon-hero-fallback.jpg",
-  unsplashFallback: "/photos/DSC09399%20(2).webp",
+  /** Hero image fallback when listing has no media. */
+  imageFallback: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+  unsplashFallback: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
 };
 
 export const BOOKING_PREVIEW = {
-  durations: [2, 4, 6, 8] as const,
+  durations: [5, 8] as const,
   minGuests: 1,
-  maxGuests: 14,
-  trustLine: "Instant confirmation • No hidden fees",
+  maxGuests: 8,
+  trustLine: "Instant confirmation • No hidden processing surcharge",
 };
 
 /**
  * Starting price by duration (hours) — static fallback / skeleton only.
- * Authoritative charter rates live in Firestore `experiences/{id}/rates`; keep this map in sync manually or pass
- * server-fetched `pricingDollarsByDuration` into `PricingSection` (see lake-austin-pontoon page).
+ * Authoritative charter rates live in Firestore `experiences/{id}/rates`.
  */
 export const PRICING_MAP: Record<number, number> = {
-  2: 450,
-  4: 450,
-  6: 899,
-  8: 1099,
+  5: 1500,
+  8: 2200,
 };
 
+/** Default social strip — no fake star ratings. */
 export const SOCIAL_PROOF = [
-  { label: "★ 5.0", sub: "rating" },
-  { label: `${location.reviewCount}+`, sub: "5-star reviews" },
-  { label: "Top-rated", sub: "on Lake Austin" },
-  { label: "Captain-led", sub: "" },
-  { label: "Lily pad included", sub: "" },
-  { label: "Cooler Included", sub: "" },
+  { label: "Private", sub: "charter" },
+  { label: "Captain", sub: "& crew" },
+  { label: "Cabo San Lucas", sub: "" },
+  ...(location.reviewCount > 0
+    ? [
+        { label: "★ " + String(location.rating), sub: "rating" },
+        { label: `${location.reviewCount}+`, sub: "5-star reviews" },
+      ]
+    : []),
 ];
 
-/** Static strip when the default pontoon fallback is used but lily pad does not apply (e.g. wake surf club). */
+/** Static strip variant (legacy lily-pad filter kept for callers). */
 export const SOCIAL_PROOF_WITHOUT_LILY_PAD = SOCIAL_PROOF.filter(
-  (item) => !/\b(lily|lilly)\s*pad\b/i.test(item.label)
+  (item) => !/lily/i.test(`${item.label} ${item.sub}`)
 );
 export const SOCIAL_AVATARS = [
   "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&crop=face",
   "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face",
   "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&h=80&fit=crop&crop=face",
 ];
-export const SOCIAL_LINE = "Loved by locals & visitors";
+export const SOCIAL_LINE = "Cabo San Lucas sport fishing";
 
 export interface ExperienceOverviewData {
   headline: string;
@@ -69,175 +69,97 @@ export interface ExperienceOverviewData {
 export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
   headline: "The experience",
   story:
-    "Spend the day on a premium pontoon with a dedicated captain. Cruise Lake Austin, anchor at a party cove, swim off the giant lily pad, and enjoy premium sound. Everything’s included — you just show up.",
-  /** SEO-rich paragraphs for the experience section (things to do, where captains go, lunch, etc.). */
+    "A private Cabo sportfishing charter with licensed captain and mate. Fish for tuna, dorado, wahoo, and marlin when conditions allow — tackle and bait included.",
   seoParagraphs: [
-    "Step aboard a captained Lake Austin pontoon rental and experience Austin from the water. Cruise past waterfront homes, anchor in popular coves, and enjoy the calm, scenic stretches that make Lake Austin one of the best boating destinations in Texas. Whether your group wants a lively atmosphere or a relaxed cruise, your captain guides the experience so every moment feels effortless.",
-    "Lake Austin is known for its smooth water, warm weather, and easy access from central Austin, making it perfect for birthdays, bachelorette parties, celebrations, or simply spending a day outside with friends and family. Many groups rotate between cruising, swimming, relaxing, and enjoying music while taking in the views along the shoreline.",
-    "Because every Nasty Sport Fishing charter is fully captained, there's nothing you need to manage. Your captain handles navigation, positioning, and timing while you focus on enjoying the lake. The result is a seamless, premium Lake Austin pontoon experience designed to help your group relax, celebrate, and create unforgettable memories on the water.",
+    "Nasty Sport Fishing runs private charters from the Marina Cabo San Lucas area. Half Day and Full Day share the same boat inventory — pick your length and check live availability.",
+    "Your crew handles the boat while you fish. Exact slip and check-in details arrive in your confirmation after booking.",
   ],
   features: [
-    { icon: "captain", text: "Private captain included" },
-    { icon: "sound", text: "Premium Bluetooth sound system" },
-    { icon: "lily", text: "Giant floating lily pad" },
-    { icon: "cooler", text: "Cooler. Ice included." },
-    { icon: "fuel", text: "Fuel included" },
-    { icon: "sparkles", text: "Good vibes" },
+    { icon: "captain", text: "Licensed captain & mate" },
+    { icon: "tackle", text: "Tackle & bait included" },
+    { icon: "license", text: "Licenses arranged" },
+    { icon: "cooler", text: "Ice & cooler space" },
   ],
   timeline: [
-    { step: "Dock", desc: "Meet your captain" },
-    { step: "Cruise", desc: "Scenic Lake Austin" },
-    { step: "Party cove", desc: "Anchor & hang" },
-    { step: "Swim", desc: "Lily pad & water" },
-    { step: "Sunset", desc: "Golden hour return" },
+    { step: "Meet", desc: "Marina Cabo San Lucas" },
+    { step: "Brief", desc: "Safety & plan" },
+    { step: "Fish", desc: "Bluewater sportfishing" },
+    { step: "Return", desc: "Back to the marina" },
   ],
-  imageUrl: "https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=800&q=80",
+  imageUrl: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
 };
 
 export const GALLERY_IMAGES = [
   {
-    url: "https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=1200&q=85",
-    alt: "Pontoon on Lake Austin",
-    category: "Boat",
+    url: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+    alt: "View toward El Arco from a boat in Cabo San Lucas",
+    category: "Cabo",
   },
   {
-    url: "https://images.unsplash.com/photo-1567894340315-735d7c361db0?w=800&q=85",
-    alt: "Lake day vibes",
-    category: "Lake Days",
-  },
-  {
-    url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&q=85",
-    alt: "Sunset on the water",
+    url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
+    alt: "El Arco at sunset in Cabo San Lucas",
     category: "Sunset",
   },
-  {
-    url: "https://images.unsplash.com/photo-1519046904884-53103b34b206?w=800&q=85",
-    alt: "Group on boat",
-    category: "Vibes",
-  },
-  {
-    url: "https://images.unsplash.com/photo-1473496169904-658ba7c44d8a?w=800&q=85",
-    alt: "Swimming and fun",
-    category: "Vibes",
-  },
 ];
-export const GALLERY_CATEGORIES = ["Vibes", "Boat", "Lake Days", "Sunset"] as const;
+export const GALLERY_CATEGORIES = ["Cabo", "Sunset"] as const;
 
 export const INCLUDED_ITEMS = [
-  { icon: "captain", title: "Licensed captain", desc: "Your captain handles everything." },
-  { icon: "fuel", title: "Fuel included", desc: "No surprise fuel fees." },
-  { icon: "cooler", title: "Cooler", desc: "Ice included." },
-  { icon: "sound", title: "Premium sound", desc: "Bluetooth stereo on board." },
-  { icon: "lily", title: "Lily pad", desc: "Giant floating mat for swimming." },
-  { icon: "lifejacket", title: "Life jackets", desc: "USCG-approved for all ages." },
-  { icon: "safety", title: "Safety first", desc: "Captain-trained; life jackets + brief." },
-  { icon: "sparkles", title: "Good vibes", desc: "Chill atmosphere, great music, and memories." },
+  { icon: "captain", title: "Licensed captain & mate", desc: "Your crew runs the boat." },
+  { icon: "tackle", title: "Tackle & bait", desc: "Included on charter." },
+  { icon: "license", title: "Licenses arranged", desc: "Fishing licenses handled." },
+  { icon: "cooler", title: "Ice & cooler space", desc: "Bring drinks and food as allowed." },
+  { icon: "safety", title: "Safety brief", desc: "Captain-led before departure." },
+  { icon: "sparkles", title: "Good vibes", desc: "Private boat for your group." },
 ];
 
 export const PRICING = {
-  note: "Deposit due today. Balance due 48 hours before your trip.",
-  tipNote: "Tips for your captain are not included but appreciated.",
-  popularHours: 4,
+  note: "Deposit options appear in checkout when the trip date qualifies. Balance rules follow your confirmation.",
+  tipNote: "Tips for your captain and mate are not included but appreciated.",
+  popularHours: 8,
 };
 
-export const REVIEWS = [
-  {
-    name: "Sarah M.",
-    location: "Austin, TX",
-    rating: 5,
-    text: "Best day on the water. Captain was amazing, boat was spotless, and the lily pad was a hit with the kids. Already booking again.",
-    date: "Jan 2025",
-    featured: true,
-    avatar: null,
-  },
-  {
-    name: "James K.",
-    location: "Dallas, TX",
-    rating: 5,
-    text: "Smooth from start to finish. Great sound system, plenty of space. Lake Austin at sunset — unbeatable.",
-    date: "Dec 2024",
-    featured: false,
-    avatar: null,
-  },
-  {
-    name: "Elena R.",
-    location: "Houston, TX",
-    rating: 5,
-    text: "We did the 6-hour and it flew by. Professional, fun, and the boat was in perfect condition.",
-    date: "Dec 2024",
-    featured: false,
-    avatar: null,
-  },
-  {
-    name: "Mike T.",
-    location: "Austin, TX",
-    rating: 5,
-    text: "Third time with Nasty Sport Fishing. Consistent quality and the team always makes it special.",
-    date: "Nov 2024",
-    featured: false,
-    avatar: null,
-  },
-  {
-    name: "Jessica L.",
-    location: "San Antonio, TX",
-    rating: 5,
-    text: "Birthday surprise for my husband — he was blown away. Couldn't recommend more.",
-    date: "Nov 2024",
-    featured: false,
-    avatar: null,
-  },
-  {
-    name: "David P.",
-    location: "Austin, TX",
-    rating: 5,
-    text: "Chill vibes, pro captain, great boat. Exactly what we wanted for a low-key Saturday.",
-    date: "Oct 2024",
-    featured: false,
-    avatar: null,
-  },
-];
+/** Empty until real guest reviews exist — do not invent testimonials. */
+export const REVIEWS: {
+  name: string;
+  location: string;
+  rating: number;
+  text: string;
+  date: string;
+  featured: boolean;
+  avatar: string | null;
+}[] = [];
 
 export const FAQ_ITEMS = [
   {
     question: "What's included?",
     answer:
-      "Your rental includes a licensed captain, fuel, cooler (ice included), premium Bluetooth sound system, and a giant floating lily pad. Life jackets are on board for all guests.",
-  },
-  {
-    question: "Can we bring drinks?",
-    answer:
-      "Yes. You may bring your own drinks and snacks. Glass is not allowed on the boat; please use cans or plastic. We provide ice.",
+      "Charters include licensed captain and mate, tackle, bait, and fishing licenses as listed on the experience. Optional add-ons appear in checkout.",
   },
   {
     question: "Where do we meet?",
     answer:
-      "We'll send you the exact dock and parking details after booking. Most trips launch from a marina on Lake Austin with easy parking.",
+      "Meet at Marina Cabo San Lucas. Exact slip, dock instructions, and check-in time arrive in your confirmation after booking.",
   },
   {
     question: "How many people?",
     answer:
-      "Our pontoon can accommodate up to 14 guests. For larger groups, we can discuss multiple boats.",
+      "Party size limits are shown on each charter listing and enforced in booking. Contact us for larger groups or multi-day packages.",
   },
   {
     question: "What if weather is bad?",
     answer:
-      "We keep an eye on the forecast and will work with you to reschedule if conditions aren't safe or fun.",
-  },
-  {
-    question: "Is music allowed?",
-    answer:
-      "Yes. We have a premium Bluetooth sound system on board. Keep volume respectful near shore and other boats.",
+      "We monitor conditions and will work with you to reschedule when the day isn't safe or fishable.",
   },
   {
     question: "Cancellation policy",
     answer:
-      "Cancel or reschedule at least 48 hours before your trip for a full refund of your deposit. Within 48 hours, deposits are non-refundable but we can help reschedule when possible.",
+      "Cancellation and deposit rules are shown at checkout and in your confirmation email.",
   },
 ];
 
 export const FINAL_CTA = {
-  headline: "Ready for the best day on Lake Austin?",
+  headline: "Ready to fish Cabo?",
   primaryCta: "Check Availability",
-  secondaryCta: "Text us",
-  secondaryHref: "#",
+  secondaryCta: "Contact us",
+  secondaryHref: "/contact",
 };

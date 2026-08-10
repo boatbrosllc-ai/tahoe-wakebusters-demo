@@ -14,6 +14,7 @@ describe("SEO sitemap path registry", () => {
       "/cabo-fishing-calendar",
       "/best-time-to-fish-cabo",
       "/best-fishing-charters-cabo-san-lucas",
+      "/cabo-fish-processing",
       "/fishing-reports",
     ];
     for (const path of required) {

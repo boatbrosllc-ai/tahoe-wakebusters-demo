@@ -14,127 +14,53 @@ import { StickyMobileBar } from "@/components/experience/StickyMobileBar";
 import { FinalCTA } from "@/components/experience/FinalCTA";
 import { BookingPreviewCard } from "@/components/experience/BookingPreviewCard";
 import { SOCIAL_PROOF_WITHOUT_LILY_PAD } from "@/lib/experience/lakeAustinPontoon.data";
-import { location, reviewCountLabel } from "@/content/location";
 import { isWakeSurfClubSlug } from "@/lib/booking/experience-aliases";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 
 const BOOKING_SECTION_ID = "booking-preview";
 
-/** Code-owned copy for /experiences/wakesurfclub (weekly shared session on Lake Austin). */
-const WAKESURF_CLUB = {
-  heroTitle: "Wake Surf Wednesdays on Lake Austin",
-  heroSubtitle: "Every Wednesday • 5:30 PM • Surf till sunset",
-  heroIntro: `Join a weekly wake surf session on Lake Austin. We provide the boat, captain/coach, boards, life jackets, and a cooler — just show up ready to ride.
-
-$100 per person
-8 spots max
-Walsh Boat Landing`,
-  socialStats: [
-    "Every Wednesday · 5:30 PM · Until sunset",
-    "$100/person · 8 spots max",
-    "Lake Austin",
-  ],
-  overviewHeadline: "Weekly Wake Surf Club",
-  overviewStory:
-    "A shared weekly session—the straightforward way to get reps on Lake Austin without booking a full private boat.",
-  overviewSeoParagraphs: [
-    "Meet on Lake Austin, hop on with the group, and rotate behind the wake. Your captain/coach keeps the session moving—surf, swap, cheer, and wrap in golden hour.",
-  ],
-  overviewTimeline: [
-    { step: "Meet", desc: "Lake Austin" },
-    { step: "Launch", desc: "5:30 PM · Club session" },
-    { step: "Surf", desc: "Coached turns · You rotate in" },
-    { step: "Sunset", desc: "Ride until golden hour" },
-  ],
-  included: [
-    { icon: "captain", title: "Captain / coach", desc: "Runs the boat and coaches the lineup" },
-    { icon: "sparkles", title: "Wake surf boat", desc: "Purpose-built tow boat" },
-    { icon: "sparkles", title: "Wake surf boards", desc: "Boards included" },
-    { icon: "lifejacket", title: "Life jackets", desc: "On-board for everyone" },
-    { icon: "cooler", title: "Cooler (BYOB – bring drinks)", desc: "" },
-    { icon: "lily", title: "Sunset session", desc: "Lake Austin until the sun drops" },
-  ],
-  faqs: [
-    {
-      question: "What's included?",
-      answer:
-        "Your spot includes the boat, captain/coach, wake surf boards, life jackets, and a cooler.",
-    },
-    {
-      question: "Where do we meet?",
-      answer:
-        "Pickup is on Lake Austin. You'll get exact arrival details when you book.",
-    },
-    {
-      question: "How many people?",
-      answer: "This club is limited to 8 people max.",
-    },
-    {
-      question: "How much is it?",
-      answer: "$100 per person.",
-    },
-    {
-      question: "When is it?",
-      answer: "Every Wednesday at 5:30 PM—and we ride until sunset.",
-    },
-    {
-      question: "Do I need experience?",
-      answer: "No. All skill levels are welcome.",
-    },
-    {
-      question: "What should I bring?",
-      answer: "Bring drinks, whatever you want for the water, and show up ready to surf.",
-    },
-    {
-      question: "What if the weather is bad?",
-      answer: "If conditions are unsafe, we'll make the call and reach out with next steps.",
-    },
-    {
-      question: "Is this a private charter?",
-      answer: "No. This is a shared weekly wake surf club session.",
-    },
-  ],
+/** Default social proof for half-day aliases when Firestore has no rating/stats. No fake stars. */
+const HALF_DAY_SOCIAL_PROOF = {
+  rating: undefined,
+  ratingCount: "",
+  stats: ["Private charter", "Captain & crew", "Cabo San Lucas"],
 };
 
-/** Default social proof for pontoon when not in Firestore. */
-const PONTOON_SOCIAL_PROOF = {
-  rating: location.rating,
-  ratingCount: reviewCountLabel(),
-  stats: ["Top-rated on Lake Austin", "Captain-led", "Lily pad included"],
-};
-
-/** Fallback hero title by slug when experience.title is missing (like pontoon "Lake Austin Luxury Pontoon"). */
+/** Fallback hero title by slug when experience.title is missing. */
 const HERO_TITLE_BY_SLUG = {
-  pontoon: "Lake Austin Luxury Pontoon",
-  watersports: "Lake Austin Watersports",
-  sunset: "Lake Austin Sunset Cruise",
-  holiday: "Seasonal Holiday Experience",
+  pontoon: "Nasty Half Day",
+  "nasty-half-day": "Nasty Half Day",
+  watersports: "Nasty Full Day",
+  "nasty-full-day": "Nasty Full Day",
+  sunset: "Cabo Sunset Fishing",
+  holiday: "Cabo Billfish Day",
 };
 
-/** Fallback hero subtitle by slug when experience.subtitle is missing (like pontoon tagline). */
+/** Fallback hero subtitle by slug when experience.subtitle is missing. */
 const HERO_SUBTITLE_BY_SLUG = {
-  pontoon: "Captain included. Premium sound. Chill, swim, celebrate.",
-  watersports: "Wake surf, wakeboard, and tubing. Captain-led on Lake Austin.",
-  sunset: "Golden hour on the water. Captain included. Book your sunset.",
-  holiday: "Seasonal holiday lights and festive cruises.",
+  pontoon: "5-hour private Cabo sportfishing charter. Captain & crew included.",
+  "nasty-half-day": "5-hour private Cabo sportfishing charter. Captain & crew included.",
+  watersports: "8-hour private Cabo sportfishing charter. Captain & crew included.",
+  "nasty-full-day": "8-hour private Cabo sportfishing charter. Captain & crew included.",
+  sunset: "Evening fishing charter in Cabo San Lucas.",
+  holiday: "Seasonal Cabo billfish-focused charter day.",
 };
 
-/** Experience overview for watersports: same structure as pontoon (headline, story, seoParagraphs, timeline). */
-const WATERSPORTS_OVERVIEW = {
+/** Full-day overview fallback only when Firestore description is empty. */
+const FULL_DAY_OVERVIEW = {
   headline: "The experience",
   story:
-    "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Experienced drivers available. Great for thrill-seekers and families who want action on the water.",
+    "A private full-day Cabo sportfishing charter with licensed captain and mate. Target pelagics and billfish when conditions allow — tackle, bait, and licenses arranged.",
   seoParagraphs: [
-    "Tow boats for wakeboarding, surfing, and tubing. On a Lake Austin wake boat rental you get a dedicated captain and a boat built for tow sports—wakeboard, wakesurf, or tube with your crew. We provide the boat and the driver; you bring the energy. Ideal for thrill-seekers and families who want action on the water.",
-    "Your captain knows Lake Austin and can take you to the best water for your chosen activity. Life jackets are on board, and we include fuel so the price you see is what you pay. No boating license needed—the captain handles everything so you can focus on the ride.",
-    "Book your Lake Austin wake boat experience below and we'll take care of the rest.",
+    "Nasty Full Day is an 8-hour private charter from Marina Cabo San Lucas. Your crew runs the boat while you fish Cabo’s bluewater for tuna, dorado, wahoo, and marlin when the bite is on.",
+    "Fuel policy, inclusions, and optional add-ons (including offshore run when offered) are shown in checkout. No surprise customer processing surcharge on the published charter base.",
+    "Check live availability below to lock your date on the same inventory used across the site.",
   ],
   timeline: [
-    { step: "Dock", desc: "Meet your captain" },
-    { step: "Cruise", desc: "Scenic Lake Austin" },
-    { step: "Ride", desc: "Wake surf, wakeboard & tube" },
-    { step: "Swap", desc: "Rotate riders, chill on the boat" },
-    { step: "Return", desc: "Back to the dock" },
+    { step: "Meet", desc: "Marina Cabo San Lucas" },
+    { step: "Brief", desc: "Safety & plan for the day" },
+    { step: "Fish", desc: "Bluewater sportfishing" },
+    { step: "Return", desc: "Back to the marina" },
   ],
 };
 
@@ -152,7 +78,7 @@ function getHeroSubtitle(experience) {
   const s = experience.subtitle?.trim();
   if (slug === "holiday") return HERO_SUBTITLE_BY_SLUG.holiday;
   if (s) return s;
-  return HERO_SUBTITLE_BY_SLUG[slug] ?? "Book your Lake Austin experience. Captain included.";
+  return HERO_SUBTITLE_BY_SLUG[slug] ?? "Book your Cabo fishing charter. Captain & crew included.";
 }
 
 export function ExperienceListingPageContent(props) {
@@ -207,18 +133,22 @@ export function ExperienceListingPageContent(props) {
   const rawHero = experience.heroMedia?.url?.trim();
   const firstGalleryStill = rawGallery.find((u) => typeof u === "string" && u.trim());
   const heroImageUrl = rawHero || firstGalleryStill || undefined;
-  const heroTitle = isWakesurfClub ? WAKESURF_CLUB.heroTitle : getHeroTitle(experience);
-  const heroSubtitle = isWakesurfClub ? WAKESURF_CLUB.heroSubtitle : getHeroSubtitle(experience);
-  const heroIntro = isWakesurfClub ? WAKESURF_CLUB.heroIntro : undefined;
+  const heroTitle = isWakesurfClub ? "Cabo charter session" : getHeroTitle(experience);
+  const heroSubtitle = isWakesurfClub
+    ? "Browse Nasty Half Day and Full Day for private Cabo fishing."
+    : getHeroSubtitle(experience);
+  const heroIntro = undefined;
 
-  // Social proof (pontoon fallback when slug is pontoon and no Firestore data)
+  // Social proof (half-day aliases when no Firestore rating/stats — no fake stars)
+  const isHalfDaySlug = slug === "pontoon" || slug === "nasty-half-day";
+  const isFullDaySlug = slug === "watersports" || slug === "nasty-full-day";
   const socialProof =
-    slug === "pontoon" && !experience.rating && !(experience.stats?.length > 0)
-      ? PONTOON_SOCIAL_PROOF
+    isHalfDaySlug && !experience.rating && !(experience.stats?.length > 0)
+      ? HALF_DAY_SOCIAL_PROOF
       : {
           rating: experience.rating,
           ratingCount: experience.ratingCount ?? "",
-          stats: isWakesurfClub ? WAKESURF_CLUB.socialStats : experience.stats ?? [],
+          stats: isWakesurfClub ? ["Shared session", "Captain / coach"] : experience.stats ?? [],
           tagline: experience.tagline?.trim() ?? "",
         };
 
@@ -240,21 +170,27 @@ export function ExperienceListingPageContent(props) {
   const overviewImageUrl = rawGallery[0];
   const overviewImageAlt = experience.title ? `${experience.title} experience` : undefined;
 
-  // Watersports + Wake Surf Club: fixed section copy; other listings use CMS description/steps.
+  // Prefer Firestore description; Cabo fallbacks only when empty (never Lake Austin copy).
   let overviewHeadlineFinal;
   let overviewStoryFinal;
   let overviewTimelineFinal;
   let overviewSeoParagraphs;
-  if (slug === "watersports") {
-    overviewHeadlineFinal = WATERSPORTS_OVERVIEW.headline;
-    overviewStoryFinal = WATERSPORTS_OVERVIEW.story;
-    overviewTimelineFinal = WATERSPORTS_OVERVIEW.timeline;
-    overviewSeoParagraphs = WATERSPORTS_OVERVIEW.seoParagraphs;
+  if (descriptionLong) {
+    overviewHeadlineFinal = overviewHeadline;
+    overviewStoryFinal = overviewStory;
+    overviewTimelineFinal = overviewTimeline;
+    overviewSeoParagraphs = undefined;
+  } else if (isFullDaySlug) {
+    overviewHeadlineFinal = FULL_DAY_OVERVIEW.headline;
+    overviewStoryFinal = FULL_DAY_OVERVIEW.story;
+    overviewTimelineFinal = FULL_DAY_OVERVIEW.timeline;
+    overviewSeoParagraphs = FULL_DAY_OVERVIEW.seoParagraphs;
   } else if (isWakesurfClub) {
-    overviewHeadlineFinal = WAKESURF_CLUB.overviewHeadline;
-    overviewStoryFinal = WAKESURF_CLUB.overviewStory;
-    overviewTimelineFinal = WAKESURF_CLUB.overviewTimeline;
-    overviewSeoParagraphs = WAKESURF_CLUB.overviewSeoParagraphs;
+    // Specialty listing not offered on NSF — keep minimal Cabo-safe stubs if slug somehow loads.
+    overviewHeadlineFinal = "Charter session";
+    overviewStoryFinal = "Contact us or browse Half Day and Full Day Cabo fishing charters.";
+    overviewTimelineFinal = undefined;
+    overviewSeoParagraphs = undefined;
   } else {
     overviewHeadlineFinal = overviewHeadline;
     overviewStoryFinal = overviewStory;
@@ -277,9 +213,7 @@ export function ExperienceListingPageContent(props) {
   const includedStrings = (experience.included ?? [])
     .map((s) => s.trim().replace(/\.$/, ""))
     .filter(Boolean);
-  const includedItems = isWakesurfClub
-    ? WAKESURF_CLUB.included
-    : includedStrings.length > 0
+  const includedItems = includedStrings.length > 0
       ? [
           ...includedStrings.map((title) => ({ icon: "", title, desc: "" })),
           { icon: "sparkles", title: "Good vibes", desc: "" },
@@ -303,9 +237,7 @@ export function ExperienceListingPageContent(props) {
       : [];
 
   // FAQ: { q, a } -> { question, answer }
-  const faqItems = isWakesurfClub
-    ? WAKESURF_CLUB.faqs.map((f) => ({ question: f.question, answer: f.answer }))
-    : (experience.faqs ?? []).length > 0
+  const faqItems = (experience.faqs ?? []).length > 0
       ? experience.faqs.map((faq) => ({
           question: faq.q || "",
           answer: faq.a || "",
@@ -314,8 +246,7 @@ export function ExperienceListingPageContent(props) {
 
   // Final CTA
   const primaryCta =
-    experience.ctaButtonText?.trim() ||
-    (isWakesurfClub ? "Reserve your spot" : "Check availability");
+    experience.ctaButtonText?.trim() || "Check availability";
   const secondaryHref = "/experiences";
   const secondaryCta = "Browse all trips";
 
@@ -371,7 +302,7 @@ export function ExperienceListingPageContent(props) {
         useStaticImageFallback={false}
       />
 
-      {slug === "watersports" && (
+      {isFullDaySlug && (
         <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences">
           <p className="text-white/90 text-sm sm:text-base">
             Looking for a shorter trip?{" "}
@@ -387,7 +318,7 @@ export function ExperienceListingPageContent(props) {
         </section>
       )}
 
-      {slug === "pontoon" && (
+      {isHalfDaySlug && (
         <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences">
           <p className="text-white/90 text-sm sm:text-base">
             Want more time offshore?{" "}
@@ -395,8 +326,8 @@ export function ExperienceListingPageContent(props) {
               Book Nasty Full Day
             </Link>
             {" "}or see{" "}
-            <Link href="/packages" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              multi-day packages
+            <Link href="/cabo-fishing-charter-prices" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              charter prices
             </Link>
             .
           </p>
@@ -430,7 +361,7 @@ export function ExperienceListingPageContent(props) {
       <FinalCTA
         onBookNow={handleBookNow}
         bookingSectionId={BOOKING_SECTION_ID}
-        headline={isWakesurfClub ? "Grab your Wednesday spot" : "Ready to go?"}
+        headline={isWakesurfClub ? "Ready to fish Cabo?" : "Ready to go?"}
         primaryCta={primaryCta}
         secondaryCta={secondaryCta}
         secondaryHref={secondaryHref}

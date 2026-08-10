@@ -17,6 +17,7 @@ const COMMERCIAL_PATHS = new Set([
   "/los-cabos-fishing-charters",
   "/cabo-fishing-charter-prices",
   "/best-fishing-charters-cabo-san-lucas",
+  "/cabo-fish-processing",
 ]);
 
 function isCommercialPath(pathname: string | null): boolean {

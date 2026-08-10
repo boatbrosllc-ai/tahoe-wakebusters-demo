@@ -77,7 +77,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Checkout may offer add-ons such as resort transportation, meal or beverage upgrades, fish processing/delivery, gear packs, and an Offshore Run Upgrade when available. Availability and prices are confirmed in the booking flow for your date — not every add-on appears on every trip.",
+          text: "Checkout may offer add-ons such as private resort or SJD airport transportation, premium breakfast or offshore lunch, Nasty in-house fish processing ($2–$3/lb finished weight), resort fish delivery, Nasty Gear Packs, trophy replica concierge, and film day when available. Beer/seltzer packages appear only once licensing is confirmed. For vacuum sealing and take-home estimates, see our fish processing page. Availability and prices are confirmed in the booking flow for your date — not every add-on appears on every trip.",
         },
         {
           type: "h2",
@@ -125,12 +125,13 @@ export default function Page() {
         },
       ]}
       related={[
+        { href: "/cabo-fish-processing", label: "Cabo fish processing" },
         { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
         { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
         { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas charters" },
         { href: "/packages", label: "Packages" },
         { href: "/best-fishing-charters-cabo-san-lucas", label: "Buyer’s guide" },
-        { href: "/boats", label: "Boats" },
+        { href: "/boats/cabo-40-express", label: "Boats" },
         { href: "/contact", label: "Contact" },
       ]}
     />

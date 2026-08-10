@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { location } from "@/content/location";
 import { analytics } from "@/lib/analytics";
+import { getPublicPhone } from "@/lib/seo/public-contact";
 
 /**
- * Sticky CTA bar on mobile for location page: Call + Book.
+ * Sticky CTA bar on mobile for location page: Call (if verified) + Book.
  */
 export function LocationPageCTA() {
   const source = "location_page_cta";
   const page = "location";
+  const phone = getPublicPhone();
 
   return (
     <div
@@ -17,13 +18,15 @@ export function LocationPageCTA() {
       role="complementary"
       aria-label="Call or book"
     >
-      <a
-        href={`tel:${location.phoneTel}`}
-        onClick={() => analytics.callClick(source, page)}
-        className="flex-1 rounded-xl bg-brand-primary py-3.5 text-center text-sm font-semibold text-white hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-      >
-        Call
-      </a>
+      {phone ? (
+        <a
+          href={`tel:${phone.tel}`}
+          onClick={() => analytics.callClick(source, page)}
+          className="flex-1 rounded-xl bg-brand-primary py-3.5 text-center text-sm font-semibold text-white hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+        >
+          Call
+        </a>
+      ) : null}
       <Link
         href="/experiences"
         onClick={() => analytics.bookCtaClick(source, page)}

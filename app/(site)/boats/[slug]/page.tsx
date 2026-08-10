@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import Image from "next/image";
-import { ChevronRight, ChevronLeft } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { getBoatBySlug } from "@/lib/booking/get-boats-public";
 import { getDisplayDescription } from "@/lib/booking/boat-display";
 import { getDisplayImageUrl } from "@/lib/utils";
@@ -173,21 +173,17 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
           aria-labelledby="boat-hero-heading"
         >
           <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 via-transparent to-brand-secondary/5" />
-          <div className="container-narrow relative z-10 mx-auto">
-            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-white/70">
+          <div className="container-narrow relative z-10 mx-auto flex flex-col items-center text-center">
+            <nav aria-label="Breadcrumb" className="flex flex-wrap items-center justify-center gap-1.5 text-sm text-white/70">
               <Link href="/" className="hover:text-white transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary">
                 Home
-              </Link>
-              <ChevronRight className="h-4 w-4 shrink-0 text-white/50" aria-hidden />
-              <Link href="/boats" className="hover:text-white transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary">
-                Our Boat
               </Link>
               <ChevronRight className="h-4 w-4 shrink-0 text-white/50" aria-hidden />
               <span className="text-white truncate max-w-[180px] sm:max-w-none" aria-current="page">
                 {boat.name}
               </span>
             </nav>
-            <div className="mt-6 sm:mt-8 text-center">
+            <div className="mt-6 sm:mt-8 text-center w-full">
               <h1 id="boat-hero-heading" className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl lg:text-4xl">
                 {boat.name}
               </h1>
@@ -307,13 +303,6 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-medium text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
               >
                 All charters
-              </Link>
-              <Link
-                href="/boats"
-                className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
-              >
-                <ChevronLeft className="h-4 w-4" aria-hidden />
-                Our boat
               </Link>
             </div>
           </div>

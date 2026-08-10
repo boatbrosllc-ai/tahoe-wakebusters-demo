@@ -53,12 +53,12 @@ export default async function ExperiencesPage() {
           sizes="100vw"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 from-25% via-black/35 to-black/20" />
-        <div className="absolute inset-0 flex flex-col justify-end pb-10 sm:pb-14">
-          <div className="container-wide px-4 sm:px-6 lg:px-8 text-center sm:text-left">
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8">
+          <div className="w-full max-w-4xl mx-auto text-center">
             <h1 className="font-display text-4xl sm:text-5xl md:text-6xl font-bold text-white tracking-tight leading-tight">
               Cabo charters
             </h1>
-            <p className="mt-3 sm:mt-4 text-lg text-white/90 max-w-xl mx-auto sm:mx-0">
+            <p className="mt-3 sm:mt-4 text-lg text-white/90 max-w-xl mx-auto">
               Same private boat. Pick Nasty, Nastier, or Nastiest — then book your day offshore.
             </p>
           </div>

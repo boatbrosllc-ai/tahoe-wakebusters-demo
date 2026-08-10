@@ -1102,11 +1102,21 @@ export async function GET(request: NextRequest) {
             }
           }
         } catch (suppErr) {
-          legacyQueryHitLimitCharter = true;
-          console.warn(
-            "[slots] charter boat-scoped booking supplement failed:",
-            suppErr instanceof Error ? suppErr.message : suppErr,
-          );
+          // Index-not-ready / query failures: keep experience-scoped bookings; flag partial so UI
+          // stays conservative, but do not pretend we "hit a doc limit".
+          const suppMsg = suppErr instanceof Error ? suppErr.message : String(suppErr);
+          if (/FAILED_PRECONDITION.*index/i.test(suppMsg)) {
+            console.warn(
+              "[slots] charter boat-scoped booking supplement skipped (index not ready):",
+              suppMsg,
+            );
+          } else {
+            legacyQueryHitLimitCharter = true;
+            console.warn(
+              "[slots] charter boat-scoped booking supplement failed:",
+              suppMsg,
+            );
+          }
         }
       }
       allBookingDocs.forEach((doc) => mergeBookingSlot(doc));

@@ -27,3 +27,6 @@ export const LAUNCH_BOAT = {
     "Every charter includes a licensed captain and mate, premium tackle, and local-grounds fuel. Book Half Day or Full Day and we'll put you on the water.",
   ].join("\n\n"),
 } as const;
+
+/** Public path for the flagship boat — used while we only list one vessel. */
+export const OUR_BOAT_PATH = `/boats/${LAUNCH_BOAT.slug}` as const;

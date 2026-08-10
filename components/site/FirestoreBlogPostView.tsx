@@ -36,7 +36,7 @@ function GuideRelatedArticles({ articles }: { articles: RelatedArticleLink[] }) 
   return (
     <aside className="mt-14 sm:mt-16 pt-12 border-t border-brand-dark/10" aria-label="Related guides">
       <h2 className="font-display text-xl sm:text-2xl font-bold text-brand-dark mb-6 sm:mb-8">
-        Related Lake Austin guides
+        Related Cabo fishing guides
       </h2>
       <ul className="grid gap-6 sm:grid-cols-2">
         {articles.map((article) => (
@@ -184,7 +184,7 @@ export function FirestoreBlogPostView({
                   {post.author?.name ?? brand.companyName}
                 </p>
                 <p className="text-sm text-brand-muted mt-1">
-                  Ready for your Lake Austin day? Book a pontoon, wake boat, or sunset cruise.
+                  Ready for Cabo? Book Nasty Half Day or Nasty Full Day.
                 </p>
               </div>
               <Button
@@ -193,7 +193,7 @@ export function FirestoreBlogPostView({
                 className="rounded-xl shrink-0 w-full sm:w-fit min-h-[48px] bg-brand-primary hover:bg-brand-primary/90 text-white shadow-[0_4px_14px_rgba(80,189,186,0.35)]"
               >
                 <Link href="/experiences" className="w-full justify-center">
-                  Book a Lake Austin rental
+                  Book a Cabo charter
                 </Link>
               </Button>
             </div>
@@ -208,7 +208,7 @@ export function FirestoreBlogPostView({
             >
               <Link href="/blog" className="inline-flex items-center justify-center gap-2">
                 <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
-                Back to The Dock
+                Back to The Bite
               </Link>
             </Button>
           </footer>

@@ -60,15 +60,15 @@ export default function FishingReportsHubPage() {
           />
           <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/70 via-brand-dark/85 to-brand-dark" />
         </div>
-        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 max-w-4xl">
+        <div className="relative container-wide px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 max-w-4xl mx-auto text-center">
           <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight">
             Cabo Fishing Reports
           </h1>
-          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl">
+          <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">
             First-party trip reports from Nasty Sport Fishing days on the water — published only when we have a real
             Cabo day to share.
           </p>
-          <div className="mt-8 max-w-md">
+          <div className="mt-8 max-w-md mx-auto">
             <SeoCheckAvailabilityCta page="fishing_reports" source="seo_hero" />
           </div>
         </div>

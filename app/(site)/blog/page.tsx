@@ -23,11 +23,11 @@ export default async function BlogHubPage(props: PageProps) {
   const allPosts = await getBlogHubPosts();
   return (
     <div className="min-h-screen bg-white overflow-x-hidden">
-      <section className="relative overflow-hidden bg-brand-dark text-white min-h-[40vh] sm:min-h-[45vh] flex flex-col justify-end">
+      <section className="relative overflow-hidden bg-brand-dark text-white min-h-[40vh] sm:min-h-[45vh] flex flex-col items-center justify-center text-center">
         <div className="absolute inset-0">
           <Image
-            src="/photos/stock/cabo/el-arco-sunset-jarvis.jpg"
-            alt="El Arco at sunset in Cabo San Lucas"
+            src="/photos/nsf/sailfish-baitball.png"
+            alt="Billfish near a baitball offshore in Cabo"
             fill
             className="object-cover object-center opacity-40"
             priority
@@ -35,7 +35,7 @@ export default async function BlogHubPage(props: PageProps) {
           />
           <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/80 via-brand-dark/50 to-brand-dark" />
         </div>
-        <div className="relative z-10 section-padding text-center pb-12 sm:pb-16 pt-16 sm:pt-20 px-4">
+        <div className="relative z-10 section-padding text-center pb-12 sm:pb-16 pt-16 sm:pt-20 px-4 w-full max-w-4xl mx-auto">
           <p className="text-brand-primary font-bold uppercase tracking-[0.28em] text-xs sm:text-sm mb-4">
             From the crew at {brand.companyName}
           </p>
