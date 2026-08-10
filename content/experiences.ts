@@ -1,8 +1,17 @@
 /**
- * Experience packages. TODO: Load from CMS.
- * All images from /photos/ (local Boat Bros assets).
- * Only the 4 categories we offer: Pontoon, Watersports, Sunset Cruise, Holiday Tour.
+ * Experience packages — Cabo San Lucas sport fishing charters.
+ * Firestore slugs remain `pontoon` / `watersports` (document identity).
+ * Public canonical URLs: nasty-half-day / nasty-full-day via experience-aliases.
  */
+
+import {
+  CHARTER_INCLUDED,
+  FOUNDING_ANGLER_RATE_ACTIVE,
+  FOUNDING_ANGLER_LABEL,
+  formatUsdFromCents,
+  getActiveCatalogRateCents,
+  STANDARD_RATE_CENTS,
+} from "@/content/catalog-pricing";
 
 export interface Experience {
   slug: string;
@@ -21,90 +30,85 @@ export interface Experience {
   /** Optional: lowest price in cents for "From $X" on cards. Use null when pricing is only from live API. */
   fromPriceCents?: number | null;
   faqs?: { q: string; a: string }[];
+  ctaLabel?: string;
+  badge?: string;
 }
+
+const halfCents = getActiveCatalogRateCents("half");
+const fullCents = getActiveCatalogRateCents("full");
 
 export const experiences: Experience[] = [
   {
     slug: "pontoon",
-    title: "Pontoon Party",
-    shortDescription: "Spacious pontoon for groups. Coolers, Bluetooth, shade.",
+    title: "Nasty Half Day",
+    shortDescription: "5 hours · Private Cabo fishing charter.",
     description:
-      "Our most popular rental. Roomy pontoon with Bluetooth stereo, built-in cooler, and plenty of shade. Perfect for friends, families, or bachelor/bachelorette groups. Captain included.",
-    highlights: ["Bluetooth stereo", "Built-in cooler", "Shade canopy", "Up to 14"],
-    duration: "3–8 hours",
-    durationMinutes: 480,
-    capacity: "Up to 14",
-    heroImage: "/photos/IMG_3160.webp",
-    gallery: ["/photos/IMG_3160.webp", "/photos/IMG_9649.webp", "/photos/IMG_8614%202.webp", "/photos/IMG_5116%202.webp"],
-    pricingNote: "From $450. 3–8 hour trips available.",
-    fromPriceCents: null,
+      "Private Cabo fishing charter with captain and mate, premium tackle, live bait allowance, licenses for up to four anglers, water, soft drinks, snacks, light breakfast, crew photos, and local-grounds fuel.",
+    highlights: CHARTER_INCLUDED.slice(0, 6),
+    duration: "5 hours",
+    durationMinutes: 300,
+    capacity: "Up to 6",
+    heroImage: "/photos/nsf/yellowfin-marina-duo.png",
+    gallery: [
+      "/photos/nsf/yellowfin-marina-duo.png",
+      "/photos/stock/charter/anglers-on-boat-pexels.jpg",
+      "/photos/nsf/yellowfin-marina-catch.png",
+      "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+    ],
+    pricingNote: FOUNDING_ANGLER_RATE_ACTIVE
+      ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(halfCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.half)}).`
+      : `${formatUsdFromCents(halfCents)} before tax. Morning and afternoon departures.`,
+    fromPriceCents: halfCents,
+    ctaLabel: "BOOK HALF DAY",
     faqs: [
-      { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain so you can relax and enjoy the day." },
-      { q: "Can we bring food and drinks?", a: "Yes. Bring your own cooler and drinks. Glass is not allowed on the boat." },
+      { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain and mate so you can focus on the fish." },
+      { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. We provide tackle, bait, snacks, and the drinks listed in what's included." },
     ],
   },
   {
     slug: "watersports",
-    title: "Wake & Surf",
-    shortDescription: "Tow boats for wakeboarding, surfing, and tubing.",
+    title: "Nasty Full Day",
+    shortDescription: "8 hours · Private offshore charter — most popular.",
     description:
-      "Purpose-built tow boats for wakeboarding, wakesurfing, and tubing. Captain included. Great for thrill-seekers and families who want action on the water.",
-    highlights: ["Wakeboard & surf gear", "Captain included", "Tubes included", "Up to 14"],
-    duration: "3–8 hours",
+      "Full-day private offshore charter for serious time on the grounds. Same inclusions as Half Day with more range when conditions allow.",
+    highlights: CHARTER_INCLUDED.slice(0, 6),
+    duration: "8 hours",
     durationMinutes: 480,
-    capacity: "Up to 14",
-    heroImage: "/photos/Thomas_2.14.1.webp",
-    gallery: ["/photos/Thomas_2.14.1.webp", "/photos/DSC00513%20(3).webp", "/photos/DSC00539.webp", "/photos/IMG_2123.webp"],
-    pricingNote: "From $600. 3–8 hour trips. Captain included.",
-    fromPriceCents: null,
-    faqs: [
-      { q: "Is equipment included?", a: "Yes. Wakeboards, surf board, and tubes are included. Life vests in all sizes provided." },
+    capacity: "Up to 6",
+    heroImage: "/photos/nsf/yellowfin-ocean-duo.png",
+    gallery: [
+      "/photos/nsf/yellowfin-ocean-duo.png",
+      "/photos/nsf/sailfish-baitball.png",
+      "/photos/stock/species/tuna-underwater-bacanek.jpg",
+      "/photos/nsf/yellowfin-marina-catch.png",
     ],
-  },
-  {
-    slug: "sunset",
-    title: "Sunset Cruise",
-    shortDescription: "Chill evening cruise. Best views and golden hour.",
-    description:
-      "Evening cruise timed for sunset over Lake Austin. Relaxed pace, great for couples or small groups. Bring a bottle and enjoy the view.",
-    highlights: ["Sunset timing", "Chill vibe", "Up to 14 guests", "1-hour cruise"],
-    duration: "1 hour",
-    durationMinutes: 60,
-    capacity: "Up to 14",
-    heroImage: "/photos/IMG_9647%202.webp",
-    gallery: ["/photos/IMG_9647%202.webp", "/photos/DSC09319%20(4).webp", "/photos/DSC09321%20(2).webp", "/photos/IMG_4539.webp"],
-    pricingNote: "From $35 per ticket for 1 hour.",
-    fromPriceCents: 3500,
-    faqs: [],
-  },
-  {
-    slug: "holiday",
-    title: "Holiday Tour",
-    shortDescription: "Seasonal holiday lights and festive cruises.",
-    description:
-      "Seasonal holiday experience: festive lights, hot cocoa, and a relaxed cruise. Available during the holiday season. Perfect for families and small groups.",
-    highlights: ["Holiday décor", "Hot cocoa", "Captain included", "Up to 14"],
-    duration: "1.5 hours",
-    durationMinutes: 90,
-    capacity: "Up to 14",
-    heroImage: "/photos/DSC09399%20(2).webp",
-    gallery: ["/photos/IMG_5095.webp", "/photos/IMG_5285.webp", "/photos/DSC09308%20(2).webp", "/photos/IMG_1197.webp"],
-    pricingNote: "$45 per ticket. Seasonal. Available November – January.",
-    fromPriceCents: 4500,
-    faqs: [{ q: "When is the Holiday Tour available?", a: "Typically November through early January. Dates are shown when you select a slot." }],
+    pricingNote: FOUNDING_ANGLER_RATE_ACTIVE
+      ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(fullCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.full)}). Peak dates from ${formatUsdFromCents(239_500)}.`
+      : `${formatUsdFromCents(fullCents)} before tax. Peak / tournament dates priced higher.`,
+    fromPriceCents: fullCents,
+    ctaLabel: "BOOK FULL DAY",
+    badge: "MOST POPULAR",
+    faqs: [
+      { q: "How far offshore do we go?", a: "Depends on the bite and conditions. Full-day trips give us range to hit the banks and work multiple spots." },
+    ],
   },
 ];
 
 export function getExperienceBySlug(slug: string): Experience | undefined {
-  return experiences.find((e) => e.slug === slug);
+  const s = (slug ?? "").toLowerCase().trim();
+  if (!s) return undefined;
+  if (s === "pontoon" || s === "nasty-half-day" || s === "half-day") {
+    return experiences.find((e) => e.slug === "pontoon");
+  }
+  if (s === "watersports" || s === "nasty-full-day" || s === "full-day") {
+    return experiences.find((e) => e.slug === "watersports");
+  }
+  return experiences.find((e) => e.slug === s);
 }
 
 /**
  * Format "from" price for display by experience slug or pricingType.
- * - Ticketed (via pricingType): "From $X per ticket"
- * - Watersports: "From $600"
- * - Sunset: "From $35 per ticket"
- * - Holiday: "$45 per ticket"
+ * Charter packages: "From $X". Ticketed leftovers: per-ticket wording.
  */
 export function formatExperiencePriceLabel(
   slug: string | null | undefined,

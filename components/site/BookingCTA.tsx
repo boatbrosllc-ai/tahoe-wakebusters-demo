@@ -16,7 +16,7 @@ export interface BookingCTAProps {
   showCall?: boolean;
   /** When true (e.g. hero on dark bg), Call link uses white border/text */
   onDark?: boolean;
-  /** When true with onDark, Call link uses pink (brand-secondary) instead of white */
+  /** When true with onDark, Call link uses brand secondary (orange) instead of white */
   callPinkOnDark?: boolean;
   primaryHint?: string;
   callHint?: string;
@@ -24,6 +24,8 @@ export interface BookingCTAProps {
   onBookNowClick?: () => void;
   /** When true with variant="inline", use smaller button size (e.g. for cards) */
   dense?: boolean;
+  /** Override primary button label (e.g. SEO "Check availability") */
+  primaryLabel?: string;
 }
 
 export function BookingCTA({
@@ -39,6 +41,7 @@ export function BookingCTA({
   callHint = "Text or call for same-day questions",
   onBookNowClick,
   dense = false,
+  primaryLabel,
 }: BookingCTAProps) {
   const handleBookClick = () => {
     analytics.bookCtaClick(source, page, experience);
@@ -52,7 +55,7 @@ export function BookingCTA({
     ? `/booking?experience=${encodeURIComponent(experience)}`
     : "/booking";
 
-  const primaryButtonLabel = "Book now";
+  const primaryButtonLabel = primaryLabel?.trim() || "Book now";
 
   if (variant === "inline") {
     const buttonClass = dense

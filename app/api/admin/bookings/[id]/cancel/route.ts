@@ -719,7 +719,7 @@ export async function POST(
           to: booking.customer?.email ?? "",
           toName: booking.customer?.name,
           templateId: "booking_cancellation",
-          subject: "Booking canceled – Boat Bros ATX",
+          subject: "Booking canceled – Nasty Sport Fishing",
           bookingId,
           eventSubtype: "booking_cancellation",
         }).catch((err) => console.error("[admin/cancel] logNotificationSent failed", err));

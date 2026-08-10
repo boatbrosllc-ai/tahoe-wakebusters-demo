@@ -10,6 +10,14 @@ export interface ExperienceWithDetails {
   addons: { id: string; name: string; description?: string; priceCents: number; type: "toggle" | "quantity" | "tip"; active: boolean; maxQty?: number }[];
 }
 
+/**
+ * Firestore `doc.data()` values often use null-prototype objects (and nested maps).
+ * Next.js cannot serialize those across the Server → Client Component boundary.
+ */
+function asPlainClientProps<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 export async function getExperienceBySlug(slug: string): Promise<ExperienceWithDetails | null> {
   const db = getDb();
   const normalizedSlug = slug.trim().toLowerCase();
@@ -41,11 +49,21 @@ export async function getExperienceBySlug(slug: string): Promise<ExperienceWithD
   });
   const addons = addonsSnap.docs.map((a) => {
     const d = a.data() as ExperienceAddon;
-    return { id: a.id, name: d.name, description: d.description, priceCents: d.priceCents, type: d.type, active: d.active, maxQty: d.maxQty };
+    return {
+      id: a.id,
+      name: d.name,
+      description: d.description,
+      priceCents: d.priceCents,
+      type: d.type,
+      active: d.active,
+      maxQty: d.maxQty,
+      ...(typeof d.catalogKey === "string" && d.catalogKey.trim() ? { catalogKey: d.catalogKey.trim() } : {}),
+      ...(d.hiddenFromBookingUI === true ? { hiddenFromBookingUI: true as const } : {}),
+    };
   });
   return {
     id: doc.id,
-    experience,
+    experience: asPlainClientProps({ ...experience, id: experience.id ?? doc.id }),
     rates,
     addons,
   };

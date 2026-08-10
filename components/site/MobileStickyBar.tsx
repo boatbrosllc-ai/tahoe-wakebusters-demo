@@ -61,7 +61,7 @@ export function MobileStickyBar() {
                   className={cn(
                     "flex flex-col items-center justify-center flex-1 min-h-[52px] rounded-xl w-full",
                     "bg-brand-secondary text-white font-semibold",
-                    "shadow-[0_-2px_16px_rgba(254,63,147,0.4)]"
+                    "shadow-[0_-2px_16px_rgba(242,122,10,0.4)]"
                   )}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: "spring", stiffness: 400, damping: 25 }}

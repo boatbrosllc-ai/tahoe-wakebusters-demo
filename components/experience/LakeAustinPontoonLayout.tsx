@@ -129,7 +129,7 @@ export function LakeAustinPontoonLayout({
       <SeoLandingHero
         heroImageUrl={heroImageUrl}
         heroImageFallback={fallbackHero}
-        heroImageAlt={ev?.heroImageAlt ?? "Lake Austin boat rental with Boat Bros ATX"}
+        heroImageAlt={ev?.heroImageAlt ?? "Lake Austin boat rental with Nasty Sport Fishing"}
         title={ev?.heroTitle ?? ""}
         subtitle={ev?.heroSubtitle ?? ""}
         introParagraph={ev?.heroIntroParagraph}

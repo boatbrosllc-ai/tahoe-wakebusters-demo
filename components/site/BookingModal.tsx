@@ -103,7 +103,7 @@ function getBookingModalStripePromise() {
   return bookingModalStripePromise;
 }
 
-/** Default view month when reinitializing the calendar — matches America/Chicago used for slots and dates. */
+/** Default view month when reinitializing the calendar — matches America/Mazatlan used for slots and dates. */
 function viewMonthFromChicagoToday(): { year: number; month: number } {
   const s = getChicagoToday();
   const [y, m] = s.split("-").map(Number);
@@ -174,7 +174,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   selectedExperienceIdRef.current = selectedExperience?.id;
   const [selectedBoat, setSelectedBoat] = useState<BoatOption | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  /** Bumped every minute and at Chicago midnight (see midnight effect after data hook) so month guards stay accurate. */
+  /** Bumped every minute and at business midnight (see midnight effect after data hook) so month guards stay accurate. */
   const [chicagoDateTick, setChicagoDateTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setChicagoDateTick((t) => t + 1), 60_000);
@@ -501,7 +501,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       clearTimeout(tid);
     };
   }, [retrySlots]);
-  /** Today's date in America/Chicago for past-date comparison; updates each minute and at Chicago midnight. */
+  /** Today's date in America/Mazatlan for past-date comparison; updates each minute and at business midnight. */
   const chicagoTodayStr = useMemo(() => {
     void chicagoDateTick;
     return getChicagoToday();
@@ -903,6 +903,28 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
       }),
     [addons]
   );
+
+  // Bundle presets: preselect add-ons by catalogKey once detail loads (still priced via create-hold).
+  useEffect(() => {
+    const keys = initialSelection?.addonCatalogKeys;
+    if (!keys?.length || addons.length === 0) return;
+    const keySet = new Set(keys.map((k) => k.toLowerCase().trim()).filter(Boolean));
+    if (keySet.size === 0) return;
+    setAddonSelections((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const addon of addons) {
+        const ck = (addon.catalogKey ?? "").toLowerCase().trim();
+        const nameKey = addon.name.toLowerCase().trim();
+        if (!keySet.has(ck) && !keySet.has(nameKey)) continue;
+        if ((next[addon.id] ?? 0) < 1) {
+          next[addon.id] = 1;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [addons, initialSelection?.addonCatalogKeys]);
 
   const emailValid = useMemo(
     () => BOOKING_EMAIL_REGEX.test(customerEmail.trim()),
@@ -3155,7 +3177,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                           })}
                         {priceReady && (
                           <div className="flex justify-between items-baseline text-sm">
-                            <span className="text-brand-muted">Tax & Fees</span>
+                            <span className="text-brand-muted">
+                              {priceSummary.processingFeeCents > 0 ? "Tax & Fees" : "Tax"}
+                            </span>
                             <span className="font-medium text-brand-dark">+${(priceSummary.taxAndFeesCents / 100).toFixed(2)}</span>
                           </div>
                         )}
@@ -3309,7 +3333,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         onChange={(e) => setMarketingOptIn(e.target.checked)}
                         className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary focus:ring-brand-primary/30"
                       />
-                      <span className="text-xs text-brand-muted">Get occasional updates and offers from Boat Bros</span>
+                      <span className="text-xs text-brand-muted">Get occasional updates and offers from Nasty Sport Fishing</span>
                     </label>
                   </div>
 
@@ -3916,7 +3940,9 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       ))}
                       {priceReady && (
                         <div className="flex justify-between text-brand-dark">
-                          <span className="text-brand-muted">Tax & Fees</span>
+                          <span className="text-brand-muted">
+                            {priceSummary.processingFeeCents > 0 ? "Tax & Fees" : "Tax"}
+                          </span>
                           <span>+${(priceSummary.taxAndFeesCents / 100).toFixed(2)}</span>
                         </div>
                       )}

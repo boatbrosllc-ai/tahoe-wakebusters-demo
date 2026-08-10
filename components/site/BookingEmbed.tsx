@@ -51,7 +51,7 @@ export function BookingEmbed({ className }: BookingEmbedProps) {
         href={booking.providerUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center justify-center rounded-xl bg-brand-secondary text-white font-semibold h-12 min-h-[44px] px-8 text-base shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:bg-brand-secondary/95 active:scale-[0.98] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2"
+        className="inline-flex items-center justify-center rounded-xl bg-brand-secondary text-white font-semibold h-12 min-h-[44px] px-8 text-base shadow-[0_2px_12px_rgba(242,122,10,0.35)] hover:bg-brand-secondary/95 active:scale-[0.98] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2"
       >
         Book now
       </a>

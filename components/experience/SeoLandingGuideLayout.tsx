@@ -40,7 +40,7 @@ export function SeoLandingGuideLayout({
     { label: "Water feel", left: "Calmer, narrower lake", right: "Larger, busier reservoir" },
     { label: "Best for private charters", left: "Excellent", right: "Varies by area" },
     { label: "Party scene", left: "Private pontoons & coves", right: "Busy open-lake weekends" },
-    { label: "Boat Bros operates here", left: "Yes — Lake Austin only", right: "No" },
+    { label: "Nasty Sport Fishing operates here", left: "Yes — Lake Austin only", right: "No" },
   ];
 
   return (
@@ -77,7 +77,7 @@ export function SeoLandingGuideLayout({
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="font-display text-2xl font-bold text-brand-dark mb-4">Our recommendation</h2>
           <p className="text-brand-dark/80 mb-6">
-            For captained private charters, swimming, and celebrations close to Austin, we recommend Lake Austin — that is where every Boat Bros trip runs.
+            For captained private charters, swimming, and celebrations close to Austin, we recommend Lake Austin — that is where every Nasty Sport Fishing trip runs.
           </p>
           <Link
             href="/lake-austin-boat-rentals"

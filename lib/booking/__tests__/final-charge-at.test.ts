@@ -1,26 +1,36 @@
 /**
- * finalChargeAt: 48 America/Chicago hours before trip (DST-safe).
+ * finalChargeAt: 48 BUSINESS_TIMEZONE (America/Mazatlan) clock hours before trip.
+ * Mazatlan does not observe DST (UTC−7 year-round).
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { toZonedTime } from "date-fns-tz";
-import { differenceInHours } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { computeFinalChargeAtUtc } from "../final-charge-at";
-
-const CHICAGO = "America/Chicago";
+import { BUSINESS_TIMEZONE } from "../business-timezone";
+import { getSlotStartEnd } from "../experience-slots";
 
 describe("computeFinalChargeAtUtc", () => {
-  it("Monday trip after US spring-forward: final charge is exactly 48 local hours before start", () => {
-    // US DST 2026: spring forward Sunday March 8. Trip Monday March 9, 2026 10:00 CDT.
-    const tripStartUtc = new Date("2026-03-09T15:00:00.000Z");
+  it("is exactly 48 Mazatlan local hours before a 6:00 AM Cabo departure", () => {
+    // June 10, 2026 6:00 AM America/Mazatlan → final charge June 8 6:00 AM Mazatlan
+    const { start: tripStartUtc } = getSlotStartEnd("2026-06-10", 6, 5, 0);
     const finalUtc = computeFinalChargeAtUtc(tripStartUtc);
 
-    const tripChi = toZonedTime(tripStartUtc, CHICAGO);
-    const finalChi = toZonedTime(finalUtc, CHICAGO);
-    const hours = differenceInHours(tripChi, finalChi);
-    assert.strictEqual(hours, 48);
+    assert.strictEqual(tripStartUtc.toISOString(), "2026-06-10T13:00:00.000Z");
+    assert.strictEqual(finalUtc.toISOString(), "2026-06-08T13:00:00.000Z");
+    assert.strictEqual(formatInTimeZone(tripStartUtc, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2026-06-10 06:00");
+    assert.strictEqual(formatInTimeZone(finalUtc, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2026-06-08 06:00");
+    assert.strictEqual((tripStartUtc.getTime() - finalUtc.getTime()) / 3600000, 48);
+  });
 
-    // 48 Chicago hours before Monday 10:00 CDT (spring-forward week): Saturday 10:00 local (CST that day).
-    assert.strictEqual(finalUtc.toISOString(), "2026-03-07T15:00:00.000Z");
+  it("stays 48 local hours across US spring-forward week (Mazatlan has no DST)", () => {
+    // Monday March 9, 2026 10:00 Mazatlan
+    const tripStartUtc = new Date("2026-03-09T17:00:00.000Z");
+    const finalUtc = computeFinalChargeAtUtc(tripStartUtc);
+
+    assert.strictEqual(formatInTimeZone(tripStartUtc, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2026-03-09 10:00");
+    assert.strictEqual(formatInTimeZone(finalUtc, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2026-03-07 10:00");
+    assert.strictEqual(finalUtc.toISOString(), "2026-03-07T17:00:00.000Z");
+    // Absolute duration is also 48h because Mazatlan has no DST.
+    assert.strictEqual((tripStartUtc.getTime() - finalUtc.getTime()) / 3600000, 48);
   });
 });

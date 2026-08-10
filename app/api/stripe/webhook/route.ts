@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import Stripe from "stripe";
 
 /** Netlify Pro max serverless duration; webhook conversion must finish or stripeEvents may stall mid-flight. */
@@ -2964,7 +2965,7 @@ export async function POST(request: NextRequest) {
                 startTimeFf = tripStartFf.toLocaleTimeString("en-US", {
                   hour: "numeric",
                   minute: "2-digit",
-                  timeZone: "America/Chicago",
+                  timeZone: BUSINESS_TIMEZONE,
                 });
               }
             }
@@ -2974,8 +2975,8 @@ export async function POST(request: NextRequest) {
               startTime: startTimeFf,
             });
             const subject = reqAct
-              ? "Action needed to complete your booking – Boat Bros ATX"
-              : "Payment failed for your upcoming trip – Boat Bros ATX";
+              ? "Action needed to complete your booking – Nasty Sport Fishing"
+              : "Payment failed for your upcoming trip – Nasty Sport Fishing";
             await logNotificationSent({
               channel: "email",
               to: bd.customer.email,

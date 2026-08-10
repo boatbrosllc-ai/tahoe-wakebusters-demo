@@ -4,18 +4,18 @@ import { brand } from "@/content/brand";
 import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 const canonical = `${baseUrl}/contact`;
 
 export const metadata: Metadata = {
-  title: "Contact | Lake Austin Boat Rentals",
+  title: "Contact | Cabo Sport Fishing",
   description:
-    "Contact Boat Bros for Lake Austin boat rentals. Pontoon, wake surf, sunset cruise. Phone, email, Austin TX.",
-  keywords: ["Lake Austin boat rentals", "contact boat rental Lake Austin", "Boat Bros Austin TX"],
+    "Contact Nasty Sport Fishing for Cabo San Lucas sport fishing charters. Phone, email, Marina Cabo San Lucas.",
+  keywords: ["Cabo fishing charter contact", "Nasty Sport Fishing", "Marina Cabo San Lucas"],
   alternates: { canonical },
   openGraph: {
-    title: "Contact | Lake Austin Boat Rentals | Boat Bros",
-    description: "Get in touch for Lake Austin boat rentals. Phone, email, address.",
+    title: "Contact | Cabo Sport Fishing | Nasty Sport Fishing",
+    description: "Get in touch for Cabo fishing charters. Phone, email, marina.",
     url: canonical,
   },
 };

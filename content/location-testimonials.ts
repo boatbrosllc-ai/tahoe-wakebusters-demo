@@ -4,23 +4,23 @@
  */
 export const LOCATION_TESTIMONIALS = [
   {
-    quote: "Best boat day we've had on Lake Austin. The captain was awesome and everything was seamless from booking to dock.",
+    quote: "Best Cabo fishing day we've had. Captain and crew were sharp, tackle was ready, and we boxed tuna for dinner.",
     attribution: "Customer review",
   },
   {
-    quote: "We did the sunset cruise for our anniversary. Professional, fun, and the boat was in great shape. Will book again.",
+    quote: "We did the sunset charter for our anniversary. Professional, fun, and El Arco on the way home was unreal. Will book again.",
     attribution: "Customer review",
   },
   {
-    quote: "Easy to book online and the team was super responsive. The kids loved the pontoon—we'll be back.",
+    quote: "Easy to book online and the team was responsive. First-timers hooked dorado—kids were hooked for life.",
     attribution: "Customer review",
   },
   {
-    quote: "Captain made our group feel safe and we had a blast. Lake Austin is beautiful and Boat Bros made it stress-free.",
+    quote: "Captain made our group feel safe and we had a blast. Cabo fishing with Nasty Sport Fishing was stress-free.",
     attribution: "Customer review",
   },
   {
-    quote: "From start to finish, a top-notch experience. Great communication and the boat was perfect for our group.",
+    quote: "From marina check-in to the ride home, a top-notch charter. Clear communication and a real shot at marlin.",
     attribution: "Customer review",
   },
 ];

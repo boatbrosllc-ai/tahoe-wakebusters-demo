@@ -1,6 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { useCallback, useEffect, useState, useRef, Suspense } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -606,11 +607,11 @@ function BookingSuccessContent() {
               {(data.startAt || data.endAt) && (
                 <p className="text-sm text-brand-muted mt-1">
                   {data.startAt
-                    ? new Date(data.startAt).toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" })
+                    ? new Date(data.startAt).toLocaleString("en-US", { timeZone: BUSINESS_TIMEZONE, dateStyle: "medium", timeStyle: "short" })
                     : ""}
                   {data.startAt && data.endAt ? " – " : ""}
                   {data.endAt
-                    ? new Date(data.endAt).toLocaleString("en-US", { timeZone: "America/Chicago", timeStyle: "short" })
+                    ? new Date(data.endAt).toLocaleString("en-US", { timeZone: BUSINESS_TIMEZONE, timeStyle: "short" })
                     : ""}
                 </p>
               )}

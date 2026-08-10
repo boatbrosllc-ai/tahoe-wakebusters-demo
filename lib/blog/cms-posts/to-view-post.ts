@@ -10,7 +10,7 @@ export function cmsSeedToViewPost(slug: string): FirestorePost | null {
     excerpt: seed.excerpt,
     slug: seed.slug,
     coverImage: { url: seed.coverImage.path, alt: seed.coverImage.alt },
-    author: { name: "Boat Bros" },
+    author: { name: "Nasty Sport Fishing" },
     content: seed.content,
     categories: seed.taxonomy.categories,
     tags: seed.taxonomy.tags,

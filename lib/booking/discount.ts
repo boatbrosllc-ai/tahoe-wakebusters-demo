@@ -12,7 +12,7 @@
 import { getCentralCalendarDayBounds, getDateStrInSlotTimezone } from "./experience-slots";
 import type { Discount } from "./types";
 
-/** Expiry is inclusive through end of the selected calendar day (America/Chicago). */
+/** Expiry is inclusive through end of the selected calendar day (America/Mazatlan). */
 export function getDiscountExpiryInstant(expiresAt: Date): Date {
   const dateStr = getDateStrInSlotTimezone(expiresAt);
   return getCentralCalendarDayBounds(dateStr).dayEnd;

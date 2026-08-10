@@ -9,23 +9,23 @@ import { MapEmbed } from "@/components/site/MapEmbed";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { LocationPageCTA } from "@/components/site/LocationPageCTA";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 const canonical = `${baseUrl}/location`;
 
 export const metadata: Metadata = {
-  title: "Our Location | Boat Bros ATX – Austin TX",
+  title: "Marina Location | Nasty Sport Fishing – Cabo San Lucas",
   description:
-    "Boat Bros location and contact. 5019 N Capital of Texas Hwy, Austin TX. Directions, parking, hours, and how to reach us. Call or book online.",
+    "Meet Nasty Sport Fishing at Marina Cabo San Lucas, Baja California Sur. Directions, hours, and how to reach us. Call or book online.",
   keywords: [
-    "Boat Bros location",
-    "Boat Bros Austin address",
-    "where is Boat Bros",
-    "Boat Bros ATX contact",
+    "Nasty Sport Fishing location",
+    "Marina Cabo San Lucas fishing charter",
+    "Cabo San Lucas sport fishing marina",
+    "Nasty Sport Fishing contact",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Our Location | Boat Bros ATX",
-    description: "Find Boat Bros – address, directions, parking, and contact. Austin TX.",
+    title: "Our Location | Nasty Sport Fishing",
+    description: "Find Nasty Sport Fishing at Marina Cabo San Lucas — directions, hours, and contact.",
     url: canonical,
     siteName: brand.companyName,
   },
@@ -114,7 +114,7 @@ export default async function LocationPage() {
               Marina & meeting location
             </h2>
             <p className="mt-3 text-brand-dark/90 leading-relaxed">
-              We operate from the Austin area near Lake Austin. Your booking confirmation will include the specific marina or dock for your trip. Guests meet the captain at the dock—we&apos;ll send exact meet-up details and a contact for the day of your trip after you book.
+              We operate out of Marina Cabo San Lucas. Your booking confirmation will include the exact slip or meet-up point. Guests meet the captain at the marina—we&apos;ll send meet-up details and a contact for the day of your trip after you book.
             </p>
             <div className="mt-6 grid gap-6 sm:gap-8 lg:grid-cols-[1fr_1fr] lg:gap-12">
               <div className="min-w-0">
@@ -158,7 +158,7 @@ export default async function LocationPage() {
               <div className="min-w-0 min-h-[240px] sm:min-h-0">
                 <MapEmbed
                   src={location.mapEmbedSrc}
-                  title="Boat Bros location on Google Maps"
+                  title="Nasty Sport Fishing location on Google Maps"
                   viewOnMapsUrl={location.googleMapsPlaceUrl}
                 />
               </div>
@@ -197,7 +197,7 @@ export default async function LocationPage() {
               Service areas
             </h2>
             <p className="mt-2 text-brand-muted">
-              Austin, TX and surrounding areas—we operate on and around Lake Austin.
+              Cabo San Lucas and Los Cabos — we fish the Pacific and Sea of Cortez grounds off Cabo.
             </p>
             <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2 text-brand-dark">
               {location.areaServed.map((area) => (
@@ -209,14 +209,14 @@ export default async function LocationPage() {
             </ul>
             <p className="mt-6 text-brand-dark/90">
               See our{" "}
-              <Link href="/lake-austin-boat-rentals" className="text-brand-primary font-medium hover:underline">
-                Lake Austin boat rentals
+              <Link href="/experiences" className="text-brand-primary font-medium hover:underline">
+                Cabo fishing charters
               </Link>
               ,{" "}
-              <Link href="/boat-rental-austin" className="text-brand-primary font-medium hover:underline">
-                boat rental Austin
+              <Link href="/boats" className="text-brand-primary font-medium hover:underline">
+                boat details
               </Link>
-              , and <Link href="/experiences" className="text-brand-primary font-medium hover:underline">book online</Link>.
+              , and <Link href="/booking" className="text-brand-primary font-medium hover:underline">book online</Link>.
             </p>
           </div>
         </section>

@@ -100,7 +100,7 @@ describe("buildSlotId", () => {
 });
 
 describe("getSlotsApiRequestWindow", () => {
-  it("includes a 7:00 PM Central departure on endDate in the overlap window (regression)", () => {
+  it("includes a 7:00 PM business-timezone departure on endDate in the overlap window (regression)", () => {
     const endDate = "2025-06-15";
     const maxDur = 3;
     const { windowStart, windowEnd } = getSlotsApiRequestWindow("2025-06-01", endDate, maxDur);
@@ -117,24 +117,26 @@ describe("getSlotsApiRequestWindow", () => {
         new Date("2025-06-01T12:00:00.000Z"),
         legacyUtcCutoffEnd,
       ),
-      "naive UTC end-of-day previously excluded 7pm Central on endDate",
+      "naive UTC end-of-day previously excluded 7pm local on endDate",
     );
   });
 });
 
 describe("getSlotStartEnd", () => {
-  it("returns start and end in America/Chicago with correct duration", () => {
+  it("returns start and end in America/Mazatlan with correct duration", () => {
     const { start, end } = getSlotStartEnd("2025-06-15", 14, 2, 0);
     assert.ok(start instanceof Date);
     assert.ok(end instanceof Date);
     const durationMs = end.getTime() - start.getTime();
     assert.strictEqual(durationMs, 2 * 60 * 60 * 1000);
+    // 14:00 Mazatlan (UTC−7) = 21:00 UTC
+    assert.strictEqual(start.toISOString(), "2025-06-15T21:00:00.000Z");
   });
 
-  it("produces a stable UTC instant on US spring-forward Sunday (America/Chicago)", () => {
-    // 2025-03-09 is DST start (2am → 3am); 10:00 local after the transition is unambiguous.
+  it("produces a stable UTC instant on US spring-forward Sunday (Mazatlan has no DST)", () => {
+    // US DST spring-forward does not shift Mazatlan; 10:00 local remains UTC−7.
     const { start } = getSlotStartEnd("2025-03-09", 10, 2, 0);
-    assert.strictEqual(start.toISOString(), "2025-03-09T15:00:00.000Z");
+    assert.strictEqual(start.toISOString(), "2025-03-09T17:00:00.000Z");
   });
 
   it("round-trips with parseSlotId and buildSlotId", () => {
@@ -149,16 +151,16 @@ describe("getSlotStartEnd", () => {
 });
 
 describe("getDateStrInSlotTimezone", () => {
-  it("keeps evening Chicago times on the same business date (UTC midnight edge)", () => {
-    const chicagoEvening = new Date("2026-01-16T03:30:00.000Z"); // 2026-01-15 9:30 PM CST
-    assert.strictEqual(getDateStrInSlotTimezone(chicagoEvening), "2026-01-15");
+  it("keeps evening Mazatlan times on the same business date (UTC midnight edge)", () => {
+    const caboEvening = new Date("2026-01-16T04:30:00.000Z"); // 2026-01-15 9:30 PM Mazatlan
+    assert.strictEqual(getDateStrInSlotTimezone(caboEvening), "2026-01-15");
   });
 
-  it("returns stable business dates across DST spring-forward boundary", () => {
-    const beforeJump = new Date("2026-03-08T07:59:00.000Z"); // 1:59 AM CST
-    const afterJump = new Date("2026-03-08T08:01:00.000Z"); // 3:01 AM CDT
-    assert.strictEqual(getDateStrInSlotTimezone(beforeJump), "2026-03-08");
-    assert.strictEqual(getDateStrInSlotTimezone(afterJump), "2026-03-08");
+  it("returns stable business dates across US DST spring-forward (Mazatlan unchanged)", () => {
+    const beforeUsJump = new Date("2026-03-08T07:59:00.000Z"); // 12:59 AM Mazatlan
+    const afterUsJump = new Date("2026-03-08T08:01:00.000Z"); // 1:01 AM Mazatlan
+    assert.strictEqual(getDateStrInSlotTimezone(beforeUsJump), "2026-03-08");
+    assert.strictEqual(getDateStrInSlotTimezone(afterUsJump), "2026-03-08");
   });
 });
 
@@ -251,7 +253,7 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
   const sat = "2025-06-14";
   const mon = "2025-06-09";
 
-  it("fixture dates are Saturday / Monday in America/Chicago", () => {
+  it("fixture dates are Saturday / Monday in America/Mazatlan", () => {
     assert.strictEqual(isSaturdayInSlotTimezone(sat), true);
     assert.strictEqual(isSaturdayInSlotTimezone(mon), false);
   });

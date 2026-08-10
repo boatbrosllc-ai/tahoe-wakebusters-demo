@@ -44,7 +44,7 @@ export function LeadCapture() {
           Get availability + tips
         </h2>
         <p className="text-white/80 mb-6 sm:mb-6 max-w-md mx-auto text-sm sm:text-base">
-          Drop your email for seasonal availability, last-minute openings, and Lake Austin boat rental tips. No spam.
+          Drop your email for seasonal availability, last-minute openings, and Cabo fishing tips. No spam.
         </p>
         {status === "success" ? (
           <motion.div
@@ -73,7 +73,7 @@ export function LeadCapture() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: 0.18 }}
             >
-              We&apos;ll send availability and Lake Austin boat rental tips. No spam, ever.
+              We&apos;ll send availability and Cabo fishing tips. No spam, ever.
             </motion.p>
           </motion.div>
         ) : (

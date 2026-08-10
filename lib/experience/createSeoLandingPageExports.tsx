@@ -4,7 +4,7 @@ import { SeoLandingPage } from "@/components/experience/SeoLandingPage";
 import { getSeoLandingPage, type SeoLandingPageId } from "@/lib/experience/seoLanding.data";
 import { getSeoLandingMedia } from "@/lib/experience/seoLandingMedia";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 export function createSeoLandingMetadata(pageId: SeoLandingPageId): Metadata {
   const config = getSeoLandingPage(pageId);

@@ -12,118 +12,48 @@ import { brand } from "@/content/brand";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
-/** Base FAQs reused on every boat pillar for snippet potential. */
 const BOAT_PILLAR_FAQ_BASE: FAQItem[] = [
   {
     question: "Is a captain included with this boat?",
-    answer: "Yes. Every Boat Bros Lake Austin rental includes a licensed captain. You don't need a boating license—just show up and enjoy.",
+    answer:
+      "Yes. Every Nasty Sport Fishing Cabo San Lucas charter includes a licensed captain and mate. You show up ready to fish — we handle the boat, tackle, and local knowledge.",
   },
   {
     question: "How many guests can this boat fit?",
-    answer: "Our Boats typically fit up to 14 guests. Check the experience page when you book for your chosen trip.",
+    answer:
+      "Our Cabo 40 Express charters up to 6 guests. Check the Half Day or Full Day experience page when you book for trip details and what’s included.",
   },
   {
-    question: "Is alcohol allowed?",
-    answer: "Yes. You may bring alcohol for adults of legal drinking age. We ask that everyone drink responsibly and follow the captain's instructions for safety.",
+    question: "What should we bring?",
+    answer:
+      "Sunscreen, sunglasses, a hat, and soft-soled shoes. We provide premium tackle, bait, licenses for listed anglers, water, soft drinks, snacks, and light breakfast on charter packages.",
   },
   {
     question: "What if the weather changes?",
-    answer: "We monitor weather closely. If conditions are unsafe, we'll work with you to reschedule or refund per our cancellation policy.",
+    answer:
+      "We monitor conditions closely. If it’s unsafe to fish, we’ll work with you to reschedule or refund per our cancellation policy.",
   },
 ];
 
-/** Extra FAQ items by boat type for SEO (long-tail keywords). */
-function getSeoFaqForBoat(boatType: string | undefined): FAQItem[] {
-  const t = boatType?.trim().toLowerCase() ?? "";
-  if (t === "pontoon" || t === "tritoon") {
-    return [
-      {
-        question: "Do I need a boating license for a Lake Austin pontoon rental?",
-        answer: "No. Every Boat Bros Lake Austin pontoon rental and pontoon boat rental Austin trip includes a licensed captain. You don't need a boating license—the captain handles navigation and docking. Just show up and enjoy your pontoon rental Lake Austin experience.",
-      },
-      {
-        question: "How much does a pontoon boat rental cost on Lake Austin?",
-        answer: "Pontoon boat rental Lake Austin pricing depends on trip length and experience (e.g. half-day charter, sunset cruise). Our Lake Austin pontoon rentals include the captain and fuel. Check availability and see prices when you select your date and duration on the experience page.",
-      },
-      {
-        question: "Where can I rent a pontoon boat in Austin?",
-        answer: "Boat Bros offers pontoon boat rental Austin and Lake Austin pontoon rentals with captain included. We operate on Lake Austin—easy access from Austin, TX. Book online for pontoon rentals Lake Austin, tritoon charters, and sunset cruises.",
-      },
-    ];
-  }
-  if (t === "wake") {
-    return [
-      {
-        question: "Do I need experience to book a Lake Austin wake boat rental?",
-        answer: "No. Our Lake Austin wake boat rental trips include an experienced driver and captain. Whether you're new to wakeboarding or wakesurfing or you've done it before, we'll get you on the water. Wake surf Lake Austin and wakeboard sessions are open to all skill levels.",
-      },
-      {
-        question: "What's included in a Lake Austin wake boat rental?",
-        answer: "Our Lake Austin wake boat rentals include the boat, a licensed captain, life jackets, and typically wakeboards, surf board, and tubes. Fuel is included. Book a wake boat rental Austin style with Boat Bros for a full-service experience.",
-      },
-    ];
-  }
-  return [];
-}
-
-function boatTypeLabel(boatType: string | undefined): string {
-  if (!boatType || !boatType.trim()) return "Boat";
-  const t = boatType.trim().toLowerCase();
-  if (t === "pontoon") return "Pontoon";
-  if (t === "wake") return "Wake";
-  if (t === "tritoon") return "Tritoon";
-  return boatType.trim().charAt(0).toUpperCase() + boatType.trim().slice(1);
-}
-
-function boatTypeKeywords(boatType: string | undefined): string[] {
-  const t = boatType?.trim().toLowerCase() ?? "";
-  if (t === "pontoon" || t === "tritoon") {
-    return [
-      "Lake Austin pontoon rentals",
-      "pontoon rental Lake Austin",
-      "pontoon boat rental Lake Austin",
-      "pontoon boat rental austin",
-      "pontoon boat austin",
-      "pontoon rental austin",
-      "pontoon rental austin tx",
-      "party barge rental austin",
-      "austin texas pontoon rental",
-      "lake austin pontoon",
-      "Lake Austin boat rental",
-    ];
-  }
-  if (t === "wake") {
-    return [
-      "Lake Austin wake boat rental",
-      "wake surf Lake Austin",
-      "Lake Austin wakeboard rental",
-      "wake boat rental Austin",
-      "Lake Austin tubing boat rental",
-    ];
-  }
-  return ["Lake Austin boat rentals", "boat rental Lake Austin"];
-}
-
-/** SEO-rich paragraphs by boat type for organic search (pontoon/tritoon vs wake). */
-function getSeoParagraphsForBoat(boatType: string | undefined, boatName: string): string[] {
-  const t = boatType?.trim().toLowerCase() ?? "";
-  if (t === "pontoon" || t === "tritoon") {
-    return [
-      `A pontoon boat rental on Lake Austin is one of the best ways to spend a day on the water in Austin, TX. ${boatName} gives you space for up to 14 guests, with a captain included so no one needs a boating license. Whether you're looking for a pontoon rental Lake Austin for a bachelorette party, family day, or a chill cruise, our tritoon and pontoon boats deliver comfort, Bluetooth audio, cooler space, and a lily pad for swimming.`,
-      `Rent a pontoon boat on Lake Austin with Boat Bros and you get a captained experience from dock to cove. Pontoon boat rental Austin and Lake Austin pontoon options are popular for good reason: stable ride, room to move, and easy access from central Austin. We include fuel and a licensed captain with every Lake Austin boat rental so the price you see is what you pay. Book ${boatName} for a Lake Austin pontoon charter, sunset cruise, or holiday tour.`,
-      `Looking for pontoon boat rentals in Austin TX or a party barge rental Austin style? ${boatName} is part of our Lake Austin fleet—captain included, no license required. Perfect for groups who want a pontoon boat Austin Texas day on the water without the hassle. Check availability and reserve your Lake Austin pontoon rental online.`,
-    ];
-  }
-  if (t === "wake") {
-    return [
-      `Lake Austin wake boat rental is ideal for wakeboarding, wakesurfing, and tubing. ${boatName} is a purpose-built wake boat with a licensed captain—no boating license needed. Book a wake boat rental Austin experience for thrill-seekers and families who want action on the water.`,
-      `Our Lake Austin wake boat rentals include expert drivers who know the best water for your chosen activity. Wake surf Lake Austin and wakeboard sessions are popular; we provide the boat, the captain, and the gear. Reserve ${boatName} for your next Lake Austin wakeboard or tubing rental.`,
-    ];
-  }
+function getSeoFaqForBoat(): FAQItem[] {
   return [
-    `Lake Austin boat rentals with Boat Bros include a licensed captain and a range of boats for every kind of trip. ${boatName} is available for captained charters—no boating license required. Book your Lake Austin boat rental online and we'll take care of the rest.`,
+    {
+      question: "Do I need a fishing license for a Cabo charter?",
+      answer:
+        "Licenses for the anglers listed on your package are included with Nasty Sport Fishing charters. We’ll confirm guest count when you book.",
+    },
+    {
+      question: "Where do we meet for departure?",
+      answer:
+        "We operate from Marina Cabo San Lucas. After booking, we’ll send the exact slip and meet-up instructions for your charter day.",
+    },
+    {
+      question: "Is the Cabo 40 Express good for offshore fishing?",
+      answer:
+        "Yes. The 2010 Cabo 40 Express is a Michael Peters–designed hard-top sportfisher with twin Cummins power, a tuna tower, and a serious cockpit — built for Cabo bluewater work on Half Day and Full Day trips.",
+    },
   ];
 }
 
@@ -137,17 +67,16 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     return {};
   }
 
-  const typeLabel = boatTypeLabel(boat.boatType);
-  const title = `${boat.name} | Lake Austin ${typeLabel} Rental | Boat Bros`;
-  const t = boat.boatType?.trim().toLowerCase() ?? "";
-  const description =
-    t === "wake"
-      ? `Book ${boat.name} for your Lake Austin trip. Captain-included wake boat rental—no license required. Wake surf & wakeboard Lake Austin. Reserve your Lake Austin boat rental today.`
-      : t === "pontoon" || t === "tritoon"
-        ? `Book ${boat.name} for your Lake Austin trip. Captain-included ${typeLabel.toLowerCase()} rental—no license required. Pontoon rental Lake Austin & Austin TX. Reserve your Lake Austin boat rental today.`
-        : `Book ${boat.name} for your Lake Austin trip. Captain-included ${typeLabel.toLowerCase()} rental—no license required. Reserve your Lake Austin boat rental today.`;
+  const title = `${boat.name} | Cabo Sport Fishing Charter Boat | Nasty Sport Fishing`;
+  const description = `Book the ${boat.name} for your Cabo San Lucas sport fishing charter. Captain and crew included. Reserve Half Day or Full Day online.`;
   const canonical = `${baseUrl}/boats/${boat.slug}`;
-  const keywords = [...boatTypeKeywords(boat.boatType), `${boat.name} Lake Austin rental`];
+  const keywords = [
+    "Cabo fishing boat",
+    "Cabo San Lucas sportfisher",
+    "Cabo 40 Express charter",
+    "Nasty Sport Fishing boat",
+    `${boat.name} Cabo charter`,
+  ];
 
   return {
     title,
@@ -155,7 +84,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     keywords,
     alternates: { canonical },
     openGraph: {
-      title: `${boat.name} | Lake Austin ${typeLabel} Rental | Boat Bros`,
+      title: `${boat.name} | Cabo Sport Fishing | Nasty Sport Fishing`,
       description,
       url: canonical,
       siteName: brand.companyName,
@@ -170,7 +99,7 @@ function BreadcrumbJsonLd({ boatName, slug, nonce }: { boatName: string; slug: s
     "@type": "BreadcrumbList",
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "Home", item: baseUrl },
-      { "@type": "ListItem", position: 2, name: "Our Boats", item: `${baseUrl}/boats` },
+      { "@type": "ListItem", position: 2, name: "Our Boat", item: `${baseUrl}/boats` },
       { "@type": "ListItem", position: 3, name: boatName, item: `${baseUrl}/boats/${encodeURIComponent(slug)}` },
     ],
   };
@@ -181,27 +110,24 @@ function BreadcrumbJsonLd({ boatName, slug, nonce }: { boatName: string; slug: s
 
 function ServiceJsonLd({
   boatName,
-  boatType,
   description,
   imageUrl,
   nonce,
 }: {
   boatName: string;
-  boatType: string | undefined;
   description: string;
   imageUrl: string | undefined;
   nonce?: string;
 }) {
-  const typeLabel = boatTypeLabel(boatType);
   const service = {
     "@context": "https://schema.org",
     "@type": "Service",
-    serviceType: `${typeLabel} Boat Rental`,
+    serviceType: "Sport Fishing Charter",
     name: boatName,
     description,
     image: imageUrl ? getDisplayImageUrl(imageUrl) : undefined,
     provider: { "@type": "LocalBusiness", name: brand.companyName },
-    areaServed: { "@type": "Place", name: "Austin, TX" },
+    areaServed: { "@type": "Place", name: "Cabo San Lucas, Mexico" },
   };
   return (
     <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(service) }} />
@@ -219,29 +145,29 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
   }
 
   const nonce = (await headers()).get("x-nonce") ?? undefined;
-
-  const typeLabel = boatTypeLabel(boat.boatType);
-
   const bodyDescription = getDisplayDescription(boat);
-
   const serviceDescription =
     boat.experiences.length > 0
-      ? `${getDisplayDescription(boat).split(/\n\n+/)[0].trim()} Available for ${boat.experiences.map((e) => e.title).join(", ")}. Captain included.`
+      ? `${getDisplayDescription(boat).split(/\n\n+/)[0].trim()} Available for ${boat.experiences.map((e) => e.title).join(", ")}. Captain and crew included.`
       : getDisplayDescription(boat).split(/\n\n+/)[0].trim();
+
+  const seoParagraphs = [
+    `Cabo San Lucas sport fishing starts with the right boat. The ${boat.name} is Nasty Sport Fishing’s offshore sportfisher — a hard-top express with the range, cockpit, and twin-diesel power to fish local grounds and the edges when conditions allow.`,
+    `Every charter on ${boat.name} includes a licensed captain and mate. No boat ownership headaches, no guesswork on where the bite is — just show up at Marina Cabo San Lucas ready to fish. Half Day and Full Day packages cover tackle, bait, and the provisions listed on each experience.`,
+    `Looking for a private Cabo fishing boat charter? Book ${boat.name} online, pick your date, and we’ll confirm slip and meet-up details before departure.`,
+  ];
 
   return (
     <>
       <BreadcrumbJsonLd boatName={boat.name} slug={boat.slug} nonce={nonce} />
       <ServiceJsonLd
         boatName={boat.name}
-        boatType={boat.boatType}
         description={serviceDescription}
         imageUrl={normalizeBoatPhotoForRender(boat.photos[0])}
         nonce={nonce}
       />
 
       <main id="main-content" className="min-h-screen bg-white pb-24 lg:pb-0 overflow-x-hidden">
-        {/* Hero */}
         <section
           className="relative overflow-hidden bg-brand-dark px-5 sm:px-6 lg:px-8 py-10 sm:py-14 lg:py-16"
           aria-labelledby="boat-hero-heading"
@@ -254,7 +180,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
               </Link>
               <ChevronRight className="h-4 w-4 shrink-0 text-white/50" aria-hidden />
               <Link href="/boats" className="hover:text-white transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary">
-                Our Boats
+                Our Boat
               </Link>
               <ChevronRight className="h-4 w-4 shrink-0 text-white/50" aria-hidden />
               <span className="text-white truncate max-w-[180px] sm:max-w-none" aria-current="page">
@@ -266,7 +192,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 {boat.name}
               </h1>
               <p className="mt-2 text-white/85 text-base sm:text-lg max-w-xl mx-auto">
-                {boat.heroSubtitle?.trim() || `Lake Austin ${typeLabel.toLowerCase()} rental · Captain included · No license required`}
+                {boat.heroSubtitle?.trim() || "Cabo San Lucas sportfisher · Captain & crew included"}
               </p>
               {boat.experiences.length > 0 && (
                 <div className="mt-6 flex justify-center">
@@ -277,7 +203,6 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
           </div>
         </section>
 
-        {/* Gallery */}
         {boat.photos.length > 0 && (
           <section className="section-padding bg-white" aria-label="Gallery">
             <div className="container-wide px-4 sm:px-6 lg:px-8">
@@ -287,10 +212,11 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                   <div key={i} className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-brand-bg shadow-sm ring-1 ring-black/5">
                     <Image
                       src={getDisplayImageUrl(normalizeBoatPhotoForRender(url))}
-                      alt=""
+                      alt={i === 0 ? `${boat.name} sport fishing yacht` : `${boat.name} photo ${i + 1}`}
                       fill
                       className="object-cover"
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                      priority={i === 0}
                     />
                   </div>
                 ))}
@@ -299,7 +225,6 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
           </section>
         )}
 
-        {/* Description */}
         <section className="section-padding bg-brand-bg" aria-labelledby="about-boat-heading">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary mb-2">About this boat</p>
@@ -316,38 +241,30 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
           </div>
         </section>
 
-        {/* SEO content – Lake Austin rental keywords by boat type */}
-        {(() => {
-          const seoParagraphs = getSeoParagraphsForBoat(boat.boatType, boat.name);
-          if (seoParagraphs.length === 0) return null;
-          return (
-            <section className="section-padding bg-white" aria-labelledby="lake-austin-rental-heading">
-              <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
-                <h2 id="lake-austin-rental-heading" className="font-display text-xl font-bold text-brand-dark sm:text-2xl">
-                  Lake Austin {typeLabel} rental – what you get
-                </h2>
-                <div className="mt-4 max-w-2xl text-brand-dark/90 space-y-4">
-                  {seoParagraphs.map((p, i) => (
-                    <p key={i} className="text-base sm:text-lg leading-relaxed">
-                      {p}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            </section>
-          );
-        })()}
+        <section className="section-padding bg-white" aria-labelledby="cabo-charter-heading">
+          <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
+            <h2 id="cabo-charter-heading" className="font-display text-xl font-bold text-brand-dark sm:text-2xl">
+              Cabo sport fishing charter — what you get
+            </h2>
+            <div className="mt-4 max-w-2xl text-brand-dark/90 space-y-4">
+              {seoParagraphs.map((p, i) => (
+                <p key={i} className="text-base sm:text-lg leading-relaxed">
+                  {p}
+                </p>
+              ))}
+            </div>
+          </div>
+        </section>
 
-        {/* Available for */}
         {boat.experiences.length > 0 && (
           <section className="section-padding bg-white" aria-labelledby="available-for-heading">
             <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
               <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary mb-2">Book this boat for</p>
               <h2 id="available-for-heading" className="font-display text-xl font-bold text-brand-dark sm:text-2xl">
-                Available experiences
+                Available charters
               </h2>
               <p className="mt-2 text-brand-muted text-sm sm:text-base">
-                All include a licensed captain. Tap an experience for full details and pricing.
+                All include a licensed captain and mate. Tap a trip for full details and pricing.
               </p>
               <ul className="mt-5 space-y-2">
                 {boat.experiences.map((exp) => (
@@ -364,43 +281,39 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
               </ul>
               <p className="mt-4">
                 <Link href="/experiences" className="inline-flex items-center gap-1 text-sm font-medium text-brand-primary hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary">
-                  View all experiences <ChevronRight className="h-4 w-4" aria-hidden />
+                  View all charters <ChevronRight className="h-4 w-4" aria-hidden />
                 </Link>
               </p>
             </div>
           </section>
         )}
 
-        {/* FAQ */}
         <section aria-labelledby="faq-heading">
           <h2 id="faq-heading" className="sr-only">
-            Frequently asked questions about {boat.name} and Lake Austin boat rentals
+            Frequently asked questions about {boat.name} and Cabo sport fishing charters
           </h2>
-          <FAQ items={[...BOAT_PILLAR_FAQ_BASE, ...getSeoFaqForBoat(boat.boatType)]} />
+          <FAQ items={[...BOAT_PILLAR_FAQ_BASE, ...getSeoFaqForBoat()]} />
         </section>
 
-        {/* CTA */}
         <section className="bg-brand-dark py-10 sm:py-14">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8 text-center">
-            <h2 className="font-display text-xl font-bold text-white sm:text-2xl">
-              Ready to book?
-            </h2>
+            <h2 className="font-display text-xl font-bold text-white sm:text-2xl">Ready to book?</h2>
             <p className="mt-1.5 text-white/80 text-sm sm:text-base">
-              Captain included · Choose your experience and check availability
+              Captain & crew included · Choose Half Day or Full Day and check availability
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
               <Link
                 href="/experiences"
                 className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-medium text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
               >
-                All experiences
+                All charters
               </Link>
               <Link
                 href="/boats"
                 className="inline-flex items-center gap-2 rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden />
-                All boats
+                Our boat
               </Link>
             </div>
           </div>

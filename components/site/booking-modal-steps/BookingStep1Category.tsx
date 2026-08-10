@@ -2,9 +2,32 @@
 
 import Image from "next/image";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { experiences, formatExperiencePriceLabel } from "@/content/experiences";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
-import { formatExperiencePriceLabel } from "@/content/experiences";
 import type { ExperienceItem } from "./types";
+
+const FALLBACK_CARD_IMAGE = "/photos/nsf/cabo-40-express.png";
+const STATIC_BY_SLUG = new Map(experiences.map((e) => [e.slug, e]));
+
+function isLegacyExperienceImage(url: string | null | undefined): boolean {
+  if (!url?.trim()) return true;
+  return /boat-bros|firebasestorage\.app\/experi|IMG_\d|DSC0|pontoon-hero|lake.?austin/i.test(url);
+}
+
+function bookingCardImage(exp: ExperienceItem): string {
+  const fromListing = experienceCardImageUrl(exp.heroMedia, exp.gallery);
+  if (fromListing && !isLegacyExperienceImage(fromListing)) return fromListing;
+  const staticHero = STATIC_BY_SLUG.get(exp.slug)?.heroImage;
+  return staticHero ?? FALLBACK_CARD_IMAGE;
+}
+
+function bookingCardTitle(exp: ExperienceItem): string {
+  const title = exp.title?.trim() || "";
+  if (title && !/lake\s*austin|boat\s*bros|pontoon charter|watersports charter|holiday boat tour/i.test(title)) {
+    return title;
+  }
+  return STATIC_BY_SLUG.get(exp.slug)?.title || title || "Experience";
+}
 
 export interface BookingStep1CategoryProps {
   loading: boolean;
@@ -40,8 +63,8 @@ export function BookingStep1Category({
         <div className="grid grid-cols-2 grid-rows-[1fr_1fr] gap-2.5 sm:gap-4 md:gap-5 flex-1 min-h-0 min-w-0">
           {experiences.map((exp) => {
             const isSelected = selectedExperience?.id === exp.id;
-            const cardImage = experienceCardImageUrl(exp.heroMedia, exp.gallery);
-            const hasImage = Boolean(cardImage);
+            const cardImage = bookingCardImage(exp);
+            const title = bookingCardTitle(exp);
             return (
               <button
                 key={exp.id}
@@ -54,30 +77,30 @@ export function BookingStep1Category({
                 )}
               >
                 <div className="absolute inset-0 bg-brand-dark/5">
-                  {hasImage && cardImage ? (
-                    <Image
-                      src={getDisplayImageUrl(cardImage)}
-                      alt=""
-                      fill
-                      className={cn(
-                        "object-cover",
-                        !exp.listingCardImagePosition?.trim() && "object-center"
-                      )}
-                      style={
-                        exp.listingCardImagePosition?.trim()
-                          ? { objectPosition: exp.listingCardImagePosition.trim() }
-                          : undefined
-                      }
-                      sizes="(max-width: 768px) 50vw, 280px"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/15 to-brand-dark/10" />
-                  )}
+                  <Image
+                    src={getDisplayImageUrl(cardImage)}
+                    alt=""
+                    fill
+                    className={cn(
+                      "object-cover",
+                      !exp.listingCardImagePosition?.trim() && "object-center"
+                    )}
+                    style={
+                      exp.listingCardImagePosition?.trim()
+                        ? { objectPosition: exp.listingCardImagePosition.trim() }
+                        : undefined
+                    }
+                    sizes="(max-width: 768px) 50vw, 280px"
+                  />
                 </div>
                 <div className="relative flex flex-1 flex-col justify-end p-2.5 sm:p-4 md:p-5 bg-gradient-to-t from-black/80 via-black/30 to-transparent">
-                  <span className="text-sm sm:text-base md:text-lg font-semibold text-white drop-shadow-md leading-tight line-clamp-2">{exp.title}</span>
-                  {exp.subtitle ? (
+                  <span className="text-sm sm:text-base md:text-lg font-semibold text-white drop-shadow-md leading-tight line-clamp-2">{title}</span>
+                  {exp.subtitle && !/lake\s*austin|boat\s*bros/i.test(exp.subtitle) ? (
                     <span className="text-[11px] sm:text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">{exp.subtitle}</span>
+                  ) : STATIC_BY_SLUG.get(exp.slug)?.shortDescription ? (
+                    <span className="text-[11px] sm:text-xs md:text-sm text-white/90 mt-0.5 line-clamp-1">
+                      {STATIC_BY_SLUG.get(exp.slug)!.shortDescription}
+                    </span>
                   ) : null}
                   {exp.fromPriceCents != null && (
                     <span className="text-xs sm:text-sm font-medium text-white/95 mt-0.5 sm:mt-1">

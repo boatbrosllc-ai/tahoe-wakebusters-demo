@@ -6,24 +6,25 @@ import { brand } from "@/content/brand";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 
 const footerLinks = [
-  { href: "/experiences", label: "Experiences" },
-  { href: "/austin-boat-rental", label: "Austin Boat Rental" },
-  { href: "/boats", label: "Our Boats" },
-  { href: "/location", label: "Location" },
+  { href: "/experiences", label: "Charters" },
+  { href: "/boats", label: "Our Boat" },
+  { href: "/location", label: "Marina" },
   { href: "/booking", label: "Book" },
   { href: "/our-story", label: "Our Story" },
-  { href: "/blog", label: "The Dock" },
+  { href: "/blog", label: "Blog" },
   { href: "/faqs", label: "FAQs" },
   { href: "/contact", label: "Contact" },
 ];
 
 const seoRentalLinks = [
-  { href: "/boat-rental-austin", label: "Boat rental Austin" },
-  { href: "/lake-austin-boat-rentals", label: "Lake Austin boat rentals" },
-  { href: "/austin-party-boat-rentals", label: "Austin party boat" },
-  { href: "/pontoon-boat-rental-austin", label: "Pontoon rental Austin" },
-  { href: "/sunset-cruise-austin", label: "Sunset cruise Austin" },
-  { href: "/wakesurfing-austin", label: "Wakesurfing Austin" },
+  { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas fishing charters" },
+  { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
+  { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+  { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
+  { href: "/cabo-marlin-fishing", label: "Marlin fishing Cabo" },
+  { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
+  { href: "/fishing-reports", label: "Fishing reports" },
+  { href: "/boats", label: "Our fishing boat" },
 ];
 
 const linkClass =
@@ -64,7 +65,7 @@ export function Footer() {
             </ul>
           </div>
           <div>
-            <p className="font-medium text-white text-sm mb-2">Boat rentals</p>
+            <p className="font-medium text-white text-sm mb-2">Cabo fishing</p>
             <ul className="space-y-2">
               {seoRentalLinks.map((link) => (
                 <li key={link.href}>
@@ -170,7 +171,7 @@ export function Footer() {
             {" · "}
             <Link href="/location" className="hover:text-brand-primary transition-colors">Location</Link>
             {" · "}
-            Lake Austin boat rentals, Austin TX. Licensed & insured.
+            Cabo San Lucas sport fishing. Licensed charters.
           </p>
         </div>
       </div>

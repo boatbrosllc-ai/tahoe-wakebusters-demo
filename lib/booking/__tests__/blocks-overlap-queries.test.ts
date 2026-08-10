@@ -7,7 +7,7 @@ import {
 
 describe("blocks-overlap-queries", () => {
   it("blockRowOverlapsSlot matches boat-specific block regardless of experience on doc", () => {
-    const slotStart = new Date("2026-07-04T18:00:00.000Z").getTime(); // 1pm Chicago
+    const slotStart = new Date("2026-07-04T18:00:00.000Z").getTime(); // absolute fixture (overlap uses ms)
     const slotEnd = new Date("2026-07-04T21:00:00.000Z").getTime();
     const row = {
       boatId: "Ld5Lj5RCfFvd1ld01P1A",

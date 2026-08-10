@@ -165,7 +165,7 @@ export async function runWaiverReminderCron(
           to: toEmail,
           toName,
           templateId: "waiver_reminder",
-          subject: "Reminder: Sign your waiver – Boat Bros ATX",
+          subject: "Reminder: Sign your waiver – Nasty Sport Fishing",
           bookingId: full.bookingId,
           eventSubtype: "waiver_reminder",
         }).catch((err) => console.error(`[${logPrefix}] logNotificationSent failed`, err));

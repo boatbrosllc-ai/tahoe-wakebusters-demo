@@ -7,8 +7,10 @@ import {
   getFallbackExperienceSlugsForSitemap,
   isLocalBlogCanonical,
 } from "@/lib/booking/get-sitemap-data";
+import { SEO_SITEMAP_PATHS } from "@/lib/seo/paths";
+import { getPublishedFishingReports } from "@/content/seo/fishing-reports";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 /** Regenerate sitemap periodically so new boat pillar URLs appear without a full redeploy. */
 export const revalidate = 3600;
@@ -16,35 +18,12 @@ export const revalidate = 3600;
 /** Site launch date used as stable lastModified fallback for static pages. */
 const SITE_CONTENT_EPOCH = new Date("2024-01-01T00:00:00.000Z");
 
-const SEO_PHASE_1_PATHS = [
-  "/boat-rental-austin",
-  "/lake-austin-boat-rentals",
-  "/austin-party-boat-rentals",
-  "/pontoon-boat-rental-austin",
-] as const;
-
-const SEO_PHASE_2_4_PATHS = [
-  "/lake-austin-party-boat-rentals",
-  "/private-boat-rental-austin",
-  "/captained-boat-rental-austin",
-  "/boat-ride-austin",
-  "/wakesurfing-austin",
-  "/wake-boat-rental-austin",
-  "/wakesurf-club-austin",
-  "/sunset-cruise-austin",
-  "/lake-austin-sunset-cruise",
-  "/lake-austin-vs-lake-travis-boat-rental",
-] as const;
-
 const staticPaths = [
   "",
   "/experiences",
-  "/experiences/lake-austin-pontoon",
-  "/austin-bachelorette-boat-rental",
-  "/austin-bachelor-party-boat-rental",
-  ...SEO_PHASE_1_PATHS,
-  ...SEO_PHASE_2_4_PATHS,
-  "/austin-boat-rental",
+  "/experiences/nasty-half-day",
+  "/experiences/nasty-full-day",
+  "/packages",
   "/location",
   "/boats",
   "/faqs",
@@ -52,6 +31,7 @@ const staticPaths = [
   "/our-story",
   "/blog",
   "/menu",
+  ...SEO_SITEMAP_PATHS,
 ];
 
 type ChangeFreq = MetadataRoute.Sitemap[number]["changeFrequency"];
@@ -64,27 +44,19 @@ function staticPriority(path: string): number {
     path === "/experiences" ||
     path === "/boats" ||
     path === "/location" ||
-    path === "/austin-bachelorette-boat-rental" ||
-    path === "/austin-bachelor-party-boat-rental" ||
-    path === "/austin-boat-rental" ||
-    SEO_PHASE_1_PATHS.includes(path as (typeof SEO_PHASE_1_PATHS)[number])
+    path === "/packages" ||
+    path === "/cabo-san-lucas-fishing-charters" ||
+    path === "/cabo-fishing-charter-prices" ||
+    path === "/deep-sea-fishing-cabo"
   ) {
     return 0.9;
   }
+  if (SEO_SITEMAP_PATHS.includes(path)) return 0.85;
   return 0.8;
 }
 
 function staticChangeFreq(path: string): ChangeFreq {
-  if (
-    path === "" ||
-    path === "/experiences" ||
-    path === "/boats" ||
-    path === "/location" ||
-    path === "/austin-bachelorette-boat-rental" ||
-    path === "/austin-bachelor-party-boat-rental" ||
-    path === "/austin-boat-rental" ||
-    SEO_PHASE_1_PATHS.includes(path as (typeof SEO_PHASE_1_PATHS)[number])
-  ) {
+  if (path === "" || path === "/experiences" || path === "/boats" || path === "/location") {
     return "weekly";
   }
   return "monthly";
@@ -181,8 +153,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     });
   }
 
-  // Avoid empty dynamic sections when Firebase partially fails but static data exists
-  if (!boatsLoaded && !firestoreBlogLoaded && deduped.size <= staticPaths.length + getStaticBlogPostsForSitemap().length) {
+  for (const report of getPublishedFishingReports()) {
+    addEntry(deduped, `${baseUrl}/fishing-reports/${encodeURIComponent(report.slug)}`, {
+      lastModified: report.date ? new Date(`${report.date}T12:00:00.000Z`) : SITE_CONTENT_EPOCH,
+      changeFrequency: "monthly",
+      priority: 0.7,
+    });
+  }
+
+  if (
+    !boatsLoaded &&
+    !firestoreBlogLoaded &&
+    deduped.size <= staticPaths.length + getStaticBlogPostsForSitemap().length
+  ) {
     for (const exp of getFallbackExperienceSlugsForSitemap()) {
       const path = `/experiences/${encodeURIComponent(exp.slug)}`;
       addEntry(deduped, `${baseUrl}${path}`, {

@@ -3,11 +3,12 @@
  * so both use consistent month boundaries and can browse/fetch any month.
  */
 
-/** Returns today's date string (YYYY-MM-DD) in America/Chicago timezone. Uses Intl.formatToParts so the result is deterministic and does not depend on server locale. */
-/** Calendar date (YYYY-MM-DD) in America/Chicago for an arbitrary UTC instant. */
-export function getChicagoDateStringForInstant(d: Date): string {
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
+
+/** Calendar date (YYYY-MM-DD) in BUSINESS_TIMEZONE for an arbitrary UTC instant. */
+export function getBusinessDateStringForInstant(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Chicago",
+    timeZone: BUSINESS_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -18,25 +19,34 @@ export function getChicagoDateStringForInstant(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function getChicagoToday(): string {
-  return getChicagoDateStringForInstant(new Date());
+/** @deprecated Use {@link getBusinessDateStringForInstant}. */
+export const getChicagoDateStringForInstant = getBusinessDateStringForInstant;
+
+export function getBusinessToday(): string {
+  return getBusinessDateStringForInstant(new Date());
 }
 
+/** @deprecated Use {@link getBusinessToday}. */
+export const getChicagoToday = getBusinessToday;
+
 /**
- * Milliseconds until the next calendar midnight in America/Chicago (when the Chicago date rolls over).
+ * Milliseconds until the next calendar midnight in BUSINESS_TIMEZONE.
  * Used to refresh slot fetches after the local business day boundary.
  */
-export function getMsUntilNextChicagoMidnight(now: Date = new Date()): number {
-  const todayStr = getChicagoDateStringForInstant(now);
+export function getMsUntilNextBusinessMidnight(now: Date = new Date()): number {
+  const todayStr = getBusinessDateStringForInstant(now);
   let lo = now.getTime();
   let hi = now.getTime() + 49 * 3600 * 1000;
   while (hi - lo > 1000) {
     const mid = Math.floor((lo + hi) / 2);
-    if (getChicagoDateStringForInstant(new Date(mid)) === todayStr) lo = mid + 1;
+    if (getBusinessDateStringForInstant(new Date(mid)) === todayStr) lo = mid + 1;
     else hi = mid;
   }
   return Math.max(0, lo - now.getTime());
 }
+
+/** @deprecated Use {@link getMsUntilNextBusinessMidnight}. */
+export const getMsUntilNextChicagoMidnight = getMsUntilNextBusinessMidnight;
 
 /** YYYY-MM-DD from a Date's calendar parts (for month boundaries). */
 export function toDateStr(d: Date): string {
@@ -48,7 +58,7 @@ export function toMonthKey(year: number, month1Based: number): string {
   return `${year}-${String(month1Based).padStart(2, "0")}`;
 }
 
-/** Date range for a single calendar month. month is 0-indexed (0 = January). Builds from string only for start; end uses last day. */
+/** Date range for a single calendar month. month is 0-indexed (0 = January). */
 export function getMonthRange(year: number, month: number): { start: string; end: string } {
   const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
   const start = `${monthKey}-01`;
@@ -62,8 +72,8 @@ export function getMonthRangeWithAdjacent(year: number, month: number): { start:
   const start = new Date(year, month - 1, 1);
   const end = new Date(year, month + 2, 0);
   return {
-    start: getChicagoDateStringForInstant(start),
-    end: getChicagoDateStringForInstant(end),
+    start: getBusinessDateStringForInstant(start),
+    end: getBusinessDateStringForInstant(end),
   };
 }
 

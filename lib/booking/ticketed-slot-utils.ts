@@ -15,7 +15,7 @@ export type ExperienceForTicketed = {
   departureHour?: number;
   departureMinute?: number;
   tripDurationHours?: number;
-  /** When set and non-empty, departures only on these weekdays (0=Sun … 6=Sat) in America/Chicago. */
+  /** When set and non-empty, departures only on these weekdays (0=Sun … 6=Sat) in America/Mazatlan. */
   ticketedWeekdays?: number[];
   defaultRateId?: string;
   id?: string;

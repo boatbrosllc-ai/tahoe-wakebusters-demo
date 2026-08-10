@@ -4,7 +4,7 @@ import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { resolveCanonicalExperienceSlug } from "@/lib/booking/experience-aliases";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 export interface SitemapBlogPost {
   slug: string;
@@ -20,11 +20,8 @@ export interface SitemapExperienceEntry {
 
 /** Stable fallback when Firebase is unavailable during sitemap generation. */
 export const FALLBACK_EXPERIENCE_PAGE_SLUGS: readonly string[] = [
-  "lake-austin-pontoon",
-  "watersports",
-  "sunset",
-  "holiday",
-  "wakesurfclub",
+  "nasty-half-day",
+  "nasty-full-day",
 ];
 
 function toIso(t: unknown): string | undefined {

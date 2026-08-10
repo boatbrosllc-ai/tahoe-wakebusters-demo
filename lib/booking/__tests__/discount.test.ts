@@ -1,5 +1,5 @@
 /**
- * Regression: discount validation, inclusive America/Chicago expiry, and 2-character codes.
+ * Regression: discount validation, inclusive America/Mazatlan expiry, and 2-character codes.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
@@ -48,7 +48,7 @@ describe("validateAndApplyDiscount", () => {
     }
   });
 
-  it("treats expiry as inclusive through end of America/Chicago calendar day", () => {
+  it("treats expiry as inclusive through end of America/Mazatlan calendar day", () => {
     const dateOnly = "2026-06-15";
     const { dayStart, dayEnd } = getCentralCalendarDayBounds(dateOnly);
     const discount = activePercentDiscount({

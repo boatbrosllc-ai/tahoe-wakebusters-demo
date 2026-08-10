@@ -4,17 +4,15 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 /**
- * Prefetches critical routes so the first click to key pages is near-instant.
- * Runs after a short delay to avoid competing with LCP; also runs on high-traffic pages.
+ * Prefetches critical Nasty Sport Fishing routes so first clicks are near-instant.
  */
 const CRITICAL_ROUTES = [
   "/experiences",
-  "/experiences/lake-austin-pontoon",
+  "/experiences/nasty-half-day",
+  "/experiences/nasty-full-day",
   "/booking",
+  "/packages",
   "/contact",
-  "/austin-bachelorette-boat-rental",
-  "/austin-bachelor-party-boat-rental",
-  "/austin-boat-rental",
   "/location",
 ] as const;
 

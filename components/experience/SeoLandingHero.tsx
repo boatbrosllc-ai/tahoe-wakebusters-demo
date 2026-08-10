@@ -54,7 +54,7 @@ export function SeoLandingHero({
   return (
     <section className="relative overflow-hidden bg-brand-dark">
       <div className="absolute inset-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-brand-dark via-[#0a1628] to-brand-dark" aria-hidden />
+        <div className="absolute inset-0 bg-gradient-to-br from-brand-dark via-[#04244a] to-brand-dark" aria-hidden />
         {useHeroVideo ? (
           <>
             <Image src={HERO_VIDEO_POSTER} alt="" fill className="object-cover" priority sizes="100vw" aria-hidden />

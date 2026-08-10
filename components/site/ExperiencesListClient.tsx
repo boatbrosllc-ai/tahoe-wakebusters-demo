@@ -12,7 +12,26 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
-import { getCanonicalExperiencePath, isPontoonSlug } from "@/lib/booking/experience-aliases";
+import { getCanonicalExperiencePath, isPontoonSlug, isWakeSurfClubSlug } from "@/lib/booking/experience-aliases";
+
+const FALLBACK_CARD_IMAGE = "/photos/nsf/cabo-40-express.png";
+
+function isLegacyExperienceImage(url: string | null | undefined): boolean {
+  if (!url?.trim()) return true;
+  return /boat-bros|firebasestorage\.app\/experi|IMG_\d|DSC0|pontoon-hero|lake.?austin/i.test(url);
+}
+
+function resolveCardHeroImage(
+  listingHero: string | null,
+  staticHero: string | undefined,
+): string {
+  if (listingHero && !isLegacyExperienceImage(listingHero)) return listingHero;
+  return staticHero ?? FALLBACK_CARD_IMAGE;
+}
+
+function isLegacyListingCopy(text: string | null | undefined): boolean {
+  return /lake\s*austin|boat\s*bros|pontoon charter|watersports charter|holiday boat tour/i.test(text ?? "");
+}
 
 type ListingData = {
   slug: string;
@@ -25,7 +44,7 @@ type ListingData = {
   listingCardImagePosition?: string;
 };
 const STATIC_EXPERIENCE_BY_SLUG = new Map(experiences.map((exp) => [exp.slug, exp]));
-const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday", "lake-austin-pontoon"]);
+const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday", "nasty-half-day", "nasty-full-day"]);
 const isAdminManagedSlug = (slug: string) =>
   isPontoonSlug(slug) || slug === "watersports" || slug === "sunset" || slug === "holiday";
 
@@ -95,18 +114,22 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
     const exp = STATIC_EXPERIENCE_BY_SLUG.get(listing.slug) ?? STATIC_EXPERIENCE_BY_SLUG.get(slugKey);
     const fromListing = experienceCardImageUrl(listing.heroMedia, listing.gallery);
     const mergedGallery =
-      listing.gallery && listing.gallery.length > 0 ? listing.gallery : (exp?.gallery ?? []);
+      listing.gallery && listing.gallery.length > 0 && !listing.gallery.every(isLegacyExperienceImage)
+        ? listing.gallery.filter((u) => !isLegacyExperienceImage(u))
+        : (exp?.gallery ?? []);
+    const listingTitle = listing.title?.trim() || "";
+    const listingSubtitle = listing.subtitle?.trim() || "";
     return {
       slug: listing.slug,
-      title: listing.title?.trim() || exp?.title || "Experience",
-      shortDescription: listing.subtitle?.trim() || exp?.shortDescription || "",
+      title: (!isLegacyListingCopy(listingTitle) && listingTitle) || exp?.title || "Experience",
+      shortDescription: (!isLegacyListingCopy(listingSubtitle) && listingSubtitle) || exp?.shortDescription || "",
       description: exp?.description || "",
       highlights: exp?.highlights || [],
       duration: exp?.duration || "See details",
       durationMinutes: exp?.durationMinutes,
       capacity: CAPACITY_ALL,
-      heroImage: fromListing ?? exp?.heroImage ?? "/photos/IMG_0386.webp",
-      gallery: mergedGallery,
+      heroImage: resolveCardHeroImage(fromListing, exp?.heroImage),
+      gallery: mergedGallery.length > 0 ? mergedGallery : (exp?.gallery ?? []),
       pricingNote: exp?.pricingNote || "",
       ...(listing.fromPriceCents != null && { fromPriceCents: listing.fromPriceCents }),
       ...(listing.pricingType && { pricingType: listing.pricingType }),
@@ -129,6 +152,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
         : [];
     const merged = [...listings, ...staticFallbackListings].filter((item) => {
       if (!item.slug) return false;
+      if (isWakeSurfClubSlug(item.slug)) return false;
       if (isAdminManagedSlug(item.slug)) return activeStaticManagedSlugs.has(item.slug);
       return true;
     });
@@ -144,12 +168,13 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
   }, [listings, order]);
 
   const pontoonExperience = sortedExperiences.find((e) => isPontoonSlug(e.slug));
-  const restUnsorted = sortedExperiences.filter((e) => !isPontoonSlug(e.slug));
-  // Wake Surf (watersports) always second after Pontoon on mobile and desktop
-  const watersports = restUnsorted.find((e) => e.slug === "watersports");
-  const restOthers = restUnsorted.filter((e) => e.slug !== "watersports");
-  const rest = watersports ? [watersports, ...restOthers] : restUnsorted;
-  const firstData = pontoonExperience ?? null;
+  const watersports = sortedExperiences.find((e) => e.slug === "watersports");
+  const primaryCards = [pontoonExperience, watersports].filter(
+    (e): e is NonNullable<typeof pontoonExperience> => e != null
+  );
+  const rest = sortedExperiences.filter(
+    (e) => !isPontoonSlug(e.slug) && e.slug !== "watersports"
+  );
 
   const contentWidth = "max-w-5xl mx-auto px-6 sm:px-8 lg:px-10";
   const reduceMotion = useReducedMotion();
@@ -163,10 +188,10 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
       {/* Hero – gradient + motion */}
       <section className="relative h-[45vh] min-h-[320px] max-h-[480px] overflow-hidden bg-brand-dark">
         <div className="absolute inset-0 sm:hidden">
-          <Image src="/photos/IMG_0386.webp" alt="" fill className="object-cover object-[center_62%]" priority sizes="100vw" />
+          <Image src="/photos/nsf/yellowfin-marina-duo.png" alt="" fill className="object-cover object-[center_40%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 hidden sm:block">
-          <Image src="/photos/IMG_2123.webp" alt="" fill className="object-cover object-[center_78%]" priority sizes="100vw" />
+          <Image src="/photos/nsf/cabo-40-express.png" alt="" fill className="object-cover object-[center_50%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 from-30% via-black/25 to-transparent" />
         <div className="absolute inset-0 flex flex-col justify-center items-center sm:justify-end sm:items-stretch pb-0 sm:pb-12 sm:pb-16 lg:pb-20">
@@ -177,7 +202,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.6, ease: easing }}
             >
-              On the water
+              Cabo charters
             </motion.h1>
             <motion.p
               className="mt-4 text-lg text-white/90 max-w-lg sm:max-w-lg mx-auto sm:mx-0"
@@ -185,7 +210,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1, ease: easing }}
             >
-              Lake Austin boat rentals: pontoon, wake surf, sunset cruises — book your day on the water.
+              Cabo sport fishing charters: half-day, full-day & sunset — marlin, tuna, dorado & more.
             </motion.p>
           </div>
         </div>
@@ -202,7 +227,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.4 }}
           >
-            Choose your experience
+            Choose your charter
           </motion.h2>
           <motion.p
             className="text-lg sm:text-xl text-brand-muted text-center max-w-2xl mx-auto mb-4 leading-relaxed"
@@ -227,103 +252,117 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
             )}
             <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
               <Link
-                href="/experiences/lake-austin-pontoon"
+                href="/experiences/pontoon"
                 className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
               >
-                Lake Austin Pontoon Rentals
+                Half-day Cabo charters
               </Link>
               <span aria-hidden>·</span>
               <Link
                 href="/boats"
                 className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
               >
-                Meet our boats
+                Meet our boat
               </Link>
             </span>
           </motion.p>
 
-          {firstData && (
-            <motion.div
-              className="mb-6 sm:mb-8 relative"
-              initial={reduceMotion ? false : { opacity: 0, y: 24 }}
-              whileInView={reduceMotion ? {} : { opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-40px" }}
-              transition={{ duration: 0.45, delay: 0.1 }}
-            >
-              <Link
-                href={getCanonicalExperiencePath(firstData.slug)}
-                className="group block relative rounded-2xl bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-secondary/20 hover:-translate-y-1"
-                aria-label={`${firstData.title} — view details`}
-              >
-                {/* Ring overlay so pink outline stays on top of image */}
-                <div className="absolute inset-0 rounded-2xl ring-4 ring-brand-secondary pointer-events-none z-20 transition-all duration-300 group-hover:ring-brand-secondary/90" aria-hidden />
-                {isPontoonSlug(firstData.slug) && (
-                  <div
-                    className="absolute top-0 right-0 z-30 w-52 h-52 sm:w-72 sm:h-72 lg:w-96 lg:h-96 pointer-events-none translate-x-[30%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
-                    aria-hidden
+          {primaryCards.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 lg:gap-6 mb-6 sm:mb-8">
+              {primaryCards.map((data, i) => {
+                const isFullDay = data.slug === "watersports";
+                return (
+                  <motion.div
+                    key={data.slug}
+                    className="min-w-0 relative h-full"
+                    initial={reduceMotion ? false : { opacity: 0, y: 24 }}
+                    whileInView={reduceMotion ? {} : { opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-40px" }}
+                    transition={{ duration: 0.45, delay: 0.1 + i * 0.06 }}
                   >
-                    <Image
-                      src="/photos/most popular.png"
-                      alt=""
-                      fill
-                      className="object-contain drop-shadow-xl transition-[filter] duration-500 group-hover:drop-shadow-2xl"
-                      sizes="(max-width: 640px) 208px, (max-width: 1024px) 288px, 384px"
-                    />
-                  </div>
-                )}
-                <div className="relative overflow-hidden rounded-2xl aspect-[4/3] sm:aspect-[5/2] min-h-[280px] sm:min-h-[300px] lg:min-h-[320px] z-0">
-                  <Image
-                    src={getDisplayImageUrl(firstData.heroImage)}
-                    alt=""
-                    fill
-                    className={cn(
-                      "object-cover transition-transform duration-500 group-hover:scale-[1.03]",
-                      !firstData.listingCardImagePosition?.trim() && "object-center"
-                    )}
-                    style={
-                      firstData.listingCardImagePosition?.trim()
-                        ? { objectPosition: firstData.listingCardImagePosition.trim() }
-                        : undefined
-                    }
-                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 100vw, 1280px"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
-                  <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-7 lg:p-9">
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm text-white mb-1.5">
-                      <span className="inline-flex items-center gap-1.5 sm:gap-2">
-                        <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
-                        {firstData.duration}
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 sm:gap-2">
-                        <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
-                        {firstData.capacity}
-                      </span>
-                    </div>
-                    <h3 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-snug">
-                      {firstData.title}
-                    </h3>
-                    <p className="mt-2 sm:mt-3 text-white/90 text-sm sm:text-base max-w-lg line-clamp-3 leading-relaxed">
-                      {firstData.shortDescription}
-                    </p>
-                    <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
-                      {firstData.fromPriceCents != null && (
-                        <span className="text-base sm:text-xl font-bold text-brand-primary">
-                          {formatExperiencePriceLabel(firstData.slug, firstData.fromPriceCents, (firstData as { pricingType?: "charter" | "ticketed" }).pricingType)}
-                        </span>
+                    <Link
+                      href={getCanonicalExperiencePath(data.slug)}
+                      className="group block relative h-full rounded-2xl bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 transition-all duration-300 hover:shadow-2xl hover:shadow-brand-primary/25 hover:-translate-y-1"
+                      aria-label={`${data.title} — view details`}
+                    >
+                      <div className="absolute inset-0 rounded-2xl ring-4 ring-brand-primary pointer-events-none z-20 transition-all duration-300 group-hover:ring-brand-primary/90" aria-hidden />
+                      {isFullDay && (
+                        <div
+                          className="absolute top-0 right-0 z-30 w-40 h-40 sm:w-52 sm:h-52 lg:w-64 lg:h-64 pointer-events-none translate-x-[28%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-105 group-hover:rotate-[20deg]"
+                          aria-hidden
+                        >
+                          <Image
+                            src="/photos/most-popular.png"
+                            alt=""
+                            fill
+                            className="object-contain drop-shadow-xl transition-[filter] duration-500 group-hover:drop-shadow-2xl"
+                            sizes="(max-width: 640px) 160px, (max-width: 1024px) 208px, 256px"
+                          />
+                        </div>
                       )}
-                      {(firstData as { pricingType?: "charter" | "ticketed" }).pricingType === "ticketed" && (
-                        <span className="text-white/80 text-xs sm:text-sm">Prices may vary by date</span>
-                      )}
-                      <span className="inline-flex items-center gap-1.5 text-white font-medium text-sm group-hover:gap-2.5 transition-[gap] duration-200">
-                        View trip <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            </motion.div>
+                      <div className="relative overflow-hidden rounded-2xl aspect-[4/3] min-h-[240px] sm:min-h-[280px] lg:min-h-[320px] h-full z-0">
+                        <Image
+                          src={getDisplayImageUrl(data.heroImage)}
+                          alt=""
+                          fill
+                          className={cn(
+                            "object-cover transition-transform duration-500 group-hover:scale-[1.03]",
+                            isFullDay
+                              ? "object-[center_22%] sm:object-[center_18%]"
+                              : !data.listingCardImagePosition?.trim() && "object-center"
+                          )}
+                          style={
+                            !isFullDay && data.listingCardImagePosition?.trim()
+                              ? { objectPosition: data.listingCardImagePosition.trim() }
+                              : undefined
+                          }
+                          sizes="(max-width: 768px) 100vw, 50vw"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-18% via-black/40 to-transparent sm:from-black/88 sm:from-22%" />
+                        <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-6 lg:p-8">
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-white mb-1.5">
+                            <span className="inline-flex items-center gap-1.5 sm:gap-2">
+                              <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
+                              {data.duration}
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 sm:gap-2">
+                              <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" aria-hidden />
+                              {data.capacity}
+                            </span>
+                          </div>
+                          <h3 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-snug">
+                            {data.title}
+                          </h3>
+                          <p className="mt-2 sm:mt-3 text-white/90 text-sm sm:text-base max-w-lg line-clamp-3 leading-relaxed">
+                            {data.shortDescription}
+                          </p>
+                          <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2 sm:gap-4">
+                            {data.fromPriceCents != null && (
+                              <span className="text-base sm:text-xl font-bold text-brand-primary">
+                                {formatExperiencePriceLabel(
+                                  data.slug,
+                                  data.fromPriceCents,
+                                  (data as { pricingType?: "charter" | "ticketed" }).pricingType
+                                )}
+                              </span>
+                            )}
+                            {(data as { pricingType?: "charter" | "ticketed" }).pricingType === "ticketed" && (
+                              <span className="text-white/80 text-xs sm:text-sm">Prices may vary by date</span>
+                            )}
+                            <span className="inline-flex items-center gap-1.5 text-white font-medium text-sm group-hover:gap-2.5 transition-[gap] duration-200">
+                              View trip <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </Link>
+                  </motion.div>
+                );
+              })}
+            </div>
           )}
 
+          {rest.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-5">
             {rest.map((data, i) => {
               return (
@@ -393,6 +432,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               );
             })}
           </div>
+          )}
         </div>
       </section>
 
@@ -406,7 +446,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               type="button"
               variant="secondary"
               size="lg"
-              className="rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] font-semibold hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] touch-manipulation h-12 px-6 sm:px-8"
+              className="rounded-xl shadow-[0_2px_12px_rgba(20,182,220,0.3)] font-semibold hover:shadow-[0_2px_16px_rgba(20,182,220,0.4)] touch-manipulation h-12 px-6 sm:px-8"
               onClick={() => setBookingModalOpen(true)}
             >
               Book now

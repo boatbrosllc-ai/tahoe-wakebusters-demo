@@ -74,7 +74,7 @@ export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
   seoParagraphs: [
     "Step aboard a captained Lake Austin pontoon rental and experience Austin from the water. Cruise past waterfront homes, anchor in popular coves, and enjoy the calm, scenic stretches that make Lake Austin one of the best boating destinations in Texas. Whether your group wants a lively atmosphere or a relaxed cruise, your captain guides the experience so every moment feels effortless.",
     "Lake Austin is known for its smooth water, warm weather, and easy access from central Austin, making it perfect for birthdays, bachelorette parties, celebrations, or simply spending a day outside with friends and family. Many groups rotate between cruising, swimming, relaxing, and enjoying music while taking in the views along the shoreline.",
-    "Because every Boat Bros charter is fully captained, there's nothing you need to manage. Your captain handles navigation, positioning, and timing while you focus on enjoying the lake. The result is a seamless, premium Lake Austin pontoon experience designed to help your group relax, celebrate, and create unforgettable memories on the water.",
+    "Because every Nasty Sport Fishing charter is fully captained, there's nothing you need to manage. Your captain handles navigation, positioning, and timing while you focus on enjoying the lake. The result is a seamless, premium Lake Austin pontoon experience designed to help your group relax, celebrate, and create unforgettable memories on the water.",
   ],
   features: [
     { icon: "captain", text: "Private captain included" },
@@ -172,7 +172,7 @@ export const REVIEWS = [
     name: "Mike T.",
     location: "Austin, TX",
     rating: 5,
-    text: "Third time with Boat Bros. Consistent quality and the team always makes it special.",
+    text: "Third time with Nasty Sport Fishing. Consistent quality and the team always makes it special.",
     date: "Nov 2024",
     featured: false,
     avatar: null,

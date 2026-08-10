@@ -3,6 +3,7 @@
  */
 
 import type { Firestore } from "firebase-admin/firestore";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatMoney } from "@/lib/booking/format-money";
 import { logNotificationSent } from "@/lib/booking/email-log";
@@ -56,7 +57,7 @@ export async function notifyFinalChargeSuccess(
   if (slotId) {
     const parsed = parseSlotId(slotId.trim());
     if (parsed) {
-      /** `tripStart` is a UTC instant from `getSlotStartEnd`; email lines below format it in America/Chicago. */
+      /** `tripStart` is a UTC instant from `getSlotStartEnd`; email lines below format it in America/Mazatlan. */
       const tripStart = getSlotStartEnd(
         parsed.dateStr,
         parsed.startHour,
@@ -68,12 +69,12 @@ export async function notifyFinalChargeSuccess(
         month: "short",
         day: "numeric",
         year: "numeric",
-        timeZone: "America/Chicago",
+        timeZone: BUSINESS_TIMEZONE,
       });
       startTimeStr = tripStart.toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
-        timeZone: "America/Chicago",
+        timeZone: BUSINESS_TIMEZONE,
       });
     }
   }
@@ -89,7 +90,7 @@ export async function notifyFinalChargeSuccess(
     }
   }
 
-  const subject = `Payment received — ${experienceName} – Boat Bros ATX`;
+  const subject = `Payment received — ${experienceName} – Nasty Sport Fishing`;
 
   try {
     const { providerMessageId } = await sendFinalChargeSuccessEmail(

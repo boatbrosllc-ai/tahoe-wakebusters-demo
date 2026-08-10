@@ -1,24 +1,23 @@
 import type { Metadata } from "next";
 import { brand } from "@/content/brand";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
-  title: `The Dock | Boat Tips, Austin Events & Lake News | ${brand.companyName}`,
+  title: "The Bite | Cabo Fishing Tips & Guides",
   description:
-    "The Dock: boat tips, Austin events, and lake & boating news from Boat Bros. Get the most out of your Lake Austin boat rental—what to bring, best coves, and more.",
+    "Cabo fishing tips, charter guides, and bite notes from Nasty Sport Fishing — seasons, species, and trip prep for Cabo San Lucas.",
   keywords: [
-    "Lake Austin blog",
-    "boat tips Austin",
-    "Austin lake events",
-    "Lake Austin news",
-    "boat rental tips",
+    "Cabo fishing blog",
+    "Cabo fishing tips",
+    "Cabo San Lucas fishing guides",
+    "sport fishing Cabo",
   ],
   openGraph: {
-    title: `The Dock | Boat Tips, Austin Events & Lake News | ${brand.companyName}`,
+    title: `The Bite | Cabo Fishing Tips & Guides | ${brand.companyName}`,
     description:
-      "Boat tips, Austin events, and lake & boating news from Boat Bros. Get the most out of your Lake Austin boat rental.",
+      "Cabo fishing tips, charter guides, and bite notes from Nasty Sport Fishing.",
     url: `${baseUrl}/blog`,
     type: "website",
   },

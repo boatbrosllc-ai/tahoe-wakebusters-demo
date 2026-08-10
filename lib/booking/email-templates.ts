@@ -17,7 +17,7 @@ export function isDepositFromBookingStripe(booking: Booking): boolean {
   return isDepositMode(booking);
 }
 
-/** Absolute URL for the Boat Bros email logo (Lockup Pink – used in all transactional emails). */
+/** Absolute URL for the Nasty Sport Fishing email logo (used in all transactional emails). */
 function getEmailLogoUrl(): string {
   const base = bookingEnv.appBaseUrl.replace(/\/$/, "");
   return `${base}${brand.logoEmailPath}`;
@@ -48,13 +48,13 @@ export interface EmailTemplateMeta {
 const REMINDER_SAMPLE_PARAMS = {
   to: "guest@example.com",
   customerName: "Jordan",
-  experienceName: "Lake Austin Pontoon Charter",
+  experienceName: "Nasty Half Day",
   tripDate: "Sat, Mar 22, 2025",
-  startTime: "2:00 PM",
-  locationText: "We'll send exact meeting point before your trip.",
-  locationAddress: "Lake Austin, Austin TX",
+  startTime: "7:00 AM",
+  locationText: "We'll send exact marina meet-up before your trip.",
+  locationAddress: "Marina Cabo San Lucas, BCS",
   waiverSigningUrl: null as string | null,
-  whatToBring: ["Sunscreen", "Water", "ID"],
+  whatToBring: ["Sunscreen", "Hat", "Soft-soled shoes", "Valid ID"],
 };
 
 export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
@@ -63,7 +63,7 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
     name: "Confirmation and Waiver",
     description:
       "One email with booking details and waiver link. Sent when a booking is paid. The live subject appends \"& Waiver\" when a waiver signing URL is available.",
-    subject: "Booking Confirmation – Boat Bros ATX",
+    subject: "Booking Confirmation – Nasty Sport Fishing",
   },
   {
     id: "booking_reminder_1week",
@@ -74,7 +74,7 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
   {
     id: "booking_reminder_24h",
     name: "24 hours before",
-    description: "Sent the day before the trip. Directions, Fetii promo, $5 park fee.",
+    description: "Sent the day before the trip. Marina meet-up reminders and trip logistics.",
     subject: getReminderSubject("24h", REMINDER_SAMPLE_PARAMS.experienceName),
   },
   {
@@ -85,14 +85,14 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
   },
 ];
 
-const PRIMARY_COLOR = "#50bdba";
-const DARK_COLOR = "#001c30";
-const PINK_COLOR = "#fe3f93"; /* Brand secondary – Lockup Pink logo */
-const MUTED_COLOR = "#196a87";
-const BG_LIGHT = "#f0fafb";
+const PRIMARY_COLOR = "#14b6dc";
+const DARK_COLOR = "#04244a";
+const ORANGE_COLOR = "#f27a0a";
+const MUTED_COLOR = "#1a5a7a";
+const BG_LIGHT = "#e8f6fa";
 
-/** Header gradient: navy → teal → pink to match Lockup Pink logo palette. */
-const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COLOR} 50%, ${PINK_COLOR} 100%)`;
+/** Header gradient: navy → teal → orange. */
+const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK_COLOR} 0%, ${PRIMARY_COLOR} 50%, ${ORANGE_COLOR} 100%)`;
 
 /**
  * Render booking confirmation HTML (beautiful, email-client safe).
@@ -168,7 +168,7 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
           <!-- Header -->
           <tr>
             <td style="background: ${HEADER_GRADIENT}; padding: 28px 32px; text-align: center;">
-              <img src="${getEmailLogoUrl()}" alt="Boat Bros ATX" width="260" height="72" style="max-width: 260px; height: auto; display: block; margin: 0 auto;" />
+              <img src="${getEmailLogoUrl()}" alt="Nasty Sport Fishing" width="260" height="72" style="max-width: 260px; height: auto; display: block; margin: 0 auto;" />
               <p style="margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">${isDeposit ? "Booking confirmed (deposit received)" : "Booking confirmed (full payment)"}</p>
             </td>
           </tr>
@@ -216,7 +216,7 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
           <!-- Footer -->
           <tr>
             <td style="padding: 24px 32px; background: ${BG_LIGHT}; border-top: 1px solid rgba(0,28,48,0.08); text-align: center;">
-              <p style="margin: 0; font-size: 12px; color: ${MUTED_COLOR};">— Boat Bros ATX</p>
+              <p style="margin: 0; font-size: 12px; color: ${MUTED_COLOR};">— Nasty Sport Fishing</p>
             </td>
           </tr>
         </table>

@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
@@ -98,12 +99,12 @@ export async function POST(
       month: "short",
       day: "numeric",
       year: "numeric",
-      timeZone: "America/Chicago",
+      timeZone: BUSINESS_TIMEZONE,
     });
     const startTimeStr = start.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
-      timeZone: "America/Chicago",
+      timeZone: BUSINESS_TIMEZONE,
     });
 
     const manageToken = signManageToken({ bookingId, tripDateStr: booking.startDateStr });

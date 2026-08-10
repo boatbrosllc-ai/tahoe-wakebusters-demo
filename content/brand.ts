@@ -1,44 +1,52 @@
 /**
  * Brand content – logo path, contact, socials.
- * TODO: Swap to CMS (Sanity/Contentful) for admin-editable copy.
+ * Single place for public company identity. Do not invent ops facts — use placeholders until confirmed.
  */
 
 export const brand = {
   /** Logo on light backgrounds (header desktop) */
-  logoPath: "/logos/BB_Horizontal_Logo_MidTeal_NoBkg.png",
-  /** Main logo dark teal – desktop navbar (teal bar) */
-  logoDesktopPath: "/logos/BB_Horizontal_Logo_DarkTeal_NoBkg.png",
-  /** Logo on mobile header (teal bar) – pink monogram */
-  logoMonogramPath: "/logos/BB_Monogram_Pink_NoBkg@3x.png",
-  /** Navbar logo – same for mobile and desktop (BB pink button icon) */
-  logoNavbarPath: "/logos/BB pink Button Icon.png",
-  /** Pink logo – hero hover */
-  logoPinkPath: "/logos/Boay Bros pink Final.png",
-  /** Logo on dark backgrounds (e.g. dark hero/footer) */
-  logoDarkPath: "/logos/BB_Horizontal_Logo_White_NoBkg.png",
-  /** All transactional emails – Lockup Main Logo Pink (no background) */
-  logoEmailPath: "/logos/BB_Lockup_MainLogo_Pink_NoBkg.png",
-  /** Hero section – white logo (mobile + desktop) */
-  logoHeroPath: "/logos/Hero Logo white.png",
-  logoAlt: "Boat Bros ATX",
-  companyName: "Boat Bros ATX",
-  tagline: "Captained charters for lake days & celebrations — check availability & book online now.",
-  phone: "(512) 957-6197",
-  phoneTel: "+15129576197",
-  email: "info@boatbrosatx.com",
+  logoPath: "/logos/NSF_Logo.png",
+  /** Main logo – desktop navbar */
+  logoDesktopPath: "/logos/NSF_Logo.png",
+  /** Logo on mobile header */
+  logoMonogramPath: "/logos/NSF_Logo.png",
+  /** Navbar logo – mobile and desktop */
+  logoNavbarPath: "/logos/NSF_Logo.png",
+  /** Accent / hover logo */
+  logoPinkPath: "/logos/NSF_Logo.png",
+  /** Logo on dark backgrounds (footer) */
+  logoDarkPath: "/logos/NSF_Logo.png",
+  /** All transactional emails */
+  logoEmailPath: "/logos/NSF_Logo.png",
+  /** Hero section – primary lockup */
+  logoHeroPath: "/logos/NSF_Logo.png",
+  logoAlt: "Nasty Sport Fishing",
+  companyName: "Nasty Sport Fishing",
+  publicName: "Nasty Sport Fishing",
+  tagline: "Cabo San Lucas sport fishing charters — marlin, tuna, dorado & more. Book your trip.",
+  /** Business / departure timezone for new listings (seed). */
+  timezone: "America/Mazatlan",
+  currency: "USD",
+  country: "MX",
+  locale: "en-US",
+  domain: "nastysportfishing.com",
+  phone: "(555) 000-0000",
+  phoneTel: "+15550000000",
+  email: "info@nastysportfishing.com",
   address: {
-    line1: "5019 N Capital of Texas Hwy",
-    city: "Austin",
-    state: "TX",
-    zip: "78746",
+    line1: "Marina Cabo San Lucas",
+    city: "Cabo San Lucas",
+    state: "BCS",
+    zip: "23450",
+    country: "Mexico",
   },
-  hours: "Daily 8am – sunset (seasonal)",
+  hours: "Daily — trips depart by reservation",
   socials: {
-    instagram: "https://www.instagram.com/boatbrosatx/?hl=en",
-    facebook: "https://www.facebook.com/p/Boat-Bros-100094413895091/",
-    tiktok: "https://www.tiktok.com/@boatbrosatx",
-    yelp: "https://www.yelp.com/biz/boat-bros-austin",
-    tripadvisor: "https://www.tripadvisor.com/Attraction_Review-g30196-d33273443-Reviews-Boat_Bros-Austin_Texas.html",
+    instagram: "https://www.instagram.com/",
+    facebook: "https://www.facebook.com/",
+    tiktok: "https://www.tiktok.com/",
+    yelp: "https://www.yelp.com/",
+    tripadvisor: "https://www.tripadvisor.com/",
   },
 };
 

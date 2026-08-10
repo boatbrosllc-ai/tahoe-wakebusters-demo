@@ -1,26 +1,25 @@
 import Link from "next/link";
 
 const HOMEPAGE_SEO_LINKS: { href: string; label: string }[] = [
-  { href: "/boat-rental-austin", label: "Boat rental Austin" },
-  { href: "/lake-austin-boat-rentals", label: "Lake Austin boat rentals" },
-  { href: "/austin-party-boat-rentals", label: "Austin party boat rentals" },
-  { href: "/pontoon-boat-rental-austin", label: "Pontoon boat rental Austin" },
-  { href: "/wakesurf-club-austin", label: "Wakesurf Club Austin" },
-  { href: "/sunset-cruise-austin", label: "Sunset cruise Austin" },
+  { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas fishing charters" },
+  { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
+  { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
+  { href: "/cabo-marlin-fishing", label: "Marlin fishing Cabo" },
+  { href: "/cabo-fishing-calendar", label: "Cabo fishing calendar" },
+  { href: "/fishing-reports", label: "Fishing reports" },
+  { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
+  { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
 ];
 
 const EXPERIENCES_HUB_SEO_LINKS: { href: string; label: string }[] = [
   ...HOMEPAGE_SEO_LINKS,
-  { href: "/lake-austin-party-boat-rentals", label: "Lake Austin party boat rentals" },
-  { href: "/private-boat-rental-austin", label: "Private boat rental Austin" },
-  { href: "/captained-boat-rental-austin", label: "Captained boat rental Austin" },
-  { href: "/boat-ride-austin", label: "Boat ride Austin" },
-  { href: "/wakesurfing-austin", label: "Wakesurfing Austin" },
-  { href: "/wake-boat-rental-austin", label: "Wake boat rental Austin" },
-  { href: "/lake-austin-sunset-cruise", label: "Lake Austin sunset cruise" },
-  { href: "/lake-austin-vs-lake-travis-boat-rental", label: "Lake Austin vs Lake Travis" },
-  { href: "/austin-bachelorette-boat-rental", label: "Bachelorette party boat" },
-  { href: "/austin-bachelor-party-boat-rental", label: "Bachelor party boat" },
+  { href: "/los-cabos-fishing-charters", label: "Los Cabos fishing charters" },
+  { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
+  { href: "/best-fishing-charters-cabo-san-lucas", label: "How to choose a charter" },
+  { href: "/packages", label: "Multi-day packages" },
+  { href: "/boats", label: "Our fishing boat" },
+  { href: "/faqs", label: "Charter FAQs" },
+  { href: "/contact", label: "Contact" },
 ];
 
 export function SeoHubLinks({ variant }: { variant: "home" | "experiences" }) {
@@ -32,11 +31,11 @@ export function SeoHubLinks({ variant }: { variant: "home" | "experiences" }) {
           ? "px-5 sm:px-6 lg:px-8 py-10 bg-white border-t border-brand-dark/10"
           : "px-5 sm:px-6 lg:px-8 py-8 max-w-7xl mx-auto"
       }
-      aria-label="Popular boat rentals in Austin"
+      aria-label="Cabo fishing guides and charters"
     >
       <div className={variant === "home" ? "max-w-7xl mx-auto" : undefined}>
         <h2 className="text-lg sm:text-xl font-semibold text-brand-dark text-center mb-4">
-          Popular boat rentals in Austin
+          Cabo fishing guides &amp; charters
         </h2>
         <ul className="flex flex-wrap justify-center gap-2 sm:gap-3">
           {links.map((link) => (

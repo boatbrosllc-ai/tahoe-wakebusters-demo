@@ -77,7 +77,7 @@ export function MobileExperienceBookRail({
               className={cn(
                 "shrink-0 inline-flex items-center justify-center gap-2 rounded-xl",
                 "bg-brand-secondary text-white font-semibold h-12 min-h-[44px] px-5 text-sm",
-                "shadow-[0_2px_12px_rgba(254,63,147,0.35)]",
+                "shadow-[0_2px_12px_rgba(20,182,220,0.35)]",
                 "hover:bg-brand-secondary/95 active:scale-[0.98] transition-transform",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2"
               )}

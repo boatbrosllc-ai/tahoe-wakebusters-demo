@@ -114,7 +114,7 @@ export async function POST(
       to: toEmail,
       toName,
       templateId: "waiver_invite",
-      subject: "Sign your waiver – Boat Bros ATX",
+      subject: "Sign your waiver – Nasty Sport Fishing",
       bookingId: req.bookingId,
       eventSubtype: "waiver_invite",
     }).catch((err) => console.error("[waiver-requests/send] logNotificationSent failed", err));

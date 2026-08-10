@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Ban, Plus, Trash2, RefreshCw, CalendarDays, Pencil } from "lucide-react";
@@ -50,18 +51,18 @@ function fmtDate(iso: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
-    timeZone: "America/Chicago",
+    timeZone: BUSINESS_TIMEZONE,
   });
 }
 
 function fmtDateTime(iso: string) {
   const d = new Date(iso);
-  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
-  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: BUSINESS_TIMEZONE });
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BUSINESS_TIMEZONE });
   return `${date} ${time}`;
 }
 
-/** Hour and minute in business timezone (America/Chicago), matching slot grid / admin calendar. */
+/** Hour and minute in business timezone (America/Mazatlan), matching slot grid / admin calendar. */
 function hourMinuteInSlotTz(iso: string): { hour: number; minute: number } {
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -81,7 +82,7 @@ function isFullDay(startAt: string, endAt: string): boolean {
   return s.hour === 0 && s.minute === 0 && e.hour === 23 && e.minute >= 59;
 }
 
-/** Format a Date in America/Chicago as YYYY-MM-DDTHH:MM for datetime-local input. */
+/** Format a Date in America/Mazatlan as YYYY-MM-DDTHH:MM for datetime-local input. */
 function toCentralDatetimeLocal(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: SLOT_TIMEZONE,
@@ -96,7 +97,7 @@ function toCentralDatetimeLocal(d: Date): string {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
-/** Parse YYYY-MM-DDTHH:MM as America/Chicago wall time and return a UTC Date. */
+/** Parse YYYY-MM-DDTHH:MM as America/Mazatlan wall time and return a UTC Date. */
 function parseCentralDatetimeLocal(s: string): Date {
   const [datePart, timePart] = s.split("T");
   if (!datePart || !timePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return new Date(s);

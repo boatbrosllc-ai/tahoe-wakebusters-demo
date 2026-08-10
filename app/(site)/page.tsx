@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Hero } from "@/components/site/Hero";
-import { ExperienceChooser } from "@/components/site/ExperienceChooser";
+import { BundleChooser } from "@/components/site/BundleChooser";
+import { InquiryPackagesTeaser } from "@/components/site/InquiryPackagesTeaser";
 import { HomeOurBoats } from "@/components/site/HomeOurBoats";
 import { HowItWorks } from "@/components/site/HowItWorks";
 import { Testimonials } from "@/components/site/Testimonials";
@@ -12,36 +13,44 @@ import { SeoHubLinks } from "@/components/site/SeoHubLinks";
 import { getListingBoatsForPublic } from "@/lib/booking/get-boats-public";
 import { getActiveExperiencesForPublic } from "@/lib/booking/get-experiences-public";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 const canonical = baseUrl;
 
 export const metadata: Metadata = {
-  title: "Lake Austin Boat Rentals | Pontoon, Wake Surf & Sunset Cruises",
+  title: { absolute: "Cabo Fishing Charters | Nasty Sport Fishing" },
   description:
-    "Austin boat rentals and boat rentals Austin TX on Lake Austin—captain included. Pontoon, wake surf, sunset cruises. Book online — Boat Bros ATX.",
+    "Private Cabo fishing charters with captain & crew. Nasty Half Day and Full Day sportfishing trips — book online with Nasty Sport Fishing.",
   keywords: [
-    "austin boat rental",
-    "boat rentals austin tx",
-    "Lake Austin boat rentals",
-    "boat rentals Lake Austin",
-    "Lake Austin pontoon rentals",
-    "pontoon rentals Lake Austin",
-    "Lake Austin wake boat rental",
-    "Lake Austin sunset cruise",
-    "captained boat rental Lake Austin",
-    "Austin boat rental",
+    "Cabo fishing charters",
+    "Cabo sport fishing charters",
+    "Cabo charters",
+    "Cabo fishing trips",
+    "Cabo fishing tours",
+    "fishing in Cabo",
+    "Cabo San Lucas fishing",
+    "Nasty Sport Fishing",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Lake Austin Boat Rentals | Pontoon, Wake & Sunset | Boat Bros",
+    title: "Cabo Fishing Charters | Nasty Sport Fishing",
     description:
-      "Lake Austin boat rentals with captain. Pontoon, wake surf, sunset cruises. Book online. Boat Bros ATX.",
+      "Private Cabo sport fishing charters — Half Day & Full Day. Captain, tackle, and bait included. Book online.",
     url: canonical,
-    images: [{ url: "/photos/IMG_3160.webp", width: 1200, height: 630, alt: "Lake Austin pontoon – Boat Bros ATX" }],
+    images: [
+      {
+        url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
+        width: 1200,
+        height: 630,
+        alt: "El Arco at sunset – Nasty Sport Fishing Cabo",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
-    images: ["/photos/IMG_3160.webp"],
+    title: "Cabo Fishing Charters | Nasty Sport Fishing",
+    description:
+      "Private Cabo sport fishing charters — Half Day & Full Day. Book online.",
+    images: ["/photos/stock/cabo/el-arco-sunset-jarvis.jpg"],
   },
 };
 
@@ -56,14 +65,14 @@ export default async function HomePage() {
   try {
     initialListings = await getActiveExperiencesForPublic();
   } catch {
-    // ExperienceChooser falls back to static content when empty
+    // BundleChooser falls back to static experience content when empty
   }
 
   return (
     <>
       <PrefetchCriticalRoutes />
       <Hero />
-      <ExperienceChooser
+      <BundleChooser
         initialListings={initialListings.map((item) => ({
           slug: item.slug,
           title: item.title,
@@ -72,9 +81,9 @@ export default async function HomePage() {
           gallery: item.gallery,
           fromPriceCents: item.fromPriceCents,
           pricingType: item.pricingType,
-          ...(item.listingCardImagePosition ? { listingCardImagePosition: item.listingCardImagePosition } : {}),
         }))}
       />
+      <InquiryPackagesTeaser />
       <HomeOurBoats boats={boats} />
       <HowItWorks />
       <Testimonials />

@@ -1,179 +1,121 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
-import Link from "next/link";
-import { motion, AnimatePresence } from "framer-motion";
-import { X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { X, ChevronLeft, ChevronRight } from "lucide-react";
 
-const INITIAL_COUNT = 6;
-
-const images = [
-  "/photos/IMG_8520.webp",
-  "/photos/IMG_3160.webp",
-  "/photos/DSC00484.webp",
-  "/photos/DSC09399%20(2).webp",
-  "/photos/DSC09308%20(2).webp",
-  "/photos/DSC09319%20(4).webp",
-  "/photos/IMG_9649.webp",
-  "/photos/Thomas_2.14.1.webp",
-  "/photos/IMG_9647%202.webp",
-  "/photos/DSC00539.webp",
-  "/photos/IMG_5095.webp",
-  "/photos/IMG_5285.webp",
-  "/photos/IMG_5116%202.webp",
-  "/photos/IMG_0969.webp",
-  "/photos/IMG_2123.webp",
-  "/photos/IMG_4539.webp",
-  "/photos/IMG_8614%202.webp",
-  "/photos/DSC00513%20(3).webp",
-  "/photos/DSC09321%20(2).webp",
-  "/photos/IMG_0386.webp",
-  "/photos/IMG_0514.webp",
-  "/photos/IMG_1197.webp",
-  "/photos/IMG_5120%202.webp",
+/** Real NSF / Cabo charter gallery — catch shots, boat, marina, gear. */
+const GALLERY_IMAGES = [
+  "/photos/nsf/sailfish-baitball.png",
+  "/photos/nsf/cabo-40-express.png",
+  "/photos/nsf/yellowfin-marina-duo.png",
+  "/photos/nsf/yellowfin-ocean-duo.png",
+  "/photos/nsf/yellowfin-marina-catch.png",
+  "/photos/nsf/rods-wake-sunset.png",
+  "/photos/nsf/reel-sunset.png",
+  "/photos/nsf/marina-sunset-lighthouse.png",
+  "/photos/nsf/tuna-scales-detail.png",
+  "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
+  "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+  "/photos/stock/cabo/marina-yachts-pexels.jpg",
 ];
 
 export function GalleryPreviewClient() {
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const visibleImages = showAll ? images : images.slice(0, INITIAL_COUNT);
-  const moreImages = !showAll ? images.slice(INITIAL_COUNT) : [];
-  const hasMore = images.length > INITIAL_COUNT && !showAll;
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  const close = useCallback(() => setLightboxIndex(null), []);
+  const prev = useCallback(() => {
+    setLightboxIndex((i) => (i === null ? null : (i - 1 + GALLERY_IMAGES.length) % GALLERY_IMAGES.length));
+  }, []);
+  const next = useCallback(() => {
+    setLightboxIndex((i) => (i === null ? null : (i + 1) % GALLERY_IMAGES.length));
+  }, []);
 
   useEffect(() => {
-    const onEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setLightboxSrc(null);
+    if (lightboxIndex === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+      if (e.key === "ArrowLeft") prev();
+      if (e.key === "ArrowRight") next();
     };
-    if (lightboxSrc) {
-      document.addEventListener("keydown", onEscape);
-      document.body.style.overflow = "hidden";
-    }
-    return () => {
-      document.removeEventListener("keydown", onEscape);
-      document.body.style.overflow = "";
-    };
-  }, [lightboxSrc]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxIndex, close, prev, next]);
 
   return (
     <>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 lg:gap-5">
-        {visibleImages.map((src, i) => (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
+        {GALLERY_IMAGES.map((src, i) => (
           <button
-            type="button"
             key={src}
-            onClick={() => setLightboxSrc(src)}
-            className={cn(
-              "group relative aspect-[4/3] rounded-xl sm:rounded-2xl overflow-hidden bg-brand-dark/10 shadow-soft ring-1 ring-brand-dark/5",
-              "hover:shadow-xl hover:ring-2 hover:ring-brand-primary/40 transition-all duration-300",
-              "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg"
-            )}
-            aria-label="View photo"
+            type="button"
+            onClick={() => setLightboxIndex(i)}
+            className="relative aspect-[4/3] overflow-hidden rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
           >
             <Image
               src={src}
-              alt=""
+              alt={`Nasty Sport Fishing Cabo — gallery ${i + 1}`}
               fill
-              className="object-cover transition-transform duration-500 ease-out group-hover:scale-110"
-              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
-              priority={i < INITIAL_COUNT}
+              className="object-cover transition-transform duration-300 hover:scale-105"
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             />
           </button>
         ))}
       </div>
-      {hasMore && moreImages.length > 0 && (
-        <>
-          <div className="mt-6 sm:hidden">
-            <p className="text-sm text-brand-muted mb-2 px-1">Swipe for more</p>
-            <div className="overflow-x-auto overflow-y-hidden scrollbar-hide -mx-5 px-5 pb-2 -webkit-overflow-scrolling-touch">
-              <div className="flex gap-3 min-w-max">
-                {moreImages.map((src) => (
-                  <button
-                    type="button"
-                    key={src}
-                    onClick={() => setLightboxSrc(src)}
-                    className="relative shrink-0 w-[180px] aspect-[4/3] rounded-xl overflow-hidden bg-brand-dark/10 shadow-soft ring-1 ring-brand-dark/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg"
-                    aria-label="View photo"
-                  >
-                    <Image
-                      src={src}
-                      alt=""
-                      fill
-                      className="object-cover"
-                      sizes="180px"
-                    />
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <p className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => setShowAll(true)}
-              className="inline-flex items-center gap-2 rounded-full border-2 border-brand-primary bg-transparent px-6 py-3 text-brand-primary font-semibold hover:bg-brand-primary hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-bg"
-            >
-              Load more photos
-            </button>
-          </p>
-          <p className="mt-2 text-center text-sm text-brand-muted sm:hidden">
-            Or tap &quot;Load more&quot; to see all {images.length} in the grid
-          </p>
-        </>
-      )}
-      <p className="mt-6 sm:mt-6 text-center">
-        <Link
-          href="/experiences"
-          className="group inline-flex items-center gap-1.5 text-brand-primary font-medium hover:text-brand-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded-lg underline-offset-4 hover:underline"
+
+      {lightboxIndex !== null && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Gallery lightbox"
+          onClick={close}
         >
-          See all experiences
-          <span className="inline-block group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden>
-            →
-          </span>
-        </Link>
-      </p>
-
-      <AnimatePresence>
-        {lightboxSrc ? (
-          <GalleryLightbox key={lightboxSrc} src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-        ) : null}
-      </AnimatePresence>
+          <button
+            type="button"
+            onClick={close}
+            className="absolute top-4 right-4 z-10 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="Close"
+          >
+            <X className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              prev();
+            }}
+            className="absolute left-2 sm:left-4 z-10 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="Previous"
+          >
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              next();
+            }}
+            className="absolute right-2 sm:right-4 z-10 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="Next"
+          >
+            <ChevronRight className="h-6 w-6" />
+          </button>
+          <div
+            className="relative h-[70vh] w-full max-w-5xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Image
+              src={GALLERY_IMAGES[lightboxIndex]}
+              alt=""
+              fill
+              className="object-contain"
+              sizes="90vw"
+              priority
+            />
+          </div>
+        </div>
+      )}
     </>
-  );
-}
-
-function GalleryLightbox({ src, onClose }: { src: string; onClose: () => void }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Photo view"
-    >
-      <motion.div
-        initial={{ scale: 0.92, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.92, opacity: 0 }}
-        transition={{ type: "spring", damping: 22, stiffness: 280 }}
-        className="relative w-[90vw] max-w-6xl h-[85vh] max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl ring-2 ring-white/20 flex items-center justify-center"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Image src={src} alt="" fill className="object-contain" sizes="90vw" priority />
-      </motion.div>
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute top-4 right-4 p-2.5 rounded-full bg-white/15 text-white hover:bg-white/25 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-        aria-label="Close"
-      >
-        <X className="h-6 w-6" />
-      </button>
-    </motion.div>
   );
 }

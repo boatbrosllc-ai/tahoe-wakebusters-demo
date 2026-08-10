@@ -103,7 +103,7 @@ describe("ticketed slot contract: getTicketedSlotGrid vs getTicketedDepartureAnd
     assert.strictEqual(deptHour, 19, "pricingType ticketed should give 19 regardless of slug");
   });
 
-  it("getTicketedSlotGrid only emits dates on allowed weekdays (America/Chicago)", () => {
+  it("getTicketedSlotGrid only emits dates on allowed weekdays (America/Mazatlan)", () => {
     const rangeStart = new Date("2025-06-01T12:00:00.000Z");
     const rangeEnd = new Date("2025-06-07T12:00:00.000Z");
     const grid = getTicketedSlotGrid(rangeStart, rangeEnd, 2, 19, 0, [3]);

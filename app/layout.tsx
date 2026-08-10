@@ -21,7 +21,7 @@ const syne = Syne({
 let didLogGaSkip = false;
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com"),
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },

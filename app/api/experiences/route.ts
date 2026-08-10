@@ -52,12 +52,17 @@ export async function GET() {
           .filter((u): u is string => typeof u === "string" && u.trim() !== "")
           .map((u) => u.trim())
           .slice(0, LIST_GALLERY_MAX);
+        const rawHero = exp.heroMedia;
+        const heroMedia = {
+          type: (rawHero?.type === "video" ? "video" : "image") as "image" | "video",
+          url: typeof rawHero?.url === "string" ? rawHero.url : "",
+        };
         return {
           id: doc.id,
           slug: exp.slug ?? "",
           title: exp.title ?? "",
           subtitle: exp.subtitle ?? "",
-          heroMedia: exp.heroMedia ?? { type: "image", url: "" },
+          heroMedia,
           gallery,
           ...(listingCardImagePosition && { listingCardImagePosition }),
           maxGuests: getMaxGuestsForExperience(exp),

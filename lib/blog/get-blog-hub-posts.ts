@@ -6,7 +6,7 @@ import { getDb } from "@/lib/booking/firebase-admin";
 /** Display date for repo CMS seeds until Firestore publish dates exist. */
 const CMS_SEED_HUB_DATE = "2025-06-01";
 
-const VALID_CATEGORIES: readonly BlogCategory[] = ["boat-tips", "austin-events", "lake-news", "general"];
+const VALID_CATEGORIES: readonly BlogCategory[] = ["fishing-tips", "cabo-guides", "charter-news", "general"];
 
 function mapFirestoreCategory(categories: string[] | undefined): BlogCategory {
   const first = categories?.[0]?.trim();
@@ -60,7 +60,7 @@ export async function getPublishedFirestoreBlogHubPosts(): Promise<BlogPost[]> {
       excerpt: typeof data.excerpt === "string" ? data.excerpt : "",
       date: date.slice(0, 10),
       dateModified: toIso(data.updatedAt)?.slice(0, 10),
-      author: data.author?.name ?? "Boat Bros",
+      author: data.author?.name ?? "Nasty Sport Fishing",
       image: data.coverImage?.url,
       imageAlt: data.coverImage?.alt,
       category: mapFirestoreCategory(data.taxonomy?.categories),
@@ -78,7 +78,7 @@ function getCmsSeedHubPosts(): BlogPost[] {
     title: seed.title,
     excerpt: seed.excerpt,
     date: CMS_SEED_HUB_DATE,
-    author: "Boat Bros",
+    author: "Nasty Sport Fishing",
     image: seed.coverImage.path,
     imageAlt: seed.coverImage.alt,
     category: mapFirestoreCategory(seed.taxonomy.categories),

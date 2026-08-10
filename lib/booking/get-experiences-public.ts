@@ -53,12 +53,19 @@ async function fetchActiveExperiencesForPublic(): Promise<PublicExperienceListIt
       .filter((u): u is string => typeof u === "string" && u.trim() !== "")
       .map((u) => u.trim())
       .slice(0, LIST_GALLERY_MAX);
+    // Rebuild heroMedia as a plain object — Firestore map fields can have a null prototype,
+    // which Next.js cannot serialize across the Server → Client Component boundary.
+    const rawHero = exp.heroMedia;
+    const heroMedia: { type: "image" | "video"; url: string } = {
+      type: rawHero?.type === "video" ? "video" : "image",
+      url: typeof rawHero?.url === "string" ? rawHero.url : "",
+    };
     return {
       id: doc.id,
       slug: resolveCanonicalExperienceSlug(firestoreSlug, firestoreSlug),
       title: exp.title ?? "",
       subtitle: exp.subtitle ?? "",
-      heroMedia: exp.heroMedia ?? { type: "image", url: "" },
+      heroMedia,
       gallery,
       ...(listingCardImagePosition && { listingCardImagePosition }),
       maxGuests: getMaxGuestsForExperience(exp),
@@ -74,7 +81,7 @@ async function fetchActiveExperiencesForPublic(): Promise<PublicExperienceListIt
     };
   });
 
-  const slugOrder = ["pontoon", "watersports", "sunset", "holiday"];
+  const slugOrder = ["pontoon", "nasty-half-day", "watersports", "nasty-full-day", "sunset", "holiday"];
   const slugOrderIndex = (slug: string): number => {
     const lower = (slug ?? "").toLowerCase();
     const i = slugOrder.findIndex((s) => lower.includes(s) || lower === s);

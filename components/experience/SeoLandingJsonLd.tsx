@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { brand } from "@/content/brand";
 import type { SeoLandingPageConfig } from "@/lib/experience/seoLanding.data";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 export async function SeoLandingJsonLd({
   config,

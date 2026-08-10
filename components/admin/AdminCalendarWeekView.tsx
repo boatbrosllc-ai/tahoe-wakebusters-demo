@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { getSlotStartEnd, getCentralCalendarDayBounds } from "@/lib/booking/experience-slots";
 
-const CHICAGO = "America/Chicago";
+const CHICAGO = BUSINESS_TIMEZONE;
 /** `<input type="datetime-local" />` step in seconds — 10-minute increments for block start/end. */
 const BLOCK_DATETIME_LOCAL_STEP_SECONDS = 600;
 const HOUR_START = 7;
@@ -16,7 +17,7 @@ const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
 const CELL_H = 56; // px per hour
 const TOTAL_GRID_H = HOURS.length * CELL_H;
 
-/** Minutes since HOUR_START (7am) in America/Chicago for an ISO string. */
+/** Minutes since HOUR_START (7am) in America/Mazatlan for an ISO string. */
 function minutesSinceHourStartChicago(iso: string): number {
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -30,7 +31,7 @@ function minutesSinceHourStartChicago(iso: string): number {
   return hour * 60 + minute - HOUR_START * 60;
 }
 
-/** Format a Date in America/Chicago as YYYY-MM-DDTHH:MM for datetime-local input. */
+/** Format a Date in America/Mazatlan as YYYY-MM-DDTHH:MM for datetime-local input. */
 function toCentralDatetimeLocal(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: CHICAGO,
@@ -45,7 +46,7 @@ function toCentralDatetimeLocal(d: Date): string {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
-/** Parse YYYY-MM-DDTHH:MM as America/Chicago and return a Date (for form submit). */
+/** Parse YYYY-MM-DDTHH:MM as America/Mazatlan and return a Date (for form submit). */
 function parseCentralDatetimeLocal(s: string): Date {
   const [datePart, timePart] = s.split("T");
   if (!datePart || !timePart || !/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return new Date(s);
@@ -264,7 +265,7 @@ export function AdminCalendarWeekView({
     return d;
   });
 
-  /** Convert an ISO time to top-offset px and height px within the grid (America/Chicago). */
+  /** Convert an ISO time to top-offset px and height px within the grid (America/Mazatlan). */
   function eventPx(startIso: string, endIso: string): { top: number; height: number } {
     const startMin = minutesSinceHourStartChicago(startIso);
     const endMin = minutesSinceHourStartChicago(endIso);
@@ -278,7 +279,7 @@ export function AdminCalendarWeekView({
     return events.filter((ev) => !ev.boatId || selectedBoatIds.includes(ev.boatId));
   }, [events, selectedBoatIds]);
 
-  /** Day keys (YYYY-MM-DD) for the week in America/Chicago, so events group to the correct column. */
+  /** Day keys (YYYY-MM-DD) for the week in America/Mazatlan, so events group to the correct column. */
   const weekDayKeys = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(weekStart);

@@ -16,6 +16,7 @@ export type AnalyticsEvent =
   | { name: "call_click"; payload: { source: string; page?: string } }
   | { name: "lead_submit"; payload: { source: string; page?: string } }
   | { name: "contact_submit"; payload: { source: string } }
+  | { name: "seo_check_availability_click"; payload: { page: string; experience?: string } }
   | { name: "booking_step_1_category_selected"; payload: Record<string, never> }
   | { name: "booking_step_2_date_selected"; payload: Record<string, never> }
   | { name: "booking_step_4_payment_started"; payload: Record<string, never> }
@@ -51,6 +52,12 @@ function logEvent(event: AnalyticsEvent): void {
 export const analytics = {
   bookCtaClick(source: string, page: string, experience?: string) {
     logEvent({ name: "book_cta_click", payload: { source, page, experience } });
+    if (source.startsWith("seo_") || source === "seo_page") {
+      logEvent({
+        name: "seo_check_availability_click",
+        payload: { page, experience },
+      });
+    }
   },
   callClick(source: string, page?: string) {
     logEvent({ name: "call_click", payload: { source, page: page ?? "" } });

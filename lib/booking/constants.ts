@@ -1,13 +1,50 @@
 /**
  * Shared booking constants. No server-only imports so both client and server can use.
  * Single source of truth for values that must match between display and charge (e.g. tax rate).
+ *
+ * =============================================================================
+ * NSF CUSTOMER PRICING MODEL
+ * =============================================================================
+ * Customer-facing total (conceptual):
+ *   published charter price + add-ons + applicable tax/IVA + optional tip − discounts
+ *
+ * PROCESSING_FEE_RATE = 0 for NEW holds/bookings:
+ *   Payment-processing cost (~6%) is an INTERNAL margin assumption baked into
+ *   published rates — NOT a customer-facing surcharge. Do not reintroduce a
+ *   checkout fee without an explicit product decision.
+ *
+ * TAX_RATE = 0.0825:
+ *   Still legacy Texas-era rate. Cabo / Mexican IVA treatment is a SEPARATE
+ *   decision (exclusive vs inclusive). Do not change TAX_RATE here without
+ *   explicit ops/legal instruction.
+ *
+ * Where these rates affect charged totals (server-authoritative):
+ *   - lib/booking/pricing.ts → computePricing
+ *   - create-hold → holds.pricing snapshot
+ *   - create-payment-intent / convert-hold / Stripe
+ *
+ * Where they affect display (must stay in sync):
+ *   - components/site/usePriceSummary.ts
+ *   - components/site/useDiscountValidation.ts
+ *   - components/experience/ExperienceBookingCard.tsx
+ *   - Inline booking "Sales tax" labels (rate % only — not jurisdiction name)
+ *
+ * Historical bookings keep their stored pricing snapshots — never recalculate.
+ * =============================================================================
  */
 
-/** Texas combined sales tax (e.g. Austin: state 6.25% + local up to 2% = 8.25%). */
+/**
+ * Sales tax rate applied to subtotal (rate + addons).
+ * NEEDS CABO TAX / IVA DECISION BEFORE PRODUCTION — currently 8.25% legacy value.
+ */
 export const TAX_RATE = 0.0825;
 
-/** Processing fee rate applied to subtotal (rate + addons, excluding tip). */
-export const PROCESSING_FEE_RATE = 0.06;
+/**
+ * Customer-facing processing fee rate on subtotal (excluding tip).
+ * Must stay 0: processor cost is absorbed in published charter/add-on prices.
+ * Field `feesCents` remains on pricing snapshots for historical bookings / admin.
+ */
+export const PROCESSING_FEE_RATE = 0;
 
 /**
  * Default deposit = this fraction of total (when deposit checkout is allowed).

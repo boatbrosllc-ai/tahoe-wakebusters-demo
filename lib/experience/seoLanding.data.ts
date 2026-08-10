@@ -83,7 +83,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "boat-rental-austin": page({
     id: "boat-rental-austin",
     path: "/boat-rental-austin",
-    metaTitle: "Boat Rentals Austin TX | Captained Charters on Lake Austin | Boat Bros ATX",
+    metaTitle: "Boat Rentals Austin TX | Captained Charters on Lake Austin | Nasty Sport Fishing",
     metaDescription:
       "Book a boat rental in Austin, TX. Captained pontoon, wake boat & sunset cruises on Lake Austin. Captain included, no experience needed. Instant online booking.",
     keywords: [
@@ -99,7 +99,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
       "Private boats, licensed captains, instant online booking. No boating license required.",
     overviewHeadline: "Why book a captained boat rental in Austin",
     overviewStory:
-      "Every Boat Bros charter is private to your group with a licensed captain on Lake Austin. Skip the stress of driving a rental boat — we handle navigation, anchoring, and safety while you swim, celebrate, or ride the wake.",
+      "Every Nasty Sport Fishing charter is private to your group with a licensed captain on Lake Austin. Skip the stress of driving a rental boat — we handle navigation, anchoring, and safety while you swim, celebrate, or ride the wake.",
     overviewSeoParagraphs: [
       "Austin visitors and locals choose Lake Austin for calm water, limestone bluffs, and easy access from downtown. Our fleet includes spacious pontoons for parties and families, a dedicated wake boat for watersports, and evening sunset cruises when you want a shorter, scenic trip.",
       "Pricing is transparent online with captain included. Bring your own food and drinks (no glass), connect your playlist to our sound systems, and let your captain take you to the best coves and swim spots for the day.",
@@ -170,9 +170,9 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "lake-austin-boat-rentals": page({
     id: "lake-austin-boat-rentals",
     path: "/lake-austin-boat-rentals",
-    metaTitle: "Lake Austin Boat Rentals | Private Captained Charters | Boat Bros ATX",
+    metaTitle: "Lake Austin Boat Rentals | Private Captained Charters | Nasty Sport Fishing",
     metaDescription:
-      "Lake Austin boat rentals — pontoon, wake boat & sunset cruises. Captain included, no experience needed. Book online. Boat Bros ATX, Austin TX.",
+      "Lake Austin boat rentals — pontoon, wake boat & sunset cruises. Captain included, no experience needed. Book online. Nasty Sport Fishing, Austin TX.",
     keywords: [
       "lake austin boat rentals",
       "boat rental lake austin",
@@ -183,7 +183,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     heroTitle: "Lake Austin Boat Rentals — Private Captained Charters",
     heroSubtitle: "Calm water, captained pontoons, wake boat & sunset cruises.",
     heroIntroParagraph:
-      "Lake Austin boat rentals with Boat Bros mean a private captained charter — not a crowded party barge. Your group gets the whole boat, a licensed captain, and some of the best swimming and scenery in Austin.",
+      "Lake Austin boat rentals with Nasty Sport Fishing mean a private captained charter — not a crowded party barge. Your group gets the whole boat, a licensed captain, and some of the best swimming and scenery in Austin.",
     overviewHeadline: "Why Lake Austin for your boat rental",
     overviewStory:
       "Lake Austin offers clear, calm water compared to busier reservoirs, with no-wake zones perfect for swimming and floating. Our captains know the coves, Party Cove timing, and the best spots for photos and sunsets.",
@@ -214,7 +214,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
       {
         question: "Are captained boat rentals available on Lake Austin?",
         answer:
-          "Yes — every Boat Bros charter includes a licensed captain. No boating license is required for your guests.",
+          "Yes — every Nasty Sport Fishing charter includes a licensed captain. No boating license is required for your guests.",
       },
     ],
     relatedArticles: [
@@ -252,7 +252,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "austin-party-boat-rentals": page({
     id: "austin-party-boat-rentals",
     path: "/austin-party-boat-rentals",
-    metaTitle: "Austin Party Boat Rentals | Private Pontoon on Lake Austin | Boat Bros ATX",
+    metaTitle: "Austin Party Boat Rentals | Private Pontoon on Lake Austin | Nasty Sport Fishing",
     metaDescription:
       "Austin party boat rentals on Lake Austin. Private captained pontoon — perfect for birthdays, bachelorettes, corporate groups. Book your party boat today.",
     keywords: [
@@ -319,7 +319,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "pontoon-boat-rental-austin": page({
     id: "pontoon-boat-rental-austin",
     path: "/pontoon-boat-rental-austin",
-    metaTitle: "Pontoon Boat Rental Austin | Lake Austin Captained Pontoon | Boat Bros ATX",
+    metaTitle: "Pontoon Boat Rental Austin | Lake Austin Captained Pontoon | Nasty Sport Fishing",
     metaDescription:
       "Pontoon boat rentals in Austin on Lake Austin. Captain included, premium sound, lily pad, cooler. Perfect for groups. Book your Lake Austin pontoon rental.",
     keywords: [
@@ -332,7 +332,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     heroTitle: "Pontoon Boat Rentals in Austin — Lake Austin Captained Charters",
     heroSubtitle: "Groups up to 14 · Premium sound · Lily pad · Captain included",
     heroIntroParagraph:
-      "Rent a pontoon on Lake Austin with Boat Bros — captained, comfortable, and built for Austin group days. No license needed; your captain handles the boat while you swim, float, and celebrate.",
+      "Rent a pontoon on Lake Austin with Nasty Sport Fishing — captained, comfortable, and built for Austin group days. No license needed; your captain handles the boat while you swim, float, and celebrate.",
     overviewHeadline: "What's included in your pontoon rental",
     overviewStory:
       "Our Lake Austin pontoon includes a licensed captain, premium Bluetooth sound, floating lily pad, cooler with ice, and fuel for standard cruising. Perfect for parties, families, and relaxed lake days.",
@@ -376,14 +376,14 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     id: "lake-austin-party-boat-rentals",
     showMap: true,
     path: "/lake-austin-party-boat-rentals",
-    metaTitle: "Lake Austin Party Boat Rentals | Private Captained Pontoon | Boat Bros ATX",
+    metaTitle: "Lake Austin Party Boat Rentals | Private Captained Pontoon | Nasty Sport Fishing",
     metaDescription:
       "Lake Austin party boat rentals. Private captained pontoon — birthdays, bachelorettes, group days. Captain included. Book your Lake Austin party boat.",
     keywords: ["lake austin party boat rentals", "lake austin party boat", "lake austin party barge", "lake austin party boat rental"],
     heroTitle: "Lake Austin Party Boat Rentals — Private Captained Pontoon",
     heroSubtitle: "Lake-specific coves, calm water & private celebrations",
     heroIntroParagraph:
-      "Lake Austin party boat rentals with Boat Bros are private pontoon charters — your group only, with a captain who knows local coves, no-wake zones, and the best swim spots away from crowded barges.",
+      "Lake Austin party boat rentals with Nasty Sport Fishing are private pontoon charters — your group only, with a captain who knows local coves, no-wake zones, and the best swim spots away from crowded barges.",
     overviewHeadline: "Party on Lake Austin — not a shared barge",
     overviewStory:
       "Lake Austin's calm water and scenery make it the best place for an Austin party boat day. We position at Party Cove or quieter coves depending on your vibe, with lily pad, sound, and cooler ready.",
@@ -426,14 +426,14 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "private-boat-rental-austin": page({
     id: "private-boat-rental-austin",
     path: "/private-boat-rental-austin",
-    metaTitle: "Private Boat Rental Austin | Captained Private Charters | Boat Bros ATX",
+    metaTitle: "Private Boat Rental Austin | Captained Private Charters | Nasty Sport Fishing",
     metaDescription:
       "Private boat rentals in Austin, TX. Every charter is private — just your group, a captain, and Lake Austin. Pontoon, wake boat & sunset cruises. Book now.",
     keywords: ["private boat rental austin", "austin boat rental with captain", "private boat charter austin"],
     heroTitle: "Private Boat Rentals in Austin — Your Crew, Your Schedule",
     heroSubtitle: "No strangers on board — every trip is yours alone",
     heroIntroParagraph:
-      "A private boat rental in Austin with Boat Bros means the entire vessel is reserved for your group. No shared seating, no unknown guests — just your people, a licensed captain, and Lake Austin.",
+      "A private boat rental in Austin with Nasty Sport Fishing means the entire vessel is reserved for your group. No shared seating, no unknown guests — just your people, a licensed captain, and Lake Austin.",
     overviewHeadline: "Exclusivity on every charter",
     overviewStory:
       "Whether you book a pontoon, wake boat, or sunset cruise, privacy is standard. You choose the music, food, and vibe; we provide the captain, boat, and local knowledge.",
@@ -443,7 +443,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     bestForItems: BEST_FOR_GENERAL,
     faq: [
       {
-        question: "Are Boat Bros charters private?",
+        question: "Are Nasty Sport Fishing charters private?",
         answer: "Yes — pontoon and wake boat charters are private to your group. Public sunset cruises are shared; private sunset bookings are also available.",
       },
       {
@@ -474,7 +474,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "captained-boat-rental-austin": page({
     id: "captained-boat-rental-austin",
     path: "/captained-boat-rental-austin",
-    metaTitle: "Captained Boat Rental Austin | No License Needed | Boat Bros ATX",
+    metaTitle: "Captained Boat Rental Austin | No License Needed | Nasty Sport Fishing",
     metaDescription:
       "Captained boat rentals in Austin, TX. Every trip includes a licensed captain — no boating experience needed. Relax while we handle the boat. Book now.",
     keywords: [
@@ -486,7 +486,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     heroTitle: "Captained Boat Rentals in Austin — No License Needed",
     heroSubtitle: "Licensed captain on every Lake Austin charter",
     heroIntroParagraph:
-      "Every Boat Bros rental is a captained boat rental in Austin — you never drive the vessel. Ideal for visitors, celebrations, and anyone who wants a safe, stress-free day on Lake Austin.",
+      "Every Nasty Sport Fishing rental is a captained boat rental in Austin — you never drive the vessel. Ideal for visitors, celebrations, and anyone who wants a safe, stress-free day on Lake Austin.",
     overviewHeadline: "Why captained matters on Lake Austin",
     overviewStory:
       "Lake Austin has traffic, no-wake zones, and busy weekends. Our captains are licensed, insured, and know the lake — so your group focuses on fun, not navigation.",
@@ -508,7 +508,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
       },
       {
         question: "Are captains licensed and insured?",
-        answer: "Yes — Boat Bros operates with licensed, insured captains on Lake Austin.",
+        answer: "Yes — Nasty Sport Fishing operates with licensed, insured captains on Lake Austin.",
       },
       {
         question: "Which experiences are captained?",
@@ -526,7 +526,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "boat-ride-austin": page({
     id: "boat-ride-austin",
     path: "/boat-ride-austin",
-    metaTitle: "Boat Rides Austin TX | Private Charters & Sunset Cruises | Boat Bros ATX",
+    metaTitle: "Boat Rides Austin TX | Private Charters & Sunset Cruises | Nasty Sport Fishing",
     metaDescription:
       "Book a boat ride in Austin, TX. Private captained charters and public sunset cruises on Lake Austin. No experience needed. Book online today.",
     keywords: ["boat ride austin", "boat ride lake austin", "austin boat tour"],
@@ -549,7 +549,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     faq: [
       {
         question: "What's the difference between a boat ride and a boat rental?",
-        answer: "With Boat Bros they're the same product — captained charters. 'Boat ride' usually means you want an experience; we provide the captain and boat.",
+        answer: "With Nasty Sport Fishing they're the same product — captained charters. 'Boat ride' usually means you want an experience; we provide the captain and boat.",
       },
       {
         question: "Do you offer short boat rides?",
@@ -577,7 +577,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "wakesurfing-austin": page({
     id: "wakesurfing-austin",
     path: "/wakesurfing-austin",
-    metaTitle: "Wakesurfing Austin | Private Wake Boat Charters on Lake Austin | Boat Bros ATX",
+    metaTitle: "Wakesurfing Austin | Private Wake Boat Charters on Lake Austin | Nasty Sport Fishing",
     metaDescription:
       "Wakesurfing in Austin on Lake Austin. Private wake boat charters with a captain. Beginners welcome. Book your Austin wakesurf session.",
     keywords: ["wakesurfing austin", "wakesurf boat rental austin", "wake boat rental austin", "austin wakeboard boat rental"],
@@ -629,7 +629,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "wake-boat-rental-austin": page({
     id: "wake-boat-rental-austin",
     path: "/wake-boat-rental-austin",
-    metaTitle: "Wake Boat Rental Austin | Private Captained Wake Boat | Boat Bros ATX",
+    metaTitle: "Wake Boat Rental Austin | Private Captained Wake Boat | Nasty Sport Fishing",
     metaDescription:
       "Wake boat rentals in Austin, TX. Private captained wake boat on Lake Austin — wakesurfing, wakeboarding, tubing. Captain included. Book now.",
     keywords: ["wake boat rental austin", "wakesurf boat rental austin", "ski boat rental austin", "ski boat rental lake austin"],
@@ -675,7 +675,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "wakesurf-club-austin": page({
     id: "wakesurf-club-austin",
     path: "/wakesurf-club-austin",
-    metaTitle: "Wakesurf Club Austin | Wednesday Wake Sessions on Lake Austin | Boat Bros ATX",
+    metaTitle: "Wakesurf Club Austin | Wednesday Wake Sessions on Lake Austin | Nasty Sport Fishing",
     metaDescription:
       "Join the Wakesurf Club in Austin. Wednesday shared wake sessions on Lake Austin — 8 spots per trip. Beginners welcome. Book your spot now.",
     keywords: ["wakesurf club austin", "wednesday wakesurf club austin", "shared wakesurf austin", "public wakesurf austin"],
@@ -725,7 +725,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
   "sunset-cruise-austin": page({
     id: "sunset-cruise-austin",
     path: "/sunset-cruise-austin",
-    metaTitle: "Sunset Cruise Austin | Public & Private Lake Austin Sunset Cruises | Boat Bros ATX",
+    metaTitle: "Sunset Cruise Austin | Public & Private Lake Austin Sunset Cruises | Nasty Sport Fishing",
     metaDescription:
       "Sunset cruises in Austin on Lake Austin. Public cruises every evening + private charters. Captain included. Book your Austin sunset cruise.",
     keywords: ["sunset cruise austin", "austin sunset boat ride", "lake austin sunset cruise", "public sunset cruise austin"],
@@ -777,14 +777,14 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     id: "lake-austin-sunset-cruise",
     showMap: true,
     path: "/lake-austin-sunset-cruise",
-    metaTitle: "Lake Austin Sunset Cruise | Public & Private Charters | Boat Bros ATX",
+    metaTitle: "Lake Austin Sunset Cruise | Public & Private Charters | Nasty Sport Fishing",
     metaDescription:
       "Lake Austin sunset cruises every evening. Public shared cruises + private charters. Captain included. Book your Lake Austin sunset cruise.",
     keywords: ["lake austin sunset cruise", "sunset cruise lake austin", "lake austin sunset boat"],
     heroTitle: "Lake Austin Sunset Cruise — Public & Private Captained Charters",
     heroSubtitle: "Lake Austin bluffs, coves & golden hour",
     heroIntroParagraph:
-      "A Lake Austin sunset cruise puts you on calm water with hill country views as the sun drops. Boat Bros offers public tickets and private sunset charters — captain included.",
+      "A Lake Austin sunset cruise puts you on calm water with hill country views as the sun drops. Nasty Sport Fishing offers public tickets and private sunset charters — captain included.",
     overviewHeadline: "Why sunset on Lake Austin",
     overviewStory:
       "Lake Austin's narrow shape and tree-lined shores create standout sunset photos. Our captains route for light and calm water, not crowded open-lake traffic.",
@@ -828,7 +828,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     id: "lake-austin-vs-lake-travis-boat-rental",
     layoutVariant: "guide",
     path: "/lake-austin-vs-lake-travis-boat-rental",
-    metaTitle: "Lake Austin vs Lake Travis Boat Rental | Which Is Better? | Boat Bros ATX",
+    metaTitle: "Lake Austin vs Lake Travis Boat Rental | Which Is Better? | Nasty Sport Fishing",
     metaDescription:
       "Comparing Lake Austin vs Lake Travis for boat rentals? We break down calm water, scenery, access, and pricing. See why Lake Austin wins for private charters.",
     keywords: ["lake austin vs lake travis boat rental", "austin boat rentals lake travis", "boat rental austin tx lake travis"],
@@ -840,7 +840,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
     overviewStory:
       "Lake Austin is closer to downtown, generally calmer, and ideal for private captained pontoons and wake sessions. Lake Travis is larger, busier, and farther west — great for some crowds, but a different trip.",
     overviewSeoParagraphs: [
-      "For private celebrations, swimming, and captained experiences without a long drive, Lake Austin is our recommendation — that's where Boat Bros operates exclusively.",
+      "For private celebrations, swimming, and captained experiences without a long drive, Lake Austin is our recommendation — that's where Nasty Sport Fishing operates exclusively.",
       "Lake Travis can make sense if you're already staying lakeside west of Austin and want a huge open reservoir. For most Austin trips, Lake Austin's access and calm water win.",
     ],
     schemaVariant: "article",
@@ -856,7 +856,7 @@ export const SEO_LANDING_PAGES: Record<SeoLandingPageId, SeoLandingPageConfig> =
         answer: "Lake Austin is generally calmer with more no-wake coves; Lake Travis is larger and can be rougher with wind and traffic.",
       },
       {
-        question: "Where does Boat Bros operate?",
+        question: "Where does Nasty Sport Fishing operate?",
         answer: "We offer captained charters on Lake Austin only.",
       },
       {

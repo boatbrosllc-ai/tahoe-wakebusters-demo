@@ -2,7 +2,7 @@ import "server-only";
 import type { BlogCategory, BlogPost } from "@/content/blog";
 import type { SerializedFirestorePost } from "@/lib/blog/firestore";
 
-const VALID_CATEGORIES: BlogCategory[] = ["boat-tips", "austin-events", "lake-news", "general"];
+const VALID_CATEGORIES: BlogCategory[] = ["fishing-tips", "cabo-guides", "charter-news", "general"];
 
 function toBlogCategory(categories: string[] | undefined): BlogCategory {
   const first = categories?.[0];

@@ -3,7 +3,7 @@ import { computeContentStats, contentBlocksToText } from "../content-stats";
 import { buildSchemaFields } from "../schema-jsonld";
 import type { CmsBlogPostSeed } from "./helpers";
 
-const AUTHOR = { name: "Boat Bros" };
+const AUTHOR = { name: "Nasty Sport Fishing" };
 
 /** Build a Firestore-ready published post document from seed data. */
 export function buildPublishedPostDoc(

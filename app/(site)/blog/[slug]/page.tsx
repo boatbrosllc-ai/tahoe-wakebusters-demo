@@ -20,7 +20,7 @@ import { Clock, Anchor, ArrowLeft, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReadingProgress } from "@/components/site/ReadingProgress";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
 type Props = { params: Promise<{ slug: string }> };
 

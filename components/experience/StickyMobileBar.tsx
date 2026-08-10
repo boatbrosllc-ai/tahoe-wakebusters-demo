@@ -57,7 +57,7 @@ export function StickyMobileBar({
         variant="secondary"
         size="lg"
         onClick={handlePrimaryClick}
-        className="rounded-xl shrink-0 shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] focus-visible:ring-brand-secondary min-h-[44px] min-w-[44px] touch-manipulation font-semibold"
+        className="rounded-xl shrink-0 shadow-[0_2px_12px_rgba(20,182,220,0.3)] hover:shadow-[0_2px_16px_rgba(20,182,220,0.4)] focus-visible:ring-brand-secondary min-h-[44px] min-w-[44px] touch-manipulation font-semibold"
       >
         {onBookNow ? "Book now" : "Check Availability"}
       </Button>

@@ -192,7 +192,7 @@ export function FirestoreBlogPostView({
                 size="lg"
                 className="rounded-xl shrink-0 w-full sm:w-fit min-h-[48px] bg-brand-primary hover:bg-brand-primary/90 text-white shadow-[0_4px_14px_rgba(80,189,186,0.35)]"
               >
-                <Link href="/lake-austin-boat-rentals" className="w-full justify-center">
+                <Link href="/experiences" className="w-full justify-center">
                   Book a Lake Austin rental
                 </Link>
               </Button>

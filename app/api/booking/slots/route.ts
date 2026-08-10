@@ -156,7 +156,7 @@ export async function GET(request: NextRequest) {
     if ((!boatId && !experienceId) || !startDate || !endDate) {
       return NextResponse.json({ error: "boatId or experienceId, startDate, endDate required (YYYY-MM-DD)" }, { status: 400 });
     }
-    // Range validation uses UTC noon anchors (stable calendar day vs America/Chicago). Request-window bounds for
+    // Range validation uses UTC noon anchors (stable calendar day vs America/Mazatlan). Request-window bounds for
     // bookings/holds/blocks overlap and slot queries are computed per-branch via getSlotsApiRequestWindow.
     const rangeStartAnchor = new Date(startDate + "T12:00:00.000Z");
     const rangeEndAnchor = new Date(endDate + "T12:00:00.000Z");

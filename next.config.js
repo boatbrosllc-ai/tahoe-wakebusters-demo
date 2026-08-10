@@ -26,20 +26,7 @@ const nextConfig = {
   redirects: async () => [
     // Avoid GSC "Sitemap is HTML" when the sitemap URL is guessed without `.xml` (404 page is HTML).
     { source: "/sitemap", destination: "/sitemap.xml", permanent: true },
-    { source: "/boat-rentals-austin-tx", destination: "/austin-boat-rental", permanent: true },
-    { source: "/lake-austin-boat-rental", destination: "/lake-austin-boat-rentals", permanent: true },
-    { source: "/lake-austin-pontoon-rentals", destination: "/experiences/lake-austin-pontoon", permanent: true },
     { source: "/more", destination: "/menu", permanent: true },
-    {
-      source: "/lake-austin-bachelorette-party-boat-rentals",
-      destination: "/austin-bachelorette-boat-rental",
-      permanent: true,
-    },
-    {
-      source: "/lake-austin-bachelor-party-boat-rentals",
-      destination: "/austin-bachelor-party-boat-rental",
-      permanent: true,
-    },
   ],
   rewrites: async () => [
     { source: "/favicon.ico", destination: "/brand/logo.svg" },
@@ -49,9 +36,13 @@ const nextConfig = {
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },
       { protocol: 'https', hostname: 'storage.googleapis.com' },
+      // Legacy Firebase hosts may still serve historical uploaded media
       { protocol: 'https', hostname: 'boat-bros-app.appspot.com' },
       { protocol: 'https', hostname: 'boat-bros-app.firebasestorage.app' },
-      { protocol: 'https', hostname: 'boatbrosatx.com' },
+      { protocol: 'https', hostname: 'nasty-sport-fishing.appspot.com' },
+      { protocol: 'https', hostname: 'nasty-sport-fishing.firebasestorage.app' },
+      { protocol: 'https', hostname: 'nastysportfishing.com' },
+      { protocol: 'https', hostname: 'www.nastysportfishing.com' },
     ],
   },
   // Don't bundle firebase-admin; use Node require at runtime (server-only)

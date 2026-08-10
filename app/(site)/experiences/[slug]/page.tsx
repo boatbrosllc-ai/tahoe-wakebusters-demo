@@ -12,11 +12,11 @@ import {
   resolveCanonicalExperienceSlug,
 } from "@/lib/booking/experience-aliases";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 
 type Props = { params: Promise<{ slug: string }> };
 
-const FIRESTORE_SLUGS = ["pontoon", "watersports", "sunset", "holiday"] as const;
+const FIRESTORE_SLUGS = ["pontoon", "watersports", "nasty-half-day", "nasty-full-day", "sunset", "holiday"] as const;
 
 async function getAdminManagedExperience(slug: string): Promise<{ active: boolean } | null> {
   const db = getDb();
@@ -68,11 +68,13 @@ export async function generateStaticParams() {
 }
 
 const SLUG_KEYWORDS: Record<string, string[]> = {
-  pontoon: ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
-  "lake-austin-pontoon": ["Lake Austin pontoon rentals", "pontoon rental Lake Austin", "Lake Austin pontoon party"],
-  watersports: ["Lake Austin wake boat rental", "wake surf Lake Austin", "Lake Austin wakeboard rental"],
-  sunset: ["Lake Austin sunset cruise", "sunset boat rental Lake Austin"],
-  holiday: ["Lake Austin boat rental", "holiday boat rental Lake Austin"],
+  pontoon: ["Cabo half-day fishing charter", "Nasty Half Day", "Cabo San Lucas sport fishing"],
+  "nasty-half-day": ["Nasty Half Day", "Cabo half-day fishing charter", "5 hour fishing Cabo"],
+  "lake-austin-pontoon": ["Cabo fishing charter", "Cabo San Lucas sport fishing"],
+  watersports: ["Cabo full-day fishing charter", "Nasty Full Day", "offshore fishing Cabo"],
+  "nasty-full-day": ["Nasty Full Day", "Cabo full-day fishing charter", "8 hour fishing Cabo"],
+  sunset: ["Cabo sunset fishing", "evening fishing charter Cabo"],
+  holiday: ["Cabo billfish charter", "marlin fishing Cabo San Lucas"],
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -87,7 +89,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   if (firestoreData) {
     const exp = firestoreData.experience;
-    const title = exp.metaTitle?.trim() || `${exp.title} | Lake Austin Boat Rentals`;
+    const title = exp.metaTitle?.trim() || `${exp.title} | Cabo Sport Fishing`;
     const description = exp.metaDescription?.trim() || exp.subtitle;
     return {
       title,
@@ -106,7 +108,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         return { title: "Experience" };
       }
       return {
-        title: `${staticExp.title} | Lake Austin Boat Rentals`,
+        title: `${staticExp.title} | Cabo Sport Fishing`,
         description: staticExp.shortDescription,
         ...(keywords?.length ? { keywords } : {}),
         alternates: { canonical },

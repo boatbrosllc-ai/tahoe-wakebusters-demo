@@ -4,7 +4,7 @@ export function resolveCmsImageSrc(url: string): string {
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("/")) return trimmed;
 
-  const siteBase = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+  const siteBase = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
   if (trimmed.startsWith(siteBase)) {
     const path = trimmed.slice(siteBase.length);
     return path.startsWith("/") ? path : `/${path}`;
@@ -12,7 +12,13 @@ export function resolveCmsImageSrc(url: string): string {
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.hostname === "boatbrosatx.com" || parsed.hostname === "www.boatbrosatx.com") {
+    // Current domain + legacy Boat Bros hosts (CMS/seed assets may still use old absolute URLs)
+    if (
+      parsed.hostname === "nastysportfishing.com" ||
+      parsed.hostname === "www.nastysportfishing.com" ||
+      parsed.hostname === "boatbrosatx.com" ||
+      parsed.hostname === "www.boatbrosatx.com"
+    ) {
       return parsed.pathname + parsed.search;
     }
   } catch {

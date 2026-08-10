@@ -3,7 +3,15 @@ import { allowBoatTypeForSlug, inferSlugFromTitle } from "@/lib/booking/experien
 export const ALLOWED_BOAT_TYPES = ["pontoon", "wake", "tritoon"] as const;
 export type AllowedBoatType = (typeof ALLOWED_BOAT_TYPES)[number];
 
-const PLACEHOLDER_BOAT_IMAGE = "/photos/IMG_3160.webp";
+const PLACEHOLDER_BOAT_IMAGE = "/photos/nsf/cabo-40-express.png";
+
+/** Site-relative marketing photos under /public/photos (launch fleet images). */
+function isApprovedSitePhotoPath(raw: string): boolean {
+  const path = raw.trim();
+  if (!path.startsWith("/photos/")) return false;
+  if (path.includes("..") || path.includes("\\") || path.includes("//")) return false;
+  return /^\/photos\/[a-zA-Z0-9/_.,+\- %]+\.(png|jpe?g|webp|gif|avif)$/i.test(path);
+}
 
 function normalizeMaybeUrl(raw: string): URL | null {
   try {
@@ -15,7 +23,10 @@ function normalizeMaybeUrl(raw: string): URL | null {
 }
 
 export function isApprovedPhotoUrl(raw: string): boolean {
-  const url = normalizeMaybeUrl(raw);
+  const trimmed = raw.trim();
+  if (isApprovedSitePhotoPath(trimmed)) return true;
+
+  const url = normalizeMaybeUrl(trimmed);
   if (!url || url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase();
   const path = url.pathname || "/";

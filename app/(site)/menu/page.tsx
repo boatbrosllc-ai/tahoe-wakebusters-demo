@@ -17,17 +17,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CallCard } from "@/components/site/CallCard";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
 export const metadata: Metadata = {
-  title: "Menu | Lake Austin Boat Rentals",
+  title: "Menu | Cabo Sport Fishing",
   description:
-    "Boat Bros — Lake Austin boat rentals: pontoon, wake surf, sunset cruise. Book, experiences, FAQs, contact. Austin TX.",
-  keywords: ["Lake Austin boat rentals", "Boat Bros", "pontoon rental Lake Austin"],
+    "Nasty Sport Fishing — Cabo San Lucas sport fishing charters. Book, charters, FAQs, contact.",
+  keywords: ["Cabo fishing charters", "Nasty Sport Fishing", "Cabo San Lucas sport fishing"],
   alternates: { canonical: `${baseUrl}/menu` },
   openGraph: {
-    title: "Menu | Lake Austin Boat Rentals | Boat Bros",
-    description: "Browse experiences, book, story, FAQs, contact. Lake Austin boat rentals.",
+    title: "Menu | Cabo Sport Fishing | Nasty Sport Fishing",
+    description: "Browse charters, book, story, FAQs, contact. Cabo San Lucas sport fishing.",
     url: `${baseUrl}/menu`,
   },
 };
@@ -36,33 +36,33 @@ const pageLinks = [
   { href: "/", label: "Home", icon: Home, description: "Back to homepage and hero" },
   {
     href: "/experiences",
-    label: "Experiences",
+    label: "Charters",
     icon: Compass,
-    description: "Browse pontoon, wake, sunset & more on Lake Austin",
+    description: "Half-day, full-day & sunset fishing trips",
   },
   {
     href: "/boats",
-    label: "Our Boats",
+    label: "Our Boat",
     icon: Ship,
-    description: "Meet our fleet — pontoon, tritoon & wake boats",
+    description: "Meet the boat for your Cabo charter",
   },
   {
     href: "/booking",
     label: "Book Now",
     icon: CalendarCheck,
-    description: "Book now and reserve your boat rental",
+    description: "Book now and reserve your charter",
   },
   {
     href: "/our-story",
     label: "Our Story",
     icon: BookOpen,
-    description: "Meet the crew behind Boat Bros and our story",
+    description: "Meet the crew behind Nasty Sport Fishing and our story",
   },
   {
     href: "/blog",
-    label: "The Dock",
+    label: "The Bite",
     icon: Newspaper,
-    description: "Boat tips, Austin events, and lake & boating news",
+    description: "Cabo fishing tips, seasons, and trip news",
   },
   {
     href: "/faqs",

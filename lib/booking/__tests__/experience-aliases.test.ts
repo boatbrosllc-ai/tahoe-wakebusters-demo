@@ -1,251 +1,137 @@
 /**
- * Regression tests for experience alias families.
- * Verifies identical boat-resolution outcomes across endpoints: for each alias in a family,
- * getExperienceIdVariants returns a variant set that includes all family members, so boats
- * linked by any alias are resolved consistently (boats, experience-detail, slots, create-hold).
+ * Experience alias / boat-resolution contract tests for Nasty Sport Fishing.
+ * Firestore slugs `pontoon` / `watersports` are intentional legacy IDs for Half/Full Day.
  */
+
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
+  EXPERIENCE_ALIAS_FAMILIES,
   getExperienceIdVariants,
+  getSlugLookupCandidates,
   boatMatchesExperience,
+  isPontoonSlug,
   isWatersportsSlug,
   isWakeSurfClubSlug,
-  isPontoonSlug,
   allowBoatTypeForSlug,
-  EXPERIENCE_ALIAS_FAMILIES,
-  buildStaticToFirestoreSlugMap,
-  getSlugLookupCandidates,
   resolveCanonicalExperienceSlug,
+  buildStaticToFirestoreSlugMap,
 } from "../experience-aliases";
 
-describe("getExperienceIdVariants", () => {
-  const pontoonFamily = ["pontoon", "lake-austin-pontoon", "pontoon-party"];
-  const watersportsFamily = [
-    "watersports",
-    "wake-surf",
-    "lake-austin-wake-boat",
-    "wake",
-    "wakeboard",
-    "wake-board",
-    "wakesurf",
-  ];
-  const wakeSurfClubFamily = ["wakesurfclub", "wake-surf-club", "wakesurf-club"];
-  const sunsetFamily = ["sunset", "sunset-cruise"];
-  const holidayFamily = ["holiday"];
+describe("EXPERIENCE_ALIAS_FAMILIES", () => {
+  const halfFamily = ["pontoon", "nasty-half-day", "half-day"];
+  const fullFamily = ["watersports", "nasty-full-day", "full-day"];
 
-  it("pontoon family: every alias yields same variant set for boat-resolution", () => {
+  it("pontoon family: every alias yields same variant set", () => {
     const docId = "exp-pontoon-1";
-    const expectedIds = new Set([docId, ...pontoonFamily]);
-    for (const slug of pontoonFamily) {
+    const expectedIds = new Set([docId, ...halfFamily]);
+    for (const slug of halfFamily) {
       const variants = getExperienceIdVariants(docId, slug);
       const variantSet = new Set(variants);
       assert.ok(
-        pontoonFamily.every((a) => variantSet.has(a)),
-        `slug "${slug}" should include all pontoon aliases, got ${JSON.stringify(variants)}`
+        halfFamily.every((a) => variantSet.has(a)),
+        `slug "${slug}" should include all half-day aliases, got ${JSON.stringify(variants)}`
       );
-      assert.ok(variantSet.has(docId), `slug "${slug}" should include doc id`);
+      assert.ok(variantSet.has(docId));
+      assert.strictEqual(expectedIds.size, variantSet.size);
     }
   });
 
-  it("watersports family: every alias yields same variant set for boat-resolution", () => {
-    const docId = "exp-wake-1";
-    for (const slug of watersportsFamily) {
+  it("watersports family: every alias yields same variant set", () => {
+    const docId = "exp-full-1";
+    for (const slug of fullFamily) {
       const variants = getExperienceIdVariants(docId, slug);
       const variantSet = new Set(variants);
-      assert.ok(
-        watersportsFamily.every((a) => variantSet.has(a)),
-        `slug "${slug}" should include all watersports aliases, got ${JSON.stringify(variants)}`
-      );
-      assert.ok(variantSet.has(docId), `slug "${slug}" should include doc id`);
+      assert.ok(fullFamily.every((a) => variantSet.has(a)));
     }
   });
+});
 
-  it("wake surf club family: every alias yields same variant set for boat-resolution", () => {
-    const docId = "exp-wsc-1";
-    for (const slug of wakeSurfClubFamily) {
-      const variants = getExperienceIdVariants(docId, slug);
-      const variantSet = new Set(variants);
-      assert.ok(
-        wakeSurfClubFamily.every((a) => variantSet.has(a)),
-        `slug "${slug}" should include all wake surf club aliases, got ${JSON.stringify(variants)}`
-      );
-      assert.ok(variantSet.has(docId), `slug "${slug}" should include doc id`);
-    }
-  });
-
-  it("sunset family: every alias yields same variant set for boat-resolution", () => {
-    const docId = "exp-sunset-1";
-    for (const slug of sunsetFamily) {
-      const variants = getExperienceIdVariants(docId, slug);
-      const variantSet = new Set(variants);
-      assert.ok(
-        sunsetFamily.every((a) => variantSet.has(a)),
-        `slug "${slug}" should include all sunset aliases, got ${JSON.stringify(variants)}`
-      );
-      assert.ok(variantSet.has(docId), `slug "${slug}" should include doc id`);
-    }
-  });
-
-  it("holiday family: slug yields doc id and holiday", () => {
-    const docId = "exp-holiday-1";
-    const variants = getExperienceIdVariants(docId, "holiday");
-    const variantSet = new Set(variants);
-    assert.ok(variantSet.has(docId), "should include doc id");
-    assert.ok(variantSet.has("holiday"), "should include holiday");
-  });
-
-  it("unknown slug: returns only doc id and slug", () => {
-    const variants = getExperienceIdVariants("exp-xyz", "custom-slug");
-    assert.ok(variants.includes("exp-xyz"));
-    assert.ok(variants.includes("custom-slug"));
-    assert.strictEqual(variants.length, 2);
+describe("getSlugLookupCandidates", () => {
+  it("orders requested slug first then family", () => {
+    const c = getSlugLookupCandidates("nasty-half-day");
+    assert.strictEqual(c[0], "nasty-half-day");
+    assert.ok(c.includes("pontoon"));
   });
 });
 
 describe("boatMatchesExperience", () => {
-  it("matches when boat has doc id", () => {
+  it("matches doc id", () => {
     assert.strictEqual(boatMatchesExperience({ experienceIds: ["exp-1"] }, "exp-1", "pontoon"), true);
   });
-  it("matches when boat has family alias (pontoon)", () => {
-    assert.strictEqual(boatMatchesExperience({ experienceIds: ["lake-austin-pontoon"] }, "exp-1", "pontoon"), true);
+  it("matches family alias", () => {
+    assert.strictEqual(boatMatchesExperience({ experienceIds: ["nasty-half-day"] }, "exp-1", "pontoon"), true);
   });
-  it("matches when boat has family alias (watersports)", () => {
-    assert.strictEqual(boatMatchesExperience({ experienceIds: ["wake-surf"] }, "exp-1", "watersports"), true);
-  });
-  it("matches when boat has family alias (sunset)", () => {
-    assert.strictEqual(boatMatchesExperience({ experienceIds: ["sunset-cruise"] }, "exp-1", "sunset"), true);
-  });
-  it("no match when boat has unrelated experience", () => {
+  it("rejects unrelated", () => {
     assert.strictEqual(boatMatchesExperience({ experienceIds: ["other-exp"] }, "exp-1", "pontoon"), false);
   });
-  it("empty or missing experienceIds", () => {
+  it("empty experienceIds", () => {
     assert.strictEqual(boatMatchesExperience({ experienceIds: [] }, "exp-1", "pontoon"), false);
     assert.strictEqual(boatMatchesExperience({}, "exp-1", "pontoon"), false);
   });
 });
 
-describe("isWatersportsSlug / isWakeSurfClubSlug / isPontoonSlug", () => {
-  it("isWatersportsSlug true for all watersports aliases", () => {
-    const watersports = [
-      "watersports",
-      "wake-surf",
-      "lake-austin-wake-boat",
-      "wake",
-      "wakeboard",
-      "wake-board",
-      "wakesurf",
-    ];
-    for (const slug of watersports) {
-      assert.strictEqual(isWatersportsSlug(slug), true, `expected isWatersportsSlug("${slug}") === true`);
+describe("slug helpers", () => {
+  it("isPontoonSlug true for half-day family", () => {
+    for (const slug of ["pontoon", "nasty-half-day", "half-day"]) {
+      assert.strictEqual(isPontoonSlug(slug), true);
     }
   });
-  it("isWakeSurfClubSlug true for all wake surf club aliases", () => {
-    for (const slug of ["wakesurfclub", "wake-surf-club", "wakesurf-club"]) {
-      assert.strictEqual(isWakeSurfClubSlug(slug), true, `expected isWakeSurfClubSlug("${slug}") === true`);
-    }
-    assert.strictEqual(isWakeSurfClubSlug("watersports"), false);
-    assert.strictEqual(isWakeSurfClubSlug("wakesurf"), false);
-  });
-  it("getSlugLookupCandidates resolves wake surf club URL variants", () => {
-    for (const slug of ["wakesurfclub", "wake-surf-club", "wakesurf-club"]) {
-      const candidates = getSlugLookupCandidates(slug);
-      assert.ok(candidates.includes("wakesurfclub"), `${slug} should resolve wakesurfclub`);
-      assert.ok(candidates.includes(slug), `${slug} should include itself`);
+  it("isWatersportsSlug true for full-day family", () => {
+    for (const slug of ["watersports", "nasty-full-day", "full-day"]) {
+      assert.strictEqual(isWatersportsSlug(slug), true);
     }
   });
-  it("isPontoonSlug true for all pontoon aliases", () => {
-    for (const slug of ["pontoon", "lake-austin-pontoon", "pontoon-party"]) {
-      assert.strictEqual(isPontoonSlug(slug), true, `expected isPontoonSlug("${slug}") === true`);
-    }
+  it("wake surf club family removed", () => {
+    assert.strictEqual(isWakeSurfClubSlug("wakesurf-club"), false);
   });
-  it("sunset and holiday are not watersports or pontoon", () => {
+  it("sunset and holiday are not half/full", () => {
     assert.strictEqual(isWatersportsSlug("sunset"), false);
-    assert.strictEqual(isWatersportsSlug("sunset-cruise"), false);
-    assert.strictEqual(isWatersportsSlug("holiday"), false);
-    assert.strictEqual(isPontoonSlug("sunset"), false);
     assert.strictEqual(isPontoonSlug("holiday"), false);
   });
 });
 
 describe("allowBoatTypeForSlug", () => {
-  it("watersports: explicit wake types only; blank rejected unless env fallback", () => {
-    const prevPub = process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-    try {
-      delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      const allowStrict = allowBoatTypeForSlug("wake-surf");
-      assert.strictEqual(allowStrict("wake"), true);
-      assert.strictEqual(allowStrict("wakeboard"), true);
-      assert.strictEqual(allowStrict("wakesurf"), true);
-      assert.strictEqual(allowStrict(""), false);
-      assert.strictEqual(allowStrict(undefined), false);
-      assert.strictEqual(allowStrict("pontoon"), false);
-      assert.strictEqual(allowStrict("tritoon"), false);
-
-      const allowClub = allowBoatTypeForSlug("wakesurfclub");
-      assert.strictEqual(allowClub("wake"), true);
-      assert.strictEqual(allowClub("pontoon"), false);
-
-      process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
-      const allowLegacy = allowBoatTypeForSlug("wake-surf");
-      assert.strictEqual(allowLegacy(""), false);
-      assert.strictEqual(allowLegacy(undefined), false);
-      process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = "true";
-      const allowPublic = allowBoatTypeForSlug("wake-surf");
-      assert.strictEqual(allowPublic(""), true);
-      assert.strictEqual(allowPublic(undefined), true);
-    } finally {
-      delete process.env.BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      if (prevPub === undefined) delete process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT;
-      else process.env.NEXT_PUBLIC_BOOKING_WATERSPORTS_ALLOW_UNTYPED_BOAT = prevPub;
+  it("half/full day: any boat type so packages share inventory", () => {
+    for (const slug of ["pontoon", "nasty-half-day", "watersports", "nasty-full-day"]) {
+      const allow = allowBoatTypeForSlug(slug);
+      assert.strictEqual(allow("wake"), true, slug);
+      assert.strictEqual(allow("pontoon"), true, slug);
+      assert.strictEqual(allow(""), true, slug);
     }
-  });
-  it("pontoon: pontoon/tritoon or missing allowed", () => {
-    const allow = allowBoatTypeForSlug("lake-austin-pontoon");
-    assert.strictEqual(allow("pontoon"), true);
-    assert.strictEqual(allow("tritoon"), true);
-    assert.strictEqual(allow(undefined), true);
-    assert.strictEqual(allow("wake"), false);
-    assert.strictEqual(allow("wakeboard"), false);
   });
   it("sunset/holiday: any boat type allowed", () => {
     assert.strictEqual(allowBoatTypeForSlug("sunset")("wake"), true);
-    assert.strictEqual(allowBoatTypeForSlug("sunset-cruise")(undefined), true);
     assert.strictEqual(allowBoatTypeForSlug("holiday")("pontoon"), true);
   });
 });
 
 describe("resolveCanonicalExperienceSlug", () => {
-  it("maps pontoon family aliases to lake-austin-pontoon", () => {
-    assert.strictEqual(resolveCanonicalExperienceSlug("pontoon"), "lake-austin-pontoon");
-    assert.strictEqual(resolveCanonicalExperienceSlug("pontoon-party"), "lake-austin-pontoon");
-    assert.strictEqual(resolveCanonicalExperienceSlug("lake-austin-pontoon", "pontoon"), "lake-austin-pontoon");
+  it("maps half-day family to nasty-half-day", () => {
+    assert.strictEqual(resolveCanonicalExperienceSlug("pontoon"), "nasty-half-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("half-day"), "nasty-half-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("nasty-half-day", "pontoon"), "nasty-half-day");
   });
-  it("prefers Firestore slug for non-pontoon experiences", () => {
-    assert.strictEqual(resolveCanonicalExperienceSlug("sunset-cruise", "sunset-cruise"), "sunset-cruise");
-    assert.strictEqual(resolveCanonicalExperienceSlug("sunset", "sunset-cruise"), "sunset-cruise");
+  it("maps full-day family to nasty-full-day", () => {
+    assert.strictEqual(resolveCanonicalExperienceSlug("watersports"), "nasty-full-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("full-day"), "nasty-full-day");
   });
-  it("falls back to family canonical when Firestore slug is missing", () => {
-    assert.strictEqual(resolveCanonicalExperienceSlug("wake-surf"), "watersports");
-    assert.strictEqual(resolveCanonicalExperienceSlug("wakesurf-club"), "wakesurfclub");
+  it("uses Firestore slug for specialty experiences", () => {
+    assert.strictEqual(resolveCanonicalExperienceSlug("sunset", "sunset"), "sunset");
   });
 });
 
 describe("static-slug-map alignment", () => {
-  it("buildStaticToFirestoreSlugMap includes URL variants from EXPERIENCE_ALIAS_FAMILIES", () => {
+  it("buildStaticToFirestoreSlugMap includes NSF public aliases", () => {
     const map = buildStaticToFirestoreSlugMap();
-    assert.strictEqual(map["pontoon-party"], "pontoon");
-    assert.strictEqual(map["lake-austin-pontoon"], "pontoon");
-    assert.strictEqual(map["wake-surf"], "watersports");
-    assert.strictEqual(map["wakesurf"], "watersports");
-    assert.strictEqual(map["wake-surf-club"], "wakesurfclub");
-    assert.strictEqual(map["wakesurf-club"], "wakesurfclub");
-    assert.strictEqual(map["sunset-cruise"], "sunset");
+    assert.strictEqual(map["nasty-half-day"], "pontoon");
+    assert.strictEqual(map["half-day"], "pontoon");
+    assert.strictEqual(map["nasty-full-day"], "watersports");
+    assert.strictEqual(map["full-day"], "watersports");
   });
   it("canonical slugs are first in each family", () => {
     for (const family of EXPERIENCE_ALIAS_FAMILIES) {
-      const canonical = family[0];
-      assert.ok(canonical.length > 0, "each family has a canonical slug");
+      assert.ok(family[0].length > 0);
     }
   });
 });

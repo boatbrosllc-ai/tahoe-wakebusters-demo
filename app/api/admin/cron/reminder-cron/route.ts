@@ -1,6 +1,6 @@
 /**
  * Booking reminder cron: sends 1-week, 24h, and day-of (3h before) emails.
- * Run hourly (e.g. 0 * * * *). Trip times are interpreted in America/Chicago (Austin).
+ * Run hourly (e.g. 0 * * * *). Trip times are interpreted in America/Mazatlan (Cabo).
  * Waiver link included in each email when the guest hasn't signed yet.
  *
  * Pagination: iterates all eligible records using cursor-based pages bounded by a
@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendBookingReminderEmail } from "@/lib/booking/brevo";
 import { getReminderSubject } from "@/lib/booking/reminder-emails";
@@ -113,8 +114,8 @@ export async function POST(request: NextRequest) {
     const parsed = parseSlotId(slotId);
     if (!parsed) continue;
     const tripStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours ?? 2, parsed.startMinute ?? 0).start;
-    const startTimeStr = tripStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
-    const tripDateStr = tripStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
+    const startTimeStr = tripStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BUSINESS_TIMEZONE });
+    const tripDateStr = tripStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: BUSINESS_TIMEZONE });
     let experienceName = "Your trip";
     let locationText = "We'll send exact meeting point before your trip.";
     let locationAddress = "";
@@ -260,14 +261,14 @@ export async function POST(request: NextRequest) {
         const startTimeStr = tripStart.toLocaleTimeString("en-US", {
           hour: "numeric",
           minute: "2-digit",
-          timeZone: "America/Chicago",
+          timeZone: BUSINESS_TIMEZONE,
         });
         const tripDateStr = tripStart.toLocaleDateString("en-US", {
           weekday: "short",
           month: "short",
           day: "numeric",
           year: "numeric",
-          timeZone: "America/Chicago",
+          timeZone: BUSINESS_TIMEZONE,
         });
 
         let experienceName = "Your trip";

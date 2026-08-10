@@ -85,6 +85,8 @@ export interface AddonOption {
   highlight?: boolean;
   /** When true (set in Firestore), hide from customer booking UIs (replaces fragile name-based filtering). */
   hiddenFromBookingUI?: boolean;
+  /** Stable catalog key for bundle presets. */
+  catalogKey?: string;
 }
 
 export interface BookingModalInitialSelection {
@@ -101,4 +103,9 @@ export interface BookingModalInitialSelection {
   durationHours?: number;
   /** Guest or ticket count to pre-fill step 4. */
   partySize?: number;
+  /**
+   * Bundle preset add-on keys (ExperienceAddon.catalogKey).
+   * Resolved to addon ids after addons load — does not bypass create-hold pricing.
+   */
+  addonCatalogKeys?: string[];
 }

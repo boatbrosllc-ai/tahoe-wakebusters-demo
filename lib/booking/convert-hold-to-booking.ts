@@ -791,6 +791,13 @@ export async function convertHoldToBooking(
     slotId: hold.slotId,
     startDateStr: parsedSlot ? parsedSlot.dateStr : startDateStrFallback ?? undefined,
     rateId: hold.rateId,
+    ...(typeof experienceForPricing?.title === "string" && experienceForPricing.title.trim()
+      ? { experienceTitle: experienceForPricing.title.trim() }
+      : {}),
+    ...(typeof (rate as { displayName?: string })?.displayName === "string" &&
+    (rate as { displayName?: string }).displayName!.trim()
+      ? { rateDisplayName: (rate as { displayName: string }).displayName.trim() }
+      : {}),
     addonSelections: hold.addonSelections,
     partySize: hold.partySize,
     petsCount: hold.petsCount,

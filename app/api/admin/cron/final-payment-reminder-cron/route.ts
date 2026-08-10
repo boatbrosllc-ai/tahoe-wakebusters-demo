@@ -1,6 +1,6 @@
 /**
  * Cron: send "final payment request" email 48 hours before trip to bookings with status final_due.
- * Run hourly (e.g. 0 * * * *). Trip times in America/Chicago.
+ * Run hourly (e.g. 0 * * * *). Trip times in America/Mazatlan.
  * Email includes a secure link to /booking/manage?token=... where they can pay; Stripe webhook marks final_paid.
  * Requires MANAGE_BOOKING_SECRET and APP_BASE_URL for the pay link.
  *
@@ -11,6 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendFinalPaymentRequestEmail } from "@/lib/booking/brevo";
 import { getFinalPaymentRequestSubject } from "@/lib/booking/reminder-emails";
@@ -126,8 +127,8 @@ export async function POST(request: NextRequest) {
     if (!parsed) continue;
     const tripStart = getSlotStartEnd(parsed.dateStr, parsed.startHour, parsed.durationHours ?? 2, parsed.startMinute ?? 0).start;
     const tripStartMsRetry = tripStart.getTime();
-    const tripDateStr = tripStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" });
-    const startTimeStr = tripStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
+    const tripDateStr = tripStart.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: BUSINESS_TIMEZONE });
+    const startTimeStr = tripStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BUSINESS_TIMEZONE });
     const hoursUntilTripRetry = getHoursUntilTrip(tripStartMsRetry, nowMs);
     const toEmail = booking.customer?.email?.trim();
     const customerName = booking.customer?.name?.trim() ?? "Guest";
@@ -265,12 +266,12 @@ export async function POST(request: NextRequest) {
         month: "short",
         day: "numeric",
         year: "numeric",
-        timeZone: "America/Chicago",
+        timeZone: BUSINESS_TIMEZONE,
       });
       const startTimeStr = tripStart.toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
-        timeZone: "America/Chicago",
+        timeZone: BUSINESS_TIMEZONE,
       });
 
       const manageToken = signManageToken({ bookingId: doc.id, tripDateStr: booking.startDateStr });

@@ -75,7 +75,7 @@ export function buildLineItems(params: {
         currency: pricing.currency,
         unit_amount: taxAndFeesCents,
         product_data: {
-          name: "Tax & Fees",
+          name: pricing.feesCents > 0 ? "Tax & Fees" : "Tax",
         },
       },
       quantity: 1,
@@ -209,7 +209,7 @@ export function buildLineItemsFromHoldPricing(params: {
       price_data: {
         currency: pricing.currency,
         unit_amount: taxAndFeesCents,
-        product_data: { name: "Tax & Fees" },
+        product_data: { name: pricing.feesCents > 0 ? "Tax & Fees" : "Tax" },
       },
       quantity: 1,
     });

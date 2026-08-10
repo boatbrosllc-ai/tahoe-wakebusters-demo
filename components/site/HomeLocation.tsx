@@ -6,7 +6,7 @@ import { location } from "@/content/location";
 import { MapEmbed } from "@/components/site/MapEmbed";
 
 /**
- * Homepage section: where to be picked up — address, map, and links to directions and location page.
+ * Homepage section: marina meet-up — address, map, and links to directions and location page.
  */
 export function HomeLocation() {
   return (
@@ -19,10 +19,10 @@ export function HomeLocation() {
           id="home-location-heading"
           className="text-2xl sm:text-3xl font-bold text-brand-dark text-center mb-2"
         >
-          Lake Austin boat rental pick-up location
+          Marina meet-up in Cabo San Lucas
         </h2>
         <p className="text-brand-muted text-center max-w-xl mx-auto mb-6 sm:mb-8">
-          Meet us at the address below for your Lake Austin boat rental. We&apos;ll confirm exact meet-up and parking when you book.
+          Meet us at Marina Cabo San Lucas for your sport fishing charter. We&apos;ll confirm exact slip and check-in time when you book.
         </p>
 
         <div className="max-w-3xl mx-auto grid gap-6 sm:grid-cols-[1fr_1fr] sm:gap-8 items-start">
@@ -58,13 +58,13 @@ export function HomeLocation() {
               </Link>
             </div>
             <p className="mt-4 text-sm text-brand-muted">
-              *We can accommodate custom pick-up locations upon request.
+              *Exact slip and boarding instructions are sent with your confirmation.
             </p>
           </div>
           <div className="min-h-[240px] w-full min-w-0 sm:min-h-0">
             <MapEmbed
               src={location.mapEmbedSrc}
-              title="Boat Bros pick-up location on Google Maps"
+              title="Nasty Sport Fishing marina on Google Maps"
               viewOnMapsUrl={location.googleMapsPlaceUrl}
             />
           </div>

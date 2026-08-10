@@ -8,7 +8,7 @@ import { useState } from "react";
  */
 export function MapEmbed({
   src,
-  title = "Boat Bros location on Google Maps",
+  title = "Nasty Sport Fishing location on Google Maps",
   viewOnMapsUrl,
 }: {
   src: string;

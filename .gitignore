@@ -37,5 +37,10 @@ next-env.d.ts
 # Vercel
 .vercel
 
+# Local build/debug dumps
+build-out*.txt
+build-full.txt
+tmp-*.json
+
 # Standalone server (do not commit; use next build → .next/standalone/server.js if needed)
 server.js

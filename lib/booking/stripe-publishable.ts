@@ -3,8 +3,8 @@
  * Use this so booking UI can fail fast when payment is not configured.
  *
  * Apple Pay in the Payment Element only appears after each public origin is registered under
- * Stripe Dashboard → Settings → Payment methods → Payment method domains (add e.g. boatbrosatx.com
- * and www.boatbrosatx.com, then verify via hosted file or DNS). See:
+ * Stripe Dashboard → Settings → Payment methods → Payment method domains (add e.g. nastysportfishing.com
+ * and www.nastysportfishing.com, then verify via hosted file or DNS). See:
  * https://stripe.com/docs/payments/payment-methods/pmd-registration
  */
 

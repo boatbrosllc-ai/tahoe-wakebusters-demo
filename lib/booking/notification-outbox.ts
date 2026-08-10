@@ -9,6 +9,7 @@
  */
 
 import type { Firestore, DocumentReference } from "firebase-admin/firestore";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getFirestoreExports } from "./firebase-admin";
 import { writeOperationalAlert } from "./operational-alerts";
 import type { BookingStatus, NotificationOutboxEntry, NotificationOutboxStatus } from "./types";
@@ -743,7 +744,10 @@ async function deliverClaimedConfirmationEntry(
       const expSnap = await db.collection("experiences").doc(booking.experienceId).get();
       if (expSnap.exists) {
         const exp = expSnap.data() as Experience;
-        experienceName = exp.title ?? experienceName;
+        experienceName =
+          (typeof booking.experienceTitle === "string" && booking.experienceTitle.trim()) ||
+          exp.title ||
+          experienceName;
         locationText = exp.location?.addressText ?? locationText;
         cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
         pricingType = exp.pricingType;
@@ -964,7 +968,7 @@ async function deliverClaimedConfirmationEntry(
         month: "short",
         day: "numeric",
         year: "numeric",
-        timeZone: "America/Chicago",
+        timeZone: BUSINESS_TIMEZONE,
       });
       void sendBookingConfirmationSms({
         phone: booking.customer.phone,
@@ -1248,7 +1252,7 @@ async function deliverClaimedDiscountLimitExceededEntry(
           month: "short",
           day: "numeric",
           year: "numeric",
-          timeZone: "America/Chicago",
+          timeZone: BUSINESS_TIMEZONE,
         });
       }
     }

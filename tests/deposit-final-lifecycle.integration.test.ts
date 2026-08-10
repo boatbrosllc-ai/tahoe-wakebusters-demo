@@ -2,7 +2,7 @@
  * End-to-end deposit booking + final charge behaviors (Firestore emulator).
  * Follows patterns in booking-two-tab-concurrency.integration.test.ts and run-final-charges.route.ts.
  *
- * (1) convertHoldToBooking with deposit → final_due + finalChargeAt (America/Chicago −48h).
+ * (1) convertHoldToBooking with deposit → final_due + finalChargeAt (America/Mazatlan −48h).
  * (2) Firestore transaction mirroring run-final-charges “reconcile existing succeeded final PI” path → final_paid
  *     (avoids live Stripe.retrieve; same tx as route when existing PI status is succeeded).
  * (3) Stale PI path: upsertPendingRefundRecord as webhook does for post_conversion_preconversion_success —
@@ -159,7 +159,7 @@ describe(
   "deposit lifecycle (Firestore emulator)",
   { skip: !firestoreEmulatorEnabled() },
   () => {
-    it("convertHoldToBooking deposit path stores final_due and finalChargeAt (Chicago 48h before slot)", async () => {
+    it("convertHoldToBooking deposit path stores final_due and finalChargeAt (Mazatlan 48h before slot)", async () => {
       const { getSlotStartEnd } = await import("../lib/booking/experience-slots");
       const { computeFinalChargeAtUtc } = await import("../lib/booking/final-charge-at");
 

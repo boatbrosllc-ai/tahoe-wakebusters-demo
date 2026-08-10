@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { parseSlotIdRelaxed, getSlotStartEnd } from "@/lib/booking/experience-slots";
@@ -21,7 +22,21 @@ import {
 } from "@/lib/booking/rate-limit";
 import { verifyReceiptToken } from "@/lib/booking/receiptToken";
 
-const TZ = "America/Chicago";
+const TZ = BUSINESS_TIMEZONE;
+
+/** Mazatlan is fixed UTC−7 (no DST). Chicago-style DAYLIGHT/STANDARD pairs must not be used. */
+const VTIMEZONE_LINES: string[] = [
+  "BEGIN:VTIMEZONE",
+  `TZID:${TZ}`,
+  `X-LIC-LOCATION:${TZ}`,
+  "BEGIN:STANDARD",
+  "TZOFFSETFROM:-0700",
+  "TZOFFSETTO:-0700",
+  "TZNAME:MST",
+  "DTSTART:19700101T000000",
+  "END:STANDARD",
+  "END:VTIMEZONE",
+];
 
 function bookingIncludedInOperatorIcalFeed(status: string | undefined): boolean {
   if (!status) return false;
@@ -38,7 +53,7 @@ function icalSummaryForBooking(experienceName: string, b: Booking): string {
   return `${escapeIcalText(experienceName)} – ${namePart}`;
 }
 
-/** Format a Date in America/Chicago for iCal TZID (YYYYMMDDTHHmmSS). */
+/** Format a Date in BUSINESS_TIMEZONE for iCal TZID (YYYYMMDDTHHmmSS). */
 function formatIcalLocal(d: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
@@ -92,7 +107,7 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Not found", { status: 404 });
     }
     const expId = b.experienceId ?? "";
-    let experienceName = "Boat Bros trip";
+    let experienceName = "Nasty Sport Fishing trip";
     if (expId) {
       const expSnap = await db.collection("experiences").doc(expId).get();
       experienceName = expSnap.exists ? (expSnap.data() as { title?: string })?.title ?? experienceName : experienceName;
@@ -118,29 +133,12 @@ export async function GET(request: NextRequest) {
     const lines: string[] = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
-      "PRODID:-//Boat Bros//Booking Calendar//EN",
+      "PRODID:-//Nasty Sport Fishing//Booking Calendar//EN",
       "CALSCALE:GREGORIAN",
       "METHOD:PUBLISH",
-      "BEGIN:VTIMEZONE",
-      "TZID:America/Chicago",
-      "X-LIC-LOCATION:America/Chicago",
-      "BEGIN:DAYLIGHT",
-      "TZOFFSETFROM:-0600",
-      "TZOFFSETTO:-0500",
-      "TZNAME:CDT",
-      "DTSTART:19700308T020000",
-      "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
-      "END:DAYLIGHT",
-      "BEGIN:STANDARD",
-      "TZOFFSETFROM:-0500",
-      "TZOFFSETTO:-0600",
-      "TZNAME:CST",
-      "DTSTART:19701101T020000",
-      "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
-      "END:STANDARD",
-      "END:VTIMEZONE",
+      ...VTIMEZONE_LINES,
       "BEGIN:VEVENT",
-      `UID:booking-${bookingIdParam}@boatbros`,
+      `UID:booking-${bookingIdParam}@nastysportfishing`,
       `DTSTAMP:${formatIcalUtc(new Date())}`,
       `DTSTART;TZID=${TZ}:${dtStart}`,
       `DTEND;TZID=${TZ}:${dtEnd}`,
@@ -268,27 +266,10 @@ export async function GET(request: NextRequest) {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Boat Bros//Booking Calendar//EN",
+    "PRODID:-//Nasty Sport Fishing//Booking Calendar//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "BEGIN:VTIMEZONE",
-    "TZID:America/Chicago",
-    "X-LIC-LOCATION:America/Chicago",
-    "BEGIN:DAYLIGHT",
-    "TZOFFSETFROM:-0600",
-    "TZOFFSETTO:-0500",
-    "TZNAME:CDT",
-    "DTSTART:19700308T020000",
-    "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
-    "END:DAYLIGHT",
-    "BEGIN:STANDARD",
-    "TZOFFSETFROM:-0500",
-    "TZOFFSETTO:-0600",
-    "TZNAME:CST",
-    "DTSTART:19701101T020000",
-    "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
-    "END:STANDARD",
-    "END:VTIMEZONE",
+    ...VTIMEZONE_LINES,
   ];
 
   for (const { id, data: b } of bookings) {
@@ -310,7 +291,7 @@ export async function GET(request: NextRequest) {
     const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();
 
     lines.push("BEGIN:VEVENT");
-    lines.push(`UID:booking-${id}@boatbros`);
+    lines.push(`UID:booking-${id}@nastysportfishing`);
     lines.push(`DTSTAMP:${formatIcalUtc(new Date())}`);
     lines.push(`DTSTART;TZID=${TZ}:${dtStart}`);
     lines.push(`DTEND;TZID=${TZ}:${dtEnd}`);

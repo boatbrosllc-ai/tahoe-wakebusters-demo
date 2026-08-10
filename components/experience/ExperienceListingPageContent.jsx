@@ -372,23 +372,31 @@ export function ExperienceListingPageContent(props) {
       />
 
       {slug === "watersports" && (
-        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences and guides">
+        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences">
           <p className="text-white/90 text-sm sm:text-base">
-            Prefer a pontoon for larger groups?{" "}
-            <Link href="/experiences/lake-austin-pontoon" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Lake Austin Pontoon Rentals
+            Looking for a shorter trip?{" "}
+            <Link href="/experiences/nasty-half-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Book Nasty Half Day
             </Link>
-            . Also see{" "}
-            <Link href="/wakesurfing-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              wakesurfing Austin
+            {" "}or browse{" "}
+            <Link href="/experiences" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              all Cabo charters
             </Link>
-            ,{" "}
-            <Link href="/wake-boat-rental-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              wake boat rental Austin
+            .
+          </p>
+        </section>
+      )}
+
+      {slug === "pontoon" && (
+        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences">
+          <p className="text-white/90 text-sm sm:text-base">
+            Want more time offshore?{" "}
+            <Link href="/experiences/nasty-full-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Book Nasty Full Day
             </Link>
-            , and{" "}
-            <Link href="/wakesurf-club-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Wakesurf Club Austin
+            {" "}or see{" "}
+            <Link href="/packages" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              multi-day packages
             </Link>
             .
           </p>
@@ -396,17 +404,17 @@ export function ExperienceListingPageContent(props) {
       )}
 
       {slug === "sunset" && (
-        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences and guides">
+        <section className="px-5 sm:px-6 lg:px-8 py-6 max-w-3xl mx-auto text-center" aria-label="Related experiences">
           <p className="text-white/90 text-sm sm:text-base">
-            Planning golden hour on the lake? See{" "}
-            <Link href="/sunset-cruise-austin" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              sunset cruise Austin
-            </Link>{" "}
-            and{" "}
-            <Link href="/lake-austin-sunset-cruise" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Lake Austin sunset cruise
+            Prefer a full fishing day?{" "}
+            <Link href="/experiences/nasty-full-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Nasty Full Day
             </Link>
-            .
+            {" "}and{" "}
+            <Link href="/experiences/nasty-half-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
+              Nasty Half Day
+            </Link>
+            {" "}are our core Cabo charters.
           </p>
         </section>
       )}

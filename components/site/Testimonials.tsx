@@ -63,12 +63,12 @@ export function Testimonials() {
           </p>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
           <p className="text-sm sm:text-base text-white/80">
-            Boat Bros · {location.addressFormatted}
+            Nasty Sport Fishing · {location.addressFormatted}
           </p>
         </motion.div>
 
         <h2 id="testimonials-heading" className="sr-only">
-          What people say about Boat Bros
+          What people say about Nasty Sport Fishing
         </h2>
 
         {/* 3 cards at a time, rotate every 5.5s – staggered, clean transition */}
@@ -148,7 +148,7 @@ export function Testimonials() {
         </div>
 
         <p className="mt-6 text-center text-sm text-white/50">
-          Real reviews from guests on Lake Austin · Google
+          Real reviews from Cabo fishing guests
         </p>
       </div>
     </section>

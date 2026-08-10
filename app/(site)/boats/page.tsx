@@ -9,65 +9,108 @@ import { brand } from "@/content/brand";
 import { ChevronRight } from "lucide-react";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 const canonical = `${baseUrl}/boats`;
 
 /** Cache page for 60s so prefetches and repeat visits are fast; boats list is cached in getListingBoatsForPublic. */
 export const revalidate = 60;
 
 export const metadata: Metadata = {
-  title: "Our Boats | Lake Austin Boat Rentals | Boat Bros",
+  title: "Our Boat | Cabo Sport Fishing | Nasty Sport Fishing",
   description:
-    "Meet our Lake Austin boat rentals fleet. Every trip is captain-included—pontoon, wake, and triton boats for your day on the water. Boat Bros ATX.",
+    "Meet the boat for your Cabo San Lucas sport fishing charter. Licensed captain & crew included. Nasty Sport Fishing.",
   keywords: [
-    "Lake Austin boat rentals",
-    "boat rental Lake Austin",
-    "our boats",
-    "Lake Austin fleet",
-    "captained boat rental Lake Austin",
+    "Cabo fishing boat",
+    "Cabo San Lucas charter boat",
+    "sport fishing Cabo",
+    "Nasty Sport Fishing boat",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Our Boats | Lake Austin Boat Rentals | Boat Bros",
+    title: "Our Boat | Cabo Sport Fishing | Nasty Sport Fishing",
     description:
-      "Meet our Lake Austin boat rentals fleet. Captain-included pontoon, wake, and triton boats. Book your day on the water.",
+      "Meet the boat for your Cabo fishing charter. Captain & crew included.",
     url: canonical,
     siteName: brand.companyName,
   },
 };
 
 function shortDescription(description: string | undefined): string {
-  if (!description || !description.trim()) return "Part of the Boat Bros Lake Austin fleet. Captain included.";
+  if (!description || !description.trim()) {
+    return "Nasty Sport Fishing's Cabo charter boat. Captain & crew included.";
+  }
   const first = description.trim().split(/\n\n+/)[0];
-  return first.length > 160 ? first.slice(0, 157) + "..." : first;
+  return first.length > 220 ? first.slice(0, 217) + "..." : first;
 }
 
 export default async function BoatsHubPage() {
   const boats = await getListingBoatsForPublic();
+  const single = boats.length === 1 ? boats[0] : null;
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Hero */}
       <section className="relative bg-brand-dark px-5 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20" aria-labelledby="boats-hero-heading">
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/20 via-transparent to-brand-secondary/10" />
         <div className="container-narrow relative z-10 mx-auto text-center">
           <h1 id="boats-hero-heading" className="text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-            Our Boats
+            Our Boat
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-            Our Lake Austin boat rentals fleet—every trip is captain-included. Choose a boat below to see details and book your day on the water.
+            {single
+              ? `${single.name} — every Cabo charter includes a licensed captain and crew.`
+              : "Our Cabo sport fishing boat—every charter includes a licensed captain and crew."}
           </p>
         </div>
       </section>
 
-      {/* Boat cards */}
       <section className="section-padding bg-white" aria-labelledby="boats-grid-heading">
         <div className="container-wide px-4 sm:px-6 lg:px-8">
           <h2 id="boats-grid-heading" className="sr-only">
-            Our Lake Austin rental boats
+            {single ? single.name : "Our Cabo fishing boat"}
           </h2>
           {boats.length === 0 ? (
-            <p className="text-center text-brand-muted">No boats are listed at the moment. Check back soon or contact us.</p>
+            <p className="text-center text-brand-muted">No boat is listed at the moment. Check back soon or contact us.</p>
+          ) : single ? (
+            <div className="mx-auto max-w-4xl">
+              <div className="group relative flex flex-col overflow-hidden rounded-2xl bg-brand-dark ring-2 ring-brand-primary/80">
+                <Link
+                  href={`/boats/${single.slug}`}
+                  className={`block relative overflow-hidden aspect-[16/10] min-h-[220px] sm:min-h-[300px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark ${
+                    single.firstLinkedExperienceSlug ? "rounded-t-2xl" : "rounded-2xl"
+                  }`}
+                  aria-label={`${single.name} — view boat details`}
+                >
+                  <Image
+                    src={getDisplayImageUrl(normalizeBoatPhotoForRender(single.photos[0]))}
+                    alt={`${single.name} — Cabo San Lucas sport fishing charter boat`}
+                    fill
+                    className="object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
+                    sizes="(max-width: 896px) 100vw, 896px"
+                    priority
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 from-15% via-black/35 to-transparent" />
+                  <div className="absolute inset-0 flex flex-col justify-end p-5 sm:p-7 lg:p-8">
+                    <h3 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-snug">
+                      {single.name}
+                    </h3>
+                    <p className="mt-2 sm:mt-3 text-white/90 text-sm sm:text-base max-w-2xl leading-relaxed">
+                      {shortDescription(getDisplayDescription(single))}
+                    </p>
+                    <span className="mt-4 inline-flex items-center gap-1.5 text-white font-semibold text-sm sm:text-base group-hover:gap-2.5 transition-[gap] duration-200">
+                      Full details <ChevronRight className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+                    </span>
+                  </div>
+                </Link>
+                {single.firstLinkedExperienceSlug && (
+                  <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3 p-4 sm:p-5 border-t border-white/10 bg-brand-dark/95 rounded-b-2xl">
+                    <BoatBookNowButton
+                      showCalendarIcon={false}
+                      className="inline-flex items-center justify-center rounded-full min-h-[44px] px-6 text-sm font-semibold bg-brand-primary text-brand-dark hover:bg-brand-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
               {boats.map((boat) => {
@@ -98,11 +141,9 @@ export default async function BoatsHubPage() {
                         <h3 className="font-display text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                           {boat.name}
                         </h3>
-                        <p className="mt-1.5 text-white/90 text-xs sm:text-sm line-clamp-2 leading-snug">
-                          {desc}
-                        </p>
-                        <span className="mt-2 sm:mt-2.5 inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm group-hover:gap-2 transition-[gap] duration-200">
-                          View boat <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4 group-hover:translate-x-0.5 transition-transform duration-200" aria-hidden />
+                        <p className="mt-1.5 text-white/90 text-xs sm:text-sm line-clamp-2 leading-snug">{desc}</p>
+                        <span className="mt-2 sm:mt-2.5 inline-flex items-center gap-1.5 text-white font-medium text-xs sm:text-sm">
+                          View boat <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden />
                         </span>
                       </div>
                     </Link>
@@ -122,19 +163,18 @@ export default async function BoatsHubPage() {
         </div>
       </section>
 
-      {/* CTA */}
       <section className="py-16 sm:py-20 lg:py-24 bg-gradient-to-b from-brand-bg to-white" aria-label="Book or contact">
         <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8 text-center">
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-brand-dark tracking-tight">See you on the water</h2>
           <p className="mt-4 text-brand-muted text-base max-w-md mx-auto">
-            All our Lake Austin boat rentals include a licensed captain. Book online or reach out—we&apos;re here to help.
+            Every Cabo charter includes a licensed captain and crew. Book online or reach out—we&apos;re here to help.
           </p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/experiences"
               className="inline-flex items-center justify-center rounded-full h-12 px-8 bg-brand-primary text-brand-dark hover:bg-brand-primary/95 font-semibold shadow-lg shadow-brand-primary/25 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
             >
-              View experiences & book
+              View charters & book
             </Link>
             <Link
               href="/contact"

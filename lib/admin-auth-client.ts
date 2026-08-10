@@ -2,8 +2,8 @@
 
 import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE } from "@/lib/admin-auth-constants";
 
-const STORAGE_KEY = "boatbros-admin-auth-sync";
-const BROADCAST_NAME = "boatbros-admin-auth";
+const STORAGE_KEY = "nsf-admin-auth-sync";
+const BROADCAST_NAME = "nsf-admin-auth";
 
 export type AdminSessionClientState =
   | { status: "signed_in" }

@@ -17,9 +17,11 @@ function watersportsAllowUntypedBoatInInventory(): boolean {
 }
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
-  ["pontoon", "lake-austin-pontoon", "pontoon-party"],
-  ["watersports", "wake-surf", "lake-austin-wake-boat", "wake", "wakeboard", "wake-board", "wakesurf"],
-  ["wakesurfclub", "wake-surf-club", "wakesurf-club"],
+  // Firestore slug `pontoon` = Nasty Half Day. Keep only NSF-needed public aliases.
+  ["pontoon", "nasty-half-day", "half-day"],
+  // Firestore slug `watersports` = Nasty Full Day.
+  ["watersports", "nasty-full-day", "full-day"],
+  // Specialty listings (inactive by default in seed). Keep sunset-cruise alias for historical booking ID variants.
   ["sunset", "sunset-cruise"],
   ["holiday"],
 ];
@@ -195,10 +197,13 @@ export function getSlugForBoatTypeFilter(
  */
 export function inferSlugFromTitle(titleOrName: string | undefined): string {
   const t = (titleOrName ?? "").toLowerCase();
+  // Prefer NSF product names before legacy Austin keywords.
+  if (/nasty\s*full|full\s*day/.test(t)) return "watersports";
+  if (/nasty\s*half|half\s*day/.test(t)) return "pontoon";
   if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
   if (/pontoon|tritoon|party/.test(t)) return "pontoon";
   if (/sunset|cruise/.test(t)) return "sunset";
-  if (/holiday|festive/.test(t)) return "holiday";
+  if (/holiday|festive|billfish/.test(t)) return "holiday";
   return "";
 }
 
@@ -217,18 +222,24 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
   return out;
 }
 
-/** Dedicated public page slug for the pontoon family (not bare `pontoon`). */
-export const PONTOON_CANONICAL_PAGE_SLUG = "lake-austin-pontoon";
+/** Dedicated public page slug for the Nasty Half Day (pontoon) family. */
+export const PONTOON_CANONICAL_PAGE_SLUG = "nasty-half-day";
+
+/** Dedicated public page slug for the Nasty Full Day (watersports) family. */
+export const WATERSPORTS_CANONICAL_PAGE_SLUG = "nasty-full-day";
 
 /**
  * Resolve the canonical public URL slug for an experience page.
- * Prefers the matched Firestore slug when provided; pontoon family always maps to the dedicated page.
+ * Prefers NSF public slugs for pontoon/watersports families; preserves alias redirects for old URLs.
  */
 export function resolveCanonicalExperienceSlug(requestedSlug: string, firestoreSlug?: string): string {
   const requested = (requestedSlug ?? "").toLowerCase().trim();
   const docSlug = (firestoreSlug ?? "").toLowerCase().trim();
   if (isPontoonSlug(requested) || (docSlug && isPontoonSlug(docSlug))) {
     return PONTOON_CANONICAL_PAGE_SLUG;
+  }
+  if (isWatersportsSlug(requested) || (docSlug && isWatersportsSlug(docSlug))) {
+    return WATERSPORTS_CANONICAL_PAGE_SLUG;
   }
   if (docSlug) return docSlug;
   const family = getFamilyVariants(requested);
@@ -275,13 +286,17 @@ export function inferSlugFromAssignedBoats(
 }
 
 /**
- * Predicate for boatType filtering: watersports => wake only (never show pontoon/tritoon); pontoon => any except wake; others => any.
- * Use when listing boats or slots so that only eligible boat types appear (e.g. wake boats for watersports).
- * For watersports we explicitly reject pontoon/tritoon so they never appear even if mis-assigned or slug is wrong.
+ * Predicate for boatType filtering.
+ * Cabo Half Day + Full Day share the same sportfisher inventory — do not apply the
+ * legacy Austin wake-vs-pontoon split to those families, or bundles cannot share one boat.
+ * Wake Surf Club (shared ticketed) still prefers wake-typed boats when present.
  */
 export function allowBoatTypeForSlug(slug: string): (boatType: string | undefined) => boolean {
   const s = (slug ?? "").toLowerCase().trim();
-  if (isWatersportsSlug(s) || isWakeSurfClubSlug(s)) {
+  if (isPontoonSlug(s) || isWatersportsSlug(s)) {
+    return () => true;
+  }
+  if (isWakeSurfClubSlug(s)) {
     return (bt) => {
       const b = (bt ?? "").toLowerCase().trim();
       if (b === "pontoon" || b === "tritoon") return false;
@@ -290,7 +305,6 @@ export function allowBoatTypeForSlug(slug: string): (boatType: string | undefine
       return false;
     };
   }
-  if (isPontoonSlug(s)) return (bt) => !isWakeListingBoatType(bt);
   return () => true;
 }
 

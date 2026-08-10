@@ -143,7 +143,7 @@ function getDefaultFormData(): ExperienceFormData {
     seasonalStartDate: "",
     seasonalEndDate: "",
     active: true,
-    timezone: "America/Chicago",
+    timezone: "America/Mazatlan",
     rates: [],
     addons: [],
     heroOverlayText: "",
@@ -215,7 +215,7 @@ function dataFromApi(api: Record<string, unknown>): ExperienceFormData {
     seasonalStartDate: typeof (sea as { startDate?: string }).startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test((sea as { startDate: string }).startDate) ? (sea as { startDate: string }).startDate : "",
     seasonalEndDate: typeof (sea as { endDate?: string }).endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test((sea as { endDate: string }).endDate) ? (sea as { endDate: string }).endDate : "",
     active: api.active === true,
-    timezone: typeof api.timezone === "string" ? api.timezone : "America/Chicago",
+    timezone: typeof api.timezone === "string" ? api.timezone : "America/Mazatlan",
     rates: rates.map((r) => ({
       durationHours: typeof r.durationHours === "number" ? r.durationHours : 0,
       displayName: typeof r.displayName === "string" ? r.displayName : "",
@@ -1065,8 +1065,8 @@ export function ExperienceForm({
         </p>
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
-          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Chicago" aria-label="Timezone for times and dates" />
-          <p className="text-xs text-brand-muted mt-1">Used for departure times and calendar dates (e.g. America/Chicago).</p>
+          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder="America/Mazatlan" aria-label="Timezone for times and dates" />
+          <p className="text-xs text-brand-muted mt-1">Used for departure times and calendar dates (e.g. America/Mazatlan).</p>
         </div>
         </div>}
       </section>
@@ -1284,7 +1284,7 @@ export function ExperienceForm({
             <div className="space-y-2">
               <p className="text-sm font-medium text-sky-900">Operating weekdays</p>
               <p className="text-xs text-sky-800">
-                Uses listing timezone (see above; slots use America/Chicago). Leave none selected for <strong>every</strong> day, or pick fixed days (e.g. Wednesday only for a weekly surf club).
+                Uses listing timezone (see above; slots use America/Mazatlan). Leave none selected for <strong>every</strong> day, or pick fixed days (e.g. Wednesday only for a weekly surf club).
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-2">
                 {TICKETED_WEEKDAY_LABELS.map((label, day) => (

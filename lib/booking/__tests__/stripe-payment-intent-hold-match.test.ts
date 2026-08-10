@@ -162,14 +162,14 @@ describe("customerOverrideFromPaymentIntent", () => {
     const pi = {
       id: "pi_test",
       payment_method: {
-        billing_details: { email: "boatbrosllc@gmail.com", name: "Boat Bros LLC", phone: "" },
+        billing_details: { email: "info@nastysportfishing.com", name: "Nasty Sport Fishing", phone: "" },
       },
-      receipt_email: "boatbrosllc@gmail.com",
+      receipt_email: "info@nastysportfishing.com",
     };
     const r = customerOverrideFromPaymentIntent(pi as never, holdDraft);
     assert.ok(r);
     assert.equal(r!.email, "pat@example.com");
-    assert.equal(r!.name, "Boat Bros LLC");
+    assert.equal(r!.name, "Nasty Sport Fishing");
   });
 
   it("uses Stripe email when hold still has internal checkout placeholder", () => {
@@ -196,12 +196,12 @@ describe("customerOverrideFromCheckoutSession", () => {
   it("prefers hold guest email over Checkout customer_details when both are non-placeholder", () => {
     const holdDraft = { name: "Pat Guest", email: "pat@example.com", phone: "+15550001111" };
     const session = {
-      customer_details: { email: "boatbrosllc@gmail.com", name: "Boat Bros LLC", phone: "" },
+      customer_details: { email: "info@nastysportfishing.com", name: "Nasty Sport Fishing", phone: "" },
     };
     const r = customerOverrideFromCheckoutSession(session as never, holdDraft);
     assert.ok(r);
     assert.equal(r!.email, "pat@example.com");
-    assert.equal(r!.name, "Boat Bros LLC");
+    assert.equal(r!.name, "Nasty Sport Fishing");
   });
 
   it("uses Checkout email when hold still has internal checkout placeholder", () => {

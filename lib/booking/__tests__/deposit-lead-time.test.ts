@@ -1,5 +1,5 @@
 /**
- * Deposit lead-time eligibility (48h America/Chicago boundary vs cron finalChargeAt) for create-payment-intent guard.
+ * Deposit lead-time eligibility (48h America/Mazatlan boundary vs cron finalChargeAt) for create-payment-intent guard.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";

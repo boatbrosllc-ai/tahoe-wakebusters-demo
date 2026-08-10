@@ -45,7 +45,7 @@ import {
 const LEGACY_HOLDS_FETCH_BUDGET_MS = 8_000;
 const TICKETED_BOOKINGS_SCAN_LIMIT = 2000;
 
-/** YYYY-MM-DD in America/Chicago for consistent calendar and checkout pricing. */
+/** YYYY-MM-DD in America/Mazatlan for consistent calendar and checkout pricing. */
 function toDateStrCentral(d: Date): string {
   return getDateStrInSlotTimezone(d);
 }

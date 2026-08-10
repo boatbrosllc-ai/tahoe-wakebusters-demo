@@ -58,7 +58,7 @@ export interface ListingBoat {
   boatType?: string;
   /**
    * When set, only these start times are bookable for this boat (e.g. wakeboard: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm).
-   * Omit for default hourly grid. Each entry: { hour: 0–23, minute: 0 | 30 } in America/Chicago.
+   * Omit for default hourly grid. Each entry: { hour: 0–23, minute: 0 | 30 } in America/Mazatlan.
    */
   allowedStartTimes?: { hour: number; minute: number }[];
   /** Optional custom line under the boat name on the public boat page (e.g. "Lake Austin tritoon rental · Captain included"). */
@@ -185,7 +185,7 @@ export interface Experience {
   tripDurationHours?: number;
   /**
    * Ticketed: optional weekly schedule — departures only on these weekdays (0=Sun … 6=Sat) in listing timezone
-   * (slot logic uses America/Chicago). Omit or empty = every day.
+   * (slot logic uses America/Mazatlan). Omit or empty = every day.
    */
   ticketedWeekdays?: number[];
   showSpotsRemaining?: boolean;
@@ -244,6 +244,10 @@ export interface ExperienceAddon {
   highlight?: boolean;
   /** When true, omit from customer booking UIs (replaces fragile client-side name filtering). */
   hiddenFromBookingUI?: boolean;
+  /** Stable key for seed reconcile + bundle presets (not the Firestore doc id). */
+  catalogKey?: string;
+  /** When true, fulfilled by a vetted local partner (display/ops only). */
+  partnerFulfilled?: boolean;
 }
 
 // Slots (subcollection experiences/{experienceId}/slots/{slotId}) — same shape as boats slots
@@ -527,6 +531,13 @@ export interface Booking {
   holdId?: string;
   slotId: string;
   rateId: string;
+  /**
+   * Display snapshots at conversion time. Historical money remains in `pricing`;
+   * these fields prevent live package renames from rewriting old booking labels.
+   * Older bookings may omit them — fall back to live experience/rate lookup.
+   */
+  experienceTitle?: string;
+  rateDisplayName?: string;
   addonSelections: AddonSelection[];
   partySize: number;
   petsCount: number;

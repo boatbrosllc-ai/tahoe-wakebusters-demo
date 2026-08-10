@@ -43,7 +43,7 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
             type="button"
             variant="secondary"
             size="lg"
-            className="w-full rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] font-semibold touch-manipulation"
+            className="w-full rounded-xl shadow-[0_2px_12px_rgba(20,182,220,0.3)] hover:shadow-[0_2px_16px_rgba(20,182,220,0.4)] font-semibold touch-manipulation"
             onClick={openModalForExperience}
           >
             Book now
@@ -79,7 +79,7 @@ export function StaticExperienceBookingSection({ experience, onOpenBookingModal 
           <Button
             variant="secondary"
             size="lg"
-            className="w-full rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] hover:shadow-[0_2px_16px_rgba(254,63,147,0.4)] font-semibold touch-manipulation"
+            className="w-full rounded-xl shadow-[0_2px_12px_rgba(20,182,220,0.3)] hover:shadow-[0_2px_16px_rgba(20,182,220,0.4)] font-semibold touch-manipulation"
             onClick={onOpenBookingModal}
           >
             Book now

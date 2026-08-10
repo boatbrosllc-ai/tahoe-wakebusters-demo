@@ -14,7 +14,7 @@ export const SEO_LANDING_MEDIA: Record<SeoLandingPageId, SeoLandingMediaConfig> 
   "boat-rental-austin": {
     fallbackHeroImage: "/photos/IMG_9649.webp",
     ogImage: "/photos/IMG_9649.webp",
-    heroAlt: "Boat rental Austin TX — captained charter on Lake Austin with Boat Bros ATX",
+    heroAlt: "Boat rental Austin TX — captained charter on Lake Austin with Nasty Sport Fishing",
     heroBadge: "Captain included · No license needed",
     useHeroVideo: true,
     heroHighlights: ["Lake Austin", "Pontoon · Wake · Sunset", "Licensed & insured"],

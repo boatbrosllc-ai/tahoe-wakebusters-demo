@@ -3,20 +3,25 @@ import Image from "next/image";
 import { brand } from "@/content/brand";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 const canonical = `${baseUrl}/our-story`;
 
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
-  title: "Our Story | Lake Austin Boat Rentals",
+  title: "Our Story | Cabo San Lucas Sport Fishing",
   description:
-    "Meet Thomas and Nicodemus — the brothers behind Boat Bros. A legacy of lake adventure on Lake Austin.",
-  keywords: ["Lake Austin boat rentals", "Boat Bros Austin", "best boat rentals Lake Austin"],
+    "Nasty Sport Fishing — Cabo San Lucas sport fishing charters built for anglers who want marlin, tuna, dorado, and a crew that takes the day seriously.",
+  keywords: [
+    "Nasty Sport Fishing",
+    "Cabo San Lucas sport fishing",
+    "Cabo fishing charter story",
+    "Los Cabos fishing",
+  ],
   alternates: { canonical },
   openGraph: {
-    title: "Our Story | Lake Austin Boat Rentals | Boat Bros",
-    description: "Meet Thomas and Nicodemus — the brothers behind Boat Bros.",
+    title: "Our Story | Cabo San Lucas Sport Fishing | Nasty Sport Fishing",
+    description: "How Nasty Sport Fishing brings serious Cabo charters to the marina.",
     url: canonical,
   },
 };
@@ -27,10 +32,10 @@ export default function OurStoryPage() {
       {/* Hero – full width, centered content */}
       <section className="relative w-full aspect-[3/4] sm:aspect-[21/9] min-h-[360px] sm:min-h-[420px] lg:min-h-[480px] max-h-[80vh] sm:max-h-[60vh] overflow-hidden">
         <Image
-          src="/photos/brothers.webp"
-          alt="The Boat Bros crew – local Austin team"
+          src="/photos/stock/cabo/el-arco-sunset-jarvis.jpg"
+          alt="El Arco at sunset — Cabo San Lucas with Nasty Sport Fishing"
           fill
-          className="object-cover object-[center_20%]"
+          className="object-cover object-[center_40%]"
           priority
           sizes="100vw"
         />
@@ -39,13 +44,13 @@ export default function OurStoryPage() {
         <div className="absolute inset-0 flex flex-col items-center justify-end text-center w-full px-5 py-12 sm:px-8 sm:py-14 lg:px-12 lg:py-20">
           <div className="w-full max-w-4xl mx-auto">
             <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-brand-primary mb-3">
-              Lake Austin boat rentals
+              Cabo San Lucas sport fishing
             </p>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-bold text-white tracking-tight drop-shadow-lg">
               Our story
             </h1>
             <p className="mt-3 text-lg sm:text-xl lg:text-2xl text-white/90 max-w-2xl mx-auto">
-              The crew behind {brand.companyName} – Lake Austin boat rentals, done right.
+              The crew behind {brand.companyName} — Cabo charters that hit different.
             </p>
           </div>
         </div>
@@ -57,29 +62,26 @@ export default function OurStoryPage() {
           <article className="rounded-2xl sm:rounded-3xl border-2 border-brand-dark/10 bg-white/90 shadow-premium overflow-hidden backdrop-blur-sm">
             <div className="p-6 sm:p-8 lg:p-10 xl:p-12">
               <p className="text-xl sm:text-2xl lg:text-3xl text-brand-dark font-semibold leading-relaxed mb-8 border-l-4 border-brand-primary pl-6 sm:pl-8">
-                Thomas and Nicodemus – A Legacy of Lake Adventure
+                Built for Cabo. Obsessed with the bite.
               </p>
               <div className="space-y-6 text-brand-muted leading-relaxed text-base sm:text-lg">
                 <p>
-                  Welcome to Boat Bros! Meet Thomas and Nicodemus, the brothers behind the creation of the company. Our story is rooted in a childhood filled with thrilling adventures and unforgettable moments on the water.
+                  Nasty Sport Fishing started with a simple idea: Cabo San Lucas deserves charters that feel as serious as the fish that swim here — marlin, yellowfin, dorado, and wahoo — without the tourist-trap runaround.
                 </p>
                 <p>
-                  Growing up in a family of nine children, with seven boys and two girls, our weekends were spent on the water. Our father, a true water enthusiast, introduced us to the wonders of boating.
+                  We run licensed trips out of Marina Cabo San Lucas with captain and crew who know the Pacific and Sea of Cortez edges, the banks when they fire, and how to put first-timers and seasoned anglers on the same boat without chaos.
                 </p>
                 <p>
-                  As we grew older, our passion for boating became an inseparable part of who we are. It was during these formative years that the seed of Boat Bros was planted.
+                  Every half-day, full-day, and sunset trip is private. Tackle and ice are ready. You show up ready to fish; we handle the rest — lines, safety, and the plan for the day&apos;s conditions.
                 </p>
                 <p>
-                  Boat Bros is more than just a boat rental service – it’s an extension of our family and a community of like-minded individuals. We are dedicated to our customers having an unforgettable experience.
-                </p>
-                <p>
-                  We are a family that invites you to be a part of our story. Welcome to Boat Bros!
+                  Whether you&apos;re chasing a billfish release photo or a cooler of tuna for dinner, we&apos;re here for the fight. Welcome aboard — book a charter and we&apos;ll see you at the marina.
                 </p>
               </div>
             </div>
           </article>
 
-          {/* CTA block – same style as FAQ page */}
+          {/* CTA block */}
           <div className="mt-14 sm:mt-16 rounded-3xl bg-brand-dark p-8 sm:p-10 lg:p-12 text-center shadow-premium overflow-hidden relative">
             <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/20 via-transparent to-brand-muted/10" aria-hidden />
             <div className="relative z-10">
@@ -87,7 +89,7 @@ export default function OurStoryPage() {
                 Ready to book?
               </h2>
               <p className="text-white/80 text-sm sm:text-base mb-6 max-w-md mx-auto">
-                Pick your experience, date, and time. Instant confirmation · Easy reschedule.
+                Pick your charter, date, and time. Instant confirmation · Easy reschedule.
               </p>
               <BookingCTA
                 source="our_story_page"

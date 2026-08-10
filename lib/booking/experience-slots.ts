@@ -1,16 +1,17 @@
 import { fromZonedTime } from "date-fns-tz";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 
 /**
  * Experience slot grid: all dates are available until booked or blocked.
  * Slot id format: YYYY-MM-DD-startHour-durationHours (e.g. 2025-02-10-13-3) for :00 starts,
  * or YYYY-MM-DD-startHour-minute-durationHours (e.g. 2025-02-10-9-30-4) for :30 starts.
  *
- * Operating hours: 7am–7pm (Austin, America/Chicago). Start times are every hour from 7am
- * unless a boat defines allowedStartTimes (e.g. wakeboard: 9, 9:30, 10, 10:30, 15, 15:30, 16).
+ * Operating hours: 7am–7pm in the Nasty business timezone (Cabo / America/Mazatlan).
+ * Start times are every hour from 7am unless a boat defines allowedStartTimes.
  */
 
-/** Business timezone for slot times (Austin). */
-export const SLOT_TIMEZONE = "America/Chicago";
+/** Business timezone for slot wall times (re-export of BUSINESS_TIMEZONE). */
+export const SLOT_TIMEZONE = BUSINESS_TIMEZONE;
 
 /** Operating window: 7am (7) to 7pm (19). Last departure at 7pm; trips may end after 7pm. */
 export const OPERATING_START_HOUR = 7;
@@ -114,7 +115,7 @@ export function parseSlotIdRelaxed(slotId: string): ParsedSlotId | null {
 }
 
 /**
- * Slots API request window in America/Chicago: from midnight on `startDateStr` through the end instant
+ * Slots API request window in America/Mazatlan: from midnight on `startDateStr` through the end instant
  * of a trip that departs at the last schedulable hour ({@link OPERATING_END_HOUR}) on `endDateStr`
  * with `maxDurationHours`. Use this for booking/hold/block overlap and slot `startAt` query upper bounds
  * so evening departures on the range end date are not cut off by a UTC end-of-day timestamp.
@@ -220,7 +221,7 @@ function formatDatePartsInChicago(date: Date): { year: number; month: number; da
 }
 
 /**
- * Build the UTC instant for midnight in America/Chicago on `dateStr`.
+ * Build the UTC instant for midnight in America/Mazatlan on `dateStr`.
  * Uses date-fns-tz conversion so DST transition days map correctly.
  */
 function getChicagoMidnightUtcInstant(dateStr: string): Date {
@@ -229,8 +230,8 @@ function getChicagoMidnightUtcInstant(dateStr: string): Date {
 
 /**
  * Returns start and end `Date` values (JavaScript UTC instants) for a slot whose wall-clock fields
- * (dateStr + hour/minute) are interpreted in America/Chicago. The returned `Date` objects are
- * absolute UTC times; display with `timeZone: "America/Chicago"` (or `Intl`) to show local trip time.
+ * (dateStr + hour/minute) are interpreted in America/Mazatlan. The returned `Date` objects are
+ * absolute UTC times; display with `timeZone: "America/Mazatlan"` (or `Intl`) to show local trip time.
  * Uses `Date.UTC` composition from calendar parts + DST offset so hour overflow (e.g. late departures)
  * rolls to the correct UTC day instead of invalid strings like `T24:00:00.000Z`.
  */
@@ -358,7 +359,7 @@ export function isListingBoatCharterStartTimeAllowed(
 }
 
 /**
- * Date string (YYYY-MM-DD) for a given moment in America/Chicago. Use for "today" and date ranges so
+ * Date string (YYYY-MM-DD) for a given moment in America/Mazatlan. Use for "today" and date ranges so
  * dashboard "next 7 days" and slot logic match the business timezone.
  */
 export function getDateStrInSlotTimezone(date: Date): string {
@@ -373,7 +374,7 @@ export function getDateStrInSlotTimezone(date: Date): string {
 }
 
 /**
- * Today's date string in America/Chicago so we only filter "past" times when the slot is actually today in Austin.
+ * Today's date string in America/Mazatlan so we only filter "past" times when the slot is actually today in Cabo.
  */
 function getTodayDateStr(now: Date): string {
   return getDateStrInSlotTimezone(now);
@@ -418,7 +419,7 @@ export function getSlotGrid(
   return out;
 }
 
-/** Allowed start times for wakeboard boat on Saturday only: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm (America/Chicago). */
+/** Allowed start times for wakeboard boat on Saturday only: 9, 9:30, 10, 10:30, 3pm, 3:30pm, 4pm (America/Mazatlan). */
 export const WAKEBOARD_SATURDAY_START_TIMES: { hour: number; minute: number }[] = [
   { hour: 9, minute: 0 },
   { hour: 9, minute: 30 },
@@ -450,7 +451,7 @@ export function getWeekdayInSlotTimezone(dateStr: string): number {
   return WEEKDAY_SHORT_TO_NUM[w] ?? 0;
 }
 
-/** True if dateStr (YYYY-MM-DD) is a Saturday in America/Chicago. */
+/** True if dateStr (YYYY-MM-DD) is a Saturday in America/Mazatlan. */
 export function isSaturdayInSlotTimezone(dateStr: string): boolean {
   return getWeekdayInSlotTimezone(dateStr) === 6;
 }

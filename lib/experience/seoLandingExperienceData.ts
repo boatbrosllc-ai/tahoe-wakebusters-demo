@@ -74,7 +74,7 @@ async function resolveCard(slug: string, base: { href: string; title: string; de
   return {
     ...base,
     imageUrl,
-    imageAlt: `${base.title} on Lake Austin — Boat Bros ATX`,
+    imageAlt: `${base.title} on Lake Austin — Nasty Sport Fishing`,
     fromPriceCents,
     durationLabel: duration,
   };

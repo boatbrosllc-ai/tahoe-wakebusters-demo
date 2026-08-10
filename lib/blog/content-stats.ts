@@ -64,7 +64,7 @@ function countLinksInText(text: string): { internal: number; external: number } 
   while ((m = regex.exec(text)) !== null) {
     const url = m[2].trim();
     if (!url) continue;
-    if (url.startsWith("/") || url.startsWith("#") || url.includes("boatbrosatx.com") || url.includes("localhost")) {
+    if (url.startsWith("/") || url.startsWith("#") || url.includes("nastysportfishing.com") || url.includes("localhost")) {
       internal++;
     } else {
       external++;

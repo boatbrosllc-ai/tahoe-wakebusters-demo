@@ -10,13 +10,13 @@ export function SeoLandingMapSection() {
           On Lake Austin — minutes from downtown
         </h2>
         <p className="text-center text-brand-dark/70 max-w-2xl mx-auto mb-8">
-          Boat Bros charters launch on Lake Austin. Easy access from Austin, TX — see{" "}
+          Nasty Sport Fishing charters launch on Lake Austin. Easy access from Austin, TX — see{" "}
           <Link href="/location" className="text-brand-primary font-medium hover:underline">
             directions & parking
           </Link>
           .
         </p>
-        <MapEmbed src={location.mapEmbedSrc} viewOnMapsUrl={location.googleMapsPlaceUrl} title="Lake Austin boat rental location — Boat Bros ATX" />
+        <MapEmbed src={location.mapEmbedSrc} viewOnMapsUrl={location.googleMapsPlaceUrl} title="Lake Austin boat rental location — Nasty Sport Fishing" />
       </div>
     </section>
   );

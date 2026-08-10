@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import Stripe from "stripe";
 import type { QueryDocumentSnapshot, DocumentData, DocumentReference } from "firebase-admin/firestore";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
@@ -792,12 +793,12 @@ export async function POST(request: NextRequest) {
                       month: "short",
                       day: "numeric",
                       year: "numeric",
-                      timeZone: "America/Chicago",
+                      timeZone: BUSINESS_TIMEZONE,
                     });
                     startTimeMissing = tripStartMissing.toLocaleTimeString("en-US", {
                       hour: "numeric",
                       minute: "2-digit",
-                      timeZone: "America/Chicago",
+                      timeZone: BUSINESS_TIMEZONE,
                     });
                   }
                 }
@@ -942,12 +943,12 @@ export async function POST(request: NextRequest) {
                         month: "short",
                         day: "numeric",
                         year: "numeric",
-                        timeZone: "America/Chicago",
+                        timeZone: BUSINESS_TIMEZONE,
                       });
                       startTimeMissing = tripStartMissing.toLocaleTimeString("en-US", {
                         hour: "numeric",
                         minute: "2-digit",
-                        timeZone: "America/Chicago",
+                        timeZone: BUSINESS_TIMEZONE,
                       });
                     }
                   }
@@ -1194,16 +1195,16 @@ export async function POST(request: NextRequest) {
                     month: "short",
                     day: "numeric",
                     year: "numeric",
-                    timeZone: "America/Chicago",
+                    timeZone: BUSINESS_TIMEZONE,
                   });
                   startTimeFc = tripStartFc.toLocaleTimeString("en-US", {
                     hour: "numeric",
                     minute: "2-digit",
-                    timeZone: "America/Chicago",
+                    timeZone: BUSINESS_TIMEZONE,
                   });
                 }
               }
-              const subject = requiresAction ? "Action needed to complete your booking – Boat Bros ATX" : "Payment failed for your upcoming trip – Boat Bros ATX";
+              const subject = requiresAction ? "Action needed to complete your booking – Nasty Sport Fishing" : "Payment failed for your upcoming trip – Nasty Sport Fishing";
               await sendFinalChargeFailedEmail(booking.customer.email, booking.customer.name, manageLink, requiresAction, {
                 experienceName: experienceNameFc,
                 tripDate: tripDateFc,

@@ -15,11 +15,11 @@ import { revalidateAdminSession, subscribeAdminAuthRevalidate } from "@/lib/admi
 import BookingModal from "@/components/site/BookingModal";
 
 const navLinks = [
-  { href: "/experiences", label: "Experiences" },
-  { href: "/austin-boat-rental", label: "Austin Boat Rental" },
-  { href: "/boats", label: "Our Boats" },
+  { href: "/experiences", label: "Charters" },
+  { href: "/packages", label: "Packages" },
+  { href: "/boats", label: "Our Boat" },
   { href: "/our-story", label: "Our Story" },
-  { href: "/blog", label: "The Dock" },
+  { href: "/blog", label: "The Bite" },
   { href: "/faqs", label: "FAQs" },
   { href: "/contact", label: "Contact" },
 ];
@@ -96,7 +96,7 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
         "pt-[env(safe-area-inset-top)]"
       )}
     >
-      {/* Thin pink bar – social icons */}
+      {/* Thin orange bar – social icons */}
       <div className="bg-brand-secondary flex items-center justify-center px-3 sm:px-4 lg:px-8 h-8 min-h-8">
         <div className="flex items-center gap-1 sm:gap-2">
           {brand.socials.instagram && (
@@ -166,25 +166,25 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
       <div
         className={cn(
           "container-wide relative flex items-center justify-between",
-          "h-16 sm:h-[4.25rem] lg:h-20",
+          "h-16 sm:h-[4.5rem] lg:h-20",
           "flex-nowrap overflow-visible",
           "gap-2 px-3 sm:px-4 lg:px-8"
         )}
       >
-        {/* Left: logo – constrained on mobile so it never bleeds */}
-        <div className="flex shrink-0 items-center min-w-0 max-w-[45%] lg:max-w-none">
+        {/* Left: logo */}
+        <div className="flex shrink-0 items-center min-w-0 max-w-[50%] sm:max-w-[45%] lg:max-w-none">
           <Link
             href="/"
-            className="flex items-center min-w-0 rounded-lg overflow-hidden transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
-            aria-label="Boat Bros ATX home"
+            className="flex items-center min-w-0 rounded-lg transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
+            aria-label="Nasty Sport Fishing home"
           >
             <Image
               src={brand.logoNavbarPath ?? brand.logoMonogramPath ?? brand.logoPath}
               alt={brand.logoAlt}
-              width={64}
-              height={64}
-              className="h-10 w-10 sm:h-11 sm:w-11 lg:h-14 lg:w-14 object-contain object-left"
-              sizes="(max-width: 1023px) 40px, 56px"
+              width={250}
+              height={125}
+              className="h-11 w-auto max-w-[180px] sm:h-12 sm:max-w-[210px] lg:h-14 lg:max-w-[250px] object-contain object-left"
+              sizes="(max-width: 640px) 180px, (max-width: 1023px) 210px, 250px"
               priority
               fetchPriority="high"
             />
@@ -260,7 +260,7 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
             variant="secondary"
             size="lg"
             className={cn(
-              "hidden sm:inline-flex shrink-0 rounded-xl shadow-[0_2px_12px_rgba(254,63,147,0.3)] touch-manipulation",
+              "hidden sm:inline-flex shrink-0 rounded-xl shadow-[0_2px_12px_rgba(255,107,26,0.3)] touch-manipulation",
               "h-11 min-w-[4rem] px-3 text-sm font-semibold sm:h-12 sm:min-w-[5rem] sm:px-4 lg:h-12 lg:min-w-[7rem] lg:px-5 lg:text-base"
             )}
             onClick={() => setBookingModalOpen(true)}

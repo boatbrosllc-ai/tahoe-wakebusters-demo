@@ -28,7 +28,7 @@ interface InitialSelection {
   date?: string;
 }
 
-/** Initial display month (current month in America/Chicago). */
+/** Initial display month (current month in America/Mazatlan). */
 function getInitialDisplayMonth(): { year: number; month: number } {
   const today = getChicagoToday();
   const [y, m] = today.split("-").map(Number);

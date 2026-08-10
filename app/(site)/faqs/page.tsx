@@ -4,23 +4,23 @@ import { brand } from "@/content/brand";
 import { faqs } from "@/content/faqs";
 import { FAQsPageClient } from "./FAQsPageClient";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com").replace(/\/+$/, "");
+const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
 const canonical = `${baseUrl}/faqs`;
 
 export const metadata: Metadata = {
-  title: "FAQs | Lake Austin Boat Rentals",
+  title: "FAQs | Cabo Sport Fishing Charters",
   description:
-    "FAQs about Lake Austin boat rentals: pontoon rental, wake boat, sunset cruise. Captain included, pricing, cancellation. Boat Bros ATX, Austin TX.",
+    "FAQs about Cabo San Lucas fishing charters: what's included, weather, tipping, marina meet-up, licenses. Nasty Sport Fishing.",
   keywords: [
-    "Lake Austin boat rental",
-    "boat rental Lake Austin with captain",
-    "Lake Austin pontoon rental",
-    "Lake Austin boat rental prices",
+    "Cabo fishing charter FAQ",
+    "Cabo San Lucas sport fishing",
+    "fishing charter cancellation",
+    "marina Cabo San Lucas",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "FAQs | Lake Austin Boat Rentals | Boat Bros",
-    description: "Frequently asked questions about Lake Austin boat rentals. Captain, pricing, booking.",
+    title: "FAQs | Cabo Sport Fishing | Nasty Sport Fishing",
+    description: "Frequently asked questions about Cabo fishing charters. Captain, pricing, booking.",
     url: canonical,
   },
 };

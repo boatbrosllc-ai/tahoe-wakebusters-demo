@@ -4,7 +4,7 @@
 
 import type { BlogPostDoc, BlogPostSerialized, ContentBlock, FaqBlock } from "./types";
 
-const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://boatbrosatx.com";
+const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
 
 function stripTrailingSlash(url: string): string {
   return url.replace(/\/$/, "");
@@ -47,7 +47,7 @@ export function buildArticleJsonLd(
     dateModified,
     author: {
       "@type": "Person",
-      name: post.author?.name ?? "Boat Bros ATX",
+      name: post.author?.name ?? "Nasty Sport Fishing",
     },
     ...(image && { image: image }),
     ...(post.stats?.wordCount && { wordCount: post.stats.wordCount }),

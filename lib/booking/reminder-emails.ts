@@ -1,7 +1,6 @@
 /**
  * Booking reminder emails: 1-week, 24h before, day-of (3h before).
- * Shared content: directions/map, rideshare (Fetii boatbros), $5 cash park fee.
- * Waiver link included when provided (guest hasn't signed yet).
+ * Shared content: marina directions / map. Waiver link when provided.
  */
 
 import { brand } from "@/content/brand";
@@ -25,23 +24,23 @@ export interface BookingReminderParams {
   whatToBring?: string[];
 }
 
-const PRIMARY = "#50bdba";
-const DARK = "#001c30";
-const PINK = "#fe3f93"; /* Brand secondary – Lockup Pink logo */
-const MUTED = "#196a87";
-const BG = "#f0fafb";
+const PRIMARY = "#14b6dc";
+const DARK = "#04244a";
+const ORANGE = "#f27a0a";
+const MUTED = "#1a5a7a";
+const BG = "#e8f6fa";
 
-/** Header gradient: navy → teal → pink to match Lockup Pink logo palette. */
-const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK} 0%, ${PRIMARY} 50%, ${PINK} 100%)`;
+/** Header gradient: navy → teal → orange. */
+const HEADER_GRADIENT = `linear-gradient(135deg, ${DARK} 0%, ${PRIMARY} 50%, ${ORANGE} 100%)`;
 
 function getEmailLogoUrl(): string {
   const base = bookingEnv.appBaseUrl.replace(/\/$/, "");
   return `${base}${brand.logoEmailPath}`;
 }
 
-/** Header row with Boat Bros Lockup Pink logo and subtitle (for gradient background). */
+/** Header row with Nasty Sport Fishing logo and subtitle. */
 function reminderHeaderHtml(subtitle: string): string {
-  return `<td style="background: ${HEADER_GRADIENT}; padding: 24px 28px; text-align: center;"><img src="${getEmailLogoUrl()}" alt="Boat Bros ATX" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" /><p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${subtitle}</p></td>`;
+  return `<td style="background: ${HEADER_GRADIENT}; padding: 24px 28px; text-align: center;"><img src="${getEmailLogoUrl()}" alt="Nasty Sport Fishing" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" /><p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${subtitle}</p></td>`;
 }
 
 function escapeHtml(s: string): string {
@@ -57,7 +56,7 @@ function mapUrl(address: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${q}`;
 }
 
-/** Shared block: directions, map, rideshare (Fetii boatbros), $5 cash. */
+/** Shared block: marina directions and map. */
 function sharedInstructionsHtml(params: BookingReminderParams): string {
   const mapLink = params.locationAddress
     ? mapUrl(params.locationAddress)
@@ -65,14 +64,14 @@ function sharedInstructionsHtml(params: BookingReminderParams): string {
       ? mapUrl(params.locationText)
       : null;
   return `
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BG}; border-radius: 12px; margin: 16px 0; border: 1px solid rgba(0,28,48,0.08);">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BG}; border-radius: 12px; margin: 16px 0; border: 1px solid rgba(10,22,40,0.08);">
     <tr>
       <td style="padding: 20px 24px;">
-        <p style="margin: 0 0 12px; font-size: 14px; font-weight: 600; color: ${DARK};">📍 Directions &amp; logistics</p>
+        <p style="margin: 0 0 12px; font-size: 14px; font-weight: 600; color: ${DARK};">📍 Marina meet-up</p>
         <p style="margin: 0 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;">${escapeHtml(params.locationText)}</p>
         ${mapLink ? `<p style="margin: 0 0 16px;"><a href="${escapeHtml(mapLink)}" target="_blank" rel="noopener" style="color: ${PRIMARY}; font-weight: 600;">View on map / Get directions</a></p>` : ""}
-        <p style="margin: 0 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;"><strong style="color: ${DARK};">Parking is limited.</strong> We recommend rideshare when possible. Use <a href="https://www.fetii.com?promo=boatbros" target="_blank" rel="noopener" style="color: ${PRIMARY}; font-weight: 600;">Fetii</a> for group rides—promo code <strong style="color: ${DARK};">boatbros</strong> for Boat Bros guests.</p>
-        <p style="margin: 0; font-size: 14px; color: ${MUTED}; line-height: 1.5;">Bring <strong style="color: ${DARK};">$5 cash per person</strong> for the park entry fee.</p>
+        <p style="margin: 0 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;"><strong style="color: ${DARK};">Arrive a little early</strong> so we can load coolers, brief the crew, and cast off on time. Exact slip instructions are in your confirmation.</p>
+        <p style="margin: 0; font-size: 14px; color: ${MUTED}; line-height: 1.5;">Bring sunscreen, soft-soled shoes, sunglasses, and a soft cooler if you want drinks or snacks.</p>
       </td>
     </tr>
   </table>`;
@@ -135,7 +134,7 @@ export function buildReminder1WeekHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you on the water!</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Boat Bros ATX</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
         </td>
       </tr>
     </table>
@@ -169,7 +168,7 @@ export function buildReminder24hHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">Get some rest—tomorrow we&apos;re on the water.</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Boat Bros ATX</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
         </td>
       </tr>
     </table>
@@ -203,7 +202,7 @@ export function buildReminderDayOfHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you in a few hours—let&apos;s make it a great one.</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Boat Bros ATX</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
         </td>
       </tr>
     </table>
@@ -230,13 +229,13 @@ export function buildReminderHtml(type: ReminderType, params: BookingReminderPar
 export function getReminderSubject(type: ReminderType, experienceName: string): string {
   switch (type) {
     case "1week":
-      return `One week until your ${experienceName} – Boat Bros ATX`;
+      return `One week until your ${experienceName} – Nasty Sport Fishing`;
     case "24h":
-      return `Tomorrow: We're excited to see you – Boat Bros ATX`;
+      return `Tomorrow: We're excited to see you – Nasty Sport Fishing`;
     case "dayof":
-      return `Today's the day – let's have a blast! – Boat Bros ATX`;
+      return `Today's the day – let's have a blast! – Nasty Sport Fishing`;
     default:
-      return `Reminder: ${experienceName} – Boat Bros ATX`;
+      return `Reminder: ${experienceName} – Nasty Sport Fishing`;
   }
 }
 
@@ -257,7 +256,7 @@ export interface FinalPaymentRequestParams {
   hoursUntilTrip?: number;
 }
 
-const FINAL_PAYMENT_SUBJECT = "Complete your payment – Boat Bros ATX";
+const FINAL_PAYMENT_SUBJECT = "Complete your payment – Nasty Sport Fishing";
 
 export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams): string {
   const hoursRounded =
@@ -297,7 +296,7 @@ export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams):
           </table>
           <p style="margin:16px 0 0;font-size:14px;color:${MUTED};line-height:1.6;">This link takes you to your booking where you can pay securely. After payment, your booking will be marked paid and you&apos;re good to go.</p>
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you on the water!</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Boat Bros ATX</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
         </td>
       </tr>
     </table>

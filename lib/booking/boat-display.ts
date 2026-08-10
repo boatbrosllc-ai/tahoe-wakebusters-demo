@@ -30,7 +30,7 @@ function descriptionMatchesBoat(boatName: string, description: string): boolean 
   return words.some((word) => firstChunk.includes(word));
 }
 
-const DEFAULT_CAPACITY = 14;
+const DEFAULT_CAPACITY = 6;
 
 /** Type-specific first-line copy that uses the boat name (never another brand). */
 function generatedDescription(boat: BoatDisplayInput): string {
@@ -38,12 +38,12 @@ function generatedDescription(boat: BoatDisplayInput): string {
   const guests = boat.capacity ?? DEFAULT_CAPACITY;
   const t = (boat.boatType ?? "").trim().toLowerCase();
   if (t === "wake") {
-    return `${displayName} — luxury wake boat for up to ${guests} guests with captain included and powerful Bluetooth audio. Built for wakeboarding, wakesurfing, and tubing on Lake Austin.`;
+    return `${displayName} — Cabo San Lucas sportfisher for up to ${guests} guests with captain and crew included.`;
   }
   if (t === "pontoon" || t === "tritoon") {
-    return `${displayName} for up to ${guests} guests with captain included, Bluetooth audio, cooler, and lily pad — everything you need for a perfect Lake Austin day.`;
+    return `${displayName} for up to ${guests} guests with captain and crew — ready for a Cabo San Lucas fishing charter.`;
   }
-  return `${displayName} is part of the Boat Bros Lake Austin fleet. Captain-included rental — no boating license required.`;
+  return `${displayName} is Nasty Sport Fishing's Cabo San Lucas charter boat. Captain & crew included · up to ${guests} guests.`;
 }
 
 /**

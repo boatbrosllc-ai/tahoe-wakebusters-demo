@@ -51,6 +51,7 @@ export interface ExperienceDetailAddon {
   maxQty?: number;
   highlight: boolean;
   hiddenFromBookingUI?: boolean;
+  catalogKey?: string;
 }
 
 export interface ExperienceDetailSeasonal {
@@ -205,6 +206,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           maxQty: a.maxQty,
           highlight: a.highlight ?? false,
           ...(a.hiddenFromBookingUI === true ? { hiddenFromBookingUI: true as const } : {}),
+          ...(typeof a.catalogKey === "string" && a.catalogKey.trim()
+            ? { catalogKey: a.catalogKey.trim() }
+            : {}),
         };
       })
       .filter((a) => a.type !== "tip");

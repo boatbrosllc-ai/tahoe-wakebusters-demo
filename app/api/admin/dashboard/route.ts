@@ -136,7 +136,7 @@ export async function GET(request: NextRequest) {
       customerName: string;
       customerEmail: string;
       totalCents: number;
-      /** Slot start instant (America/Chicago grid); used server-side for sort only — omitted from JSON. */
+      /** Slot start instant (America/Mazatlan grid); used server-side for sort only — omitted from JSON. */
       slotStartMs: number;
     };
     const recentBookings: RecentRow[] = [];
