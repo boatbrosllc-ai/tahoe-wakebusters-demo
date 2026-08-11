@@ -23,6 +23,7 @@ export function AddonSelector({
         const effectiveMax = addon.maxQty ?? 10;
         const qty = Math.min(rawQty, effectiveMax);
         const binary = effectiveMax <= 1;
+        const selected = qty > 0;
         return (
           <button
             key={addon.id}
@@ -36,19 +37,19 @@ export function AddonSelector({
             }}
             className={cn(
               "w-full flex items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all",
-              addon.highlight
-                ? qty > 0
-                  ? "border-amber-500/60 bg-amber-50 shadow-sm ring-2 ring-amber-400/30"
-                  : "border-amber-300/50 bg-amber-50/50 hover:border-amber-400/60"
-                : qty > 0
-                  ? "border-brand-primary/40 bg-brand-primary/5"
-                  : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
+              selected
+                ? "border-brand-primary/40 bg-brand-primary/5"
+                : "border-brand-dark/10 bg-white hover:border-brand-dark/20"
             )}
           >
-            <span className={cn("text-sm font-medium", addon.highlight ? "text-brand-dark font-semibold" : "text-brand-dark")}>
+            <span className="text-sm font-medium text-brand-dark">
               {addon.name}
-              {addon.description && <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>}
-              {qty > 0 && <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>}
+              {addon.description && (
+                <span className="block text-xs font-normal text-brand-muted mt-0.5">{addon.description}</span>
+              )}
+              {selected && (
+                <span className="block text-xs font-semibold text-brand-primary mt-1">Selected × {qty}</span>
+              )}
             </span>
             <span className="text-sm font-semibold text-brand-primary shrink-0">
               +${(addon.priceCents / 100).toFixed(2)}
@@ -60,4 +61,3 @@ export function AddonSelector({
     </div>
   );
 }
-

@@ -34,6 +34,7 @@ import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/for
 import { slugMatches, isTicketedExperienceForBooking, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { isAddonHiddenFromBookingUI } from "@/lib/booking/hidden-addons";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
@@ -1061,13 +1062,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const priceReady = effectiveRateCents != null || selectedRate != null;
 
   const displayAddons = useMemo(
-    () =>
-      addons.filter((a) => {
-        if (a.hiddenFromBookingUI === true) return false;
-        // Legacy: sunscreen was hidden by name until Firestore sets `hiddenFromBookingUI` on the add-on doc.
-        if (/sunscreen/i.test(a.name)) return false;
-        return true;
-      }),
+    () => addons.filter((a) => !isAddonHiddenFromBookingUI(a)),
     [addons]
   );
 
@@ -2888,8 +2883,8 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
         // Step 4 (details & payment): taller panel on phone so more form fields are visible before scrolling.
         step === 4 &&
           "max-sm:h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))] max-sm:max-h-[min(90dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1rem))]",
-        // Desktop: explicit height so flex children get real space (min-h alone + overflow-y-auto on body still collapsed inner flex).
-        step4UsesInnerScroll && "sm:h-[min(85dvh,720px)] sm:max-h-[85vh] sm:shrink-0"
+        // Desktop: taller checkout panel so more of step 3 (details & payment) is visible before scrolling.
+        step4UsesInnerScroll && "sm:h-[min(92dvh,900px)] sm:max-h-[92vh] sm:shrink-0"
       )}
     >
       <div
@@ -3197,7 +3192,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                 )}
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                   <div
-                    className="booking-step4-scroll min-h-[180px] sm:min-h-[min(42dvh,380px)] flex-1 basis-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain max-sm:touch-pan-y"
+                    className="booking-step4-scroll min-h-[180px] sm:min-h-[min(58dvh,560px)] flex-1 basis-0 overflow-y-auto overflow-x-hidden pr-1 space-y-5 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] sm:pb-6 scroll-smooth overscroll-y-contain max-sm:touch-pan-y"
                     role="region"
                     aria-label="Booking details form"
                   >

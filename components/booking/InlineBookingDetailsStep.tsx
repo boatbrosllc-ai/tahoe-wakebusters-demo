@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
+import { isAddonHiddenFromBookingUI } from "@/lib/booking/hidden-addons";
 import { runCreateHold, runCreatePaymentIntentForHold, releaseHold } from "@/lib/booking/run-create-hold-and-payment";
 import {
   completeAfterPaymentWithPolling,
@@ -343,13 +344,7 @@ export function InlineBookingDetailsStep({
   }, [experiencePetsMax, petsCount]);
 
   const displayAddons = useMemo(
-    () =>
-      addons.filter((a) => {
-        if (a.hiddenFromBookingUI === true) return false;
-        // Legacy: sunscreen was hidden by name until Firestore sets `hiddenFromBookingUI` on the add-on doc.
-        if (/sunscreen/i.test(a.name)) return false;
-        return true;
-      }),
+    () => addons.filter((a) => !isAddonHiddenFromBookingUI(a)),
     [addons]
   );
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim()), [customerEmail]);
