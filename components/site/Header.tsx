@@ -256,12 +256,20 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
             <a
               href={`tel:${phone.tel}`}
               onClick={handleCallClick}
-              className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 lg:w-12 lg:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
+              className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
               aria-label={`Call ${phone.display}`}
             >
-              <Phone className="h-6 w-6 lg:h-6 lg:w-6" aria-hidden />
+              <Phone className="h-6 w-6" aria-hidden />
             </a>
-          ) : null}
+          ) : (
+            <Link
+              href="/contact"
+              className="shrink-0 flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 rounded-lg text-white/90 hover:bg-white/15 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary touch-manipulation"
+              aria-label="Contact us"
+            >
+              <Phone className="h-6 w-6" aria-hidden />
+            </Link>
+          )}
           {/* Account icon – only when admin is signed in; never shown to regular users */}
           {isAdmin && (
             <div className="relative shrink-0" ref={accountRef}>

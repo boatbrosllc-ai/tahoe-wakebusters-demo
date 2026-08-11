@@ -178,7 +178,7 @@ export function PackagesPageClient() {
                 transition={{ duration: 0.4, delay: Math.min(i * 0.06, 0.24) }}
                 className="group flex flex-col overflow-hidden rounded-2xl bg-brand-bg ring-1 ring-white/15 transition-[box-shadow,transform] duration-300 hover:-translate-y-1 hover:shadow-[0_20px_50px_rgba(0,0,0,0.35)] hover:ring-brand-secondary/45"
               >
-                <div className="relative aspect-[16/10] overflow-hidden">
+                <div className="relative aspect-[3/2] overflow-hidden">
                   <Image
                     src={pkg.image}
                     alt={pkg.imageAlt}

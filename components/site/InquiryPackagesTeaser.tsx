@@ -67,7 +67,7 @@ export function InquiryPackagesTeaser() {
                 className="group flex h-full flex-col overflow-hidden rounded-2xl bg-white border border-white/10 shadow-sm transition-all duration-300 hover:border-brand-secondary/50 hover:shadow-lg hover:shadow-brand-secondary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-brand-dark"
                 aria-label={`${pkg.title} — request a quote`}
               >
-                <div className="relative aspect-[16/10] overflow-hidden bg-brand-dark">
+                <div className="relative aspect-[3/2] overflow-hidden bg-brand-dark">
                   <Image
                     src={pkg.image}
                     alt=""

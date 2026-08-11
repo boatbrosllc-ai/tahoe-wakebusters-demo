@@ -38,7 +38,7 @@ export const inquiryPackages: InquiryPackage[] = [
       "Fishing days, villa coordination, transportation, food/provisioning guidance, catch handling, group coordination.",
     image: "/photos/nsf/bachelor-blowout.jpg",
     imageAlt: "Three anglers with yellowfin tuna on a Cabo sportfishing charter",
-    imagePosition: "58% 0%",
+    imagePosition: "58% 18%",
     highlights: [
       "2 private fishing days",
       "Villa coordination",
