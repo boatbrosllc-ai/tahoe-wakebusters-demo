@@ -32,6 +32,12 @@ const BREVO_FETCH_TIMEOUT_MS = 8000;
 /** Exponential back-off: 1s, then 3s before final failure. */
 const SEND_RETRY_DELAYS_MS = [1000, 3000];
 
+const SKIPPED_EMAIL_MESSAGE_ID = "skipped:email-unconfigured";
+
+function isBrevoConfigured(): boolean {
+  return Boolean(bookingEnv.brevoApiKey.trim());
+}
+
 function getHeaders(): Record<string, string> {
   return {
     "api-key": bookingEnv.brevoApiKey,
@@ -58,6 +64,12 @@ async function sendWithRetry(
   body: Record<string, unknown>,
   opts?: { retries?: number; idempotencyKey?: string }
 ): Promise<Response> {
+  if (!isBrevoConfigured()) {
+    return new Response(JSON.stringify({ messageId: SKIPPED_EMAIL_MESSAGE_ID }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const retries = opts?.retries ?? 2;
   const headers: Record<string, string> = { ...getHeaders() };
   if (opts?.idempotencyKey) {

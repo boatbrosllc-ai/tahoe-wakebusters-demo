@@ -3,13 +3,14 @@ import { checkRateLimit, getClientKey } from "@/lib/booking/rate-limit";
 import { hasFirebaseConfig } from "@/lib/booking/env";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { sendLeadNotificationEmail } from "@/lib/booking/brevo";
+import { upsertGuestRecord } from "@/lib/booking/guests";
 
 const MAX_EMAIL_LENGTH = 254;
 const MAX_SOURCE_LENGTH = 200;
 
 /**
- * Lead capture (email). Persists to Firestore when configured and/or sends to business email via Brevo.
- * Rate-limited and input size capped. Returns failure when storage or delivery fails.
+ * Lead capture (email). Persists to the customer Firestore `leads` and `guests` collections.
+ * Rate-limited and input size capped. Returns failure when storage fails.
  */
 export async function POST(request: NextRequest) {
   let submissionId: string | null = null;
@@ -35,30 +36,30 @@ export async function POST(request: NextRequest) {
     }
 
     const useFirestore = hasFirebaseConfig();
-    const useBrevo = Boolean(process.env.BREVO_API_KEY?.trim());
-    if (!useFirestore && !useBrevo) {
-      console.error("[Lead] Misconfiguration: neither Firestore nor Brevo configured; lead not persisted or delivered.");
+    if (!useFirestore) {
+      console.error("[Lead] Misconfiguration: Firestore not configured; lead not persisted.");
       return NextResponse.json(
         { error: "Something went wrong" },
         { status: 500 }
       );
     }
 
-    if (useFirestore) {
-      const db = getDb();
-      const { Timestamp } = getFirestoreExports();
-      const ref = db.collection("leads").doc();
-      submissionId = ref.id;
-      await ref.set({
-        email,
-        source,
-        createdAt: Timestamp.now(),
-      });
-    } else {
-      submissionId = crypto.randomUUID();
+    const db = getDb();
+    const { Timestamp } = getFirestoreExports();
+    const ref = db.collection("leads").doc();
+    submissionId = ref.id;
+    await ref.set({
+      email,
+      source,
+      createdAt: Timestamp.now(),
+    });
+    try {
+      await upsertGuestRecord(db, { email, source: source || "lead" });
+    } catch (guestErr) {
+      console.error("[Lead] Guest upsert failed", { submissionId }, guestErr);
     }
 
-    if (useBrevo) {
+    if (process.env.BREVO_API_KEY?.trim()) {
       await sendLeadNotificationEmail(email, source);
     }
 

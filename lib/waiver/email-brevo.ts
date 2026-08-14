@@ -119,6 +119,10 @@ function buildReminderHtml(params: WaiverReminderParams): string {
 
 export const waiverEmailBrevo: WaiverEmailAdapter = {
   async sendWaiverInvite(params: WaiverInviteParams): Promise<void> {
+    if (!bookingEnv.brevoApiKey.trim()) {
+      console.warn("[waiver-email] skipped invite; no email provider configured");
+      return;
+    }
     const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
       method: "POST",
       headers: getHeaders(),
@@ -136,6 +140,10 @@ export const waiverEmailBrevo: WaiverEmailAdapter = {
   },
 
   async sendWaiverReminder(params: WaiverReminderParams): Promise<void> {
+    if (!bookingEnv.brevoApiKey.trim()) {
+      console.warn("[waiver-email] skipped reminder; no email provider configured");
+      return;
+    }
     const res = await fetch(`${BREVO_API_BASE}/smtp/email`, {
       method: "POST",
       headers: getHeaders(),

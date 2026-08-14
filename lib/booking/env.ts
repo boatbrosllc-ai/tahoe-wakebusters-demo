@@ -142,7 +142,7 @@ export const bookingEnv = {
     return requireEnv("STRIPE_WEBHOOK_SECRET");
   },
   get brevoApiKey(): string {
-    return requireEnv("BREVO_API_KEY");
+    return getEnv("BREVO_API_KEY") ?? "";
   },
   get brevoBookingTemplateId(): number | undefined {
     const v = getEnv("BREVO_TEMPLATE_ID_BOOKING_CONFIRMATION") ?? getEnv("BREVO_BOOKING_TEMPLATE_ID");

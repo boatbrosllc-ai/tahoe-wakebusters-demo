@@ -8,6 +8,7 @@
 import type { Firestore, DocumentReference, Query } from "firebase-admin/firestore";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { upsertBrevoContact, sendWaiverTemplateMissingAlert } from "@/lib/booking/brevo";
+import { upsertGuestRecord } from "@/lib/booking/guests";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import {
   listTemplates,
@@ -344,6 +345,21 @@ export async function convertHoldToBooking(
             } catch (waiverErr) {
               bookingError("convert-hold", "recovery waiver invite send failed", waiverErr, { bookingId: recoveryBookingId });
             }
+          }
+        }
+        {
+          const cust = bookingForSideEffects.customer;
+          try {
+            await upsertGuestRecord(db, {
+              email: cust.email,
+              name: cust.name,
+              phone: cust.phone,
+              source: "booking",
+              bookingId: recoveryBookingId,
+              marketingOptIn: hold.marketingOptIn === true,
+            });
+          } catch (guestErr) {
+            bookingError("convert-hold", "recovery guest upsert failed", guestErr, { bookingId: recoveryBookingId });
           }
         }
         if (hold.marketingOptIn && !bookingForSideEffects.brevoSubscribedAt) {
@@ -1218,6 +1234,18 @@ export async function convertHoldToBooking(
   await tryImmediateConfirmationSendForBooking(db, bookingId);
   if (enqueueWaiverInviteOutbox) {
     await tryImmediateWaiverInviteSendForBooking(db, bookingId);
+  }
+  try {
+    await upsertGuestRecord(db, {
+      email: customer.email,
+      name: customer.name,
+      phone: customer.phone,
+      source: "booking",
+      bookingId,
+      marketingOptIn: hold.marketingOptIn === true,
+    });
+  } catch (guestErr) {
+    bookingError("convert-hold", "guest upsert failed", guestErr, { bookingId });
   }
   if (hold.marketingOptIn) {
     const listId = bookingEnv.brevoMarketingListId;

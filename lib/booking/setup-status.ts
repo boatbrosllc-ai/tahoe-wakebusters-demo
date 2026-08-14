@@ -12,6 +12,7 @@ export interface SetupStatus {
   firebaseError?: string;
   experienceCount: number;
   stripeConfigured: boolean;
+  /** When false, confirmation/waiver emails are skipped; guests still persist in Firestore. */
   brevoConfigured: boolean;
   appBaseUrlConfigured: boolean;
   /** When false, receipt tokens, manage links, and release tokens are degraded or unavailable. */
@@ -72,7 +73,6 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     firebaseConnected &&
     experienceCount > 0 &&
     stripeConfigured &&
-    brevoConfigured &&
     appBaseUrlConfigured &&
     manageBookingSecretConfigured;
 
