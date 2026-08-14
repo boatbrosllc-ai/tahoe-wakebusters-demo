@@ -3,14 +3,16 @@
 @tailwind utilities;
 
 :root {
-  /* Nasty Sport Fishing – exact colors sampled from logo lockup */
-  --brand-primary: #14b6dc;   /* Light cyan/blue – logo outer glow, CTAs */
-  --brand-secondary: #f27a0a; /* Logo orange accent bar */
-  /* Supporting */
-  --brand-dark: #04244a;      /* Logo navy – heroes, footer, “SPORT FISHING” bar */
-  --brand-muted: #1a5a7a;     /* Deeper teal – secondary copy */
-  --brand-bg: #e8f6fa;        /* Light cyan tint – muted sections */
-  --brand-silver: #d5dbe1;    /* Metallic silver from NASTY lettering */
+  /* Fallback theme tokens. Active site overrides these on <html> via siteThemeCssVars(). */
+  --brand-primary: #14b6dc;
+  --brand-secondary: #f27a0a;
+  --brand-accent: #f27a0a;
+  --brand-dark: #04244a;
+  --brand-muted: #1a5a7a;
+  --brand-bg: #e8f6fa;
+  --brand-silver: #d5dbe1;
+  --brand-text: #04244a;
+  --brand-radius: 1rem;
 }
 
 @layer base {

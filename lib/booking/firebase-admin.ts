@@ -2,6 +2,9 @@
  * Firebase Admin SDK — server-side only.
  * Loads firebase-admin via require() at runtime (serverComponentsExternalPackages in next.config keeps it external).
  * Initialize with service account (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY).
+ *
+ * The Firebase project is per-deployment (env), not per `sites/` folder.
+ * Do not assume every customer shares one database.
  */
 import "server-only";
 

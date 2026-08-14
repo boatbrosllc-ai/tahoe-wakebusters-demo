@@ -1,5 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Experience alias / boat-resolution contract tests for Nasty Sport Fishing.
+ * Experience alias / boat-resolution contract tests for ${brand.companyName}.
  * Firestore slugs `pontoon` / `watersports` are intentional legacy IDs for Half/Full Day.
  */
 

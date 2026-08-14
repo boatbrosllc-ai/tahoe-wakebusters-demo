@@ -38,9 +38,9 @@ function getEmailLogoUrl(): string {
   return `${base}${brand.logoEmailPath}`;
 }
 
-/** Header row with Nasty Sport Fishing logo and subtitle. */
+/** Header row with ${brand.companyName} logo and subtitle. */
 function reminderHeaderHtml(subtitle: string): string {
-  return `<td style="background: ${HEADER_GRADIENT}; padding: 24px 28px; text-align: center;"><img src="${getEmailLogoUrl()}" alt="Nasty Sport Fishing" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" /><p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${subtitle}</p></td>`;
+  return `<td style="background: ${HEADER_GRADIENT}; padding: 24px 28px; text-align: center;"><img src="${getEmailLogoUrl()}" alt="${brand.companyName}" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" /><p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${subtitle}</p></td>`;
 }
 
 function escapeHtml(s: string): string {
@@ -134,7 +134,7 @@ export function buildReminder1WeekHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you on the water!</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— ${brand.companyName}</p>
         </td>
       </tr>
     </table>
@@ -168,7 +168,7 @@ export function buildReminder24hHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">Get some rest—tomorrow we&apos;re on the water.</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— ${brand.companyName}</p>
         </td>
       </tr>
     </table>
@@ -202,7 +202,7 @@ export function buildReminderDayOfHtml(params: BookingReminderParams): string {
           ${instructions}
           ${bring}
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you in a few hours—let&apos;s make it a great one.</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— ${brand.companyName}</p>
         </td>
       </tr>
     </table>
@@ -229,13 +229,13 @@ export function buildReminderHtml(type: ReminderType, params: BookingReminderPar
 export function getReminderSubject(type: ReminderType, experienceName: string): string {
   switch (type) {
     case "1week":
-      return `One week until your ${experienceName} – Nasty Sport Fishing`;
+      return `One week until your ${experienceName} – ${brand.companyName}`;
     case "24h":
-      return `Tomorrow: We're excited to see you – Nasty Sport Fishing`;
+      return `Tomorrow: We're excited to see you – ${brand.companyName}`;
     case "dayof":
-      return `Today's the day – let's have a blast! – Nasty Sport Fishing`;
+      return `Today's the day – let's have a blast! – ${brand.companyName}`;
     default:
-      return `Reminder: ${experienceName} – Nasty Sport Fishing`;
+      return `Reminder: ${experienceName} – ${brand.companyName}`;
   }
 }
 
@@ -256,7 +256,7 @@ export interface FinalPaymentRequestParams {
   hoursUntilTrip?: number;
 }
 
-const FINAL_PAYMENT_SUBJECT = "Complete your payment – Nasty Sport Fishing";
+const FINAL_PAYMENT_SUBJECT = `Complete your payment – ${brand.companyName}`;
 
 export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams): string {
   const hoursRounded =
@@ -296,7 +296,7 @@ export function buildFinalPaymentRequestHtml(params: FinalPaymentRequestParams):
           </table>
           <p style="margin:16px 0 0;font-size:14px;color:${MUTED};line-height:1.6;">This link takes you to your booking where you can pay securely. After payment, your booking will be marked paid and you&apos;re good to go.</p>
           <p style="margin:20px 0 0;font-size:14px;color:${MUTED};">See you on the water!</p>
-          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— Nasty Sport Fishing</p>
+          <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${DARK};">— ${brand.companyName}</p>
         </td>
       </tr>
     </table>

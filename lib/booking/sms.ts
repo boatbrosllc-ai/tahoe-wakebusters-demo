@@ -4,6 +4,7 @@
  * When not configured, send functions no-op and return false (no throw).
  */
 
+import { brand } from "@/content/brand";
 import { bookingEnv } from "./env";
 import { validatePhone } from "./validate-phone";
 import { logNotificationSent, type NotificationEventSubtype } from "./email-log";
@@ -120,7 +121,7 @@ export async function sendBookingConfirmationSms(params: {
   receiptLink?: string;
 }): Promise<boolean> {
   const { phone, customerName, experienceName, tripDate, bookingId, receiptLink } = params;
-  let body = `Nasty Sport Fishing: You're booked! ${experienceName} on ${tripDate}.`;
+  let body = `${brand.companyName}: You're booked! ${experienceName} on ${tripDate}.`;
   if (receiptLink) {
     body += ` Receipt: ${receiptLink}`;
   } else {
@@ -152,7 +153,7 @@ export async function sendBookingReminderSms(params: {
       : reminderType === "24h"
         ? "Reminder: Your trip is tomorrow"
         : "Reminder: Your trip is today";
-  let body = `Nasty Sport Fishing – ${line}. ${experienceName}, ${tripDate}.`;
+  let body = `${brand.companyName} – ${line}. ${experienceName}, ${tripDate}.`;
   if (waiverSigningUrl) body += ` Sign waiver: ${waiverSigningUrl}`;
   return sendAndLog({
     phone,
@@ -174,7 +175,7 @@ export async function sendFinalPaymentRequestSms(params: {
   bookingId: string;
 }): Promise<boolean> {
   const { phone, customerName, amountFormatted, payLink, bookingId } = params;
-  const body = `Nasty Sport Fishing: Pay remaining balance (${amountFormatted}) before your trip: ${payLink}`;
+  const body = `${brand.companyName}: Pay remaining balance (${amountFormatted}) before your trip: ${payLink}`;
   return sendAndLog({
     phone,
     toName: customerName,
@@ -248,7 +249,7 @@ export async function sendBookingCancellationSms(params: {
       refundLine = " We could not complete your refund automatically; our team will follow up with you.";
       break;
   }
-  const body = `Nasty Sport Fishing: Your booking${trip} (${experienceName}) has been canceled.${refundLine}`;
+  const body = `${brand.companyName}: Your booking${trip} (${experienceName}) has been canceled.${refundLine}`;
   return sendAndLog({
     phone,
     toName: customerName,

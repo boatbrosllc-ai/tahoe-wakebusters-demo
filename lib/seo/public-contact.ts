@@ -43,10 +43,10 @@ export function getPublicPhone(): PublicPhone | null {
 
 /** City / region / country only — not a fabricated street NAP. */
 export function getPublicAreaLabel(): string {
-  const city = brand.address.city?.trim() || "Cabo San Lucas";
-  const state = brand.address.state?.trim() || "Baja California Sur";
-  const country = brand.address.country?.trim() || "Mexico";
-  return `${city}, ${state}, ${country}`;
+  const city = brand.address.city?.trim() || "";
+  const state = brand.address.state?.trim() || "";
+  const country = brand.address.country?.trim() || "";
+  return [city, state, country].filter(Boolean).join(", ");
 }
 
 /**
@@ -54,10 +54,7 @@ export function getPublicAreaLabel(): string {
  * Slip / dock details stay in post-booking confirmation.
  */
 export function getMarinaMeetNote(): string {
-  return (
-    brand.marinaMeetNote?.trim() ||
-    "Meet at Marina Cabo San Lucas — exact slip and check-in details arrive after booking."
-  );
+  return brand.marinaMeetNote?.trim() || "We'll send exact meet-up details after booking.";
 }
 
 /** Verified street line for UI/schema — null when unset or placeholder marina-only line used as street. */
@@ -122,9 +119,9 @@ export function buildLocalBusinessJsonLd(input: LocalBusinessJsonLdInput): Recor
 
   const address: Record<string, unknown> = {
     "@type": "PostalAddress",
-    addressLocality: brand.address.city?.trim() || "Cabo San Lucas",
-    addressRegion: brand.address.state?.trim() || "Baja California Sur",
-    addressCountry: "MX",
+    addressLocality: brand.address.city?.trim() || "",
+    addressRegion: brand.address.state?.trim() || "",
+    addressCountry: brand.country,
   };
   if (street) address.streetAddress = street;
   if (postalCode) address.postalCode = postalCode;
@@ -137,18 +134,15 @@ export function buildLocalBusinessJsonLd(input: LocalBusinessJsonLdInput): Recor
     url: input.baseUrl.replace(/\/+$/, ""),
     email: brand.email,
     address,
-    areaServed: [
-      { "@type": "Place", name: "Cabo San Lucas" },
-      { "@type": "Place", name: "Los Cabos" },
-      { "@type": "Place", name: "Baja California Sur" },
-      { "@type": "Place", name: "Sea of Cortez" },
-    ],
+    areaServed: (brand.address.city ? [{ "@type": "Place", name: brand.address.city }] : []).concat(
+      brand.address.state ? [{ "@type": "Place", name: brand.address.state }] : []
+    ),
     hasOfferCatalog: {
       "@type": "OfferCatalog",
-      name: "Cabo sport fishing charters",
+      name: `${brand.companyName} trips`,
       itemListElement: [
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Nasty Half Day Cabo fishing charter" } },
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Nasty Full Day Cabo fishing charter" } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Half Day charter" } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Full Day charter" } },
       ],
     },
   };

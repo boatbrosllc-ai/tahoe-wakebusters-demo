@@ -10,24 +10,23 @@ import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { LocationPageCTA } from "@/components/site/LocationPageCTA";
 import { getMarinaMeetNote, getPublicPhone } from "@/lib/seo/public-contact";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 const canonical = `${baseUrl}/location`;
 
 export const metadata: Metadata = {
-  title: "Marina Location | Nasty Sport Fishing – Cabo San Lucas",
-  description:
-    "Meet Nasty Sport Fishing in Cabo San Lucas, Baja California Sur. Marina meet-up details arrive after booking. Email or book online.",
+  title: `Marina Location | ${brand.companyName}`,
+  description: `Meet ${brand.companyName}. Dock meet-up details arrive after booking. Email or book online.`,
   keywords: [
-    "Nasty Sport Fishing location",
-    "Marina Cabo San Lucas fishing charter",
-    "Cabo San Lucas sport fishing marina",
-    "Nasty Sport Fishing contact",
+    `${brand.companyName} location`,
+    `${brand.companyName} contact`,
+    "boat rental marina",
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Our Location | Nasty Sport Fishing",
-    description: "Find Nasty Sport Fishing in Cabo San Lucas — marina meet-up details after you book.",
+    title: `Our Location | ${brand.companyName}`,
+    description: `Find ${brand.companyName} — dock meet-up details after you book.`,
     url: canonical,
     siteName: brand.companyName,
   },
@@ -107,10 +106,10 @@ export default async function LocationPage() {
             </div>
           </section>
         ) : (
-          <section className="bg-brand-bg/50 py-8 sm:py-10" aria-label="Cabo sport fishing">
+          <section className="bg-brand-bg/50 py-8 sm:py-10" aria-label="Private boat rentals">
             <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8 text-center">
               <p className="text-lg sm:text-xl font-semibold text-brand-dark">
-                Cabo San Lucas sport fishing
+                Private boat rentals
               </p>
               <p className="mt-1 text-brand-muted">{reviewCountLabel()}</p>
             </div>
@@ -123,7 +122,7 @@ export default async function LocationPage() {
               Marina & meeting location
             </h2>
             <p className="mt-3 text-brand-dark/90 leading-relaxed">
-              We operate out of the Marina Cabo San Lucas area. Your booking confirmation includes the exact slip or meet-up point. Guests meet the captain at the marina—we send meet-up details after you book.
+              We operate from the local marina / dock area. Your booking confirmation includes the exact slip or meet-up point. Guests meet the captain there—we send meet-up details after you book.
             </p>
             <div className={`mt-6 grid gap-6 sm:gap-8 ${hasMap ? "lg:grid-cols-[1fr_1fr] lg:gap-12" : ""}`}>
               <div className="min-w-0">
@@ -191,7 +190,7 @@ export default async function LocationPage() {
                 <div className="min-w-0 min-h-[240px] sm:min-h-0">
                   <MapEmbed
                     src={location.mapEmbedSrc}
-                    title="Nasty Sport Fishing location on Google Maps"
+                    title={`${brand.companyName} location on Google Maps`}
                     viewOnMapsUrl={location.googleMapsPlaceUrl || undefined}
                   />
                 </div>

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import { PageBreadcrumbs } from "@/components/experience/PageBreadcrumbs";
 import { FishProcessingPageClient } from "@/components/fish-processing/FishProcessingPageClient";
 import {
@@ -14,9 +15,9 @@ import {
 
 const path = "/cabo-fish-processing";
 
-const title = "Cabo Fish Processing | Vacuum Seal & Freeze Your Catch | Nasty Sport Fishing";
+const title = `Cabo Fish Processing | Vacuum Seal & Freeze Your Catch | ${brand.companyName}`;
 const description =
-  "Professional Cabo fish processing from Nasty Sport Fishing. Filleting, portioning, vacuum sealing, freezing, travel-ready packaging and qualifying fish shipping from Cabo San Lucas.";
+  `Professional Cabo fish processing from ${brand.companyName}. Filleting, portioning, vacuum sealing, freezing, travel-ready packaging and qualifying fish shipping from Cabo San Lucas.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path,

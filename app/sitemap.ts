@@ -9,8 +9,10 @@ import {
 } from "@/lib/booking/get-sitemap-data";
 import { SEO_SITEMAP_PATHS } from "@/lib/seo/paths";
 import { getPublishedFishingReports } from "@/content/seo/fishing-reports";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+
+const baseUrl = getSiteBaseUrl();
 
 /** Regenerate sitemap periodically so new boat pillar URLs appear without a full redeploy. */
 export const revalidate = 3600;

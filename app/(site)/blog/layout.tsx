@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
 import { brand } from "@/content/brand";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+
+const baseUrl = getSiteBaseUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: "The Bite | Cabo Fishing Tips & Guides",
   description:
-    "Cabo fishing tips, charter guides, and bite notes from Nasty Sport Fishing — seasons, species, and trip prep for Cabo San Lucas.",
+    `Cabo fishing tips, charter guides, and bite notes from ${brand.companyName} — seasons, species, and trip prep for Cabo San Lucas.`,
   keywords: [
     "Cabo fishing blog",
     "Cabo fishing tips",
@@ -17,7 +19,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: `The Bite | Cabo Fishing Tips & Guides | ${brand.companyName}`,
     description:
-      "Cabo fishing tips, charter guides, and bite notes from Nasty Sport Fishing.",
+      `Cabo fishing tips, charter guides, and bite notes from ${brand.companyName}.`,
     url: `${baseUrl}/blog`,
     type: "website",
   },

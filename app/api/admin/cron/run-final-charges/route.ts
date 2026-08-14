@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Cron: attempt off-session final charge for bookings with finalChargeAt <= now.
  * Call with Authorization: Bearer CRON_SECRET.
@@ -1204,7 +1205,7 @@ export async function POST(request: NextRequest) {
                   });
                 }
               }
-              const subject = requiresAction ? "Action needed to complete your booking – Nasty Sport Fishing" : "Payment failed for your upcoming trip – Nasty Sport Fishing";
+              const subject = requiresAction ? `Action needed to complete your booking – ${brand.companyName}` : `Payment failed for your upcoming trip – ${brand.companyName}`;
               await sendFinalChargeFailedEmail(booking.customer.email, booking.customer.name, manageLink, requiresAction, {
                 experienceName: experienceNameFc,
                 tripDate: tripDateFc,

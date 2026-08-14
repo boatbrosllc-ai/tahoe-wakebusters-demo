@@ -6,7 +6,7 @@ const MAX_NAME_LENGTH = 500;
 const MAX_MESSAGE_LENGTH = 10_000;
 
 /**
- * Contact form. Sends submission to business email (info@nastysportfishing.com or CONTACT_EMAIL) via Brevo.
+ * Contact form. Sends submission to CONTACT_EMAIL (or siteConfig contact email) via Brevo.
  * Rate-limited and input size capped to prevent abuse.
  */
 export async function POST(request: NextRequest) {

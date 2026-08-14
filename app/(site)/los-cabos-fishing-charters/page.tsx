@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
 
 const description =
-  "Los Cabos fishing charters explained — the region vs Cabo San Lucas city, and where Nasty Sport Fishing operates from Marina Cabo San Lucas.";
+  `Los Cabos fishing charters explained — the region vs Cabo San Lucas city, and where ${brand.companyName} operates from Marina Cabo San Lucas.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path: "/los-cabos-fishing-charters",
@@ -19,7 +20,7 @@ export default function Page() {
       path="/los-cabos-fishing-charters"
       pageKey="los_cabos_fishing_charters"
       h1="Los Cabos Fishing Charters"
-      lede="Los Cabos is a region. Cabo San Lucas is a city. Here’s how that maps to where Nasty Sport Fishing actually departs — and how to book without guessing the wrong marina."
+      lede={`Los Cabos is a region. Cabo San Lucas is a city. Here’s how that maps to where ${brand.companyName} actually departs — and how to book without guessing the wrong marina.`}
       breadcrumbName="Los Cabos Fishing Charters"
       metaDescription={description}
       heroImage="/photos/stock/cabo/aerial-lands-end-clark.jpg"
@@ -36,7 +37,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Cabo San Lucas is the city at Land’s End, home to Marina Cabo San Lucas. That marina is where Nasty Sport Fishing meets guests for day charters. We are not describing every marina or harbor across the peninsula — just our operating area.",
+          text: `Cabo San Lucas is the city at Land’s End, home to Marina Cabo San Lucas. That marina is where ${brand.companyName} meets guests for day charters. We are not describing every marina or harbor across the peninsula — just our operating area.`,
         },
         {
           type: "h2",
@@ -45,7 +46,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Nasty Sport Fishing runs private charters from the Marina Cabo San Lucas area. Exact slip and dock instructions come in your confirmation after you book. If you are staying in San José del Cabo or the Tourist Corridor, plan transfer time to Cabo San Lucas for check-in — resort transportation can be added as an optional checkout add-on when offered.",
+          text: `${brand.companyName} runs private charters from the Marina Cabo San Lucas area. Exact slip and dock instructions come in your confirmation after you book. If you are staying in San José del Cabo or the Tourist Corridor, plan transfer time to Cabo San Lucas for check-in — resort transportation can be added as an optional checkout add-on when offered.`,
         },
         { type: "cta" },
         {
@@ -55,7 +56,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Day fishing still uses the same two private products: Nasty Half Day (5 hours) and Nasty Full Day (8 hours). Multi-day itineraries with lodging or tournament weeks are inquiry packages — not the same as selecting a date on the charter calendar. Start with experiences for day trips, packages for coordinated quote requests, or contact if your group needs something custom.",
+          text: "Day fishing still uses the same two private products: Half Day (5 hours) and Full Day (8 hours). Multi-day itineraries with lodging or tournament weeks are inquiry packages — not the same as selecting a date on the charter calendar. Start with experiences for day trips, packages for coordinated quote requests, or contact if your group needs something custom.",
         },
         {
           type: "h2",
@@ -90,7 +91,7 @@ export default function Page() {
         {
           question: "Are Los Cabos multi-day packages the same as Half Day / Full Day?",
           answer:
-            "No. Multi-day packages are inquiry-only quote products. Day charters book online as Nasty Half Day or Nasty Full Day on the live calendar.",
+            "No. Multi-day packages are inquiry-only quote products. Day charters book online as Half Day or Full Day on the live calendar.",
         },
         {
           question: "What is the cancellation policy?",
@@ -100,8 +101,8 @@ export default function Page() {
       ]}
       related={[
         { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas charters" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
         { href: "/packages", label: "Packages" },
         { href: "/best-fishing-charters-cabo-san-lucas", label: "How to choose a charter" },

@@ -1,9 +1,10 @@
+import { brand } from "@/content/brand";
 import type { Metadata } from "next";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
 
 const description =
-  "Cabo fishing charter prices for Nasty Half Day and Full Day — founding vs standard rates, peak windows, inclusions, deposits, and checkout tax.";
+  "Cabo fishing charter prices for Half Day and Full Day — founding vs standard rates, peak windows, inclusions, deposits, and checkout tax.";
 
 export const metadata: Metadata = buildSeoMetadata({
   path: "/cabo-fishing-charter-prices",
@@ -19,7 +20,7 @@ export default function Page() {
       path="/cabo-fishing-charter-prices"
       pageKey="cabo_fishing_charter_prices"
       h1="Cabo Fishing Charter Prices"
-      lede="Clear private-charter pricing for Nasty Half Day (5h) and Nasty Full Day (8h) — founding rates when active, peak Full Day windows, and what’s included before tax."
+      lede="Clear private-charter pricing for Half Day (5h) and Full Day (8h) — founding rates when active, peak Full Day windows, and what’s included before tax."
       breadcrumbName="Charter Prices"
       metaDescription={description}
       heroImage="/photos/stock/cabo/el-arco-sunset-jarvis.jpg"
@@ -27,7 +28,7 @@ export default function Page() {
       sections={[
         {
           type: "p",
-          text: "Nasty Sport Fishing publishes private charter rates for two durations on one boat calendar. The cards below pull from the same catalog used across the site — not a second pricing engine — so you see founding or standard presentation consistently.",
+          text: `${brand.companyName} publishes private charter rates for two durations on one boat calendar. The cards below pull from the same catalog used across the site — not a second pricing engine — so you see founding or standard presentation consistently.`,
         },
         {
           type: "h2",
@@ -121,13 +122,13 @@ export default function Page() {
         {
           question: "Are shared-boat seats available at a lower price?",
           answer:
-            "No. Nasty Half Day and Nasty Full Day are private charters. Pricing is for the boat, not per shared seat.",
+            "No. Half Day and Full Day are private charters. Pricing is for the boat, not per shared seat.",
         },
       ]}
       related={[
         { href: "/cabo-fish-processing", label: "Cabo fish processing" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas charters" },
         { href: "/packages", label: "Packages" },
         { href: "/best-fishing-charters-cabo-san-lucas", label: "Buyer’s guide" },

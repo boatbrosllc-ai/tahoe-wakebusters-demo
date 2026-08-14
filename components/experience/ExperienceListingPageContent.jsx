@@ -23,44 +23,44 @@ const BOOKING_SECTION_ID = "booking-preview";
 const HALF_DAY_SOCIAL_PROOF = {
   rating: undefined,
   ratingCount: "",
-  stats: ["Private charter", "Captain & crew", "Cabo San Lucas"],
+  stats: ["Private charter", "Captain & crew", "Your City"],
 };
 
 /** Fallback hero title by slug when experience.title is missing. */
 const HERO_TITLE_BY_SLUG = {
-  pontoon: "Nasty Half Day",
-  "nasty-half-day": "Nasty Half Day",
-  watersports: "Nasty Full Day",
-  "nasty-full-day": "Nasty Full Day",
-  sunset: "Cabo Sunset Fishing",
-  holiday: "Cabo Billfish Day",
+  pontoon: "Half Day",
+  "nasty-half-day": "Half Day",
+  watersports: "Full Day",
+  "nasty-full-day": "Full Day",
+  sunset: "Sunset Trip",
+  holiday: "Specialty Day",
 };
 
 /** Fallback hero subtitle by slug when experience.subtitle is missing. */
 const HERO_SUBTITLE_BY_SLUG = {
-  pontoon: "5-hour private Cabo sportfishing charter. Captain & crew included.",
-  "nasty-half-day": "5-hour private Cabo sportfishing charter. Captain & crew included.",
-  watersports: "8-hour private Cabo sportfishing charter. Captain & crew included.",
-  "nasty-full-day": "8-hour private Cabo sportfishing charter. Captain & crew included.",
-  sunset: "Evening fishing charter in Cabo San Lucas.",
-  holiday: "Seasonal Cabo billfish-focused charter day.",
+  pontoon: "5-hour private captained charter. Captain & crew included.",
+  "nasty-half-day": "5-hour private captained charter. Captain & crew included.",
+  watersports: "8-hour private captained charter. Captain & crew included.",
+  "nasty-full-day": "8-hour private captained charter. Captain & crew included.",
+  sunset: "Evening charter.",
+  holiday: "Seasonal specialty charter day.",
 };
 
 /** Full-day overview fallback only when Firestore description is empty. */
 const FULL_DAY_OVERVIEW = {
   headline: "The experience",
   story:
-    "A private full-day Cabo sportfishing charter with licensed captain and mate. Target pelagics and billfish when conditions allow — tackle, bait, and licenses arranged.",
+    "A private full-day captained charter with licensed captain and mate.",
   seoParagraphs: [
-    "Nasty Full Day is an 8-hour private charter from Marina Cabo San Lucas. Your crew runs the boat while you fish Cabo’s bluewater for tuna, dorado, wahoo, and marlin when the bite is on.",
-    "Fuel policy, inclusions, and optional add-ons (including offshore run when offered) are shown in checkout. No surprise customer processing surcharge on the published charter base.",
-    "Check live availability below to lock your date on the same inventory used across the site.",
+    "Full Day is an 8-hour private charter. Your crew runs the boat.",
+    "Fuel policy, inclusions, and optional add-ons are shown in checkout.",
+    "Check live availability below to lock your date.",
   ],
   timeline: [
-    { step: "Meet", desc: "Marina Cabo San Lucas" },
+    { step: "Meet", desc: "Dock / marina" },
     { step: "Brief", desc: "Safety & plan for the day" },
-    { step: "Fish", desc: "Bluewater sportfishing" },
-    { step: "Return", desc: "Back to the marina" },
+    { step: "Trip", desc: "On the water" },
+    { step: "Return", desc: "Back to the dock" },
   ],
 };
 
@@ -78,7 +78,7 @@ function getHeroSubtitle(experience) {
   const s = experience.subtitle?.trim();
   if (slug === "holiday") return HERO_SUBTITLE_BY_SLUG.holiday;
   if (s) return s;
-  return HERO_SUBTITLE_BY_SLUG[slug] ?? "Book your Cabo fishing charter. Captain & crew included.";
+  return HERO_SUBTITLE_BY_SLUG[slug] ?? "Book your trip. Captain & crew included.";
 }
 
 export function ExperienceListingPageContent(props) {
@@ -133,9 +133,9 @@ export function ExperienceListingPageContent(props) {
   const rawHero = experience.heroMedia?.url?.trim();
   const firstGalleryStill = rawGallery.find((u) => typeof u === "string" && u.trim());
   const heroImageUrl = rawHero || firstGalleryStill || undefined;
-  const heroTitle = isWakesurfClub ? "Cabo charter session" : getHeroTitle(experience);
+  const heroTitle = isWakesurfClub ? "Charter session" : getHeroTitle(experience);
   const heroSubtitle = isWakesurfClub
-    ? "Browse Nasty Half Day and Full Day for private Cabo fishing."
+    ? "Browse Half Day and Full Day."
     : getHeroSubtitle(experience);
   const heroIntro = undefined;
 
@@ -307,11 +307,11 @@ export function ExperienceListingPageContent(props) {
           <p className="text-white/90 text-sm sm:text-base">
             Looking for a shorter trip?{" "}
             <Link href="/experiences/nasty-half-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Book Nasty Half Day
+              Book Half Day
             </Link>
             {" "}or browse{" "}
             <Link href="/experiences" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              all Cabo charters
+              all trips
             </Link>
             .
           </p>
@@ -323,7 +323,7 @@ export function ExperienceListingPageContent(props) {
           <p className="text-white/90 text-sm sm:text-base">
             Want more time offshore?{" "}
             <Link href="/experiences/nasty-full-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Book Nasty Full Day
+              Book Full Day
             </Link>
             {" "}or see{" "}
             <Link href="/cabo-fishing-charter-prices" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
@@ -339,11 +339,11 @@ export function ExperienceListingPageContent(props) {
           <p className="text-white/90 text-sm sm:text-base">
             Prefer a full fishing day?{" "}
             <Link href="/experiences/nasty-full-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Nasty Full Day
+              Full Day
             </Link>
             {" "}and{" "}
             <Link href="/experiences/nasty-half-day" className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary rounded">
-              Nasty Half Day
+              Half Day
             </Link>
             {" "}are our core Cabo charters.
           </p>
@@ -361,7 +361,7 @@ export function ExperienceListingPageContent(props) {
       <FinalCTA
         onBookNow={handleBookNow}
         bookingSectionId={BOOKING_SECTION_ID}
-        headline={isWakesurfClub ? "Ready to fish Cabo?" : "Ready to go?"}
+        headline={isWakesurfClub ? "Ready to book?" : "Ready to go?"}
         primaryCta={primaryCta}
         secondaryCta={secondaryCta}
         secondaryHref={secondaryHref}

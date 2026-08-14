@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Ensures boat descriptions shown on the site always match the boat's name
  * (e.g. no "Bentley tritoon" copy for a boat titled "JC Neptoon Tritoon").
@@ -43,7 +44,7 @@ function generatedDescription(boat: BoatDisplayInput): string {
   if (t === "pontoon" || t === "tritoon") {
     return `${displayName} for up to ${guests} guests with captain and crew — ready for a Cabo San Lucas fishing charter.`;
   }
-  return `${displayName} is Nasty Sport Fishing's Cabo San Lucas charter boat. Captain & crew included · up to ${guests} guests.`;
+  return `${displayName} is ${brand.companyName}'s Cabo San Lucas charter boat. Captain & crew included · up to ${guests} guests.`;
 }
 
 /**

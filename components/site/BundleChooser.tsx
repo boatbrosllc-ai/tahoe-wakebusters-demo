@@ -11,12 +11,12 @@ import {
 } from "@/content/catalog-pricing";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
+import { siteConfig } from "@/config/site";
 
-/** Fishing / catch imagery for package cards — not the boat listing photo. */
-const PACKAGE_FISHING_HEROES: Record<BundleId, string> = {
-  nasty: "/photos/nsf/yellowfin-marina-duo.png",
-  nastier: "/photos/nsf/yellowfin-ocean-duo.png",
-  nastiest: "/photos/nsf/sailfish-baitball.png",
+const PACKAGE_HEROES: Record<BundleId, string> = {
+  nasty: siteConfig.media.welcome,
+  nastier: siteConfig.media.boats,
+  nastiest: siteConfig.media.hero,
 };
 
 type ListingPayload = {
@@ -30,7 +30,7 @@ type ListingPayload = {
 };
 
 function packageHero(bundle: BundlePreset): string {
-  return PACKAGE_FISHING_HEROES[bundle.id] ?? "/photos/nsf/yellowfin-marina-catch.png";
+  return PACKAGE_HEROES[bundle.id] ?? siteConfig.media.galleryFallback;
 }
 
 /**
@@ -53,17 +53,17 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
   };
 
   return (
-    <section className="section-padding bg-brand-bg" aria-labelledby="how-nasty-heading">
+    <section className="section-padding bg-brand-bg" aria-labelledby="packages-heading">
       <div className="container-wide px-4 sm:px-6 lg:px-8">
         <motion.h2
-          id="how-nasty-heading"
+          id="packages-heading"
           className="text-3xl sm:text-4xl lg:text-5xl font-bold text-brand-dark text-center mb-3"
           initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.4 }}
         >
-          Make it Nasty
+          Choose your trip
         </motion.h2>
         <motion.p
           className="text-center text-brand-muted max-w-2xl mx-auto mb-8 sm:mb-10"
@@ -72,7 +72,7 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.35, delay: 0.05 }}
         >
-          Same private boat. Three packages — Half Day, Full Day, or Full Day all-in. Add-ons are a la carte on Nasty and Nastier.
+          Same private boat. Three packages — {siteConfig.catalog.halfDay.title}, {siteConfig.catalog.fullDay.title}, or {siteConfig.catalog.fullDay.title} all-in. Add-ons are a la carte on the first two packages.
         </motion.p>
 
         {FOUNDING_ANGLER_RATE_ACTIVE && (

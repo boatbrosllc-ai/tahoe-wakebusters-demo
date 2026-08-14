@@ -1,18 +1,19 @@
+import { brand } from "@/content/brand";
 export const LOCATION_FAQ = [
   {
     question: "Where do we meet for our charter?",
     answer:
-      "We meet at Marina Cabo San Lucas. Exact slip, dock instructions, and check-in time are in your confirmation email. Arrive a little early so we can load coolers and brief everyone before departure.",
+      "We meet at the dock. Exact slip, dock instructions, and check-in time are in your confirmation email. Arrive a little early so we can load coolers and brief everyone before departure.",
   },
   {
-    question: "Do your Cabo fishing charters include a captain?",
+    question: "Do your charters include a captain?",
     answer:
-      "Yes. Every Nasty Sport Fishing charter includes a licensed captain and crew. You fish — we handle the boat, safety, and navigation.",
+      `Yes. Every ${brand.companyName} charter includes a licensed captain and crew. You enjoy the trip — we handle the boat, safety, and navigation.`,
   },
   {
-    question: "What areas do you fish?",
+    question: "What areas do you run?",
     answer:
-      "We fish Cabo San Lucas and Los Cabos waters — Pacific and Sea of Cortez edges, plus banks like Gordo and Jaime when conditions and the bite call for it. The captain sets the plan for the day.",
+      "The captain sets the plan for the day based on conditions. Meet-up details are in your confirmation.",
   },
   {
     question: "How do I book a half-day or full-day charter?",

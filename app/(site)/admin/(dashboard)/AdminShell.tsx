@@ -23,8 +23,10 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
 import { notifyAdminAuthChanged } from "@/lib/admin-auth-client";
+import { PlatformDevBanner } from "@/components/site/PlatformDevBanner";
 
 const navGroups: { label: string; links: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[] }[] = [
   {
@@ -107,6 +109,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col min-h-screen bg-brand-bg/50">
+      <PlatformDevBanner />
       {/* Mobile top header — hidden on lg+ */}
       <header className="lg:hidden sticky top-0 z-30 flex h-14 items-center gap-3 bg-brand-dark border-b border-white/10 px-4 shrink-0">
         <button
@@ -118,14 +121,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           <Menu className="h-6 w-6" aria-hidden />
         </button>
         <Link href="/" className="flex items-center gap-2 min-w-0">
-          <Image
-            src={brand.logoNavbarPath ?? brand.logoPath}
-            alt={brand.logoAlt}
-            width={32}
-            height={32}
-            className="h-8 w-8 shrink-0 object-contain rounded-lg"
-          />
-          <span className="text-xs font-medium text-brand-primary truncate">Admin</span>
+              <Image
+                src={brand.logoNavbarPath ?? brand.logoPath}
+                alt={brand.logoAlt}
+                width={32}
+                height={32}
+                className="h-8 w-8 shrink-0 object-contain rounded-lg"
+                unoptimized
+              />
+              <span className="text-xs font-medium text-brand-primary truncate">
+                Admin · {siteConfig.tenantId}
+              </span>
         </Link>
       </header>
 
@@ -161,8 +167,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 width={40}
                 height={40}
                 className="h-10 w-10 shrink-0 object-contain rounded-xl"
+                unoptimized
               />
-              <span className="text-xs font-medium text-brand-primary truncate">Admin</span>
+              <span className="text-xs font-medium text-brand-primary truncate">
+                Admin · {siteConfig.tenantId}
+              </span>
             </Link>
             <button
               type="button"

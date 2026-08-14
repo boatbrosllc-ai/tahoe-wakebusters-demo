@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import type { Metadata } from "next";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
@@ -32,7 +33,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Roosterfish fishing is a different plan than a classic offshore marlin or tuna hunt. It tends to stay closer to shorelines and structure when the fish are around — and it still depends on water, bait, and weather. Nasty Sport Fishing’s standard products are private Half Day and Full Day charters with a captain who sets the day’s program from live conditions.",
+          text: `Roosterfish fishing is a different plan than a classic offshore marlin or tuna hunt. It tends to stay closer to shorelines and structure when the fish are around — and it still depends on water, bait, and weather. ${brand.companyName}’s standard products are private Half Day and Full Day charters with a captain who sets the day’s program from live conditions.`,
         },
         {
           type: "note",
@@ -77,7 +78,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Check availability for Nasty Half Day or Nasty Full Day, review prices, or contact us if your group has a specific roosterfish request tied to dates. Captained only; licenses are typically arranged as part of the charter.",
+          text: "Check availability for Half Day or Full Day, review prices, or contact us if your group has a specific roosterfish request tied to dates. Captained only; licenses are typically arranged as part of the charter.",
         },
       ]}
       faqs={[
@@ -107,8 +108,8 @@ export default function Page() {
         { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
         { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
         { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/fishing-reports", label: "Fishing reports" },
         { href: "/contact", label: "Contact" },
       ]}

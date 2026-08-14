@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 /**
- * Prefetches critical Nasty Sport Fishing routes so first clicks are near-instant.
+ * Prefetches critical routes so first clicks are near-instant.
  */
 const CRITICAL_ROUTES = [
   "/experiences",

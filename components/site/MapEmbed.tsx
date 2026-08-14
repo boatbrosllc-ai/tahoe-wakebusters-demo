@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { brand } from "@/content/brand";
 
 /**
  * Google Maps iframe embed. No API key. Lazy-loaded and responsive.
@@ -8,7 +9,7 @@ import { useState } from "react";
  */
 export function MapEmbed({
   src,
-  title = "Nasty Sport Fishing location on Google Maps",
+  title = `${brand.companyName} location on Google Maps`,
   viewOnMapsUrl,
 }: {
   src: string;

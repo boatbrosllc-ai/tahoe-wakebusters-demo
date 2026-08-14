@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Shared waiver reminder cron: pending requests, 24h+ old, valid token, trip not past, template allows reminder.
  */
@@ -165,7 +166,7 @@ export async function runWaiverReminderCron(
           to: toEmail,
           toName,
           templateId: "waiver_reminder",
-          subject: "Reminder: Sign your waiver – Nasty Sport Fishing",
+          subject: `Reminder: Sign your waiver – ${brand.companyName}`,
           bookingId: full.bookingId,
           eventSubtype: "waiver_reminder",
         }).catch((err) => console.error(`[${logPrefix}] logNotificationSent failed`, err));

@@ -35,7 +35,7 @@ export function FAQsPageClient({ faqs }: { faqs: FaqItem[] }) {
         <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-brand-dark to-transparent" aria-hidden />
         <div className="container-narrow relative z-10 mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center text-center">
           <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-brand-primary mb-4">
-            Cabo San Lucas sport fishing
+            Private boat rentals
           </p>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white tracking-tight mb-4">
             Frequently asked questions

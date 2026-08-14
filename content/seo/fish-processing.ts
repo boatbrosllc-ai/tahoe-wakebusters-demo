@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Centralized Cabo fish-processing business rules and page copy.
  * Keep pricing, yields, and service claims here — not scattered in JSX.
@@ -42,14 +43,14 @@ export const fishProcessingConfig = {
   },
   portionSizesOz: [8, 12] as const,
   heroImage: "/photos/nsf/yellowfin-marina-catch.jpg",
-  heroImageAlt: "Yellowfin tuna catch at the marina — Nasty Sport Fishing Cabo fish processing",
+  heroImageAlt: `Yellowfin tuna catch at the marina — ${brand.companyName} Cabo fish processing`,
   labelMockup: {
-    brand: "NASTY SPORT FISHING",
+    brand: brand.companyName.toUpperCase(),
     location: "CABO SAN LUCAS",
     species: "YELLOWFIN TUNA",
     caughtBy: "Michael",
     date: "08/10/26",
-    boat: "Nasty",
+    boat: brand.shortName,
     packageWeight: "1.2 LB",
     disclaimer: "Visual concept only — personalized labels may vary by trip.",
   },
@@ -193,7 +194,7 @@ export const fishProcessingFaqs: { question: string; answer: string }[] = [
   {
     question: "How much does fish processing cost in Cabo?",
     answer:
-      "Nasty Sport Fishing processes catch at $2–$3 per finished processed pound, with a $30 minimum. Pricing is based on the packaged weight after cleaning and portioning — not the gross fish weight on the boat. Use the calculator on this page for an estimate, then confirm final weight after processing. Resort delivery is a separate $49–$79 add-on when you want the catch brought to your Cabo resort.",
+      `${brand.companyName} processes catch at $2–$3 per finished processed pound, with a $30 minimum. Pricing is based on the packaged weight after cleaning and portioning — not the gross fish weight on the boat. Use the calculator on this page for an estimate, then confirm final weight after processing. Resort delivery is a separate $49–$79 add-on when you want the catch brought to your Cabo resort.`,
   },
   {
     question: "Can you vacuum seal fish in Cabo San Lucas?",

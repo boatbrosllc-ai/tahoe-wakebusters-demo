@@ -1,9 +1,10 @@
 /**
- * Experience packages — Cabo San Lucas sport fishing charters.
+ * Experience packages — display titles come from siteConfig.catalog.
  * Firestore slugs remain `pontoon` / `watersports` (document identity).
- * Public canonical URLs: nasty-half-day / nasty-full-day via experience-aliases.
+ * Public URL aliases remain in lib/booking/experience-ids.ts.
  */
 
+import { siteConfig } from "@/config/site";
 import {
   CHARTER_INCLUDED,
   FOUNDING_ANGLER_RATE_ACTIVE,
@@ -40,20 +41,20 @@ const fullCents = getActiveCatalogRateCents("full");
 export const experiences: Experience[] = [
   {
     slug: "pontoon",
-    title: "Nasty Half Day",
-    shortDescription: "5 hours · Private Cabo fishing charter.",
+    title: siteConfig.catalog.halfDay.title,
+    shortDescription: `5 hours · Private captained charter.`,
     description:
-      "Private Cabo fishing charter with captain and mate, premium tackle, live bait allowance, licenses for up to four anglers, water, soft drinks, snacks, light breakfast, crew photos, and local-grounds fuel.",
+      "Private captained charter with captain and mate. Inclusions are listed on the trip page and confirmed at checkout.",
     highlights: CHARTER_INCLUDED.slice(0, 6),
     duration: "5 hours",
     durationMinutes: 300,
     capacity: "Up to 6",
-    heroImage: "/photos/nsf/yellowfin-marina-duo.png",
+    heroImage: siteConfig.media.welcome,
     gallery: [
-      "/photos/nsf/yellowfin-marina-duo.png",
+      siteConfig.media.welcome,
       "/photos/stock/charter/anglers-on-boat-pexels.jpg",
-      "/photos/nsf/yellowfin-marina-catch.png",
-      "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+      siteConfig.media.galleryFallback,
+      siteConfig.media.hero,
     ],
     pricingNote: FOUNDING_ANGLER_RATE_ACTIVE
       ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(halfCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.half)}).`
@@ -61,26 +62,26 @@ export const experiences: Experience[] = [
     fromPriceCents: halfCents,
     ctaLabel: "BOOK HALF DAY",
     faqs: [
-      { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain and mate so you can focus on the fish." },
-      { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. We provide tackle, bait, snacks, and the drinks listed in what's included." },
+      { q: "Is a captain included?", a: "Yes. Every trip includes a licensed captain and mate." },
+      { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. Specific inclusions are listed when you book." },
     ],
   },
   {
     slug: "watersports",
-    title: "Nasty Full Day",
-    shortDescription: "8 hours · Private offshore charter — most popular.",
+    title: siteConfig.catalog.fullDay.title,
+    shortDescription: "8 hours · Private captained charter — most popular.",
     description:
-      "Full-day private offshore charter for serious time on the grounds. Same inclusions as Half Day with more range when conditions allow.",
+      "Full-day private captained charter. Same inclusions as Half Day with more time on the water.",
     highlights: CHARTER_INCLUDED.slice(0, 6),
     duration: "8 hours",
     durationMinutes: 480,
     capacity: "Up to 6",
-    heroImage: "/photos/nsf/yellowfin-ocean-duo.png",
+    heroImage: siteConfig.media.boats,
     gallery: [
-      "/photos/nsf/yellowfin-ocean-duo.png",
-      "/photos/nsf/sailfish-baitball.png",
-      "/photos/stock/species/tuna-underwater-bacanek.jpg",
-      "/photos/nsf/yellowfin-marina-catch.png",
+      siteConfig.media.boats,
+      siteConfig.media.hero,
+      "/photos/stock/charter/anglers-on-boat-pexels.jpg",
+      siteConfig.media.galleryFallback,
     ],
     pricingNote: FOUNDING_ANGLER_RATE_ACTIVE
       ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(fullCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.full)}). Peak dates from ${formatUsdFromCents(239_500)}.`
@@ -89,7 +90,7 @@ export const experiences: Experience[] = [
     ctaLabel: "BOOK FULL DAY",
     badge: "MOST POPULAR",
     faqs: [
-      { q: "How far offshore do we go?", a: "Depends on the bite and conditions. Full-day trips give us range to hit the banks and work multiple spots." },
+      { q: "How far do we go?", a: "Depends on conditions and the trip length you book. Full-day trips give more range." },
     ],
   },
 ];

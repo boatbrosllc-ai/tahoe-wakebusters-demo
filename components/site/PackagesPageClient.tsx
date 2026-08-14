@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowUpRight, Check } from "lucide-react";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import {
   inquiryPackages,
   INQUIRY_PARTNER_DISCLAIMER,
@@ -113,7 +114,7 @@ export function PackagesPageClient() {
               How a package quote works
             </h2>
             <p className="mt-3 text-brand-muted text-base sm:text-lg leading-relaxed">
-              These are not live calendar bookings. Day charters still book online as Nasty Half Day and Nasty Full Day.
+              These are not live calendar bookings. Day charters still book online as Half Day and Full Day.
             </p>
           </div>
 
@@ -249,8 +250,8 @@ export function PackagesPageClient() {
               transition={{ duration: 0.45 }}
             >
               <Image
-                src="/photos/nsf/sportfisher-running.png"
-                alt="Nasty Sport Fishing sportfisher running off Cabo"
+                src={siteConfig.media.boats}
+                alt={`${brand.companyName} on the water`}
                 fill
                 className="object-cover"
                 sizes="(max-width: 1024px) 100vw, 50vw"

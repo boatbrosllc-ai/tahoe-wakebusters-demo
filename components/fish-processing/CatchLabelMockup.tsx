@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import Image from "next/image";
+import { brand } from "@/content/brand";
 import { fishProcessingConfig } from "@/content/seo/fish-processing";
 
 export function CatchLabelMockup() {
@@ -26,7 +27,7 @@ export function CatchLabelMockup() {
               fought for in Cabo.
             </p>
             <p className="mt-4 text-white/70 text-base sm:text-lg leading-relaxed">
-              Nasty keeps your catch organized through processing, professionally packs it and gets
+              {brand.shortName} keeps your catch organized through processing, professionally packs it and gets
               it ready for the trip home.
             </p>
             <p className="mt-8 font-display font-extrabold text-brand-secondary text-xl sm:text-2xl tracking-wide">
@@ -54,11 +55,12 @@ export function CatchLabelMockup() {
                 </div>
                 <div className="relative h-10 w-10 opacity-90">
                   <Image
-                    src="/logos/NSF_Logo.png"
+                    src={brand.logoPath}
                     alt=""
                     fill
                     className="object-contain"
                     sizes="40px"
+                    unoptimized
                   />
                 </div>
               </div>

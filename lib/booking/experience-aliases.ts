@@ -17,9 +17,9 @@ function watersportsAllowUntypedBoatInInventory(): boolean {
 }
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
-  // Firestore slug `pontoon` = Nasty Half Day. Keep only NSF-needed public aliases.
+  // Firestore slug `pontoon` = Half Day. Keep only NSF-needed public aliases.
   ["pontoon", "nasty-half-day", "half-day"],
-  // Firestore slug `watersports` = Nasty Full Day.
+  // Firestore slug `watersports` = Full Day.
   ["watersports", "nasty-full-day", "full-day"],
   // Specialty listings (inactive by default in seed). Keep sunset-cruise alias for historical booking ID variants.
   ["sunset", "sunset-cruise"],
@@ -222,10 +222,10 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
   return out;
 }
 
-/** Dedicated public page slug for the Nasty Half Day (pontoon) family. */
+/** Dedicated public page slug for the Half Day (pontoon) family. */
 export const PONTOON_CANONICAL_PAGE_SLUG = "nasty-half-day";
 
-/** Dedicated public page slug for the Nasty Full Day (watersports) family. */
+/** Dedicated public page slug for the Full Day (watersports) family. */
 export const WATERSPORTS_CANONICAL_PAGE_SLUG = "nasty-full-day";
 
 /**

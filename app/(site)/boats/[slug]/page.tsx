@@ -11,14 +11,15 @@ import { normalizeBoatPhotoForRender } from "@/lib/boats/validation";
 import { brand } from "@/content/brand";
 import { FAQ, type FAQItem } from "@/components/experience/FAQ";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+const baseUrl = getSiteBaseUrl();
 
 const BOAT_PILLAR_FAQ_BASE: FAQItem[] = [
   {
     question: "Is a captain included with this boat?",
     answer:
-      "Yes. Every Nasty Sport Fishing Cabo San Lucas charter includes a licensed captain and mate. You show up ready to fish — we handle the boat, tackle, and local knowledge.",
+      `Yes. Every ${brand.companyName} Cabo San Lucas charter includes a licensed captain and mate. You show up ready to fish — we handle the boat, tackle, and local knowledge.`,
   },
   {
     question: "How many guests can this boat fit?",
@@ -42,17 +43,17 @@ function getSeoFaqForBoat(): FAQItem[] {
     {
       question: "Do I need a fishing license for a Cabo charter?",
       answer:
-        "Licenses for the anglers listed on your package are included with Nasty Sport Fishing charters. We’ll confirm guest count when you book.",
+        `Licenses for the anglers listed on your package are included with ${brand.companyName} charters. We’ll confirm guest count when you book.`,
     },
     {
       question: "Where do we meet for departure?",
       answer:
-        "We operate from Marina Cabo San Lucas. After booking, we’ll send the exact slip and meet-up instructions for your charter day.",
+        "We operate from the local marina / dock. After booking, we’ll send the exact slip and meet-up instructions.",
     },
     {
-      question: "Is the Cabo 40 Express good for offshore fishing?",
+      question: "Is this boat good for a full day on the water?",
       answer:
-        "Yes. The 2010 Cabo 40 Express is a Michael Peters–designed hard-top sportfisher with twin Cummins power, a tuna tower, and a serious cockpit — built for Cabo bluewater work on Half Day and Full Day trips.",
+        "Yes. Half Day and Full Day trips include a licensed captain and mate. Confirm inclusions on the trip page when you book.",
     },
   ];
 }
@@ -67,15 +68,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     return {};
   }
 
-  const title = `${boat.name} | Cabo Sport Fishing Charter Boat | Nasty Sport Fishing`;
-  const description = `Book the ${boat.name} for your Cabo San Lucas sport fishing charter. Captain and crew included. Reserve Half Day or Full Day online.`;
+  const title = `${boat.name} | ${brand.companyName}`;
+  const description = `Book the ${boat.name}. Captain and crew included. Reserve Half Day or Full Day online.`;
   const canonical = `${baseUrl}/boats/${boat.slug}`;
   const keywords = [
-    "Cabo fishing boat",
-    "Cabo San Lucas sportfisher",
-    "Cabo 40 Express charter",
-    "Nasty Sport Fishing boat",
-    `${boat.name} Cabo charter`,
+    "charter boat",
+    `${brand.companyName} boat`,
+    boat.name,
   ];
 
   return {
@@ -84,7 +83,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     keywords,
     alternates: { canonical },
     openGraph: {
-      title: `${boat.name} | Cabo Sport Fishing | Nasty Sport Fishing`,
+      title: `${boat.name} | Boat Rentals | ${brand.companyName}`,
       description,
       url: canonical,
       siteName: brand.companyName,
@@ -152,9 +151,9 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
       : getDisplayDescription(boat).split(/\n\n+/)[0].trim();
 
   const seoParagraphs = [
-    `Cabo San Lucas sport fishing starts with the right boat. The ${boat.name} is Nasty Sport Fishing’s offshore sportfisher — a hard-top express with the range, cockpit, and twin-diesel power to fish local grounds and the edges when conditions allow.`,
-    `Every charter on ${boat.name} includes a licensed captain and mate. No boat ownership headaches, no guesswork on where the bite is — just show up at Marina Cabo San Lucas ready to fish. Half Day and Full Day packages cover tackle, bait, and the provisions listed on each experience.`,
-    `Looking for a private Cabo fishing boat charter? Book ${boat.name} online, pick your date, and we’ll confirm slip and meet-up details before departure.`,
+    `A day on the water starts with the right boat. The ${boat.name} is ${brand.companyName}’s flagship private charter boat.`,
+    `Every charter on ${boat.name} includes a licensed captain and mate. Show up at the dock ready to go. Half Day and Full Day packages cover the provisions listed on each experience.`,
+    `Looking for a private boat rental? Book ${boat.name} online, pick your date, and we’ll confirm dock and meet-up details before departure.`,
   ];
 
   return (

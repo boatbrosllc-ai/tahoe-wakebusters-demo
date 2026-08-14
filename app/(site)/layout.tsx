@@ -6,46 +6,34 @@ import { SiteChrome } from "@/components/site/SiteChrome";
 import { CommercialPageSchema } from "@/components/site/CommercialPageSchema";
 import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
 import { buildLocalBusinessJsonLd } from "@/lib/seo/public-contact";
+import { getSiteBaseUrl, siteConfig } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: `${brand.companyName} | Cabo San Lucas Sport Fishing`,
+    default: `${brand.companyName} | Private Boat Rentals`,
     template: `%s | ${brand.companyName}`,
   },
-  description:
-    "Cabo San Lucas sport fishing charters — marlin, tuna, dorado & wahoo. Licensed captain & crew. Book your trip. Nasty Sport Fishing.",
-  keywords: [
-    "Cabo San Lucas sport fishing",
-    "Cabo fishing charters",
-    "marlin fishing Cabo",
-    "tuna fishing Cabo San Lucas",
-    "dorado fishing Los Cabos",
-    "wahoo fishing Cabo",
-    "deep sea fishing Cabo",
-    "sport fishing Cabo San Lucas",
-    "private fishing charter Cabo",
-    "Nasty Sport Fishing",
-  ],
+  description: siteConfig.seo.description,
+  keywords: [...siteConfig.seo.keywords, brand.companyName],
   openGraph: {
     type: "website",
     locale: "en_US",
     siteName: brand.companyName,
-    /** Default share preview: Cabo El Arco sunset. */
     images: [
       {
-        url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
+        url: siteConfig.seo.defaultOgImage,
         width: 1200,
         height: 630,
-        alt: "El Arco at sunset – Nasty Sport Fishing Cabo",
+        alt: siteConfig.seo.defaultOgImageAlt,
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    images: ["/photos/stock/cabo/el-arco-sunset-jarvis.jpg"],
+    images: [siteConfig.seo.defaultOgImage],
   },
   robots: "index, follow",
 };
@@ -53,8 +41,7 @@ export const metadata: Metadata = {
 function localBusinessJsonLd() {
   return buildLocalBusinessJsonLd({
     baseUrl,
-    description:
-      "Cabo San Lucas sport fishing charters: marlin, tuna, dorado, and wahoo. Licensed captain and crew. Book online.",
+    description: siteConfig.seo.description,
     aggregateRating: locationAggregateRating(),
   });
 }

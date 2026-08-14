@@ -3,13 +3,14 @@
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
+import { siteConfig } from "@/config/site";
 
 const steps = [
   {
     n: "01",
     label: "Pick",
-    title: "Choose your charter & date",
-    description: "Nasty Half Day or Full Day. Pick the day you want on Cabo water.",
+    title: "Choose your trip & date",
+    description: `${siteConfig.catalog.halfDay.title} or ${siteConfig.catalog.fullDay.title}. Pick the day you want on the water.`,
   },
   {
     n: "02",
@@ -19,9 +20,9 @@ const steps = [
   },
   {
     n: "03",
-    label: "Fish",
-    title: "Meet us at the marina",
-    description: "Check-in details in your inbox. Captain, crew, tackle, bait, and licenses ready.",
+    label: "Go",
+    title: "Meet us at the dock",
+    description: "Check-in details in your inbox. Captain and crew ready.",
   },
 ];
 
@@ -143,7 +144,7 @@ export function HowItWorks() {
             className="rounded-xl bg-brand-secondary hover:bg-brand-secondary/90 text-white font-bold px-9 shadow-[0_12px_32px_rgba(242,122,10,0.32)] transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98]"
             onClick={() => setBookingModalOpen(true)}
           >
-            Book a Nasty charter
+            Book a trip
           </Button>
           <p className="text-sm text-brand-muted">
             Private boat · Captain &amp; crew included · Free cancellation up to 30 days before

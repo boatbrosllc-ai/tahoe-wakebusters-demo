@@ -1,69 +1,70 @@
 /**
- * Brand content – logo path, contact, socials.
- * Do not invent ops facts. Leave phone / street / ZIP / hours empty until verified.
+ * Brand content — derived from the active site (`config/site.ts` → `sites/<id>/config.ts`).
+ * Edit identity, logos, and contact in that customer's config; do not hardcode names in components.
  */
+
+import { siteConfig } from "@/config/site";
+
+const { branding, company, contact, business, social } = siteConfig;
 
 export const brand = {
   /** Logo on light backgrounds (header desktop) — colored lockup */
-  logoPath: "/logos/NSF_Logo.png",
+  logoPath: branding.logo,
   /** Main logo – desktop navbar */
-  logoDesktopPath: "/logos/NSF_White.png",
-  /** Logo on mobile header — NASTY wordmark only */
-  logoMonogramPath: "/logos/NSF_White_Mark.png",
-  /** Navbar logo – mobile and desktop (white NASTY mark on cyan bar) */
-  logoNavbarPath: "/logos/NSF_White_Mark.png",
+  logoDesktopPath: branding.logoDesktop,
+  /** Logo on mobile header */
+  logoMonogramPath: branding.logoMonogram,
+  /** Navbar logo – mobile and desktop */
+  logoNavbarPath: branding.logoNavbar,
   /** Accent / hover logo */
-  logoPinkPath: "/logos/NSF_White_Mark.png",
+  logoPinkPath: branding.logoHover,
   /** Logo on dark backgrounds (footer) */
-  logoDarkPath: "/logos/NSF_White.png",
+  logoDarkPath: branding.logoDark,
   /** All transactional emails — keep colored for light email clients */
-  logoEmailPath: "/logos/NSF_Logo.png",
+  logoEmailPath: branding.logoEmail,
   /** Hero section – primary lockup */
-  logoHeroPath: "/logos/NSF_White.png",
-  /** Hero logo hover — NASTY orange, SPORT FISHING cyan */
-  logoHeroHoverPath: "/logos/NSF_Hover.png",
-  logoAlt: "Nasty Sport Fishing",
-  companyName: "Nasty Sport Fishing",
-  publicName: "Nasty Sport Fishing",
-  tagline:
-    "Private Cabo San Lucas fishing charters — Half Day & Full Day with captain, crew, tackle & bait.",
+  logoHeroPath: branding.logoHero,
+  /** Hero logo hover */
+  logoHeroHoverPath: branding.logoHeroHover,
+  logoAlt: branding.logoAlt,
+  companyName: company.name,
+  publicName: company.publicName,
+  shortName: company.shortName,
+  tagline: company.tagline,
   /** Business / departure timezone for new listings (seed). */
-  timezone: "America/Mazatlan",
-  currency: "USD",
-  country: "MX",
-  locale: "en-US",
-  domain: "nastysportfishing.com",
+  timezone: business.timezone,
+  currency: business.currency,
+  country: business.country,
+  locale: business.locale,
+  domain: company.domain,
   /**
    * Public phone — empty until verified.
    * Do not use 555 placeholders; UI/schema omit phone when blank.
    */
-  phone: "",
-  phoneTel: "",
-  email: "info@nastysportfishing.com",
+  phone: contact.phone || siteConfig.phone,
+  phoneTel: contact.phoneTel || siteConfig.phoneTel,
+  email: contact.email,
   address: {
-    /**
-     * Street / slip — empty until verified.
-     * Do not put "Marina Cabo San Lucas" here as a fake streetAddress.
-     */
-    line1: "",
-    city: "Cabo San Lucas",
-    state: "Baja California Sur",
-    zip: "",
-    country: "Mexico",
+    line1: contact.address.line1,
+    city: contact.address.city,
+    state: contact.address.state,
+    zip: contact.address.zip,
+    country: contact.address.country,
   },
   /** Customer meet-up note (not schema streetAddress). */
-  marinaMeetNote:
-    "Meet at Marina Cabo San Lucas — exact slip and check-in details arrive after booking.",
+  marinaMeetNote: contact.marinaMeetNote,
   /** Public hours string — empty until verified (trips by reservation). */
-  hours: "",
+  hours: contact.hours,
   socials: {
-    /** Set full profile URLs when live. Empty = header shows icon placeholders only (not linked). */
-    instagram: "",
-    facebook: "",
-    tiktok: "",
-    yelp: "",
-    tripadvisor: "",
+    instagram: social.instagram,
+    facebook: social.facebook,
+    youtube: social.youtube,
+    tiktok: social.tiktok,
+    yelp: social.yelp,
+    tripadvisor: social.tripadvisor,
   },
+  catalog: siteConfig.catalog,
+  media: siteConfig.media,
 };
 
 export type Brand = typeof brand;

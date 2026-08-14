@@ -1,5 +1,5 @@
 /**
- * Single operational timezone for Nasty Sport Fishing boat/trip operations.
+ * Single operational timezone for ${brand.companyName} boat/trip operations.
  *
  * Authority: Cabo San Lucas business time (`America/Mazatlan`).
  * Kept in `lib/booking` so server booking code does not scatter string literals.

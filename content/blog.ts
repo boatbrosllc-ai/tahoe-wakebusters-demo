@@ -1,5 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Static blog posts for The Bite (Nasty Sport Fishing).
+ * Static blog posts for The Bite (${brand.companyName}).
  * Austin / Boat Bros posts removed. Add Cabo fishing posts here or via CMS.
  */
 

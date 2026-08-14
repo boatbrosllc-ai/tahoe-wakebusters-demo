@@ -1,9 +1,10 @@
+import { brand } from "@/content/brand";
 import type { BlogPostDoc, BlogImageAsset, BlogPostSerialized, BlogSchemaFields } from "../types";
 import { computeContentStats, contentBlocksToText } from "../content-stats";
 import { buildSchemaFields } from "../schema-jsonld";
 import type { CmsBlogPostSeed } from "./helpers";
 
-const AUTHOR = { name: "Nasty Sport Fishing" };
+const AUTHOR = { name: `${brand.companyName}` };
 
 /** Build a Firestore-ready published post document from seed data. */
 export function buildPublishedPostDoc(

@@ -184,7 +184,7 @@ export function FirestoreBlogPostView({
                   {post.author?.name ?? brand.companyName}
                 </p>
                 <p className="text-sm text-brand-muted mt-1">
-                  Ready for Cabo? Book Nasty Half Day or Nasty Full Day.
+                  Ready for Cabo? Book Half Day or Full Day.
                 </p>
               </div>
               <Button

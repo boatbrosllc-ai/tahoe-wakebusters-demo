@@ -1,5 +1,5 @@
 /**
- * Indexable SEO growth URLs for Nasty Sport Fishing.
+ * Indexable SEO growth URLs for this operator.
  * Only canonical, content-ready paths — no thin placeholders.
  */
 

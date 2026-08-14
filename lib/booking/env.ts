@@ -7,6 +7,14 @@ function getEnv(name: string): string | undefined {
   return process.env[name];
 }
 
+function firstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const v = getEnv(name);
+    if (v != null && String(v).trim() !== "") return v.trim();
+  }
+  return undefined;
+}
+
 function normalizePemKey(key: string): string {
   let s = key.trim();
   // Strip any leading/trailing quotes (Netlify or UI may add one or both)
@@ -57,7 +65,7 @@ function requireEnv(name: string): string {
  * so confirmation-outbox and Brevo sends work even when only deployment defaults are set.
  */
 function resolveAppBaseUrl(): string {
-  const explicit = getEnv("APP_BASE_URL")?.trim();
+  const explicit = firstEnv("APP_BASE_URL", "NEXT_PUBLIC_APP_URL")?.trim();
   if (explicit) return explicit.replace(/\/$/, "");
   const deploy =
     getEnv("URL")?.trim() ||
@@ -74,7 +82,7 @@ function resolveAppBaseUrl(): string {
 
 export const bookingEnv = {
   get firebaseProjectId(): string | undefined {
-    return getEnv("FIREBASE_PROJECT_ID");
+    return firstEnv("FIREBASE_PROJECT_ID", "FIREBASE_ADMIN_PROJECT_ID");
   },
   /** Override Storage bucket name (e.g. my-project.firebasestorage.app). If unset, uses {projectId}.appspot.com. Set this if you get "bucket does not exist" after enabling Storage. */
   get firebaseStorageBucket(): string | undefined {
@@ -82,7 +90,7 @@ export const bookingEnv = {
     return v == null || v === "" ? undefined : v.trim();
   },
   get firebaseClientEmail(): string | undefined {
-    return getEnv("FIREBASE_CLIENT_EMAIL");
+    return firstEnv("FIREBASE_CLIENT_EMAIL", "FIREBASE_ADMIN_CLIENT_EMAIL");
   },
   /** Path to service account JSON file (avoids .env key encoding/truncation). Preferred over FIREBASE_PRIVATE_KEY. */
   get firebaseServiceAccountPath(): string | undefined {
@@ -100,7 +108,7 @@ export const bookingEnv = {
       const out = normalizePemKey(raw);
       return out;
     }
-    let k = getEnv("FIREBASE_PRIVATE_KEY");
+    let k = getEnv("FIREBASE_PRIVATE_KEY") || getEnv("FIREBASE_ADMIN_PRIVATE_KEY");
     if (!k) return undefined;
     let out = normalizePemKey(k);
     // If env loader truncated (multi-line .env often keeps only first line), read full key from .env.local
@@ -124,7 +132,11 @@ export const bookingEnv = {
     return out;
   },
   get stripeSecretKey(): string {
-    return requireEnv("STRIPE_SECRET_KEY");
+    const v = firstEnv("STRIPE_CONNECT_SECRET_KEY", "STRIPE_SECRET_KEY");
+    if (v == null || v === "") {
+      throw new Error("Missing required env: STRIPE_CONNECT_SECRET_KEY (or STRIPE_SECRET_KEY)");
+    }
+    return v;
   },
   get stripeWebhookSecret(): string {
     return requireEnv("STRIPE_WEBHOOK_SECRET");

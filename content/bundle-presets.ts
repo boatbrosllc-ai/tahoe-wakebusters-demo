@@ -1,18 +1,16 @@
 /**
- * Marketing packages (Nasty / Nastier / Nastiest).
+ * Marketing packages (Half Day / Full Day / All-In).
  *
  * Ladder (one decision on the homepage):
- *   Nasty    = Half Day charter (5h) — a la carte add-ons at checkout
- *   Nastier  = Full Day charter (8h) — a la carte add-ons at checkout
- *   Nastiest = Full Day all-in — Full Day + packaged upsells preselected
+ *   nasty    = Half Day charter (5h) — a la carte add-ons at checkout
+ *   nastier  = Full Day charter (8h) — a la carte add-ons at checkout
+ *   nastiest = Full Day all-in — Full Day + packaged upsells preselected
  *
- * These are NOT separate boats or calendars. Each resolves to:
- *   experience slug (pontoon | watersports) + durationHours + optional addon catalogKeys
- *
- * Checkout still uses create-hold → pricing snapshot → PaymentIntent.
- * Display "from" prices are marketing only — never hard-code checkout totals.
+ * Bundle IDs are stable checkout keys — do not rename them.
+ * Display titles come from siteConfig.catalog.
  */
 
+import { siteConfig } from "@/config/site";
 import {
   FOUNDING_ANGLER_RATE_ACTIVE,
   formatUsdFromCents,
@@ -83,65 +81,60 @@ const nastiestFrom = nastyFull + sumAddonDisplay([...NASTIEST_ADDONS]);
 export const bundlePresets: BundlePreset[] = [
   {
     id: "nasty",
-    title: "Nasty",
-    tagline: "Half Day",
-    description: "5-hour private Cabo charter. Captain, crew, tackle, bait, and provisions. Add upgrades a la carte at checkout.",
+    title: siteConfig.catalog.halfDay.title,
+    tagline: siteConfig.catalog.halfDay.durationLabel,
+    description: "5-hour private captained charter. Add upgrades a la carte at checkout.",
     includes: [
       "5-hour private charter",
-      "Morning (6:00 AM) or Afternoon (2:00 PM)",
+      "Morning or afternoon departure",
       "Captain & mate",
-      "Tackle, bait & licenses",
-      "Snacks, water & soft drinks",
+      "Standard inclusions as listed at checkout",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastyHalf)}`,
     charterOptions: [
-      { experienceSlug: "pontoon", durationHours: 5, label: "Nasty Half Day · 5 Hours" },
+      { experienceSlug: "pontoon", durationHours: 5, label: `${siteConfig.catalog.halfDay.title} · ${siteConfig.catalog.halfDay.durationLabel}` },
     ],
     defaultOptionIndex: 0,
     addonCatalogKeys: [],
-    ctaLabel: "Book Nasty",
+    ctaLabel: siteConfig.catalog.halfDay.ctaLabel,
   },
   {
     id: "nastier",
-    title: "Nastier",
-    tagline: "Full Day",
-    description: "8-hour private offshore charter departing 6:00 AM — optional +1/+2/+3 hours to stay until 5:00 PM. Same boat. Add upgrades a la carte at checkout.",
+    title: siteConfig.catalog.fullDay.title,
+    tagline: siteConfig.catalog.fullDay.durationLabel,
+    description: "8-hour private captained charter. Same boat. Add upgrades a la carte at checkout.",
     includes: [
-      "8-hour private charter (6:00 AM start)",
-      "Optional +1 to +3 hours",
+      "8-hour private charter",
+      "Optional paid extensions when offered",
       "Captain & mate",
-      "Tackle, bait & licenses",
-      "Snacks, water & soft drinks",
+      "Standard inclusions as listed at checkout",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastyFull)}`,
     charterOptions: [
-      { experienceSlug: "watersports", durationHours: 8, label: "Nasty Full Day · 8 Hours" },
+      { experienceSlug: "watersports", durationHours: 8, label: `${siteConfig.catalog.fullDay.title} · ${siteConfig.catalog.fullDay.durationLabel}` },
     ],
     defaultOptionIndex: 0,
     addonCatalogKeys: [],
-    ctaLabel: "Book Nastier",
+    ctaLabel: siteConfig.catalog.fullDay.ctaLabel,
   },
   {
     id: "nastiest",
-    title: "Nastiest",
+    title: siteConfig.catalog.allIn.title,
     tagline: "Full Day All-In",
-    description: "Full Day charter with private resort transport, premium offshore lunch, catch processing + resort delivery, and gear — optional +1/+2/+3 hours. The done-for-you Cabo fishing day.",
+    description: "Full Day charter with popular add-ons preselected. Optional paid extensions when offered.",
     includes: [
-      "8-hour private charter (6:00 AM start)",
-      "Optional +1 to +3 hours",
-      "Private resort transportation",
-      "Premium offshore lunch",
-      "Fish processing + resort delivery",
-      "Nasty Gear Pack",
+      "8-hour private charter",
+      "Optional paid extensions when offered",
+      "Popular add-ons preselected at checkout",
     ],
     fromPriceLabel: `From ${formatUsdFromCents(nastiestFrom)}+`,
     charterOptions: [
-      { experienceSlug: "watersports", durationHours: 8, label: "Full Day · All-In" },
+      { experienceSlug: "watersports", durationHours: 8, label: `${siteConfig.catalog.fullDay.title} · All-In` },
     ],
     defaultOptionIndex: 0,
     addonCatalogKeys: [...NASTIEST_ADDONS],
     recommended: true,
-    ctaLabel: "Book Nastiest",
+    ctaLabel: siteConfig.catalog.allIn.ctaLabel,
   },
 ];
 

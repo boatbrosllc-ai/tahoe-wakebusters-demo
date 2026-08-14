@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
 
 const description =
-  "Private Cabo San Lucas fishing charters with Nasty Sport Fishing — Half Day (5h) or Full Day (8h), captained, licenses arranged, book online.";
+  `Private Cabo San Lucas fishing charters with ${brand.companyName} — Half Day (5h) or Full Day (8h), captained, licenses arranged, book online.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path: "/cabo-san-lucas-fishing-charters",
@@ -19,7 +20,7 @@ export default function Page() {
       path="/cabo-san-lucas-fishing-charters"
       pageKey="cabo_san_lucas_fishing_charters"
       h1="Cabo San Lucas Fishing Charters"
-      lede="Private, captained sportfishing from Marina Cabo San Lucas — book Nasty Half Day or Nasty Full Day on the live calendar."
+      lede="Private, captained sportfishing from Marina Cabo San Lucas — book Half Day or Full Day on the live calendar."
       breadcrumbName="Cabo San Lucas Fishing Charters"
       metaDescription={description}
       heroImage="/photos/stock/cabo/el-arco-from-boat-pexels.jpg"
@@ -28,7 +29,7 @@ export default function Page() {
       sections={[
         {
           type: "p",
-          text: "Nasty Sport Fishing runs private Cabo San Lucas fishing charters on a Cabo 40 Express sportfisher. You fish; a licensed captain and mate run the boat, set the plan from live conditions, and handle the day on the water.",
+          text: `${brand.companyName} runs private Cabo San Lucas fishing charters on a Cabo 40 Express sportfisher. You fish; a licensed captain and mate run the boat, set the plan from live conditions, and handle the day on the water.`,
         },
         {
           type: "h2",
@@ -42,8 +43,8 @@ export default function Page() {
         {
           type: "ul",
           items: [
-            "Nasty Half Day — 5 hours. A focused Cabo day with morning or afternoon departures when available.",
-            "Nasty Full Day — 8 hours. More range and time on the water when you want a longer offshore window.",
+            "Half Day — 5 hours. A focused Cabo day with morning or afternoon departures when available.",
+            "Full Day — 8 hours. More range and time on the water when you want a longer offshore window.",
           ],
         },
         {
@@ -105,12 +106,12 @@ export default function Page() {
         {
           question: "Are these private charters?",
           answer:
-            "Yes. Nasty Half Day and Nasty Full Day are private boat charters with captain and mate — not shared open-boat seats.",
+            "Yes. Half Day and Full Day are private boat charters with captain and mate — not shared open-boat seats.",
         },
         {
           question: "Can we run the boat ourselves?",
           answer:
-            "No. Nasty Sport Fishing charters are captained only. You fish; we handle the boat, safety, and navigation.",
+            `No. ${brand.companyName} charters are captained only. You fish; we handle the boat, safety, and navigation.`,
         },
         {
           question: "Do I need a Mexican fishing license?",
@@ -129,8 +130,8 @@ export default function Page() {
         },
       ]}
       related={[
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
         { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
         { href: "/cabo-marlin-fishing", label: "Cabo marlin fishing" },

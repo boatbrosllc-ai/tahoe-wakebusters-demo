@@ -10,28 +10,23 @@ import { brand } from "@/content/brand";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
 import { ChevronRight } from "lucide-react";
 import { BoatBookNowButton } from "@/components/site/BoatBookNowButton";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+
+const baseUrl = getSiteBaseUrl();
 const canonical = `${baseUrl}/boats`;
 
 /** Cache page for 60s so prefetches and repeat visits are fast; boats list is cached in getListingBoatsForPublic. */
 export const revalidate = 60;
 
 export const metadata: Metadata = {
-  title: "Our Boat | Cabo Sport Fishing | Nasty Sport Fishing",
-  description:
-    "Meet the boat for your Cabo San Lucas sport fishing charter. Licensed captain & crew included. Nasty Sport Fishing.",
-  keywords: [
-    "Cabo fishing boat",
-    "Cabo San Lucas charter boat",
-    "sport fishing Cabo",
-    "Nasty Sport Fishing boat",
-  ],
+  title: `Our Boat | ${brand.companyName}`,
+  description: `Meet the boat. Licensed captain & crew included. ${brand.companyName}.`,
+  keywords: ["charter boat", `${brand.companyName} boat`, "private boat rental"],
   alternates: { canonical },
   openGraph: {
-    title: "Our Boat | Cabo Sport Fishing | Nasty Sport Fishing",
-    description:
-      "Meet the boat for your Cabo fishing charter. Captain & crew included.",
+    title: `Our Boat | ${brand.companyName}`,
+    description: "Meet the boat. Captain & crew included.",
     url: canonical,
     siteName: brand.companyName,
   },
@@ -39,7 +34,7 @@ export const metadata: Metadata = {
 
 function shortDescription(description: string | undefined): string {
   if (!description || !description.trim()) {
-    return "Nasty Sport Fishing's Cabo charter boat. Captain & crew included.";
+    return `${brand.companyName}'s Cabo charter boat. Captain & crew included.`;
   }
   const first = description.trim().split(/\n\n+/)[0];
   return first.length > 220 ? first.slice(0, 217) + "..." : first;
@@ -62,7 +57,7 @@ export default async function BoatsHubPage() {
             Our Boats
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-            Our Cabo sport fishing boats—every charter includes a licensed captain and crew.
+            Our boats—every charter includes a licensed captain and crew.
           </p>
         </div>
       </section>
@@ -70,7 +65,7 @@ export default async function BoatsHubPage() {
       <section className="section-padding bg-white" aria-labelledby="boats-grid-heading">
         <div className="container-wide px-4 sm:px-6 lg:px-8">
           <h2 id="boats-grid-heading" className="sr-only">
-            Our Cabo fishing boats
+            Our boats
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
             {boats.map((boat) => {

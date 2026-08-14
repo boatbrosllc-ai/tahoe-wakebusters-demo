@@ -1,20 +1,21 @@
+import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 /**
  * Shared listing-page fallbacks for experience UI components.
- * Defaults are Cabo / NSF-safe. Prefer Firestore experience overrides when present.
+ * Prefer Firestore experience overrides when present.
  */
 
 import { location } from "@/content/location";
 
 export const HERO = {
-  title: "Cabo Sport Fishing Charter",
-  subtitle: "Captain & crew included. Book your Nasty Half Day or Full Day.",
+  title: `${siteConfig.catalog.halfDay.title} & ${siteConfig.catalog.fullDay.title}`,
+  subtitle: `Captain & crew included. Book your ${siteConfig.catalog.halfDay.title} or ${siteConfig.catalog.fullDay.title}.`,
   introParagraph:
-    "Private Cabo San Lucas sportfishing charters with licensed captain and mate. Check availability below.",
+    "Private captained boat rentals. Check availability below.",
   primaryCta: "Check Availability",
   secondaryCta: "View Gallery",
-  /** Hero image fallback when listing has no media. */
-  imageFallback: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
-  unsplashFallback: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
+  imageFallback: siteConfig.media.hero,
+  unsplashFallback: siteConfig.media.boats,
 };
 
 export const BOOKING_PREVIEW = {
@@ -37,7 +38,7 @@ export const PRICING_MAP: Record<number, number> = {
 export const SOCIAL_PROOF = [
   { label: "Private", sub: "charter" },
   { label: "Captain", sub: "& crew" },
-  { label: "Cabo San Lucas", sub: "" },
+  { label: location.address.city || "Private", sub: location.address.city ? "" : "charter" },
   ...(location.reviewCount > 0
     ? [
         { label: "★ " + String(location.rating), sub: "rating" },
@@ -55,7 +56,7 @@ export const SOCIAL_AVATARS = [
   "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face",
   "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&h=80&fit=crop&crop=face",
 ];
-export const SOCIAL_LINE = "Cabo San Lucas sport fishing";
+export const SOCIAL_LINE = brand.tagline;
 
 export interface ExperienceOverviewData {
   headline: string;
@@ -69,10 +70,10 @@ export interface ExperienceOverviewData {
 export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
   headline: "The experience",
   story:
-    "A private Cabo sportfishing charter with licensed captain and mate. Fish for tuna, dorado, wahoo, and marlin when conditions allow — tackle and bait included.",
+    "A private captained charter. Tackle and provisions follow what's listed on the trip — confirm inclusions when you book.",
   seoParagraphs: [
-    "Nasty Sport Fishing runs private charters from the Marina Cabo San Lucas area. Half Day and Full Day share the same boat inventory — pick your length and check live availability.",
-    "Your crew handles the boat while you fish. Exact slip and check-in details arrive in your confirmation after booking.",
+    `${brand.companyName} runs private captained trips. ${siteConfig.catalog.halfDay.title} and ${siteConfig.catalog.fullDay.title} share the same boat inventory — pick your length and check live availability.`,
+    "Your crew handles the boat. Exact dock and check-in details arrive in your confirmation after booking.",
   ],
   features: [
     { icon: "captain", text: "Licensed captain & mate" },
@@ -81,27 +82,27 @@ export const EXPERIENCE_OVERVIEW: ExperienceOverviewData = {
     { icon: "cooler", text: "Ice & cooler space" },
   ],
   timeline: [
-    { step: "Meet", desc: "Marina Cabo San Lucas" },
+    { step: "Meet", desc: "Dock / marina" },
     { step: "Brief", desc: "Safety & plan" },
-    { step: "Fish", desc: "Bluewater sportfishing" },
-    { step: "Return", desc: "Back to the marina" },
+    { step: "Trip", desc: "On the water" },
+    { step: "Return", desc: "Back to the dock" },
   ],
-  imageUrl: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+  imageUrl: siteConfig.media.hero,
 };
 
 export const GALLERY_IMAGES = [
   {
-    url: "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
-    alt: "View toward El Arco from a boat in Cabo San Lucas",
-    category: "Cabo",
+    url: siteConfig.media.hero,
+    alt: "View from a boat on the water",
+    category: "Water",
   },
   {
-    url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
-    alt: "El Arco at sunset in Cabo San Lucas",
+    url: siteConfig.media.boats,
+    alt: "Charter boat at sunset",
     category: "Sunset",
   },
 ];
-export const GALLERY_CATEGORIES = ["Cabo", "Sunset"] as const;
+export const GALLERY_CATEGORIES = ["Water", "Sunset"] as const;
 
 export const INCLUDED_ITEMS = [
   { icon: "captain", title: "Licensed captain & mate", desc: "Your crew runs the boat." },
@@ -138,7 +139,7 @@ export const FAQ_ITEMS = [
   {
     question: "Where do we meet?",
     answer:
-      "Meet at Marina Cabo San Lucas. Exact slip, dock instructions, and check-in time arrive in your confirmation after booking.",
+      "Meet at the dock. Exact slip, dock instructions, and check-in time arrive in your confirmation after booking.",
   },
   {
     question: "How many people?",
@@ -158,7 +159,7 @@ export const FAQ_ITEMS = [
 ];
 
 export const FINAL_CTA = {
-  headline: "Ready to fish Cabo?",
+  headline: "Ready to book?",
   primaryCta: "Check Availability",
   secondaryCta: "Contact us",
   secondaryHref: "/contact",

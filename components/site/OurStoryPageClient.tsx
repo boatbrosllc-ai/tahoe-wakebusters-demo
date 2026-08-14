@@ -5,12 +5,13 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import type { ReactNode } from "react";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { BookingCTA } from "@/components/site/BookingCTA";
 
-const CREW_PHOTO = "/photos/nsf/our-story-crew.jpg";
-const HERO_PHOTO = "/photos/nsf/rods-wake-sunset.png";
-const WATER_PHOTO = "/photos/nsf/sportfisher-running.png";
-const CATCH_PHOTO = "/photos/nsf/yellowfin-ocean-duo.png";
+const CREW_PHOTO = siteConfig.media.welcome;
+const HERO_PHOTO = siteConfig.media.hero;
+const WATER_PHOTO = siteConfig.media.boats;
+const CATCH_PHOTO = siteConfig.media.galleryFallback;
 
 const AROUND_FISHING = [
   "Getting to the marina",
@@ -66,7 +67,7 @@ export function OurStoryPageClient() {
       <section className="relative w-full min-h-[85dvh] sm:min-h-[75vh] overflow-hidden flex flex-col items-center justify-center">
         <Image
           src={HERO_PHOTO}
-          alt="Sportfishing rods and wake at sunset off Cabo San Lucas"
+          alt={`On the water with ${brand.companyName}`}
           fill
           className="object-cover object-[center_45%]"
           priority
@@ -111,7 +112,7 @@ export function OurStoryPageClient() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.14 }}
             >
-              Come to Cabo to fish. We&apos;ll handle the rest.
+              Private boat rentals. We&apos;ll handle the rest.
             </motion.p>
 
             <motion.div
@@ -142,16 +143,16 @@ export function OurStoryPageClient() {
       </section>
 
       {/* Opening — editorial column */}
-      <section className="section-padding bg-brand-bg" aria-labelledby="why-nasty-heading">
+      <section className="section-padding bg-brand-bg" aria-labelledby="why-we-exist-heading">
         <div className="container-wide px-4 sm:px-6 lg:px-8">
           <div className="max-w-2xl mx-auto">
             <FadeIn>
               <SectionEyebrow>Why we exist</SectionEyebrow>
               <h2
-                id="why-nasty-heading"
+                id="why-we-exist-heading"
                 className="font-display text-3xl sm:text-4xl lg:text-[2.65rem] font-bold text-brand-dark tracking-tight leading-[1.15]"
               >
-                We didn&apos;t come to Cabo to build another fishing charter.
+                We built this around the day on the water — not a tourist package.
               </h2>
             </FadeIn>
 
@@ -258,7 +259,7 @@ export function OurStoryPageClient() {
               </h2>
               <div className="mt-5 sm:mt-6 space-y-5 text-base sm:text-lg text-brand-muted leading-relaxed">
                 <p>
-                  Nasty Sport Fishing is built around{" "}
+                  {brand.companyName} is built around{" "}
                   <strong className="font-semibold text-brand-dark">private Cabo charters</strong>. You
                   aren&apos;t sharing the boat with strangers. You aren&apos;t fighting six other groups for
                   space on the rail.
@@ -349,7 +350,7 @@ export function OurStoryPageClient() {
           >
             <Image
               src={CREW_PHOTO}
-              alt="Nasty Sport Fishing angler with twin yellowfin tuna on deck in Cabo"
+              alt={`${brand.companyName} angler with twin yellowfin tuna on deck in Cabo`}
               fill
               className="object-cover object-[center_20%]"
               sizes="(max-width: 1024px) 100vw, 50vw"

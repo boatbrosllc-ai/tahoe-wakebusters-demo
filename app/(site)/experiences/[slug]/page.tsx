@@ -6,13 +6,14 @@ import { ExperienceListingPage } from "@/components/experience/ExperienceListing
 import { StaticExperienceDetail } from "@/components/experience/StaticExperienceDetail";
 import { brand } from "@/content/brand";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { getSiteBaseUrl } from "@/config/site";
 import {
   getSlugLookupCandidates,
   isExperienceAliasSlug,
   resolveCanonicalExperienceSlug,
 } from "@/lib/booking/experience-aliases";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -68,13 +69,13 @@ export async function generateStaticParams() {
 }
 
 const SLUG_KEYWORDS: Record<string, string[]> = {
-  pontoon: ["Cabo half-day fishing charter", "Nasty Half Day", "Cabo San Lucas sport fishing"],
-  "nasty-half-day": ["Nasty Half Day", "Cabo half-day fishing charter", "5 hour fishing Cabo"],
-  "lake-austin-pontoon": ["Cabo fishing charter", "Cabo San Lucas sport fishing"],
-  watersports: ["Cabo full-day fishing charter", "Nasty Full Day", "offshore fishing Cabo"],
-  "nasty-full-day": ["Nasty Full Day", "Cabo full-day fishing charter", "8 hour fishing Cabo"],
-  sunset: ["Cabo sunset fishing", "evening fishing charter Cabo"],
-  holiday: ["Cabo billfish charter", "marlin fishing Cabo San Lucas"],
+  pontoon: ["half day boat rental", "Half Day", "private boat charter"],
+  "nasty-half-day": ["Half Day", "half day boat rental", "5 hour charter"],
+  "lake-austin-pontoon": ["boat rental", "private boat charter"],
+  watersports: ["full day boat rental", "Full Day", "private boat charter"],
+  "nasty-full-day": ["Full Day", "full day boat rental", "8 hour charter"],
+  sunset: ["sunset boat rental", "evening charter"],
+  holiday: ["specialty charter", "private boat trip"],
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -89,7 +90,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   if (firestoreData) {
     const exp = firestoreData.experience;
-    const title = exp.metaTitle?.trim() || `${exp.title} | Cabo Sport Fishing`;
+    const title = exp.metaTitle?.trim() || `${exp.title} | Boat Rentals`;
     const description = exp.metaDescription?.trim() || exp.subtitle;
     return {
       title,
@@ -108,7 +109,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         return { title: "Experience" };
       }
       return {
-        title: `${staticExp.title} | Cabo Sport Fishing`,
+        title: `${staticExp.title} | Boat Rentals`,
         description: staticExp.shortDescription,
         ...(keywords?.length ? { keywords } : {}),
         alternates: { canonical },

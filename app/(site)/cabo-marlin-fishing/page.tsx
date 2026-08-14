@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import type { Metadata } from "next";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
@@ -27,7 +28,7 @@ export default function Page() {
       sections={[
         {
           type: "p",
-          text: "Marlin fishing is one of the main reasons anglers book offshore time out of Cabo San Lucas. Nasty Sport Fishing treats billfish days as condition-driven private charters: Full Day for more range when you want a serious hunt, Half Day when a shorter private window fits your schedule.",
+          text: `Marlin fishing is one of the main reasons anglers book offshore time out of Cabo San Lucas. ${brand.companyName} treats billfish days as condition-driven private charters: Full Day for more range when you want a serious hunt, Half Day when a shorter private window fits your schedule.`,
         },
         {
           type: "h2",
@@ -73,7 +74,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Nasty Full Day (8 hours) generally gives more room to run, search, and work a bite when marlin are the priority. Nasty Half Day (5 hours) still fishes private and offshore-capable, but a shorter clock can limit how far the day can stretch. Optional offshore-run upgrades may appear in checkout when available — they are not automatic and do not imply a named bank.",
+          text: "Full Day (8 hours) generally gives more room to run, search, and work a bite when marlin are the priority. Half Day (5 hours) still fishes private and offshore-capable, but a shorter clock can limit how far the day can stretch. Optional offshore-run upgrades may appear in checkout when available — they are not automatic and do not imply a named bank.",
         },
         {
           type: "h2",
@@ -119,8 +120,8 @@ export default function Page() {
         { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
         { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
         { href: "/fishing-reports", label: "Fishing reports" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
         { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
         { href: "/cabo-roosterfish-fishing", label: "Roosterfish" },

@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import type { Metadata } from "next";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
@@ -36,7 +37,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Nasty Sport Fishing charters are private and captained. Local-grounds fuel is included on standard trips; longer pushes may involve an optional offshore-run upgrade when that add-on is offered in checkout.",
+          text: `${brand.companyName} charters are private and captained. Local-grounds fuel is included on standard trips; longer pushes may involve an optional offshore-run upgrade when that add-on is offered in checkout.`,
         },
         {
           type: "h2",
@@ -65,7 +66,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "Nasty Half Day (5 hours) is a solid private offshore window when you want time on the water without a full marathon. Nasty Full Day (8 hours) gives more range to work multiple areas when the bite is spread out — often the better fit if billfish or a longer bluewater hunt is the priority.",
+          text: "Half Day (5 hours) is a solid private offshore window when you want time on the water without a full marathon. Full Day (8 hours) gives more range to work multiple areas when the bite is spread out — often the better fit if billfish or a longer bluewater hunt is the priority.",
         },
         {
           type: "h2",
@@ -109,8 +110,8 @@ export default function Page() {
         },
       ]}
       related={[
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas charters" },
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
         { href: "/cabo-marlin-fishing", label: "Marlin fishing" },

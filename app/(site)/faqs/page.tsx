@@ -3,24 +3,19 @@ import { headers } from "next/headers";
 import { brand } from "@/content/brand";
 import { faqs } from "@/content/faqs";
 import { FAQsPageClient } from "./FAQsPageClient";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 const canonical = `${baseUrl}/faqs`;
 
 export const metadata: Metadata = {
-  title: "FAQs | Cabo Sport Fishing Charters",
-  description:
-    "FAQs about Cabo San Lucas fishing charters: what's included, weather, tipping, marina meet-up, licenses. Nasty Sport Fishing.",
-  keywords: [
-    "Cabo fishing charter FAQ",
-    "Cabo San Lucas sport fishing",
-    "fishing charter cancellation",
-    "marina Cabo San Lucas",
-  ],
+  title: "FAQs",
+  description: `FAQs about private boat rentals: what's included, weather, tipping, meet-up. ${brand.companyName}.`,
+  keywords: ["boat rental FAQ", "charter cancellation", brand.companyName],
   alternates: { canonical },
   openGraph: {
-    title: "FAQs | Cabo Sport Fishing | Nasty Sport Fishing",
-    description: "Frequently asked questions about Cabo fishing charters. Captain, pricing, booking.",
+    title: `FAQs | ${brand.companyName}`,
+    description: "Frequently asked questions about booking, captain, and pricing.",
     url: canonical,
   },
 };

@@ -1,10 +1,13 @@
+import { brand } from "@/content/brand";
 /**
  * Build JSON-LD schema (Article, Breadcrumb, FAQ) for blog posts.
  */
 
 import type { BlogPostDoc, BlogPostSerialized, ContentBlock, FaqBlock } from "./types";
+import { getSiteBaseUrl } from "@/config/site";
 
-const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+
+const BASE_URL = getSiteBaseUrl();
 
 function stripTrailingSlash(url: string): string {
   return url.replace(/\/$/, "");
@@ -47,7 +50,7 @@ export function buildArticleJsonLd(
     dateModified,
     author: {
       "@type": "Person",
-      name: post.author?.name ?? "Nasty Sport Fishing",
+      name: post.author?.name ?? `${brand.companyName}`,
     },
     ...(image && { image: image }),
     ...(post.stats?.wordCount && { wordCount: post.stats.wordCount }),

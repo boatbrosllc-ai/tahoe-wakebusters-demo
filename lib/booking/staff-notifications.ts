@@ -3,6 +3,7 @@
  * events parallel to guest-facing sends. Delivery is best-effort; failures are logged with state.
  */
 
+import { brand } from "@/content/brand";
 import { logNotificationSent } from "@/lib/booking/email-log";
 import { getStaffOperationsEmail, sendStaffInternalEmail } from "@/lib/booking/brevo";
 import { sendStaffEventSms } from "@/lib/booking/sms";
@@ -71,7 +72,7 @@ export async function notifyStaffBookingConfirmation(params: {
   <strong>Phone:</strong> ${esc(cust?.phone?.trim() ?? "—")}</p>
   <p><strong>Trip:</strong> ${esc(boatName)}<br/>
   ${esc(startAt)} – ${esc(endAt)}</p>
-  <p style="font-size: 12px; color: #666;">— Nasty Sport Fishing ops (automated)</p>
+  <p style="font-size: 12px; color: #666;">— ${brand.companyName} ops (automated)</p>
 </body></html>`;
   await sendStaffInternalEmail({
     subject,

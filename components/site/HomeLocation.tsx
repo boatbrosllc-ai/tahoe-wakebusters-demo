@@ -25,7 +25,7 @@ export function HomeLocation() {
           id="home-location-heading"
           className="text-2xl sm:text-3xl font-bold text-brand-dark text-center mb-2"
         >
-          Marina meet-up in Cabo San Lucas
+          Marina meet-up
         </h2>
         <p className="text-brand-muted text-center max-w-xl mx-auto mb-6 sm:mb-8">
           {marinaNote}
@@ -74,7 +74,7 @@ export function HomeLocation() {
           </div>
           {hasMap ? (
             <div className="min-w-0 rounded-2xl overflow-hidden border border-brand-dark/10 shadow-soft">
-              <MapEmbed src={location.mapEmbedSrc} title="Marina Cabo San Lucas area map" />
+              <MapEmbed src={location.mapEmbedSrc} title="Marina area map" />
             </div>
           ) : null}
         </div>

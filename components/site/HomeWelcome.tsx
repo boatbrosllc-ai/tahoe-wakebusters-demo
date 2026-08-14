@@ -4,9 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
-const WELCOME_PHOTO = "/photos/nsf/yellowfin-marina-duo.png";
+const WELCOME_PHOTO = siteConfig.media.welcome;
 
 /**
  * Welcome + hospitality in one split — who we are and how we host.
@@ -36,19 +37,16 @@ export function HomeWelcome() {
               We&apos;re {brand.companyName}.
             </h2>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              Private Cabo San Lucas sport fishing charters. Family-run, faith-rooted, and built for
-              anglers who came to fish. One boat, licensed captain and crew, and a day run so every
-              guest enjoys it, first-timer or chasing records.
+              Private captained boat rentals. One boat, licensed captain and crew, and a day on the
+              water for first-timers and regulars alike.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
               Everyone on board is a guest. Customer service isn&apos;t a script. It&apos;s how we host.
               From the first message to the last line in, our goal is simple: you enjoy the day.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              First time on the water? We&apos;ll walk you through the basics: how to hold the rod, when
-              to reel, how to fight a fish, and what&apos;s happening on the boat so you never feel lost.
-              Seasoned angler chasing records? We&apos;ll fish serious and put you on the plan that fits.
-              Same boat, same crew, same respect.
+              First time on the water? We&apos;ll walk you through the basics so you never feel lost.
+              Seasoned guest? We&apos;ll run the day the way you want it. Same boat, same crew, same respect.
             </p>
             <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row flex-wrap items-center lg:items-stretch justify-center lg:justify-start gap-3">
               <Link
@@ -75,7 +73,7 @@ export function HomeWelcome() {
           >
             <Image
               src={WELCOME_PHOTO}
-              alt="Guests with yellowfin tuna after a Nasty Sport Fishing charter in Cabo San Lucas"
+              alt={`${brand.companyName} — welcome aboard`}
               fill
               className="object-cover object-[center_30%]"
               sizes="(max-width: 1024px) 92vw, 44vw"

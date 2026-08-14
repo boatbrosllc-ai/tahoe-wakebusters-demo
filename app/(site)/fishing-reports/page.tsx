@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import Image from "next/image";
 import Link from "next/link";
 import { PageBreadcrumbs } from "@/components/experience/PageBreadcrumbs";
@@ -8,7 +9,7 @@ import { articleJsonLd, breadcrumbJsonLd, buildSeoMetadata } from "@/lib/seo/met
 
 const path = "/fishing-reports";
 const description =
-  "Cabo fishing reports from Nasty Sport Fishing — real trip write-ups with photos as we publish them. No invented catches.";
+  `Cabo fishing reports from ${brand.companyName} — real trip write-ups with photos as we publish them. No invented catches.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path,
@@ -65,7 +66,7 @@ export default function FishingReportsHubPage() {
             Cabo Fishing Reports
           </h1>
           <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">
-            First-party trip reports from Nasty Sport Fishing days on the water — published only when we have a real
+            First-party trip reports from {brand.companyName} days on the water — published only when we have a real
             Cabo day to share.
           </p>
           <div className="mt-8 max-w-md mx-auto">

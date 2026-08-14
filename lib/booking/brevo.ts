@@ -7,6 +7,8 @@
  * `manageLink` is passed empty so signed manage URLs are not embedded in the message body.
  */
 
+import { brand } from "@/content/brand";
+import { getNoreplyEmail, getSenderName, getContactEmail } from "@/config/site";
 import { bookingEnv } from "./env";
 import { DEFAULT_CANCELLATION_POLICY } from "./cancellation-policy";
 import { formatMoney } from "./format-money";
@@ -125,8 +127,8 @@ export interface BookingEmailContext {
 }
 
 function getSender(): { name: string; email: string } {
-  const email = process.env.BREVO_SENDER_EMAIL?.trim() || "noreply@nastysportfishing.com";
-  const name = process.env.BREVO_SENDER_NAME?.trim() || "Nasty Sport Fishing";
+  const email = getNoreplyEmail();
+  const name = getSenderName();
   return { name, email };
 }
 
@@ -205,7 +207,7 @@ export async function sendBookingConfirmationEmail(
 
   const subjectForDeposit = isDepositForTemplate ? " (deposit received)" : "";
   const subjectBase = waiverSigningUrl ? "Booking Confirmation & Waiver" : "Booking Confirmation";
-  const subjectSuffix = " – Nasty Sport Fishing";
+  const subjectSuffix = ` – ${brand.companyName}`;
   const emailSubject = `${subjectBase}${subjectForDeposit}${subjectSuffix}`;
 
   const toName = booking.customer?.name?.trim() ?? "";
@@ -262,7 +264,7 @@ export async function sendBookingConfirmationEmail(
   return { subject: emailSubject, providerMessageId };
 }
 
-const BUSINESS_EMAIL = process.env.CONTACT_EMAIL?.trim() || "info@nastysportfishing.com";
+const BUSINESS_EMAIL = getContactEmail();
 
 /** Ops / captain / staff (distinct from guest-facing noreply). */
 export function getStaffOperationsEmail(): string {
@@ -298,7 +300,7 @@ export async function sendAmountIntegrityMismatchCustomerEmail(params: {
   holdId: string;
 }): Promise<void> {
   const { to, customerName, holdId } = params;
-  const subject = "We received your payment — your booking is under review – Nasty Sport Fishing";
+  const subject = `We received your payment — your booking is under review – ${brand.companyName}`;
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">
@@ -306,7 +308,7 @@ export async function sendAmountIntegrityMismatchCustomerEmail(params: {
   <p>We successfully received your payment. We need to complete a quick review of your reservation details before your booking is finalized.</p>
   <p><strong>You do not need to pay again.</strong> Our team will contact you within <strong>2 hours</strong> with an update. If you do not hear from us by then, please reply to this email or call us.</p>
   <p style="font-size: 12px; color: #666;">Reference: hold ${holdId.replace(/</g, "&lt;")}</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const res = await sendWithRetry(
     `${BREVO_API_BASE}/smtp/email`,
@@ -331,7 +333,7 @@ export async function sendPaymentUnderManualReviewCustomerEmail(params: {
   holdId: string;
 }): Promise<void> {
   const { to, customerName, holdId } = params;
-  const subject = "We received your payment — manual review – Nasty Sport Fishing";
+  const subject = `We received your payment — manual review – ${brand.companyName}`;
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px;">
@@ -339,7 +341,7 @@ export async function sendPaymentUnderManualReviewCustomerEmail(params: {
   <p>We received your payment. Your reservation is under review while we confirm a few details with our payment partner.</p>
   <p><strong>You do not need to pay again.</strong> We will contact you within <strong>one business day</strong> with an update. If you have urgent questions, reply to this email or call us.</p>
   <p style="font-size: 12px; color: #666;">Reference: hold ${holdId.replace(/</g, "&lt;")}</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const res = await sendWithRetry(
     `${BREVO_API_BASE}/smtp/email`,
@@ -417,7 +419,7 @@ export async function sendDiscountLimitExceededCustomerEmail(params: {
   bookingId?: string;
 }): Promise<void> {
   const { to, customerName, experienceName, tripDate, bookingId } = params;
-  const subject = "Your discount could not be applied – partial refund – Nasty Sport Fishing";
+  const subject = `Your discount could not be applied – partial refund – ${brand.companyName}`;
   const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
   const html = `
 <!DOCTYPE html>
@@ -428,7 +430,7 @@ export async function sendDiscountLimitExceededCustomerEmail(params: {
   ${tripLine}
   <p><strong>A partial refund will be processed within 1–2 business days</strong> and credited to your original payment method.</p>
   <p>If you have any questions, please reply to this email or contact us.</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const res = await sendWithRetry(
     `${BREVO_API_BASE}/smtp/email`,
@@ -468,7 +470,7 @@ export async function sendDiscountLimitExceededBusinessAlert(params: {
   <p><strong>Experience:</strong> ${experienceName.replace(/</g, "&lt;")}</p>
   ${tripLine}
   <p>Process the refund in Stripe and mark the pendingRefunds record as resolved.</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing booking system</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName} booking system</p>
 </body></html>`;
   const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
     sender: getSender(),
@@ -507,7 +509,7 @@ export async function sendPendingRefundPermanentFailureAlert(params: {
   ${piLine}
   ${reasonLine}
   <p><strong>Last error:</strong> ${error.replace(/</g, "&lt;").slice(0, 2000)}</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing booking system</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName} booking system</p>
 </body></html>`;
   try {
     const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
@@ -526,7 +528,7 @@ export async function sendPendingRefundPermanentFailureAlert(params: {
 }
 
 /**
- * Send a copy of the booking confirmation to the business (info@nastysportfishing.com) so they know they have a new booking.
+ * Send a copy of the booking confirmation to the business inbox so they know they have a new booking.
  * Same HTML as customer; subject indicates new booking. Throws on transport failure (outbox caller records operational alert).
  */
 export async function sendBookingConfirmationCopyToBusiness(
@@ -625,7 +627,7 @@ export async function sendFinalChargeSuccessEmail(
   params: FinalChargeSuccessEmailParams,
   opts?: { idempotencyKey?: string }
 ): Promise<{ providerMessageId?: string }> {
-  const subject = `Payment received — ${params.experienceName} – Nasty Sport Fishing`;
+  const subject = `Payment received — ${params.experienceName} – ${brand.companyName}`;
   const html = `
 <!DOCTYPE html>
 <html><body style="font-family: sans-serif; padding: 24px; max-width: 560px;">
@@ -634,7 +636,7 @@ export async function sendFinalChargeSuccessEmail(
   <p><strong>${params.experienceName.replace(/</g, "&lt;")}</strong><br />
   ${params.tripDate.replace(/</g, "&lt;")} at ${params.startTime.replace(/</g, "&lt;")}</p>
   <p>Thank you — you&apos;re all set. We&apos;ll see you on the water!</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const reqBody = {
     sender: getSender(),
@@ -680,8 +682,8 @@ export async function sendFinalChargeFailedEmail(
   tripDetails?: FinalChargeFailedEmailTripDetails
 ): Promise<void> {
   const subject = requiresAction
-    ? "Action needed to complete your booking – Nasty Sport Fishing"
-    : "Payment failed for your upcoming trip – Nasty Sport Fishing";
+    ? `Action needed to complete your booking – ${brand.companyName}`
+    : `Payment failed for your upcoming trip – ${brand.companyName}`;
   const body = requiresAction
     ? "Your card requires verification to complete the remaining balance. Please reply to this email or contact us to update your card or complete payment."
     : "We couldn't charge the remaining balance for your upcoming trip. Please reply to this email or contact us to update your card or pay the remaining balance.";
@@ -697,7 +699,7 @@ export async function sendFinalChargeFailedEmail(
   <p>${body.replace(/</g, "&lt;")}</p>
   ${tripHtml}
   ${ctaHtml}
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const reqBody = {
     sender: getSender(),
@@ -737,7 +739,7 @@ export async function sendWaiverTemplateMissingAlert(
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Trip date:</td><td>${tripDate.replace(/</g, "&lt;")}</td></tr>
   </table>
   <p style="margin-top: 24px;">No active waiver template was found at booking creation time. Please create an active waiver template and send the waiver to this customer manually before their trip date.</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing (automated alert)</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName} (automated alert)</p>
 </body></html>`;
     const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
       sender: getSender(),
@@ -785,7 +787,7 @@ export async function sendBookingCancellationEmail(params: {
     pendingRefundAmount,
     refundOutcome,
   } = params;
-  const subject = "Booking canceled – Nasty Sport Fishing";
+  const subject = `Booking canceled – ${brand.companyName}`;
   const tripLine = tripDate ? `<p><strong>Trip date:</strong> ${tripDate.replace(/</g, "&lt;")}</p>` : "";
   let refundLine = "";
   if (refundOutcome === "skipped") {
@@ -840,7 +842,7 @@ export async function sendBookingCancellationEmail(params: {
   ${tripLine}
   ${refundLine}
   <p>If you have any questions, please reply to this email or contact us.</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">— Nasty Sport Fishing</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">— ${brand.companyName}</p>
 </body></html>`;
   const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
     sender: getSender(),
@@ -856,12 +858,12 @@ export async function sendBookingCancellationEmail(params: {
 }
 
 /**
- * Send contact form submission to the business email (CONTACT_EMAIL or info@nastysportfishing.com).
+ * Send contact form submission to the business email (CONTACT_EMAIL).
  * Uses same Brevo transactional API as booking emails.
  */
 export async function sendContactFormEmail(name: string, email: string, message: string): Promise<void> {
-  const toEmail = (process.env.CONTACT_EMAIL ?? "info@nastysportfishing.com").trim();
-  const subject = "Contact form – Nasty Sport Fishing";
+  const toEmail = getContactEmail();
+  const subject = `Contact form – ${brand.companyName}`;
   const escapedName = name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapedEmail = email.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
@@ -873,7 +875,7 @@ export async function sendContactFormEmail(name: string, email: string, message:
   <p><strong>Email:</strong> ${escapedEmail}</p>
   <p><strong>Message:</strong></p>
   <p style="white-space: pre-wrap;">${escapedMessage}</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from Nasty Sport Fishing contact form</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from ${brand.companyName} contact form</p>
 </body></html>`;
   const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
     sender: getSender(),
@@ -894,8 +896,8 @@ export async function sendContactFormEmail(name: string, email: string, message:
  * Body: email and source; used so leads are delivered even if Firestore is unavailable.
  */
 export async function sendLeadNotificationEmail(email: string, source: string): Promise<void> {
-  const toEmail = (process.env.CONTACT_EMAIL ?? "info@nastysportfishing.com").trim();
-  const subject = "Lead capture – Nasty Sport Fishing";
+  const toEmail = getContactEmail();
+  const subject = `Lead capture – ${brand.companyName}`;
   const escapedEmail = email.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapedSource = String(source).replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const html = `
@@ -904,7 +906,7 @@ export async function sendLeadNotificationEmail(email: string, source: string): 
   <p><strong>New lead signup</strong></p>
   <p><strong>Email:</strong> ${escapedEmail}</p>
   <p><strong>Source:</strong> ${escapedSource}</p>
-  <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from Nasty Sport Fishing lead capture</p>
+  <p style="margin-top: 24px; font-size: 12px; color: #666;">Sent from ${brand.companyName} lead capture</p>
 </body></html>`;
   const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
     sender: getSender(),

@@ -1,59 +1,58 @@
 /**
- * Location / Contact page data.
- * City/region are public; phone, street, ZIP, geo, hours stay empty until verified.
+ * Location / Contact page data — derived from the active site config.
  */
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+import { getSiteBaseUrl, siteConfig } from "@/config/site";
+
+const { company, contact } = siteConfig;
 
 export const location = {
   /** Display name */
-  name: "Nasty Sport Fishing",
+  name: company.name,
   /** Legal name for schema */
-  legalName: "Nasty Sport Fishing",
+  legalName: company.legalName,
   address: {
-    line1: "",
-    city: "Cabo San Lucas",
-    state: "Baja California Sur",
-    zip: "",
+    line1: contact.address.line1,
+    city: contact.address.city,
+    state: contact.address.state,
+    zip: contact.address.zip,
   },
   /** Area label for UI (not a street NAP). */
-  addressFormatted: "Cabo San Lucas, Baja California Sur, Mexico",
+  addressFormatted: [contact.address.city, contact.address.state, contact.address.country]
+    .filter(Boolean)
+    .join(", "),
   /** Meet-up area note — slip details after booking. */
-  marinaMeetNote:
-    "Meet at Marina Cabo San Lucas — exact slip and check-in details arrive after booking.",
+  marinaMeetNote: contact.marinaMeetNote,
   /** Empty until verified public phone. */
-  phone: "",
-  phoneTel: "",
-  hoursNote: "Trips depart by reservation. We'll confirm meet-up time at the marina when you book.",
+  phone: contact.phone || siteConfig.phone,
+  phoneTel: contact.phoneTel || siteConfig.phoneTel,
+  hoursNote: contact.hoursNote,
   /** Maps — omit embeds/geo from schema until GBP/exact place verified. Kept optional for UI. */
-  googleMapsPlaceUrl: "",
-  mapEmbedSrc: "",
-  geo: null as { latitude: number; longitude: number } | null,
+  googleMapsPlaceUrl: contact.googleMapsPlaceUrl,
+  mapEmbedSrc: contact.mapEmbedSrc,
+  geo: contact.geo,
   /** Service area for content */
-  areaServed: [
-    "Cabo San Lucas",
-    "Los Cabos",
-    "Sea of Cortez",
-    "Pacific Ocean off Cabo",
-  ],
+  areaServed: [...contact.areaServed],
   /** No public review aggregate until real reviews exist */
   rating: 0,
   reviewCount: 0,
   sameAs: [] as string[],
-  url: baseUrl,
+  url: getSiteBaseUrl(),
 };
 
 export type Location = typeof location;
 
 /** Customer-facing review count, e.g. "120+ 5-star reviews". */
 export function reviewCountLabel(): string {
-  if (location.reviewCount <= 0) return "New Cabo charter";
+  if (location.reviewCount <= 0) return "New charter";
   return `${location.reviewCount}+ 5-star reviews`;
 }
 
 /** Star rating + review count for compact trust lines. */
 export function ratingWithReviewCount(): string {
-  if (location.reviewCount <= 0) return "Cabo San Lucas sport fishing";
+  if (location.reviewCount <= 0) {
+    return `${location.address.city} boat rentals`;
+  }
   return `${location.rating} · ${reviewCountLabel()}`;
 }
 

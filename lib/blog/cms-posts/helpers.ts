@@ -1,6 +1,8 @@
 import type { ContentBlock, FaqItem } from "../types";
 
-const SITE = "https://nastysportfishing.com";
+import { getSiteBaseUrl } from "@/config/site";
+
+const SITE = getSiteBaseUrl();
 
 export function coverImage(path: string, alt: string) {
   const url = path.startsWith("http") ? path : `${SITE}${path}`;

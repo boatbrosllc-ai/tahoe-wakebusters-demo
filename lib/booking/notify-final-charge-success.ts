@@ -3,6 +3,7 @@
  */
 
 import type { Firestore } from "firebase-admin/firestore";
+import { brand } from "@/content/brand";
 import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { getSlotStartEnd, parseSlotId } from "@/lib/booking/experience-slots";
 import { formatMoney } from "@/lib/booking/format-money";
@@ -90,7 +91,7 @@ export async function notifyFinalChargeSuccess(
     }
   }
 
-  const subject = `Payment received — ${experienceName} – Nasty Sport Fishing`;
+  const subject = `Payment received — ${experienceName} – ${brand.companyName}`;
 
   try {
     const { providerMessageId } = await sendFinalChargeSuccessEmail(

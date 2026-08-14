@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import { getCmsBlogPostSeedBySlug } from "./index";
 import type { FirestorePost } from "@/components/site/FirestoreBlogPostView";
 
@@ -10,7 +11,7 @@ export function cmsSeedToViewPost(slug: string): FirestorePost | null {
     excerpt: seed.excerpt,
     slug: seed.slug,
     coverImage: { url: seed.coverImage.path, alt: seed.coverImage.alt },
-    author: { name: "Nasty Sport Fishing" },
+    author: { name: `${brand.companyName}` },
     content: seed.content,
     categories: seed.taxonomy.categories,
     tags: seed.taxonomy.tags,

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import { SeoGuideLayout } from "@/components/seo/SeoGuideLayout";
 import { buildSeoMetadata } from "@/lib/seo/metadata";
 
 const description =
-  "How to choose fishing charters in Cabo San Lucas — boat, crew, inclusions, licenses, cancel policy — then how Nasty Sport Fishing is structured with verified catalog facts.";
+  `How to choose fishing charters in Cabo San Lucas — boat, crew, inclusions, licenses, cancel policy — then how ${brand.companyName} is structured with verified catalog facts.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path: "/best-fishing-charters-cabo-san-lucas",
@@ -19,7 +20,7 @@ export default function Page() {
       path="/best-fishing-charters-cabo-san-lucas"
       pageKey="best_fishing_charters_cabo_san_lucas"
       h1="Best Fishing Charters in Cabo San Lucas"
-      lede="A practical buyer’s guide for Cabo San Lucas — how to compare private charters honestly, then how Nasty Sport Fishing is set up using only what we can verify from our catalog."
+      lede={`A practical buyer’s guide for Cabo San Lucas — how to compare private charters honestly, then how ${brand.companyName} is set up using only what we can verify from our catalog.`}
       breadcrumbName="Buyer’s Guide"
       metaDescription={description}
       heroImage="/photos/nsf/sportfisher-running.png"
@@ -78,7 +79,7 @@ export default function Page() {
         {
           type: "h2",
           id: "nasty",
-          text: "How Nasty Sport Fishing is structured",
+          text: `How ${brand.companyName} is structured`,
         },
         {
           type: "p",
@@ -88,7 +89,7 @@ export default function Page() {
           type: "ul",
           items: [
             "Private, captained charters only — guests do not run the boat.",
-            "Nasty Half Day (5 hours) and Nasty Full Day (8 hours) on shared live inventory.",
+            "Half Day (5 hours) and Full Day (8 hours) on shared live inventory.",
             "Typical capacity up to six guests — confirm when booking.",
             "Inclusions include captain and mate, premium tackle, live bait allowance, licenses for up to four anglers, water/soft drinks/snacks/light breakfast, crew photos, and local-grounds fuel.",
             "Meet at Marina Cabo San Lucas; exact slip instructions arrive after booking.",
@@ -110,7 +111,7 @@ export default function Page() {
         {
           question: "Is Nasty a shared open boat?",
           answer:
-            "No. Nasty Half Day and Nasty Full Day are private captained charters for your group.",
+            "No. Half Day and Full Day are private captained charters for your group.",
         },
         {
           question: "Are fishing licenses included?",
@@ -136,8 +137,8 @@ export default function Page() {
       related={[
         { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas charters" },
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/boats/cabo-40-express", label: "Boats" },
         { href: "/packages", label: "Packages" },
         { href: "/los-cabos-fishing-charters", label: "Los Cabos overview" },

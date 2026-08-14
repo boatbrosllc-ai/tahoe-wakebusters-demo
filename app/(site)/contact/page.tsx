@@ -3,6 +3,7 @@ import Link from "next/link";
 import { brand } from "@/content/brand";
 import { ContactForm } from "@/components/site/ContactForm";
 import { Phone, Mail, MapPin } from "lucide-react";
+import { getSiteBaseUrl } from "@/config/site";
 import {
   getMarinaMeetNote,
   getPublicAreaLabel,
@@ -10,18 +11,18 @@ import {
   getVerifiedHours,
 } from "@/lib/seo/public-contact";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 const canonical = `${baseUrl}/contact`;
 
 export const metadata: Metadata = {
-  title: "Contact | Cabo Sport Fishing",
+  title: "Contact | Boat Rentals",
   description:
-    "Contact Nasty Sport Fishing for Cabo San Lucas sport fishing charters. Email us or send a message — Marina Cabo San Lucas meet-ups.",
-  keywords: ["Cabo fishing charter contact", "Nasty Sport Fishing", "Marina Cabo San Lucas"],
+    `Contact ${brand.companyName}. Email us or send a message.`,
+  keywords: ["boat rental contact", brand.companyName],
   alternates: { canonical },
   openGraph: {
-    title: "Contact | Cabo Sport Fishing | Nasty Sport Fishing",
-    description: "Get in touch for Cabo fishing charters. Email or send a message.",
+    title: `Contact | ${brand.companyName}`,
+    description: "Get in touch. Email or send a message.",
     url: canonical,
   },
 };

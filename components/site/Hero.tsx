@@ -5,17 +5,18 @@ import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { consumeSkipHeroEntranceOnce } from "@/lib/site/skip-hero-entrance";
 import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
-/** Full-bleed Cabo hero — El Arco sunset. */
-const HERO_IMAGE = "/photos/stock/cabo/el-arco-sunset-jarvis.jpg";
+/** Full-bleed hero — default stock charter photo from siteConfig.media. */
+const HERO_IMAGE = siteConfig.media.hero;
 
 const bullets = [
-  "Cabo San Lucas marina",
-  "Half Day & Full Day trips",
+  "Private captained trips",
+  "Half Day & Full Day options",
   "10+ payment options · BNPL",
   "Captain & crew included",
 ];
@@ -37,7 +38,7 @@ export function Hero() {
         <div className="absolute inset-0 z-[1]" aria-hidden>
           <Image
             src={HERO_IMAGE}
-            alt="El Arco rock formation at sunset in Cabo San Lucas"
+            alt={`Boat on the water — ${brand.companyName}`}
             fill
             priority
             className="object-cover object-center"
@@ -82,6 +83,7 @@ export function Hero() {
                   className="object-contain object-center transition-opacity duration-300 group-hover:opacity-0"
                   sizes="(max-width: 1024px) 95vw, 1100px"
                   priority
+                  unoptimized
                 />
                 <Image
                   src={brand.logoHeroHoverPath}
@@ -90,6 +92,7 @@ export function Hero() {
                   aria-hidden
                   className="object-contain object-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
                   sizes="(max-width: 1024px) 95vw, 1100px"
+                  unoptimized
                 />
               </span>
             </Link>

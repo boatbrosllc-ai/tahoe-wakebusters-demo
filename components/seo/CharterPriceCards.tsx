@@ -24,7 +24,7 @@ export function CharterPriceCards({ compact = false }: { compact?: boolean }) {
     <div className={compact ? "space-y-4" : "space-y-6"}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="rounded-2xl border border-brand-dark/10 bg-white p-5 sm:p-6">
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary">Nasty Half Day</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary">Half Day</p>
           <h3 className="mt-1 font-display text-xl font-bold text-brand-dark">5 hours</h3>
           <p className="mt-3 text-2xl font-bold text-brand-dark tabular-nums">{formatUsdFromCents(halfActive)}</p>
           {foundingOn ? (
@@ -42,7 +42,7 @@ export function CharterPriceCards({ compact = false }: { compact?: boolean }) {
           </Link>
         </div>
         <div className="rounded-2xl border border-brand-dark/10 bg-white p-5 sm:p-6 ring-1 ring-brand-primary/30">
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary">Nasty Full Day</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand-primary">Full Day</p>
           <h3 className="mt-1 font-display text-xl font-bold text-brand-dark">8 hours</h3>
           <p className="mt-3 text-2xl font-bold text-brand-dark tabular-nums">{formatUsdFromCents(fullActive)}</p>
           {foundingOn ? (

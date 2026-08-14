@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { useBookingModal } from "@/components/site/BookingModalContext";
 import {
   getMarinaMeetNote,
@@ -24,14 +25,11 @@ const footerLinks = [
 ];
 
 const seoRentalLinks = [
-  { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas fishing charters" },
-  { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-  { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
-  { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
-  { href: "/cabo-marlin-fishing", label: "Marlin fishing Cabo" },
-  { href: "/cabo-fishing-calendar", label: "Fishing calendar" },
-  { href: "/fishing-reports", label: "Fishing reports" },
-  { href: OUR_BOAT_PATH, label: "Our fishing boat" },
+  { href: "/experiences", label: "Browse trips" },
+  { href: "/experiences/nasty-half-day", label: siteConfig.catalog.halfDay.title },
+  { href: "/experiences/nasty-full-day", label: siteConfig.catalog.fullDay.title },
+  { href: "/packages", label: "Packages" },
+  { href: OUR_BOAT_PATH, label: "Our boat" },
 ];
 
 const linkClass =
@@ -91,7 +89,7 @@ export function Footer() {
             </ul>
           </div>
           <div>
-            <p className="font-medium text-white text-sm mb-2">Cabo fishing</p>
+            <p className="font-medium text-white text-sm mb-2">Trips</p>
             <ul className="space-y-2">
               {seoRentalLinks.map((link) => (
                 <li key={link.href}>
@@ -175,7 +173,7 @@ export function Footer() {
             {" · "}
             <Link href="/location" className="hover:text-brand-primary transition-colors">Location</Link>
             {" · "}
-            Cabo San Lucas sport fishing. Licensed charters.
+            Licensed private boat rentals.
           </p>
         </div>
       </div>

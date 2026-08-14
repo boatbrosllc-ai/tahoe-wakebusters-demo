@@ -1,27 +1,21 @@
 import Link from "next/link";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
+import { siteConfig } from "@/config/site";
 
 const HOMEPAGE_SEO_LINKS: { href: string; label: string }[] = [
-  { href: "/cabo-san-lucas-fishing-charters", label: "Cabo San Lucas fishing charters" },
-  { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing Cabo" },
-  { href: "/cabo-fishing-charter-prices", label: "Charter prices" },
-  { href: "/cabo-fish-processing", label: "Cabo fish processing" },
-  { href: "/cabo-marlin-fishing", label: "Marlin fishing Cabo" },
-  { href: "/cabo-fishing-calendar", label: "Cabo fishing calendar" },
-  { href: "/fishing-reports", label: "Fishing reports" },
-  { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-  { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+  { href: "/experiences", label: "Browse trips" },
+  { href: "/experiences/nasty-half-day", label: siteConfig.catalog.halfDay.title },
+  { href: "/experiences/nasty-full-day", label: siteConfig.catalog.fullDay.title },
+  { href: "/packages", label: "Packages" },
+  { href: OUR_BOAT_PATH, label: "Our boat" },
+  { href: "/faqs", label: "FAQs" },
+  { href: "/contact", label: "Contact" },
 ];
 
 const EXPERIENCES_HUB_SEO_LINKS: { href: string; label: string }[] = [
   ...HOMEPAGE_SEO_LINKS,
-  { href: "/los-cabos-fishing-charters", label: "Los Cabos fishing charters" },
-  { href: "/best-time-to-fish-cabo", label: "Best time to fish Cabo" },
-  { href: "/best-fishing-charters-cabo-san-lucas", label: "How to choose a charter" },
-  { href: "/packages", label: "Multi-day packages" },
-  { href: OUR_BOAT_PATH, label: "Our fishing boat" },
-  { href: "/faqs", label: "Charter FAQs" },
-  { href: "/contact", label: "Contact" },
+  { href: "/booking", label: "Book online" },
+  { href: "/location", label: "Location" },
 ];
 
 export function SeoHubLinks({ variant }: { variant: "home" | "experiences" }) {
@@ -33,11 +27,11 @@ export function SeoHubLinks({ variant }: { variant: "home" | "experiences" }) {
           ? "px-5 sm:px-6 lg:px-8 py-10 bg-white border-t border-brand-dark/10"
           : "px-5 sm:px-6 lg:px-8 py-8 max-w-7xl mx-auto"
       }
-      aria-label="Cabo fishing guides and charters"
+      aria-label="Trip guides and bookings"
     >
       <div className={variant === "home" ? "max-w-7xl mx-auto" : undefined}>
         <h2 className="text-lg sm:text-xl font-semibold text-brand-dark text-center mb-4">
-          Cabo fishing guides &amp; charters
+          Plan your trip
         </h2>
         <ul className="flex flex-wrap justify-center gap-2 sm:gap-3">
           {links.map((link) => (

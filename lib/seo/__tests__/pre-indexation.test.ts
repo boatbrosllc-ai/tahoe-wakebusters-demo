@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SEO_SITEMAP_PATHS, SEO_FUTURE_UNPUBLISHED_PATHS } from "../paths";
@@ -63,30 +64,30 @@ describe("pre-indexation SEO safety", () => {
   it("omits telephone and streetAddress from LocalBusiness when unverified", () => {
     assert.equal(getPublicPhone(), null);
     const jsonLd = buildLocalBusinessJsonLd({
-      baseUrl: "https://nastysportfishing.com",
-      description: "Cabo sport fishing charters",
+      baseUrl: "https://example.com",
+      description: "Boat rental charters",
     });
     assert.equal(jsonLd["@type"], "LocalBusiness");
-    assert.equal(jsonLd.name, "Nasty Sport Fishing");
+    assert.equal(jsonLd.name, brand.companyName);
     assert.equal(jsonLd.telephone, undefined);
     assert.equal(jsonLd.openingHoursSpecification, undefined);
     assert.equal(jsonLd.sameAs, undefined);
     const address = jsonLd.address as Record<string, unknown>;
     assert.equal(address.streetAddress, undefined);
     assert.equal(address.postalCode, undefined);
-    assert.equal(address.addressLocality, "Cabo San Lucas");
-    assert.equal(address.addressRegion, "Baja California Sur");
-    assert.equal(address.addressCountry, "MX");
-    assert.equal(jsonLd.url, "https://nastysportfishing.com");
+    assert.equal(address.addressLocality, brand.address.city);
+    assert.equal(address.addressRegion, brand.address.state);
+    assert.equal(address.addressCountry, brand.country);
+    assert.equal(jsonLd.url, "https://example.com");
     const catalog = jsonLd.hasOfferCatalog as { itemListElement: unknown[] };
     assert.equal(catalog.itemListElement.length, 2);
   });
 
-  it("uses nastysportfishing.com canonical domain in schema URL", () => {
+  it("strips trailing slash from schema URL", () => {
     const jsonLd = buildLocalBusinessJsonLd({
-      baseUrl: "https://nastysportfishing.com/",
+      baseUrl: "https://example.com/",
       description: "test",
     });
-    assert.equal(jsonLd.url, "https://nastysportfishing.com");
+    assert.equal(jsonLd.url, "https://example.com");
   });
 });

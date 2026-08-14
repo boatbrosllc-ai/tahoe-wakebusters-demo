@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Cabo fishing calendar structure.
  *
@@ -88,4 +89,4 @@ export const fishingCalendarSpecies: CalendarSpecies[] = [
 ];
 
 export const CALENDAR_VERIFICATION_NOTE =
-  "Month-by-month ratings are pending verification from Nasty Sport Fishing trip reports. The grid is ready for first-party data — we do not invent peak months. Use Best Time to Fish Cabo for planning questions while this fills in; your captain sets the daily plan from live conditions.";
+  `Month-by-month ratings are pending verification from ${brand.companyName} trip reports. The grid is ready for first-party data — we do not invent peak months. Use Best Time to Fish Cabo for planning questions while this fills in; your captain sets the daily plan from live conditions.`;

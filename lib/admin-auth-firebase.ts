@@ -22,7 +22,7 @@ export const FIREBASE_SETUP_HINT =
 
 /** All emails that are allowed to access admin, read exclusively from ADMIN_EMAIL (comma-separated). Exported for session route. */
 export function getAllowedAdminEmails(): string[] {
-  const raw = process.env.ADMIN_EMAIL?.trim();
+  const raw = process.env.ADMIN_EMAIL?.trim() || process.env.PLATFORM_ADMIN_EMAIL?.trim();
   if (!raw) return [];
   return raw
     .split(",")

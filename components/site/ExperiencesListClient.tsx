@@ -13,9 +13,10 @@ import { motion, useReducedMotion } from "framer-motion";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 import { getCanonicalExperiencePath, isPontoonSlug, isWakeSurfClubSlug } from "@/lib/booking/experience-aliases";
+import { siteConfig } from "@/config/site";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
-const FALLBACK_CARD_IMAGE = "/photos/nsf/cabo-40-express.png";
+const FALLBACK_CARD_IMAGE = siteConfig.media.listingFallback;
 
 function isLegacyExperienceImage(url: string | null | undefined): boolean {
   if (!url?.trim()) return true;
@@ -189,10 +190,10 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
       {/* Hero – gradient + motion */}
       <section className="relative h-[45vh] min-h-[320px] max-h-[480px] overflow-hidden bg-brand-dark">
         <div className="absolute inset-0 sm:hidden">
-          <Image src="/photos/nsf/yellowfin-marina-duo.png" alt="" fill className="object-cover object-[center_40%]" priority sizes="100vw" />
+          <Image src={siteConfig.media.welcome} alt="" fill className="object-cover object-[center_40%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 hidden sm:block">
-          <Image src="/photos/nsf/cabo-40-express.png" alt="" fill className="object-cover object-[center_50%]" priority sizes="100vw" />
+          <Image src={siteConfig.media.listingFallback} alt="" fill className="object-cover object-[center_50%]" priority sizes="100vw" />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 from-30% via-black/25 to-transparent" />
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8">

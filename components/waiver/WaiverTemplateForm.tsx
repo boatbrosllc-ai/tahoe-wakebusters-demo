@@ -1,4 +1,5 @@
 "use client";
+import { brand } from "@/content/brand";
 
 import React, { useId } from "react";
 import Link from "next/link";
@@ -24,7 +25,7 @@ export type SignatureConfig = {
 export type PageHeading = { title: string; heading: string; subheading: string };
 
 const DEFAULT_PAGE_HEADINGS: Record<string, PageHeading> = {
-  welcome: { title: "Welcome", heading: "Hi", subheading: "Welcome to Nasty Sport Fishing's Online Waiver!" },
+  welcome: { title: "Welcome", heading: "Hi", subheading: `Welcome to ${brand.companyName}'s Online Waiver!` },
   tripDate: { title: "Trip Date", heading: "Please enter the date you booked for", subheading: "" },
   name: { title: "Name", heading: "Please enter your First and Last name", subheading: "" },
   dob: { title: "Date of Birth", heading: "Please enter your Date of Birth", subheading: "" },
@@ -125,14 +126,14 @@ export function termsHtmlToPlainText(html: string): string {
 
 const TERMS_PLACEHOLDER = `Paste or edit terms here. Use a blank line for new paragraphs; start a line with "- " for bullets.`;
 
-/** Default Nasty Sport Fishing waiver terms (plain text). Used for new templates. */
-const BOAT_BROS_TERMS_PLAINTEXT = `PARTICIPANT AGREEMENT, RELEASE AND ASSUMPTION OF RISK
+/** Default operator waiver terms (plain text). Used for new templates. */
+const DEFAULT_OPERATOR_TERMS_PLAINTEXT = `PARTICIPANT AGREEMENT, RELEASE AND ASSUMPTION OF RISK
 
-In consideration of the services Nasty Sport Fishing, their agents, owners, officers, volunteers, employees, and all other persons or entities acting in any capacity on their behalf (hereinafter collectively referred to as "NSF"), I hereby agree to release, indemnify, and discharge NSF, on behalf of myself, my spouse, my children, my parents, my heirs, assigns, personal representative and estate as follows:
+In consideration of the services ${brand.companyName}, their agents, owners, officers, volunteers, employees, and all other persons or entities acting in any capacity on their behalf (hereinafter collectively referred to as "${brand.shortName}"), I hereby agree to release, indemnify, and discharge ${brand.shortName}, on behalf of myself, my spouse, my children, my parents, my heirs, assigns, personal representative and estate as follows:
 
 1. Acknowledgement and Assumption of Risk
 
-I acknowledge that my participation in guided sport fishing charters and boating activities entails known and unanticipated risks that could result in physical or emotional injury, paralysis, death, or damage to myself, to property, or to third parties. I understand that such risks simply cannot be eliminated without jeopardizing the essential qualities of the activity.
+I acknowledge that my participation in guided boat rentals and boating activities entails known and unanticipated risks that could result in physical or emotional injury, paralysis, death, or damage to myself, to property, or to third parties. I understand that such risks simply cannot be eliminated without jeopardizing the essential qualities of the activity.
 
 The risks include, among other things:
 
@@ -154,7 +155,7 @@ The risks include, among other things:
 - Accidents or illness occurring in remote places without medical facilities
 - My own physical condition and the physical exertion associated with this activity
 
-Furthermore, NSF personnel have difficult jobs to perform. They seek safety but are not infallible. They may:
+Furthermore, ${brand.shortName} personnel have difficult jobs to perform. They seek safety but are not infallible. They may:
 
 - Be unaware of a participant's fitness or abilities
 - Misjudge weather or environmental conditions
@@ -169,13 +170,13 @@ Additionally, I agree to wear a U.S. Coast Guard approved personal flotation dev
 
 3. Release, Indemnity, and Hold Harmless Agreement
 
-I hereby voluntarily release, forever discharge and agree to indemnify and hold harmless NSF from any and all claims, demands, or causes of action based upon or arising out of injuries, including death, to persons, or damages to or destruction of property, sustained or alleged to have been sustained in connection with, arising out of, or in any way related to my participation in this activity or my use of NSF's equipment or facilities.
+I hereby voluntarily release, forever discharge and agree to indemnify and hold harmless ${brand.shortName} from any and all claims, demands, or causes of action based upon or arising out of injuries, including death, to persons, or damages to or destruction of property, sustained or alleged to have been sustained in connection with, arising out of, or in any way related to my participation in this activity or my use of ${brand.shortName}'s equipment or facilities.
 
-This includes claims which are based or founded, in whole or in part, upon the alleged negligent acts or omissions of NSF.
+This includes claims which are based or founded, in whole or in part, upon the alleged negligent acts or omissions of ${brand.shortName}.
 
 4. Attorney's Fees and Enforcement
 
-Should NSF or anyone acting on their behalf be required to incur attorney's fees and costs to enforce this agreement, I agree to indemnify and hold them harmless for all such fees and costs.
+Should ${brand.shortName} or anyone acting on their behalf be required to incur attorney's fees and costs to enforce this agreement, I agree to indemnify and hold them harmless for all such fees and costs.
 
 5. Insurance and Medical Responsibility
 
@@ -188,7 +189,7 @@ I further certify that I am willing to assume the risk of any medical or physica
 
 6. Governing Law and Venue
 
-In the event that I file a lawsuit against NSF, I agree to do so solely in the state of Texas.
+In the event that I file a lawsuit against ${brand.shortName}, I agree to do so solely in the state of Texas.
 
 I further agree that the substantive law of Texas shall apply in that action without regard to conflict of law rules.
 
@@ -196,9 +197,9 @@ I agree that if any portion of this agreement is found to be void or unenforceab
 
 Acknowledgment of Waiver and Legal Rights
 
-By signing this document, I acknowledge that if anyone is hurt or property is damaged during my participation in this activity, I may be found by a court of law to have waived my right to maintain a lawsuit against NSF on the basis of any claim from which I have released them herein.
+By signing this document, I acknowledge that if anyone is hurt or property is damaged during my participation in this activity, I may be found by a court of law to have waived my right to maintain a lawsuit against ${brand.shortName} on the basis of any claim from which I have released them herein.
 
-I also agree that this document is valid for subsequent visits and participation at NSF.
+I also agree that this document is valid for subsequent visits and participation at ${brand.shortName}.
 
 I have had sufficient opportunity to read this entire document. I have read and understood it, and I agree to be bound by its terms.`;
 
@@ -639,7 +640,7 @@ export const defaultWaiverTemplateFormValues: WaiverTemplateFormValues = {
   title: "",
   description: "",
   isActive: true,
-  termsHtml: plainTextToTermsHtml(BOAT_BROS_TERMS_PLAINTEXT),
+  termsHtml: plainTextToTermsHtml(DEFAULT_OPERATOR_TERMS_PLAINTEXT),
   requiredFields: DEFAULT_REQUIRED,
   clauses: [],
   signature: DEFAULT_SIGNATURE,

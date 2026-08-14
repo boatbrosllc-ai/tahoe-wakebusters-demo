@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 
 export default function robots(): MetadataRoute.Robots {
   return {

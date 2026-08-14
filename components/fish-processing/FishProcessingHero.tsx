@@ -1,5 +1,6 @@
 "use client";
 
+import { brand } from "@/content/brand";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -66,7 +67,7 @@ export function FishProcessingHero({ onEstimateClick }: Props) {
             transition={{ duration: 0.45, delay: 0.15 }}
             className="text-white/85 text-base sm:text-lg max-w-2xl leading-relaxed mb-8"
           >
-            You caught it. We&apos;ll handle the rest. Nasty Sport Fishing can clean, fillet, portion,
+            You caught it. We&apos;ll handle the rest. {brand.companyName} can clean, fillet, portion,
             vacuum seal, label and freeze your catch so it&apos;s ready when you are.
           </motion.p>
 

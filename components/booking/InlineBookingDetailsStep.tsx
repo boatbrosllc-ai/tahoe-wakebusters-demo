@@ -1,4 +1,5 @@
 "use client";
+import { brand } from "@/content/brand";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
@@ -1068,7 +1069,7 @@ export function InlineBookingDetailsStep({
             )}
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="rounded border-brand-dark/30 text-brand-primary" />
-              <span className="text-xs text-brand-muted">Updates and offers from Nasty Sport Fishing</span>
+              <span className="text-xs text-brand-muted">Updates and offers from {brand.companyName}</span>
             </label>
           </div>
         </div>

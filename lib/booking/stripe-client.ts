@@ -16,7 +16,12 @@ export function getStripe(): Stripe {
     const version = typeof (Stripe as unknown as { LatestApiVersion?: string }).LatestApiVersion === "string"
       ? (Stripe as unknown as { LatestApiVersion: string }).LatestApiVersion
       : "2024-09-30.acacia";
-    stripe = new Stripe(bookingEnv.stripeSecretKey, { apiVersion: version as Stripe.LatestApiVersion });
+    stripe = new Stripe(bookingEnv.stripeSecretKey, {
+      apiVersion: version as Stripe.LatestApiVersion,
+      ...(process.env.STRIPE_CONNECT_ACCOUNT_ID?.trim()
+        ? { stripeAccount: process.env.STRIPE_CONNECT_ACCOUNT_ID.trim() }
+        : {}),
+    });
   }
   return stripe;
 }

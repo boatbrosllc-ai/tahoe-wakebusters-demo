@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import "server-only";
 import { blogPosts, type BlogCategory, type BlogPost } from "@/content/blog";
 import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
@@ -60,7 +61,7 @@ export async function getPublishedFirestoreBlogHubPosts(): Promise<BlogPost[]> {
       excerpt: typeof data.excerpt === "string" ? data.excerpt : "",
       date: date.slice(0, 10),
       dateModified: toIso(data.updatedAt)?.slice(0, 10),
-      author: data.author?.name ?? "Nasty Sport Fishing",
+      author: data.author?.name ?? `${brand.companyName}`,
       image: data.coverImage?.url,
       imageAlt: data.coverImage?.alt,
       category: mapFirestoreCategory(data.taxonomy?.categories),
@@ -78,7 +79,7 @@ function getCmsSeedHubPosts(): BlogPost[] {
     title: seed.title,
     excerpt: seed.excerpt,
     date: CMS_SEED_HUB_DATE,
-    author: "Nasty Sport Fishing",
+    author: `${brand.companyName}`,
     image: seed.coverImage.path,
     imageAlt: seed.coverImage.alt,
     category: mapFirestoreCategory(seed.taxonomy.categories),

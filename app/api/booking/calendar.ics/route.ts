@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * GET /api/booking/calendar.ics
  * iCal feed of confirmed bookings for an experience and date range.
@@ -107,7 +108,7 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Not found", { status: 404 });
     }
     const expId = b.experienceId ?? "";
-    let experienceName = "Nasty Sport Fishing trip";
+    let experienceName = `${brand.companyName} trip`;
     if (expId) {
       const expSnap = await db.collection("experiences").doc(expId).get();
       experienceName = expSnap.exists ? (expSnap.data() as { title?: string })?.title ?? experienceName : experienceName;
@@ -133,12 +134,12 @@ export async function GET(request: NextRequest) {
     const lines: string[] = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
-      "PRODID:-//Nasty Sport Fishing//Booking Calendar//EN",
+      `PRODID:-//${brand.companyName}//Booking Calendar//EN`,
       "CALSCALE:GREGORIAN",
       "METHOD:PUBLISH",
       ...VTIMEZONE_LINES,
       "BEGIN:VEVENT",
-      `UID:booking-${bookingIdParam}@nastysportfishing`,
+      `UID:booking-${bookingIdParam}@${brand.domain}`,
       `DTSTAMP:${formatIcalUtc(new Date())}`,
       `DTSTART;TZID=${TZ}:${dtStart}`,
       `DTEND;TZID=${TZ}:${dtEnd}`,
@@ -266,7 +267,7 @@ export async function GET(request: NextRequest) {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Nasty Sport Fishing//Booking Calendar//EN",
+    `PRODID:-//${brand.companyName}//Booking Calendar//EN`,
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     ...VTIMEZONE_LINES,
@@ -291,7 +292,7 @@ export async function GET(request: NextRequest) {
     const updated = (b as { updatedAt?: { toDate?: () => Date } }).updatedAt?.toDate?.();
 
     lines.push("BEGIN:VEVENT");
-    lines.push(`UID:booking-${id}@nastysportfishing`);
+    lines.push(`UID:booking-${id}@${brand.domain}`);
     lines.push(`DTSTAMP:${formatIcalUtc(new Date())}`);
     lines.push(`DTSTART;TZID=${TZ}:${dtStart}`);
     lines.push(`DTEND;TZID=${TZ}:${dtEnd}`);

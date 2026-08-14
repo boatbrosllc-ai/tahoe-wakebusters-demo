@@ -1,4 +1,5 @@
 "use client";
+import { brand } from "@/content/brand";
 
 /**
  * Booking modal UI. Data fetching and payment orchestration live in useBookingModalData
@@ -3544,7 +3545,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         onChange={(e) => setMarketingOptIn(e.target.checked)}
                         className="h-4 w-4 rounded border-2 border-brand-dark/30 text-brand-primary focus:ring-brand-primary/30"
                       />
-                      <span className="text-xs text-brand-muted">Get occasional updates and offers from Nasty Sport Fishing</span>
+                      <span className="text-xs text-brand-muted">Get occasional updates and offers from {brand.companyName}</span>
                     </label>
                   </div>
 

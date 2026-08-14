@@ -3,7 +3,7 @@
  * Single source of truth for values that must match between display and charge (e.g. tax rate).
  *
  * =============================================================================
- * NSF CUSTOMER PRICING MODEL
+ * OPERATOR PRICING MODEL
  * =============================================================================
  * Customer-facing total (conceptual):
  *   published charter price + add-ons + applicable tax/IVA + optional tip − discounts

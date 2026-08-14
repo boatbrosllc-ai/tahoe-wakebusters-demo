@@ -1,6 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Cabo sport fishing testimonials for Nasty Sport Fishing.
- * Generic names — rotate in the reviews section.
+ * Guest testimonials — placeholder copy for the platform development site.
  */
 
 export interface Testimonial {
@@ -16,7 +16,7 @@ export const testimonials: Testimonial[] = [
   {
     id: "1",
     quote:
-      "Half-day out of Cabo and we hooked dorado and a nice yellowfin. Captain and crew were sharp, tackle was dialed, and they made first-timers feel confident. Booking was easy.",
+      "Booked a half-day online and everything was straightforward. Captain and crew were sharp, and first-timers in our group felt looked after.",
     author: "Marcus Hale",
     when: "a month ago",
     rating: 5,
@@ -24,7 +24,7 @@ export const testimonials: Testimonial[] = [
   {
     id: "2",
     quote:
-      "Full-day charter hit the banks hard. We released a striped marlin and boxed tuna for dinner. Professional from marina check-in to the ride home past El Arco.",
+      "Full-day trip was well run from dock check-in to the ride home. Clear communication before we arrived.",
     author: "Elena Vargas",
     when: "2 months ago",
     rating: 5,
@@ -32,7 +32,7 @@ export const testimonials: Testimonial[] = [
   {
     id: "3",
     quote:
-      "Sunset trip with friends — golden light, a couple of solid bites, and a crew that kept everything fun and safe. Perfect for mixed experience levels.",
+      "Sunset trip with friends — golden light and a crew that kept everything fun and safe. Perfect for mixed experience levels.",
     author: "Jordan Reed",
     when: "3 months ago",
     rating: 5,
@@ -40,7 +40,7 @@ export const testimonials: Testimonial[] = [
   {
     id: "4",
     quote:
-      "Nasty Sport Fishing delivered exactly what we wanted: licensed charter, no guesswork, and a real shot at marlin and dorado. Clear communication before the trip too.",
+      `${brand.companyName} delivered exactly what we wanted: a private captained boat, no guesswork, and an easy booking flow.`,
     author: "Priya Shah",
     when: "a month ago",
     rating: 5,
@@ -48,7 +48,7 @@ export const testimonials: Testimonial[] = [
   {
     id: "5",
     quote:
-      "Family of five on a half-day. Kids caught their first fish offshore and the crew was patient and encouraging. Would book again next Cabo trip.",
+      "Family of five on a half-day. The crew was patient and encouraging. We would book again.",
     author: "Chris Delgado",
     when: "4 months ago",
     rating: 5,

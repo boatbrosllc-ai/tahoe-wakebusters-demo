@@ -55,6 +55,10 @@ function hasValue(name) {
   return v != null && String(v).trim() !== "";
 }
 
+function hasAny(...names) {
+  return names.some(hasValue);
+}
+
 const fs = require("fs");
 const path = require("path");
 const { parseGoogleTagId } = require("../lib/ga-tag-id");
@@ -177,8 +181,15 @@ async function main() {
   }
 
   const missing = [];
+  const requiredAliases = {
+    STRIPE_SECRET_KEY: ["STRIPE_SECRET_KEY", "STRIPE_CONNECT_SECRET_KEY"],
+    APP_BASE_URL: ["APP_BASE_URL", "NEXT_PUBLIC_APP_URL"],
+    ADMIN_EMAIL: ["ADMIN_EMAIL", "PLATFORM_ADMIN_EMAIL"],
+    CONTACT_EMAIL: ["CONTACT_EMAIL", "BREVO_SENDER_EMAIL", "SENDGRID_FROM_EMAIL"],
+  };
   for (const name of required) {
-    if (!hasValue(name)) missing.push(name);
+    const names = requiredAliases[name] || [name];
+    if (!hasAny(...names)) missing.push(names.join(" or "));
   }
   if (hasValue("APP_BASE_URL")) {
     const u = String(process.env.APP_BASE_URL).trim();
@@ -189,9 +200,9 @@ async function main() {
   // Firebase: path mode (preferred) OR credential-variable mode — same contract as lib/booking/env.ts
   const hasFirebasePath = hasValue(firebasePathVar);
   const hasFirebaseCreds =
-    hasValue("FIREBASE_PROJECT_ID") &&
-    hasValue("FIREBASE_CLIENT_EMAIL") &&
-    (hasValue("FIREBASE_PRIVATE_KEY") || hasValue("FIREBASE_PRIVATE_KEY_PATH"));
+    (hasValue("FIREBASE_PROJECT_ID") || hasValue("FIREBASE_ADMIN_PROJECT_ID")) &&
+    (hasValue("FIREBASE_CLIENT_EMAIL") || hasValue("FIREBASE_ADMIN_CLIENT_EMAIL")) &&
+    (hasValue("FIREBASE_PRIVATE_KEY") || hasValue("FIREBASE_ADMIN_PRIVATE_KEY") || hasValue("FIREBASE_PRIVATE_KEY_PATH"));
   if (!hasFirebasePath && !hasFirebaseCreds) {
     missing.push(
       `Firebase: set ${firebasePathVar} (path mode) OR all of ${firebaseCredentialVars.join(", ")} (variable mode)`

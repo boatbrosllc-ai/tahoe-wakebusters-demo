@@ -4,6 +4,7 @@ import { PageBreadcrumbs } from "@/components/experience/PageBreadcrumbs";
 import { SeoCheckAvailabilityCta } from "@/components/seo/SeoCheckAvailabilityCta";
 import { CharterPriceCards } from "@/components/seo/CharterPriceCards";
 import { articleJsonLd, breadcrumbJsonLd, faqPageJsonLd } from "@/lib/seo/metadata";
+import { siteConfig } from "@/config/site";
 
 export type SeoRelatedLink = { href: string; label: string };
 
@@ -35,8 +36,8 @@ export function SeoGuideLayout({
   path,
   h1,
   lede,
-  heroImage = "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
-  heroAlt = "View toward El Arco from a boat in Cabo San Lucas",
+  heroImage = siteConfig.media.hero,
+  heroAlt = "Boat on the water",
   breadcrumbName,
   sections,
   faqs = [],
@@ -207,9 +208,9 @@ export function SeoGuideLayout({
         </section>
 
         <div className="mt-14 not-prose rounded-2xl bg-brand-bg border border-brand-dark/10 p-6 sm:p-8">
-          <h2 className="font-display text-xl font-bold text-brand-dark">Ready to fish Cabo?</h2>
+          <h2 className="font-display text-xl font-bold text-brand-dark">Ready to book?</h2>
           <p className="mt-2 text-sm text-brand-muted mb-5">
-            Book Nasty Half Day or Nasty Full Day on the live calendar — same private boat inventory.
+            Book {siteConfig.catalog.halfDay.title} or {siteConfig.catalog.fullDay.title} on the live calendar — same private boat inventory.
           </p>
           <SeoCheckAvailabilityCta page={pageKey} source="seo_bottom" />
           <p className="mt-4 text-sm">

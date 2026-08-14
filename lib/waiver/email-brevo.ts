@@ -4,6 +4,7 @@
  */
 
 import { brand } from "@/content/brand";
+import { getNoreplyEmail, getSenderName } from "@/config/site";
 import { bookingEnv } from "@/lib/booking/env";
 import type { WaiverEmailAdapter, WaiverInviteParams, WaiverReminderParams } from "./email-adapter";
 import { getDefaultTokenExpiryDays } from "./tokens";
@@ -28,7 +29,7 @@ function waiverEmailHeader(subtitle: string): string {
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto 24px;background:${HEADER_GRADIENT};border-radius:16px 16px 0 0;overflow:hidden;">
     <tr>
       <td style="padding:24px 28px;text-align:center;">
-        <img src="${getEmailLogoUrl()}" alt="Nasty Sport Fishing" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" />
+        <img src="${getEmailLogoUrl()}" alt="${brand.companyName}" width="260" height="72" style="max-width:260px;height:auto;display:block;margin:0 auto;" />
         <p style="margin:6px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${subtitle}</p>
       </td>
     </tr>
@@ -43,8 +44,8 @@ function getHeaders(): Record<string, string> {
 }
 
 function getSender(): { name: string; email: string } {
-  const email = process.env.BREVO_SENDER_EMAIL?.trim() || "noreply@nastysportfishing.com";
-  const name = process.env.BREVO_SENDER_NAME?.trim() || "Nasty Sport Fishing";
+  const email = getNoreplyEmail();
+  const name = getSenderName();
   return { name, email };
 }
 
@@ -124,7 +125,7 @@ export const waiverEmailBrevo: WaiverEmailAdapter = {
       body: JSON.stringify({
         sender: getSender(),
         to: [{ email: params.to.trim(), name: params.name.trim() || undefined }],
-        subject: "Sign your waiver – Nasty Sport Fishing",
+        subject: `Sign your waiver – ${brand.companyName}`,
         htmlContent: buildInviteHtml(params),
       }),
     });
@@ -141,7 +142,7 @@ export const waiverEmailBrevo: WaiverEmailAdapter = {
       body: JSON.stringify({
         sender: getSender(),
         to: [{ email: params.to.trim(), name: params.name.trim() || undefined }],
-        subject: "Reminder: Sign your waiver – Nasty Sport Fishing",
+        subject: `Reminder: Sign your waiver – ${brand.companyName}`,
         htmlContent: buildReminderHtml(params),
       }),
     });

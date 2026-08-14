@@ -49,7 +49,7 @@ export function isPlaceholderCheckoutEmail(email: string | undefined | null): bo
 /**
  * Merge Stripe billing / receipt details with the hold draft for PI-first conversion (webhook or complete-after-payment).
  * When the hold already has a real guest email, that address wins: card billing / receipt_email often belongs to a
- * company or account holder (e.g. Nasty Sport Fishing) and must not replace the email the guest entered on the booking form.
+ * company or account holder (e.g. the operator configured in site config) and must not replace the email the guest entered on the booking form.
  * Stripe values still replace internal checkout placeholders (…@pending.internal, checkout@pending.local).
  * Returns undefined when the resolved customer matches the hold draft (no override needed).
  */

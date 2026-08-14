@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
@@ -114,7 +115,7 @@ export async function POST(
       to: toEmail,
       toName,
       templateId: "waiver_invite",
-      subject: "Sign your waiver – Nasty Sport Fishing",
+      subject: `Sign your waiver – ${brand.companyName}`,
       bookingId: req.bookingId,
       eventSubtype: "waiver_invite",
     }).catch((err) => console.error("[waiver-requests/send] logNotificationSent failed", err));

@@ -17,18 +17,19 @@ import { Button } from "@/components/ui/button";
 import { CallCard } from "@/components/site/CallCard";
 import { getPublicPhone } from "@/lib/seo/public-contact";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
+import { getSiteBaseUrl, siteConfig } from "@/config/site";
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com";
+
+const baseUrl = getSiteBaseUrl();
 
 export const metadata: Metadata = {
-  title: "Menu | Cabo Sport Fishing",
-  description:
-    "Nasty Sport Fishing — Cabo San Lucas sport fishing charters. Book, charters, FAQs, contact.",
-  keywords: ["Cabo fishing charters", "Nasty Sport Fishing", "Cabo San Lucas sport fishing"],
+  title: "Menu",
+  description: `${brand.companyName} — private boat rentals. Book, trips, FAQs, contact.`,
+  keywords: [...siteConfig.seo.keywords, brand.companyName],
   alternates: { canonical: `${baseUrl}/menu` },
   openGraph: {
-    title: "Menu | Cabo Sport Fishing | Nasty Sport Fishing",
-    description: "Browse charters, book, story, FAQs, contact. Cabo San Lucas sport fishing.",
+    title: `Menu | ${brand.companyName}`,
+    description: "Browse trips, book, story, FAQs, contact.",
     url: `${baseUrl}/menu`,
   },
 };
@@ -57,7 +58,7 @@ const pageLinks = [
     href: "/our-story",
     label: "Our Story",
     icon: BookOpen,
-    description: "Meet the crew behind Nasty Sport Fishing and our story",
+    description: `Meet the crew behind ${brand.companyName} and our story`,
   },
   {
     href: "/blog",

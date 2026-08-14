@@ -6,6 +6,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Phone, User, LayoutDashboard, ChevronDown } from "lucide-react";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { analytics } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { useBookingModal } from "@/components/site/BookingModalContext";
@@ -16,11 +17,11 @@ import { getPublicPhone } from "@/lib/seo/public-contact";
 import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
 const navLinks = [
-  { href: "/experiences", label: "Charters" },
-  { href: "/packages", label: "Packages" },
-  { href: OUR_BOAT_PATH, label: "Our Boat" },
+  { href: "/experiences", label: siteConfig.nav.experiencesLabel },
+  { href: "/packages", label: siteConfig.nav.packagesLabel },
+  { href: OUR_BOAT_PATH, label: siteConfig.nav.boatLabel },
   { href: "/our-story", label: "Our Story" },
-  { href: "/blog", label: "The Bite" },
+  { href: "/blog", label: siteConfig.nav.blogLabel },
   { href: "/faqs", label: "FAQs" },
   { href: "/contact", label: "Contact" },
 ];
@@ -210,7 +211,7 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
           <Link
             href="/"
             className="flex items-center min-w-0 rounded-lg transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-brand-primary"
-            aria-label="Nasty Sport Fishing home"
+            aria-label={`${brand.companyName} home`}
           >
             <Image
               src={brand.logoNavbarPath ?? brand.logoMonogramPath ?? brand.logoPath}
@@ -221,6 +222,7 @@ export function Header({ adminSessionCookiePresent = false }: { adminSessionCook
               sizes="(max-width: 640px) 180px, (max-width: 1023px) 210px, 250px"
               priority
               fetchPriority="high"
+              unoptimized
             />
           </Link>
         </div>

@@ -1,23 +1,18 @@
 "use client";
+import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 
 import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 
-/** Real NSF / Cabo charter gallery — catch shots, boat, marina, gear. */
 const GALLERY_IMAGES = [
-  "/photos/nsf/sailfish-baitball.png",
-  "/photos/nsf/cabo-40-express.png",
-  "/photos/nsf/yellowfin-marina-duo.png",
-  "/photos/nsf/yellowfin-ocean-duo.png",
-  "/photos/nsf/yellowfin-marina-catch.png",
-  "/photos/nsf/rods-wake-sunset.png",
-  "/photos/nsf/reel-sunset.png",
-  "/photos/nsf/marina-sunset-lighthouse.png",
-  "/photos/nsf/tuna-scales-detail.png",
-  "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
-  "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
-  "/photos/stock/cabo/marina-yachts-pexels.jpg",
+  siteConfig.media.hero,
+  siteConfig.media.welcome,
+  siteConfig.media.boats,
+  siteConfig.media.galleryFallback,
+  "/photos/stock/charter/anglers-on-boat-pexels.jpg",
+  "/photos/stock/charter/yachts-at-dock.jpg",
 ];
 
 export function GalleryPreviewClient() {
@@ -54,7 +49,7 @@ export function GalleryPreviewClient() {
           >
             <Image
               src={src}
-              alt={`Nasty Sport Fishing Cabo — gallery ${i + 1}`}
+              alt={`${brand.companyName} — gallery ${i + 1}`}
               fill
               className="object-cover transition-transform duration-300 hover:scale-105"
               sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"

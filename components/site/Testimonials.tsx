@@ -1,4 +1,5 @@
 "use client";
+import { brand } from "@/content/brand";
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
@@ -63,12 +64,12 @@ export function Testimonials() {
           </p>
           <span className="text-white/40 text-lg" aria-hidden>·</span>
           <p className="text-sm sm:text-base text-white/80">
-            Nasty Sport Fishing · {location.addressFormatted}
+            {brand.companyName} · {location.addressFormatted}
           </p>
         </motion.div>
 
         <h2 id="testimonials-heading" className="sr-only">
-          What people say about Nasty Sport Fishing
+          What people say about {brand.companyName}
         </h2>
 
         {/* 3 cards at a time, rotate every 5.5s – staggered, clean transition */}

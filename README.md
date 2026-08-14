@@ -1,8 +1,10 @@
-# Nasty Sport Fishing
+# Slipstack Platform
 
-Next.js 14 App Router site for **Nasty Sport Fishing** — Cabo San Lucas sport fishing charters with online booking.
+Shared Next.js 14 boat-rental platform (App Router) — booking, availability, payments, waivers, and admin.
 
-This repository was originally cloned from Boat Bros ATX. Business-specific Austin content has been removed. Generic booking infrastructure (holds, Stripe, slots, deposits, final charges) is retained intentionally.
+Customer identity lives in `sites/<id>/config.ts`. The active customer is `SLIPSTACK_SITE_ID` (see `docs/PLATFORM_ARCHITECTURE.md` and `sites/README.md`). Secrets live in environment variables (see `.env.example`).
+
+This repository was originally cloned from Boat Bros ATX and later branded for a Cabo charter operator. Generic booking infrastructure (holds, Stripe, slots, deposits, final charges) is retained intentionally.
 
 ## Tech stack
 
@@ -24,12 +26,13 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Booking setup
 
-1. Use a **Nasty Sport Fishing** Firebase project (not Boat Bros).
+1. Use a **dedicated Firebase project** for this operator (do not reuse another customer's).
 2. Copy `.env.example` → `.env.local` and fill Firebase, Stripe, Brevo, secrets.
-3. Deploy Firestore indexes: `firestore.indexes.json`
-4. Admin → **Seed** experiences (`lib/booking/seed-experiences.ts`)
-5. Admin → **Seed** boats — creates the launch **Cabo 40 Express** (`content/launch-boat.ts`)
-6. Assign that listing boat to both Half Day and Full Day (`experienceIds`)
+3. Set `SLIPSTACK_SITE_ID` (e.g. `abc-boats` or `platform-dev`). Company identity lives in `sites/<id>/config.ts`.
+4. Deploy Firestore indexes: `firestore.indexes.json`
+5. Admin → **Seed** experiences (`lib/booking/seed-experiences.ts`)
+6. Admin → **Seed** boats — creates the launch boat (`content/launch-boat.ts`)
+7. Assign that listing boat to experiences (`experienceIds`)
 
 See `.env.example` for variable names. Never commit service-account JSON.
 
@@ -48,12 +51,16 @@ Sunset / Billfish specialty docs may exist inactive for history; core sellable p
 
 | File | Purpose |
 |------|---------|
-| `content/brand.ts` | Company name, logo, email, phone placeholders, Cabo address |
-| `config/site.ts` | Phone / booking path / brand color refs |
-| `content/location.ts` | Marina / map / location page body |
+| `SLIPSTACK_SITE_ID` | Active customer site (`abc-boats`, `platform-dev`, …) |
+| `sites/<id>/config.ts` | Company name, logos, contact, theme tokens, SEO defaults |
+| `sites/<id>/pages/` | Customer homepage and marketing pages |
+| `config/site.ts` | Resolver — exports `siteConfig` for the rest of the app |
+| `content/brand.ts` | Adapter used by existing UI (derived from `siteConfig`) |
+| `content/location.ts` | Location page body (derived from `siteConfig`) |
 | `content/catalog-pricing.ts` | Founder/standard/peak display + seed prices |
-| `content/bundle-presets.ts` | Nasty (Half) / Nastier (Full) / Nastiest (Full all-in) |
-| `lib/booking/constants.ts` | Tax/fee rates (**Cabo decision still outstanding**) |
+| `content/bundle-presets.ts` | Package ladder shown in booking |
+| `lib/booking/constants.ts` | Tax/fee rates (**jurisdiction decision still outstanding**) |
+| `docs/PLATFORM_ARCHITECTURE.md` | Shared engine vs customer site vs env |
 
 ## Important routes
 

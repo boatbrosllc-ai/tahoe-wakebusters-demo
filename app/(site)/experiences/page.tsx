@@ -1,34 +1,29 @@
+import { brand } from "@/content/brand";
 import type { Metadata } from "next";
 import Image from "next/image";
 import { BundleChooser } from "@/components/site/BundleChooser";
 import { SeoHubLinks } from "@/components/site/SeoHubLinks";
 import { getActiveExperiencesForPublic } from "@/lib/booking/get-experiences-public";
+import { getSiteBaseUrl, siteConfig } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+const baseUrl = getSiteBaseUrl();
 const canonical = `${baseUrl}/experiences`;
 
 /** Dynamic so CSP nonces from middleware match inline scripts (GA / Next). */
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Cabo Fishing Charters | Nasty, Nastier & Nastiest",
-  description:
-    "Choose Nasty (Half Day), Nastier (Full Day), or Nastiest (Full Day all-in). Same private Cabo boat. Captain & crew included. Book online.",
+  title: "Trips",
+  description: `Choose ${siteConfig.catalog.halfDay.title}, ${siteConfig.catalog.fullDay.title}, or ${siteConfig.catalog.allIn.title}. Same private boat. Captain & crew included. Book online.`,
   keywords: [
-    "Cabo fishing charters",
-    "Cabo San Lucas sport fishing",
-    "Nasty Half Day",
-    "Nasty Full Day",
-    "Nastier",
-    "Nastiest",
-    "half-day fishing Cabo",
-    "full-day fishing Cabo",
+    ...siteConfig.seo.keywords,
+    siteConfig.catalog.halfDay.title,
+    siteConfig.catalog.fullDay.title,
   ],
   alternates: { canonical },
   openGraph: {
-    title: "Cabo Fishing Charters | Nasty Sport Fishing",
-    description:
-      "Nasty, Nastier, or Nastiest — private Cabo charters on the same boat. Captain & crew included. Book online.",
+    title: `Trips | ${brand.companyName}`,
+    description: `Private captained trips — ${siteConfig.catalog.halfDay.title}, ${siteConfig.catalog.fullDay.title}, or all-in. Book online.`,
     url: canonical,
   },
 };
@@ -45,7 +40,7 @@ export default async function ExperiencesPage() {
     <>
       <section className="relative h-[42vh] min-h-[280px] max-h-[420px] overflow-hidden bg-brand-dark">
         <Image
-          src="/photos/stock/cabo/el-arco-day-salvador.jpg"
+          src={siteConfig.media.hero}
           alt=""
           fill
           className="object-cover object-[center_40%]"
@@ -56,10 +51,10 @@ export default async function ExperiencesPage() {
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8">
           <div className="w-full max-w-4xl mx-auto text-center">
             <h1 className="font-display text-4xl sm:text-5xl md:text-6xl font-bold text-white tracking-tight leading-tight">
-              Cabo charters
+              Private trips
             </h1>
             <p className="mt-3 sm:mt-4 text-lg text-white/90 max-w-xl mx-auto">
-              Same private boat. Pick Nasty, Nastier, or Nastiest — then book your day offshore.
+              Same private boat. Pick {siteConfig.catalog.halfDay.title}, {siteConfig.catalog.fullDay.title}, or {siteConfig.catalog.allIn.title} — then book your day.
             </p>
           </div>
         </div>

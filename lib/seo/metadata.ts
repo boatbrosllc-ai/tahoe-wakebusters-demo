@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+import { getSiteBaseUrl, siteConfig } from "@/config/site";
+import { brand } from "@/content/brand";
 
 export function siteBaseUrl(): string {
-  return baseUrl;
+  return getSiteBaseUrl();
 }
 
 export type SeoPageMetaInput = {
   /** Path starting with / (no trailing slash) */
   path: string;
-  /** Title segment — layout template appends "| Nasty Sport Fishing" */
+  /** Title segment — layout template appends company name */
   title: string;
   description: string;
   ogImage?: string;
@@ -19,19 +19,21 @@ export type SeoPageMetaInput = {
 };
 
 export function buildSeoMetadata(input: SeoPageMetaInput): Metadata {
+  const baseUrl = getSiteBaseUrl();
   const canonical = `${baseUrl}${input.path}`;
-  const image = input.ogImage ?? "/photos/stock/cabo/el-arco-sunset-jarvis.jpg";
-  const alt = input.ogImageAlt ?? "Cabo San Lucas sport fishing — Nasty Sport Fishing";
+  const image = input.ogImage ?? siteConfig.seo.defaultOgImage;
+  const alt = input.ogImageAlt ?? siteConfig.seo.defaultOgImageAlt;
   const title = input.absoluteTitle
     ? { absolute: input.title }
     : input.title;
+  const titled = input.absoluteTitle ? input.title : `${input.title} | ${brand.companyName}`;
 
   return {
     title,
     description: input.description,
     alternates: { canonical },
     openGraph: {
-      title: input.absoluteTitle ? input.title : `${input.title} | Nasty Sport Fishing`,
+      title: titled,
       description: input.description,
       url: canonical,
       type: "website",
@@ -39,7 +41,7 @@ export function buildSeoMetadata(input: SeoPageMetaInput): Metadata {
     },
     twitter: {
       card: "summary_large_image",
-      title: input.absoluteTitle ? input.title : `${input.title} | Nasty Sport Fishing`,
+      title: titled,
       description: input.description,
       images: [image],
     },
@@ -48,6 +50,7 @@ export function buildSeoMetadata(input: SeoPageMetaInput): Metadata {
 }
 
 export function breadcrumbJsonLd(items: { name: string; path: string }[]): object {
+  const baseUrl = getSiteBaseUrl();
   return {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -80,6 +83,7 @@ export function articleJsonLd(input: {
   image?: string;
   dateModified?: string;
 }): object {
+  const baseUrl = getSiteBaseUrl();
   return {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -87,11 +91,11 @@ export function articleJsonLd(input: {
     description: input.description,
     mainEntityOfPage: `${baseUrl}${input.path}`,
     image: input.image ? [`${baseUrl}${input.image}`] : undefined,
-    author: { "@type": "Organization", name: "Nasty Sport Fishing" },
+    author: { "@type": "Organization", name: brand.companyName },
     publisher: {
       "@type": "Organization",
-      name: "Nasty Sport Fishing",
-      logo: { "@type": "ImageObject", url: `${baseUrl}/logos/NSF_Logo.png` },
+      name: brand.companyName,
+      logo: { "@type": "ImageObject", url: `${baseUrl}${brand.logoPath}` },
     },
     dateModified: input.dateModified,
   };
@@ -106,6 +110,7 @@ export function serviceJsonLd(input: {
   /** Free-form offer description (e.g. "$2.00 per finished processed pound"). */
   priceDescription?: string;
 }): object {
+  const baseUrl = getSiteBaseUrl();
   return {
     "@context": "https://schema.org",
     "@type": "Service",
@@ -114,19 +119,19 @@ export function serviceJsonLd(input: {
     url: `${baseUrl}${input.path}`,
     provider: {
       "@type": "LocalBusiness",
-      name: "Nasty Sport Fishing",
+      name: brand.companyName,
       url: baseUrl,
       address: {
         "@type": "PostalAddress",
-        addressLocality: "Cabo San Lucas",
-        addressRegion: "Baja California Sur",
-        addressCountry: "MX",
+        addressLocality: brand.address.city,
+        addressRegion: brand.address.state,
+        addressCountry: brand.country,
       },
     },
-    areaServed: input.areaServed ?? "Cabo San Lucas",
+    areaServed: input.areaServed ?? brand.address.city,
     offers: {
       "@type": "Offer",
-      priceCurrency: input.priceCurrency ?? "USD",
+      priceCurrency: input.priceCurrency ?? brand.currency,
       description: input.priceDescription,
       url: `${baseUrl}${input.path}`,
     },

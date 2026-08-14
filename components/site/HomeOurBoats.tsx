@@ -3,8 +3,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { siteConfig } from "@/config/site";
 
-const SECTION_PHOTO = "/photos/nsf/yellowfin-ocean-duo.png";
+const SECTION_PHOTO = siteConfig.media.boats;
 
 /**
  * What guests can expect — we handle the details; customer experience is the priority.
@@ -23,7 +24,7 @@ export function HomeOurBoats() {
           >
             <Image
               src={SECTION_PHOTO}
-              alt="Guest and crew with a yellowfin tuna offshore after a Cabo charter"
+              alt="Private boat rental on the water"
               fill
               className="object-cover object-[center_22%]"
               sizes="(max-width: 1024px) 92vw, 44vw"
@@ -51,13 +52,12 @@ export function HomeOurBoats() {
               We take care of everything.
             </h2>
             <p className="mt-4 sm:mt-5 text-base sm:text-lg text-brand-muted leading-relaxed">
-              Customer experience is our top priority. You show up ready to fish. We handle the rest:
-              the plan for the day, lines, bait, tackle, safety, and the coaching on deck so nothing
-              feels confusing or rushed.
+              Customer experience is our top priority. You show up ready for the water. We handle the rest:
+              the plan for the day, safety, and coaching on deck so nothing feels confusing or rushed.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              Before you leave the dock, you&apos;ll know where we&apos;re headed and why. On the water,
-              the captain and crew run the show. After the trip, we help with photos, fish care, and
+              Before you leave the dock, you&apos;ll know the plan. On the water,
+              the captain and crew run the show. After the trip, we help with photos and
               next steps so the day ends as clean as it started.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">

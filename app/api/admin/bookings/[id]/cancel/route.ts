@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * POST /api/admin/bookings/[id]/cancel
  * Cancel a booking (set status to "canceled") and release the slot so it becomes available again.
@@ -719,7 +720,7 @@ export async function POST(
           to: booking.customer?.email ?? "",
           toName: booking.customer?.name,
           templateId: "booking_cancellation",
-          subject: "Booking canceled – Nasty Sport Fishing",
+          subject: `Booking canceled – ${brand.companyName}`,
           bookingId,
           eventSubtype: "booking_cancellation",
         }).catch((err) => console.error("[admin/cancel] logNotificationSent failed", err));

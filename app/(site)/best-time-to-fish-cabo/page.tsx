@@ -36,7 +36,7 @@ export default function Page() {
         },
         {
           type: "p",
-          text: "If striped marlin or a broader billfish hunt is the reason you are booking, prioritize a Nasty Full Day for range and time. Read the marlin guide for release ethics and species context, then pick dates you can keep flexible if weather shifts. Ask about recent patterns when you book — do not rely on a fabricated peak-month claim.",
+          text: "If striped marlin or a broader billfish hunt is the reason you are booking, prioritize a Full Day for range and time. Read the marlin guide for release ethics and species context, then pick dates you can keep flexible if weather shifts. Ask about recent patterns when you book — do not rely on a fabricated peak-month claim.",
         },
         {
           type: "h2",
@@ -122,8 +122,8 @@ export default function Page() {
         { href: "/cabo-roosterfish-fishing", label: "Roosterfish" },
         { href: "/fishing-reports", label: "Fishing reports" },
         { href: "/cabo-fishing-charter-prices", label: "Prices" },
-        { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-        { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+        { href: "/experiences/nasty-half-day", label: "Half Day" },
+        { href: "/experiences/nasty-full-day", label: "Full Day" },
         { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing" },
       ]}
     />

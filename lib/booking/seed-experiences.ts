@@ -1,3 +1,5 @@
+import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 /**
  * Seed / reconcile Firestore experiences, rates, and addons.
  * Slot documents are not created — the slots API returns synthetic "open" slots until hold/booking.
@@ -134,7 +136,7 @@ function halfDayRates(): RateSeed[] {
   return [
     {
       durationHours: 5,
-      displayName: "Nasty Half Day (5 Hours)",
+      displayName: `${siteConfig.catalog.halfDay.title} (${siteConfig.catalog.halfDay.durationLabel})`,
       priceCents,
       active: true,
     },
@@ -150,7 +152,7 @@ function fullDayRates(): RateSeed[] {
   return [
     {
       durationHours: 8,
-      displayName: "Nasty Full Day (8 Hours)",
+      displayName: `${siteConfig.catalog.fullDay.title} (${siteConfig.catalog.fullDay.durationLabel})`,
       priceCents: base,
       priceHolidayCents: PEAK_FULL_DAY_CENTS,
       active: true,
@@ -184,21 +186,21 @@ function fullDayRates(): RateSeed[] {
 const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
   {
     slug: "pontoon",
-    title: "Nasty Half Day",
-    subtitle: "5 Hours · Private Cabo Fishing Charter",
+    title: siteConfig.catalog.halfDay.title,
+    subtitle: `${siteConfig.catalog.halfDay.durationLabel} · Private Captained Charter`,
     descriptionLong:
-      "Private half-day Cabo sport fishing charter. Captain and mate, premium tackle, live bait allowance, licenses for up to four anglers, water, soft drinks, snacks, light breakfast, crew photos, and local-grounds fuel.",
-    heroMedia: { type: "image", url: "/photos/nsf/yellowfin-marina-duo.png" },
+      "Private half-day captained charter. Captain and mate included. Confirm inclusions when you book.",
+    heroMedia: { type: "image", url: siteConfig.media.welcome },
     gallery: [
-      "/photos/nsf/yellowfin-marina-duo.png",
+      siteConfig.media.welcome,
       "/photos/stock/charter/anglers-on-boat-pexels.jpg",
-      "/photos/nsf/yellowfin-marina-catch.png",
-      "/photos/stock/cabo/el-arco-from-boat-pexels.jpg",
+      siteConfig.media.galleryFallback,
+      siteConfig.media.hero,
     ],
     location: {
-      title: "Marina Cabo San Lucas",
-      addressText: "We'll send exact slip / meet-up after booking.",
-      notes: "Meet at the marina — soft-soled shoes recommended.",
+      title: "Marina / dock",
+      addressText: siteConfig.contact.marinaMeetNote,
+      notes: "Meet at the dock — soft-soled shoes recommended.",
     },
     maxGuests: 6,
     petsMax: 0,
@@ -218,28 +220,27 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     featured: false,
     fromPriceCents: getActiveCatalogRateCents("half"),
     sortOrder: 1,
-    metaTitle: "Nasty Half Day Cabo Fishing Charter | 5 Hours",
-    metaDescription:
-      "Book Nasty Half Day — 5-hour private Cabo fishing charter with captain, tackle, bait, and provisions. Nasty Sport Fishing.",
-    tagline: FOUNDING_ANGLER_RATE_ACTIVE ? FOUNDING_ANGLER_LABEL : "Private Cabo Fishing Charter",
+    metaTitle: `${siteConfig.catalog.halfDay.title} | ${siteConfig.catalog.halfDay.durationLabel}`,
+    metaDescription: `Book ${siteConfig.catalog.halfDay.title} — private captained charter. ${brand.companyName}.`,
+    tagline: FOUNDING_ANGLER_RATE_ACTIVE ? FOUNDING_ANGLER_LABEL : "Private Captained Charter",
     _rates: halfDayRates(),
   },
   {
     slug: "watersports",
-    title: "Nasty Full Day",
-    subtitle: "8 Hours · Private Offshore Charter",
+    title: siteConfig.catalog.fullDay.title,
+    subtitle: `${siteConfig.catalog.fullDay.durationLabel} · Private Captained Charter`,
     descriptionLong:
-      "Private full-day Cabo offshore charter. More range for the banks and edges when conditions allow. Captain and mate, premium tackle, live bait allowance, licenses for up to four anglers, water, soft drinks, snacks, light breakfast, crew photos, and local-grounds fuel.",
-    heroMedia: { type: "image", url: "/photos/nsf/yellowfin-ocean-duo.png" },
+      "Private full-day captained charter. More time on the water. Captain and mate included. Confirm inclusions when you book.",
+    heroMedia: { type: "image", url: siteConfig.media.boats },
     gallery: [
-      "/photos/nsf/yellowfin-ocean-duo.png",
-      "/photos/nsf/sailfish-baitball.png",
-      "/photos/stock/species/tuna-underwater-bacanek.jpg",
-      "/photos/nsf/yellowfin-marina-catch.png",
+      siteConfig.media.boats,
+      siteConfig.media.hero,
+      "/photos/stock/charter/anglers-on-boat-pexels.jpg",
+      siteConfig.media.galleryFallback,
     ],
     location: {
-      title: "Marina Cabo San Lucas",
-      addressText: "We'll send exact slip / meet-up after booking.",
+      title: "Marina / dock",
+      addressText: siteConfig.contact.marinaMeetNote,
     },
     maxGuests: 6,
     petsMax: 0,
@@ -258,9 +259,8 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     featured: true,
     fromPriceCents: getActiveCatalogRateCents("full"),
     sortOrder: 0,
-    metaTitle: "Nasty Full Day Cabo Fishing Charter | 8 Hours Most Popular",
-    metaDescription:
-      "Book Nasty Full Day — 8-hour private Cabo offshore charter. Most popular trip. Captain, tackle, bait, and provisions included.",
+    metaTitle: `${siteConfig.catalog.fullDay.title} | ${siteConfig.catalog.fullDay.durationLabel}`,
+    metaDescription: `Book ${siteConfig.catalog.fullDay.title} — private captained charter. ${brand.companyName}.`,
     tagline: FOUNDING_ANGLER_RATE_ACTIVE ? FOUNDING_ANGLER_LABEL : "MOST POPULAR",
     stats: ["MOST POPULAR"],
     // Peak/tournament windows: set date ranges in admin (holidayDates) or pricing calendar.
@@ -273,7 +273,7 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     title: "Sunset Bite",
     subtitle: "Evening charter — golden hour, rods out, Cabo skyline.",
     descriptionLong:
-      "Shorter evening trip timed around sunset. Available as a specialty charter — primary packages are Nasty Half Day and Nasty Full Day.",
+      "Shorter evening trip timed around sunset. Available as a specialty charter — primary packages are Half Day and Full Day.",
     heroMedia: { type: "image", url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg" },
     gallery: [
       "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
@@ -306,7 +306,7 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     title: "Billfish Special",
     subtitle: "Marlin and sailfish days when Cabo is on fire.",
     descriptionLong:
-      "Targeted billfish charter. Primary bookable products are Nasty Half Day and Nasty Full Day; ask us about billfish-focused days.",
+      "Targeted billfish charter. Primary bookable products are Half Day and Full Day; ask us about billfish-focused days.",
     heroMedia: { type: "image", url: "/photos/nsf/sailfish-baitball.png" },
     gallery: [
       "/photos/nsf/sailfish-baitball.png",

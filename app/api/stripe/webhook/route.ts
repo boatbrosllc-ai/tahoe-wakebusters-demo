@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 import { NextRequest, NextResponse } from "next/server";
 import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import Stripe from "stripe";
@@ -121,6 +122,10 @@ export async function POST(request: NextRequest) {
       const message = err instanceof Error ? err.message : "Webhook signature verification failed";
       console.error("[stripe-webhook]", message);
       return NextResponse.json({ error: message }, { status: 400 });
+    }
+    const connectedAccountId = process.env.STRIPE_CONNECT_ACCOUNT_ID?.trim();
+    if (connectedAccountId && event.account && event.account !== connectedAccountId) {
+      return NextResponse.json({ received: true, ignored: true });
     }
     const db = getDb();
     const { FieldValue, Timestamp } = getFirestoreExports();
@@ -2975,8 +2980,8 @@ export async function POST(request: NextRequest) {
               startTime: startTimeFf,
             });
             const subject = reqAct
-              ? "Action needed to complete your booking – Nasty Sport Fishing"
-              : "Payment failed for your upcoming trip – Nasty Sport Fishing";
+              ? `Action needed to complete your booking – ${brand.companyName}`
+              : `Payment failed for your upcoming trip – ${brand.companyName}`;
             await logNotificationSent({
               channel: "email",
               to: bd.customer.email,

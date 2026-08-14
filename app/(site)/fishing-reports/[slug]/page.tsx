@@ -63,9 +63,9 @@ export default async function FishingReportPage({ params }: Props) {
 
   const charterLabel =
     report.charterType === "half"
-      ? "Nasty Half Day"
+      ? "Half Day"
       : report.charterType === "full"
-        ? "Nasty Full Day"
+        ? "Full Day"
         : report.charterType === "other"
           ? "Charter"
           : null;
@@ -178,7 +178,7 @@ export default async function FishingReportPage({ params }: Props) {
                     href={`/experiences/${report.relatedCharterSlug}`}
                     className="inline-block rounded-full border border-brand-dark/15 px-3 py-1.5 text-sm hover:border-brand-primary hover:text-brand-primary transition-colors"
                   >
-                    {report.relatedCharterSlug === "nasty-half-day" ? "Nasty Half Day" : "Nasty Full Day"}
+                    {report.relatedCharterSlug === "nasty-half-day" ? "Half Day" : "Full Day"}
                   </Link>
                 </li>
               ) : null}
@@ -199,7 +199,7 @@ export default async function FishingReportPage({ params }: Props) {
         <div className="mt-12 rounded-2xl bg-brand-bg border border-brand-dark/10 p-6 sm:p-8">
           <h2 className="font-display text-xl font-bold text-brand-dark">Book a Cabo day</h2>
           <p className="mt-2 text-sm text-brand-muted mb-5">
-            Check live availability for Nasty Half Day or Nasty Full Day.
+            Check live availability for Half Day or Full Day.
           </p>
           <SeoCheckAvailabilityCta
             page="fishing_report"

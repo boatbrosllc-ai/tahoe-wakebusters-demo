@@ -1,3 +1,4 @@
+import { brand } from "@/content/brand";
 /**
  * Regression: stale payment_intent.succeeded after hold reuse / intent reset must not match
  * the wrong hold intent id (deposit vs full, or superseded PI).
@@ -162,14 +163,14 @@ describe("customerOverrideFromPaymentIntent", () => {
     const pi = {
       id: "pi_test",
       payment_method: {
-        billing_details: { email: "info@nastysportfishing.com", name: "Nasty Sport Fishing", phone: "" },
+        billing_details: { email: brand.email, name: brand.companyName, phone: "" },
       },
-      receipt_email: "info@nastysportfishing.com",
+      receipt_email: brand.email,
     };
     const r = customerOverrideFromPaymentIntent(pi as never, holdDraft);
     assert.ok(r);
     assert.equal(r!.email, "pat@example.com");
-    assert.equal(r!.name, "Nasty Sport Fishing");
+    assert.equal(r!.name, `${brand.companyName}`);
   });
 
   it("uses Stripe email when hold still has internal checkout placeholder", () => {
@@ -196,12 +197,12 @@ describe("customerOverrideFromCheckoutSession", () => {
   it("prefers hold guest email over Checkout customer_details when both are non-placeholder", () => {
     const holdDraft = { name: "Pat Guest", email: "pat@example.com", phone: "+15550001111" };
     const session = {
-      customer_details: { email: "info@nastysportfishing.com", name: "Nasty Sport Fishing", phone: "" },
+      customer_details: { email: brand.email, name: brand.companyName, phone: "" },
     };
     const r = customerOverrideFromCheckoutSession(session as never, holdDraft);
     assert.ok(r);
     assert.equal(r!.email, "pat@example.com");
-    assert.equal(r!.name, "Nasty Sport Fishing");
+    assert.equal(r!.name, `${brand.companyName}`);
   });
 
   it("uses Checkout email when hold still has internal checkout placeholder", () => {

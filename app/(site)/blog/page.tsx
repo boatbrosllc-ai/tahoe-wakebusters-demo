@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { brand } from "@/content/brand";
+import { siteConfig } from "@/config/site";
 import { BlogCategoryFilter } from "@/components/site/BlogCategoryFilter";
 import { getBlogHubPosts } from "@/lib/blog/get-blog-hub-posts";
 import type { BlogCategory } from "@/content/blog";
@@ -26,8 +27,8 @@ export default async function BlogHubPage(props: PageProps) {
       <section className="relative overflow-hidden bg-brand-dark text-white min-h-[40vh] sm:min-h-[45vh] flex flex-col items-center justify-center text-center">
         <div className="absolute inset-0">
           <Image
-            src="/photos/nsf/sailfish-baitball.png"
-            alt="Billfish near a baitball offshore in Cabo"
+            src={siteConfig.media.hero}
+            alt=""
             fill
             className="object-cover object-center opacity-40"
             priority
@@ -40,7 +41,7 @@ export default async function BlogHubPage(props: PageProps) {
             From the crew at {brand.companyName}
           </p>
           <h1 className="font-display text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight">
-            The Bite
+            {siteConfig.seo.blogName}
           </h1>
           <p className="mt-4 sm:mt-6 text-base sm:text-lg text-white/90 max-w-2xl mx-auto leading-relaxed">
             Cabo fishing tips, charter guides, and bite notes — seasons, species, and trip prep.
@@ -60,9 +61,9 @@ export default async function BlogHubPage(props: PageProps) {
 
       <section className="relative overflow-hidden bg-brand-dark text-white py-16 sm:py-20">
         <div className="relative z-10 container-wide px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Ready to fish Cabo?</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Ready to book?</h2>
           <p className="mt-3 text-white/90 max-w-lg mx-auto">
-            Book Nasty Half Day or Full Day on the live calendar.
+            Book Half Day or Full Day on the live calendar.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link

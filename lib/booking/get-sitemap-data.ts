@@ -3,8 +3,10 @@ import { blogPosts } from "@/content/blog";
 import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { resolveCanonicalExperienceSlug } from "@/lib/booking/experience-aliases";
+import { getSiteBaseUrl } from "@/config/site";
 
-const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://nastysportfishing.com").replace(/\/+$/, "");
+
+const baseUrl = getSiteBaseUrl();
 
 export interface SitemapBlogPost {
   slug: string;

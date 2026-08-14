@@ -1,5 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Nasty Sport Fishing — catalog pricing presentation & seed defaults.
+ * ${brand.companyName} — catalog pricing presentation & seed defaults.
  *
  * Charged amounts still flow through Firestore rates → create-hold → computePricing.
  * This file only decides which cents we write onto rate.priceCents when seeding/reconciling,
@@ -16,7 +17,7 @@ export type CharterKind = "half" | "full";
 export const FOUNDING_ANGLER_RATE_ACTIVE = true;
 
 /** Customer-facing badge when founding rates are active. Not a coupon code. */
-export const FOUNDING_ANGLER_LABEL = "FOUNDING ANGLER RATE";
+export const FOUNDING_ANGLER_LABEL = "LAUNCH RATE";
 
 /** Standard advertised rates (USD cents), before tax/fees. */
 export const STANDARD_RATE_CENTS: Record<CharterKind, number> = {

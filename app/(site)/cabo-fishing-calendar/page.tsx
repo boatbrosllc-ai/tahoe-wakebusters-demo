@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { brand } from "@/content/brand";
 import Image from "next/image";
 import Link from "next/link";
 import { PageBreadcrumbs } from "@/components/experience/PageBreadcrumbs";
@@ -13,7 +14,7 @@ import { articleJsonLd, breadcrumbJsonLd, buildSeoMetadata } from "@/lib/seo/met
 
 const path = "/cabo-fishing-calendar";
 const description =
-  "Cabo fishing calendar by species and month — educational grid with pending first-party ratings from Nasty Sport Fishing trip reports.";
+  `Cabo fishing calendar by species and month — educational grid with pending first-party ratings from ${brand.companyName} trip reports.`;
 
 export const metadata: Metadata = buildSeoMetadata({
   path,
@@ -86,7 +87,7 @@ export default function CaboFishingCalendarPage() {
           </h1>
           <p className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">
             A species-by-month grid for planning Cabo San Lucas fishing trips. Ratings stay pending until verified from
-            Nasty Sport Fishing trip reports — we do not invent peak months.
+            {brand.companyName} trip reports — we do not invent peak months.
           </p>
           <div className="mt-8 max-w-md mx-auto">
             <SeoCheckAvailabilityCta page="cabo_fishing_calendar" source="seo_hero" />
@@ -97,7 +98,7 @@ export default function CaboFishingCalendarPage() {
       <div className="container-wide px-4 sm:px-6 lg:px-8 py-10 sm:py-14 max-w-5xl mx-auto">
         <div className="space-y-6 text-brand-dark/90 leading-relaxed max-w-3xl">
           <p className="text-base sm:text-lg">
-            Use this calendar to compare species interest across the year, then pick Nasty Half Day (5h) or Nasty Full
+            Use this calendar to compare species interest across the year, then pick Half Day (5h) or Nasty Full
             Day (8h) on the live booking calendar. For goal-based timing (“best for marlin vs tuna”), see{" "}
             <Link href="/best-time-to-fish-cabo" className="font-semibold text-brand-primary hover:underline">
               Best Time to Fish Cabo
@@ -225,8 +226,8 @@ export default function CaboFishingCalendarPage() {
               { href: "/cabo-marlin-fishing", label: "Marlin fishing" },
               { href: "/cabo-roosterfish-fishing", label: "Roosterfish" },
               { href: "/fishing-reports", label: "Fishing reports" },
-              { href: "/experiences/nasty-half-day", label: "Nasty Half Day" },
-              { href: "/experiences/nasty-full-day", label: "Nasty Full Day" },
+              { href: "/experiences/nasty-half-day", label: "Half Day" },
+              { href: "/experiences/nasty-full-day", label: "Full Day" },
               { href: "/cabo-fishing-charter-prices", label: "Prices" },
               { href: "/deep-sea-fishing-cabo", label: "Deep sea fishing" },
             ].map((link) => (

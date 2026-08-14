@@ -1,5 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Global FAQs — Nasty Sport Fishing Cabo charter policy and FAQ content.
+ * Global FAQs — ${brand.companyName} Cabo charter policy and FAQ content.
  */
 
 export interface FaqItem {
@@ -23,13 +24,13 @@ export const faqs: FaqItem[] = [
     id: "bad-weather",
     question: "What happens if there is bad weather?",
     answer:
-      "Safety comes first. Overcast skies or light chop are normal for Cabo and usually do not cancel a trip. If wind, seas, or conditions are unsafe, the captain may delay, shorten, or cancel. When we cancel for weather, we will reschedule or refund per the booking terms. We’ll communicate as early as conditions allow.",
+      "Safety comes first. Overcast skies or light chop usually do not cancel a trip. If wind, seas, or conditions are unsafe, the captain may delay, shorten, or cancel. When we cancel for weather, we will reschedule or refund per the booking terms.",
   },
   {
     id: "tipping-captain",
     question: "Tipping the captain and crew",
     answer:
-      "Gratuity for captain and crew is customary on Cabo charters — typically 15–20% of the charter price when you’ve had a great day. You can tip in cash or ask us about adding a tip on card. If something didn’t meet expectations, email info@nastysportfishing.com with details so we can make it right.",
+      `Gratuity for captain and crew is customary — typically 15–20% of the charter price when you’ve had a great day. You can tip in cash or ask us about adding a tip on card. If something didn’t meet expectations, email ${brand.email} with details so we can make it right.`,
   },
   {
     id: "tip-on-card",
@@ -65,13 +66,13 @@ export const faqs: FaqItem[] = [
     id: "what-we-target",
     question: "What fish do you target?",
     answer:
-      "Depending on season and conditions: striped marlin, yellowfin tuna, dorado (mahi), wahoo, and mixed bag species. Cabo’s Pacific and Sea of Cortez waters change day to day — the captain picks the plan for the best shot.",
+      "The captain picks the plan for the day based on conditions.",
   },
   {
     id: "drive-boat",
     question: "Can we run the boat ourselves?",
     answer:
-      "No. Nasty Sport Fishing charters are captained only. You fish; we handle the boat, safety, and navigation.",
+      `No. ${brand.companyName} charters are captained only. You fish; we handle the boat, safety, and navigation.`,
   },
   {
     id: "seasickness",
@@ -89,7 +90,7 @@ export const faqs: FaqItem[] = [
     id: "where-meet",
     question: "Where do we meet?",
     answer:
-      "We meet at Marina Cabo San Lucas. Exact slip, dock instructions, and check-in time are in your confirmation email. Arrive a bit early so we can load coolers and brief everyone before departure.",
+      "We meet at the dock. Exact slip, dock instructions, and check-in time are in your confirmation email. Arrive a bit early so we can load coolers and brief everyone before departure.",
   },
   {
     id: "catch-keep",
@@ -125,6 +126,6 @@ export const faqs: FaqItem[] = [
     id: "lost-found",
     question: "Do you have a lost & found?",
     answer:
-      "Email info@nastysportfishing.com or call the number on your confirmation as soon as you notice something missing. We’ll check the boat and marina.",
+      `Email ${brand.email} or call the number on your confirmation as soon as you notice something missing. We’ll check the boat and marina.`,
   },
 ];

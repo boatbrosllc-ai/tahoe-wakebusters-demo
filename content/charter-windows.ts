@@ -1,5 +1,6 @@
+import { brand } from "@/content/brand";
 /**
- * Nasty Sport Fishing — fixed charter windows (Cabo / America/Mazatlan).
+ * ${brand.companyName} — fixed charter windows (Cabo / America/Mazatlan).
  *
  * Guest flow: package → date → window (half AM/PM) or full day + optional extension → checkout.
  * No free-form clock times; no boat picker (single boat).

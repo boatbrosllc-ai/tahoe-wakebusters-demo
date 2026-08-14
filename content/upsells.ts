@@ -36,7 +36,7 @@ export type UpsellDefinition = {
 export const CHARTER_UPSELLS: UpsellDefinition[] = [
   {
     catalogKey: "fish-processing",
-    name: "Nasty In-House Fish Processing",
+    name: "In-House Catch Processing",
     howItWorks: "Fillet, trim, portion, vacuum seal, label, chill/freeze. Final charge $2–$3/lb after weigh-out ($30 min reserves the service at checkout).",
     suggestedPrice: { kind: "per_lb_range", lowUsd: 2, highUsd: 3, label: "$2–$3/lb" },
     seedPriceCents: 30_00,
@@ -101,7 +101,7 @@ export const CHARTER_UPSELLS: UpsellDefinition[] = [
   },
   {
     catalogKey: "nasty-gear-pack",
-    name: "Nasty Gear Pack",
+    name: "Gear Pack",
     howItWorks: "Shirt, hat, tumbler/koozie, dry bag, and more. Select quantity for your group.",
     suggestedPrice: { kind: "fixed", usd: 119, label: "$119/person" },
     seedPriceCents: 119_00,
@@ -120,7 +120,7 @@ export const CHARTER_UPSELLS: UpsellDefinition[] = [
   },
   {
     catalogKey: "nasty-film-day",
-    name: "Nasty Film Day",
+    name: "Film Day",
     howItWorks: "We travel to Cabo and professionally document the trip — $1,500 minimum.",
     suggestedPrice: { kind: "from", usd: 1500, label: "$1,500 minimum" },
     seedPriceCents: 1500_00,
