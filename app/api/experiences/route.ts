@@ -75,7 +75,7 @@ export async function GET() {
           ...(isTicketed && { departureHour: exp.departureHour ?? 19 }),
           ...(isTicketed && { departureMinute: exp.departureMinute ?? 0 }),
           // Charters allow deposit by default unless explicitly disabled; ticketed never
-          allowDeposit: isTicketed ? false : exp.allowDeposit !== false,
+          allowDeposit: isTicketed ? false : exp.allowDeposit === true,
         };
       });
     // Book now modal order: Pontoon first, then Watersports, then Sunset, Holiday last (slug order wins)

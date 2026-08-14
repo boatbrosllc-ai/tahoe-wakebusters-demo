@@ -22,8 +22,8 @@ export function PackagesPageClient() {
       {/* Hero — full-bleed, brand-first, centered */}
       <section className="relative w-full min-h-[88dvh] sm:min-h-[78vh] overflow-hidden flex flex-col items-center justify-center">
         <Image
-          src="/photos/stock/cabo/aerial-lands-end-clark.jpg"
-          alt="Aerial view of Lands End and Cabo San Lucas coastline"
+          src={siteConfig.media.boats}
+          alt="Private charter boat on the water"
           fill
           className="object-cover object-[center_35%]"
           priority
@@ -68,7 +68,7 @@ export function PackagesPageClient() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, delay: 0.1 }}
             >
-              Multi-day Cabo packages
+              Multi-day packages
             </motion.h1>
 
             <motion.p
@@ -77,7 +77,7 @@ export function PackagesPageClient() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.16 }}
             >
-              Bachelor, corporate, and week-long itineraries — coordinated by Nasty, quoted for your group.
+              Bachelor, corporate, and week-long itineraries — coordinated by {brand.companyName}, quoted for your group.
             </motion.p>
 
             <motion.div
@@ -271,7 +271,7 @@ export function PackagesPageClient() {
                 One crew. Partner logistics.
               </h2>
               <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-                Fishing days run with Nasty. Villas, transport, meals, and other third-party pieces are
+                Charter days run with {brand.companyName}. Lodging, transport, meals, and other third-party pieces are
                 coordinated by us and fulfilled by vetted local partners — so your group gets one plan,
                 not a stack of vendors.
               </p>

@@ -57,6 +57,7 @@ import {
 import { computeFinalChargeTotalCentsFromHoldPricing } from "@/lib/booking/hold-pricing-final-total";
 import { getStripe } from "@/lib/booking/stripe-client";
 import { computeFinalChargeAtUtc, isDepositEligibleByLeadTime } from "@/lib/booking/final-charge-at";
+import { shouldAutoChargeRemainingBalance } from "@/lib/booking/customer-operations";
 import { getLegacyBookingScanLimit } from "@/lib/booking/legacy-booking-scan-limit";
 import { LegacyScanLimitReachedError, resolveLegacyBoatBlockCheckContext } from "@/lib/booking/slot-availability";
 import { isCanonicalExperienceId } from "@/lib/booking/experience-id";
@@ -709,8 +710,9 @@ export async function convertHoldToBooking(
   ).start;
   const finalChargeAtDate = computeFinalChargeAtUtc(slotStartFromHoldId);
   const finalChargeAtTimestamp = Timestamp.fromDate(finalChargeAtDate);
+  const scheduleAutoFinalCharge = shouldAutoChargeRemainingBalance();
 
-  if (isDeposit && !isDepositEligibleByLeadTime(slotStartFromHoldId.getTime(), Date.now())) {
+  if (isDeposit && scheduleAutoFinalCharge && !isDepositEligibleByLeadTime(slotStartFromHoldId.getTime(), Date.now())) {
     throw new Error(DEPOSIT_WINDOW_CLOSED_MESSAGE);
   }
 
@@ -827,7 +829,7 @@ export async function convertHoldToBooking(
     stripe: stripeBlockForBooking,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
     ...(holdTipCents > 0 ? { tipCents: holdTipCents } : {}),
-    ...(isDeposit ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
+    ...(isDeposit && scheduleAutoFinalCharge ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
     ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
     createdAt: Timestamp.now() as unknown as FirestoreTimestamp,
     ...(finalPricing.totalCents > 0 ? { summaryCountersApplied: true as const } : {}),

@@ -8,8 +8,8 @@ import { usePathname, useRouter } from "next/navigation";
  */
 const CRITICAL_ROUTES = [
   "/experiences",
-  "/experiences/nasty-half-day",
-  "/experiences/nasty-full-day",
+  "/experiences/half-day",
+  "/experiences/full-day",
   "/booking",
   "/packages",
   "/contact",

@@ -44,7 +44,7 @@ export default async function BlogHubPage(props: PageProps) {
             {siteConfig.seo.blogName}
           </h1>
           <p className="mt-4 sm:mt-6 text-base sm:text-lg text-white/90 max-w-2xl mx-auto leading-relaxed">
-            Cabo fishing tips, charter guides, and bite notes — seasons, species, and trip prep.
+            Tips, charter guides, and trip notes.
           </p>
         </div>
       </section>
@@ -74,10 +74,10 @@ export default async function BlogHubPage(props: PageProps) {
               <ArrowRight className="h-5 w-5" aria-hidden />
             </Link>
             <Link
-              href="/cabo-fishing-calendar"
+              href="/experiences"
               className="inline-flex items-center justify-center rounded-xl border border-white/30 px-6 py-3.5 text-white font-semibold hover:bg-white/10"
             >
-              Fishing calendar
+              Browse trips
             </Link>
           </div>
         </div>

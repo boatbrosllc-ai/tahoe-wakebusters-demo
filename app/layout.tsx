@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Metadata, Viewport } from "next";
-import { Oswald, Syne } from "next/font/google";
+import { Syne } from "next/font/google";
 import { headers } from "next/headers";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
 import { getGoogleAdsId } from "@/lib/google-ads-id";
@@ -8,8 +8,7 @@ import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
 import "./globals.css";
-import "@/sites/abc-boats/styles/theme.css";
-import { getActiveSiteId, getSiteBaseUrl, siteConfig, siteThemeCssVars } from "@/config/site";
+import { getSiteBaseUrl, siteConfig, siteThemeCssVars } from "@/config/site";
 
 
 /** Must match `RELEASE_TRAIN` in `@stripe/stripe-js` so `loadStripe()` reuses this tag (CSP + strict-dynamic). */
@@ -22,14 +21,7 @@ const syne = Syne({
   preload: true,
 });
 
-const oswald = Oswald({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-display",
-  preload: true,
-});
-
-const displayFont = getActiveSiteId() === "abc-boats" ? oswald : syne;
+const displayFont = syne;
 
 let didLogGaSkip = false;
 
@@ -82,7 +74,6 @@ export default async function RootLayout({
     <html
       lang="en"
       className={displayFont.variable}
-      data-site={getActiveSiteId()}
       style={siteThemeCssVars() as CSSProperties}
     >
       <body>

@@ -46,7 +46,7 @@ type ListingData = {
   listingCardImagePosition?: string;
 };
 const STATIC_EXPERIENCE_BY_SLUG = new Map(experiences.map((exp) => [exp.slug, exp]));
-const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday", "nasty-half-day", "nasty-full-day"]);
+const ADMIN_MANAGED_STATIC_SLUGS = new Set(["pontoon", "watersports", "sunset", "holiday", "half-day", "full-day"]);
 const isAdminManagedSlug = (slug: string) =>
   isPontoonSlug(slug) || slug === "watersports" || slug === "sunset" || slug === "holiday";
 
@@ -204,7 +204,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.6, ease: easing }}
             >
-              Cabo charters
+              Charters
             </motion.h1>
             <motion.p
               className="mt-4 text-lg text-white/90 max-w-lg mx-auto"
@@ -212,7 +212,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
               animate={reduceMotion ? {} : { opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1, ease: easing }}
             >
-              Cabo sport fishing charters: half-day, full-day & sunset — marlin, tuna, dorado & more.
+              Private captained trips: half-day, full-day, and specialty listings when offered.
             </motion.p>
           </div>
         </div>
@@ -257,7 +257,7 @@ export function ExperiencesListClient({ initialListings = [], initialOrder = nul
                 href="/experiences/pontoon"
                 className="text-brand-primary font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 rounded"
               >
-                Half-day Cabo charters
+                Half-day charters
               </Link>
               <span aria-hidden>·</span>
               <Link

@@ -1,16 +1,14 @@
 # Slipstack Platform Architecture
 
-This repository is the shared **Slipstack** boat-rental platform: one codebase that powers many boat-rental companies.
+This repository is the **master template** for Slipstack boat-rental customer sites: one codebase per customer deployment, not a multi-tenant switcher inside one production app.
 
 Model:
 
-> Shared software engine + custom customer website/design.
-
-It is not a generic SaaS where every site looks the same. Each customer can have unique branding, homepage, navigation, and marketing components, while still using the shared booking/payment/admin engine.
+> Shared booking engine + one customer's branding, config, and marketing pages in the same repo.
 
 ## What belongs in shared/core code
 
-Reusable product functionality used across customers:
+Reusable product functionality:
 
 - Booking engine (holds, slots, availability, deposits, final charges)
 - Checkout and Stripe payment flows
@@ -18,120 +16,89 @@ Reusable product functionality used across customers:
 - Authentication and admin/dashboard
 - Customer, boat, and experience management
 - Notifications (email/SMS plumbing)
-- Shared UI primitives and utilities (`components/ui/`, `components/site/BookingModal`, `BookingWidget`)
+- Shared UI primitives (`components/ui/`, booking modal, widgets)
 - APIs and backend logic under `lib/booking/`, `app/api/`
 
-Do not put a customer’s legal name, logo, phone number, or API keys in these modules. Read identity from `siteConfig` (resolved from `sites/<id>/config.ts`) and secrets from environment variables.
+Do not hardcode a customer's legal name, logo, phone, or API keys here. Read identity from `siteConfig` (`config/site.ts`) and secrets from environment variables.
 
-Changes here may affect **every** Slipstack customer.
+## Customer configuration (one deployment)
 
-## What belongs in a customer site
-
-Each customer gets a folder under `sites/`:
+Each customer clone edits:
 
 ```text
-sites/
-  platform-dev/          default / neutral demo
-  abc-boats/             fake customer (proof of unique frontend)
-    config.ts
-    pages/               home, about, …
-    components/          header, hero, cards, …
-    styles/
+config/site.ts          company, branding, theme, tax, timezone, deposit, cancellation
+public/brand/           logos and favicon
+content/launch-boat.ts  seed boat placeholder
+content/catalog-pricing.ts
+content/bundle-presets.ts
+app/(site)/             marketing pages (homepage is app/(site)/page.tsx)
 ```
 
-Public assets: `public/sites/<id>/`.
+`content/brand.ts` and `content/location.ts` are adapters derived from `siteConfig`.
 
-That folder is what a Slipstack developer opens in Cursor to redesign **only** that customer. Unique homepage, nav, typography, card styles, animations, and marketing pages belong there.
+Theme CSS variables are applied on `<html>` from `siteConfig.theme` (`siteThemeCssVars()`).
 
-Customer sites consume shared features, for example:
+## Fork-per-customer (not multi-site switching)
 
-```tsx
-import { BookingWidget } from "@/components/site/BookingWidget";
+Do **not** use `SLIPSTACK_SITE_ID`, `sites/abc-boats/`, or a runtime site registry in production.
+
+Each real customer gets:
+
+- Their own GitHub repo (cloned from this template)
+- Their own Netlify site
+- Their own Firebase project, Stripe account, and domain
+- Their own filled-in `config/site.ts` and env vars
+
+Engine updates merge from master into customer repos without overwriting their homepage and brand config.
+
+## Environment variables
+
+See `.env.example`. Production requires:
+
+- `APP_BASE_URL` or `NEXT_PUBLIC_SITE_URL` (real domain, not `example.com`)
+- Firebase Admin + web config
+- Stripe secret + webhook + publishable key
+- Brevo, Redis (Upstash), cron/admin secrets
+
+`config/assert-production-config.ts` refuses deployed production when `config/site.ts` still has template placeholder identity.
+
+## Firebase
+
+Nothing in marketing pages selects a Firebase project. The deployment's service account and `NEXT_PUBLIC_FIREBASE_*` vars determine the database.
+
+## Seed data
+
+`lib/booking/seed-experiences.ts` and `content/launch-boat.ts` ship generic placeholders for the unforked template.
+
+For a real customer, import the Slipstack.io launch packet:
+
+```bash
+npm run import:launch-packet -- path/to/launch-packet.json
 ```
 
-Do **not** copy booking, payment, waiver, or auth logic into `sites/`.
+See [LAUNCH_PACKET.md](./LAUNCH_PACKET.md).
 
-### Configuration
+## Stable Firestore experience slugs
 
-`config/site.ts` still exports `siteConfig` for the rest of the app. It resolves the active customer from `SLIPSTACK_SITE_ID` via `config/resolve-site.ts`.
+| Firestore slug | Role |
+|----------------|------|
+| `pontoon` | Half Day inventory document |
+| `watersports` | Full Day inventory document |
 
-`content/brand.ts` and `content/location.ts` remain adapters derived from `siteConfig`.
+Public URLs are `/experiences/half-day` and `/experiences/full-day`. Do not rename Firestore slugs without a migration.
 
-Theme CSS variables are applied on `<html>` from `siteConfig.theme` (`siteThemeCssVars()`). Customer CSS can add extra rules scoped with `[data-site="<id>"]`.
+## Customizing a customer clone
 
-## How the active site is chosen (development)
+Safe to change in the customer repo:
 
-```env
-SLIPSTACK_SITE_ID=abc-boats
-```
+- `config/site.ts`, logos, homepage sections, inquiry packages, blog posts
+- Customer-specific SEO routes under `app/(site)/` (not included in the master template)
 
-`NEXT_PUBLIC_SLIPSTACK_SITE_ID` is also accepted. Restart the Next.js server after changing it.
-
-This is **not** production multi-tenancy. There is no domain-based tenant router yet. The intended production shape is: one deployment per customer, same GitHub repo, that deployment’s env selects the site **and** that customer’s Firebase/Stripe accounts.
-
-## What belongs in environment variables
-
-Credentials and deployment-specific infrastructure — see `.env.example`.
-
-**Public / browser** (`NEXT_PUBLIC_*`, plus `APP_BASE_URL` / `NEXT_PUBLIC_SITE_URL`):
-
-- Site URL
-- Firebase web app config
-- Stripe publishable key
-- Analytics IDs
-- `SLIPSTACK_SITE_ID` / `NEXT_PUBLIC_SLIPSTACK_SITE_ID`
-
-**Private / server-only:**
-
-- Firebase Admin / service account
-- Stripe secret key and webhook secret
-- Brevo, Twilio, Upstash
-- HMAC/cron/admin secrets
-- Contact and staff inboxes (when not using the config fallback)
-
-Never commit real credentials. Never put server secrets in client components.
-
-## Databases (future)
-
-Nothing in `sites/` selects a Firebase project. The app uses whatever `FIREBASE_PROJECT_ID` / service account the **deployment** provides.
-
-Today local/dev uses the current development Firebase project via `.env.local`.
-
-Later:
-
-```text
-ABC Boats deployment     → ABC Boats Firebase
-Sunset Rentals deployment → Sunset Rentals Firebase
-```
-
-both built from this repository. Do not hardcode a single Firebase project into shared source as a permanent assumption.
-
-## Manual onboarding / design workflow (not automated yet)
-
-```text
-Customer purchases Slipstack
-  → self-onboarding (company, logo, boats, payments, domain)
-  → status: READY FOR DESIGN
-  → Slipstack developer customizes sites/<customer-id>/ in Cursor
-  → review and launch
-```
-
-Per-customer Firebase **create** is not implemented yet. Keyless **auth** for the org provisioner is:
-
-`Netlify (HMAC) → Cloud Run worker (ADC as slipstack-provisioner) → Google APIs`
-
-See `docs/PROVISIONING_AUTH.md`. Do not put a Google service-account JSON key in Netlify.
+Do not copy booking/payment/waiver logic out of `lib/booking/` or `app/api/`.
 
 ## What should NOT happen
 
-Developers should not hardcode customer names, logos, phone numbers, API credentials, or customer-specific fallback domains into shared components.
-
-Do not assume a single Firebase project, Stripe account, or domain. Those are per-deployment env values.
-
-Do not rename Firestore experience slugs (`pontoon` / `watersports`) — bookings and boats reference them. Public titles and URLs can change; document IDs cannot without a migration.
-
-Do not build a page builder, CMS, or plugin system to make sites unique — unique React/CSS in `sites/<id>/` is the mechanism.
-
-## Cursor instruction
-
-> Only modify ABC Boats' customer site (`sites/abc-boats/` and `public/sites/abc-boats/`). Do not modify shared Slipstack platform functionality.
+- Hardcode customer names, domains, or Cabo/Nasty-specific marketing in shared engine code
+- Assume one Firebase or Stripe account for all customers
+- Reintroduce `SITE_IDS` / `sites/<id>` runtime switching as the shipping model
+- Silently fall back to `example.com` or placeholder company in production

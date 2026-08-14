@@ -13,6 +13,7 @@ import { buildAddonSelectionsForPricing, computePricing, getEffectiveBoatRatePri
 import { fetchMergedPricingCalendarRatesForBoatTypes } from "@/lib/booking/pricing-calendar-fetch";
 import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
+import { validateSlotSchedule } from "@/lib/booking/booking-schedule-rules";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
 import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import {
@@ -423,7 +424,7 @@ export async function POST(request: NextRequest) {
         );
       }
       listingBoatForPricing = boat;
-      capacityMax = getMaxGuestsForExperience(experience);
+      capacityMax = getMaxGuestsForExperience(experience, boat.capacity);
       if (input.partySize < 1 || input.partySize > capacityMax) {
         return NextResponse.json({ error: experience.pricingType === "ticketed" ? "Ticket quantity exceeds capacity" : "Party size exceeds capacity" }, { status: 400 });
       }
@@ -523,6 +524,24 @@ export async function POST(request: NextRequest) {
       }
       if (slotStart.getTime() < Date.now()) {
         return NextResponse.json({ error: "This time slot is in the past" }, { status: 400 });
+      }
+      const scheduleCheck = validateSlotSchedule(
+        parsedSlotId.dateStr,
+        parsedSlotId.startHour,
+        parsedSlotId.startMinute ?? 0,
+        parsedSlotId.durationHours,
+        slotStart.getTime(),
+      );
+      if (!scheduleCheck.ok) {
+        return NextResponse.json(
+          {
+            error:
+              scheduleCheck.reason === "notice"
+                ? "This trip requires more advance notice than selected"
+                : "Selected time is outside operating hours",
+          },
+          { status: 400 },
+        );
       }
       slotStartForPricing = slotStart;
       experienceForPricing = experience;
@@ -635,6 +654,24 @@ export async function POST(request: NextRequest) {
       }
       if (slotStartExp.getTime() < Date.now()) {
         return NextResponse.json({ error: "This time slot is in the past" }, { status: 400 });
+      }
+      const scheduleCheckExp = validateSlotSchedule(
+        parsedSlotId.dateStr,
+        parsedSlotId.startHour,
+        parsedSlotId.startMinute ?? 0,
+        parsedSlotId.durationHours,
+        slotStartExp.getTime(),
+      );
+      if (!scheduleCheckExp.ok) {
+        return NextResponse.json(
+          {
+            error:
+              scheduleCheckExp.reason === "notice"
+                ? "This trip requires more advance notice than selected"
+                : "Selected time is outside operating hours",
+          },
+          { status: 400 },
+        );
       }
       slotStartForPricing = slotStartExp;
       experienceForPricing = experience;

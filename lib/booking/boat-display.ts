@@ -39,12 +39,12 @@ function generatedDescription(boat: BoatDisplayInput): string {
   const guests = boat.capacity ?? DEFAULT_CAPACITY;
   const t = (boat.boatType ?? "").trim().toLowerCase();
   if (t === "wake") {
-    return `${displayName} — Cabo San Lucas sportfisher for up to ${guests} guests with captain and crew included.`;
+    return `${displayName} — private charter boat for up to ${guests} guests with captain and crew included.`;
   }
   if (t === "pontoon" || t === "tritoon") {
-    return `${displayName} for up to ${guests} guests with captain and crew — ready for a Cabo San Lucas fishing charter.`;
+    return `${displayName} for up to ${guests} guests with captain and crew included.`;
   }
-  return `${displayName} is ${brand.companyName}'s Cabo San Lucas charter boat. Captain & crew included · up to ${guests} guests.`;
+  return `${displayName} is ${brand.companyName}'s charter boat. Captain & crew included · up to ${guests} guests.`;
 }
 
 /**

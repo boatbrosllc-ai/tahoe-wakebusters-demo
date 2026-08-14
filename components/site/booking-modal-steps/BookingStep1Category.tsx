@@ -3,14 +3,19 @@
 import Image from "next/image";
 import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { bundlePresets, type BundleId, type BundlePreset } from "@/content/bundle-presets";
+import { siteConfig } from "@/config/site";
 import type { ExperienceItem } from "./types";
 
-/** Same fishing heroes as BundleChooser — keep Book Now visually aligned with /experiences. */
-const PACKAGE_FISHING_HEROES: Record<BundleId, string> = {
-  nasty: "/photos/nsf/yellowfin-marina-duo.png",
-  nastier: "/photos/nsf/yellowfin-ocean-duo.png",
-  nastiest: "/photos/nsf/sailfish-baitball.png",
+/** Same heroes as BundleChooser — keep Book Now visually aligned with /experiences. */
+const PACKAGE_HEROES: Record<BundleId, string> = {
+  "half-day": siteConfig.media.welcome,
+  "full-day": siteConfig.media.boats,
+  "all-in": siteConfig.media.hero,
 };
+
+function packageHero(bundle: BundlePreset): string {
+  return PACKAGE_HEROES[bundle.id] ?? siteConfig.media.galleryFallback;
+}
 
 function packageHoursLabel(bundle: BundlePreset): string {
   const hours =
@@ -67,7 +72,7 @@ export function BookingStep1Category({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 md:gap-4 flex-1 min-h-0 min-w-0 content-start">
           {bundlePresets.map((bundle) => {
             const isSelected = selectedBundleId === bundle.id;
-            const hero = PACKAGE_FISHING_HEROES[bundle.id];
+            const hero = packageHero(bundle);
             const hours = packageHoursLabel(bundle);
             const highlights = packageHighlights(bundle);
             return (

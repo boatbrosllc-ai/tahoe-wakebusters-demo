@@ -1,6 +1,6 @@
 /**
- * Brand content — derived from the active site (`config/site.ts` → `sites/<id>/config.ts`).
- * Edit identity, logos, and contact in that customer's config; do not hardcode names in components.
+ * Brand content — derived from `config/site.ts`.
+ * Edit identity, logos, and contact there; do not hardcode names in components.
  */
 
 import { siteConfig } from "@/config/site";

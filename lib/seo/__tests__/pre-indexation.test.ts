@@ -20,30 +20,33 @@ const AUSTIN_PATH_MARKERS = [
   "party-boat",
 ];
 
+const CABO_PATH_MARKERS = [
+  "cabo",
+  "nasty",
+  "fishing-reports",
+  "marlin",
+  "roosterfish",
+  "fish-processing",
+];
+
 describe("pre-indexation SEO safety", () => {
-  it("money/authority SEO paths are in the published sitemap registry", () => {
-    const required = [
-      "/cabo-san-lucas-fishing-charters",
-      "/deep-sea-fishing-cabo",
-      "/los-cabos-fishing-charters",
-      "/cabo-fishing-charter-prices",
-      "/cabo-marlin-fishing",
-      "/cabo-roosterfish-fishing",
-      "/cabo-fishing-calendar",
-      "/best-time-to-fish-cabo",
-      "/best-fishing-charters-cabo-san-lucas",
-      "/cabo-fish-processing",
-      "/fishing-reports",
-    ];
-    for (const path of required) {
-      assert.ok(SEO_SITEMAP_PATHS.includes(path), `missing sitemap path ${path}`);
-    }
+  it("master template ships with no customer SEO growth paths in sitemap registry", () => {
+    assert.deepEqual(SEO_SITEMAP_PATHS, []);
   });
 
   it("excludes Austin/BoatBros path markers from sitemap registry", () => {
     for (const path of SEO_SITEMAP_PATHS) {
       const lower = path.toLowerCase();
       for (const marker of AUSTIN_PATH_MARKERS) {
+        assert.equal(lower.includes(marker), false, `${path} contains ${marker}`);
+      }
+    }
+  });
+
+  it("excludes Cabo/Nasty marketing paths from sitemap registry", () => {
+    for (const path of SEO_SITEMAP_PATHS) {
+      const lower = path.toLowerCase();
+      for (const marker of CABO_PATH_MARKERS) {
         assert.equal(lower.includes(marker), false, `${path} contains ${marker}`);
       }
     }

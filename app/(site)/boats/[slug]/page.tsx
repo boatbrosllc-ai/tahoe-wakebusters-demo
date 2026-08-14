@@ -19,12 +19,12 @@ const BOAT_PILLAR_FAQ_BASE: FAQItem[] = [
   {
     question: "Is a captain included with this boat?",
     answer:
-      `Yes. Every ${brand.companyName} Cabo San Lucas charter includes a licensed captain and mate. You show up ready to fish — we handle the boat, tackle, and local knowledge.`,
+      `Yes. Every ${brand.companyName} charter includes a licensed captain and crew. You show up ready to go — we handle the boat and the plan.`,
   },
   {
     question: "How many guests can this boat fit?",
     answer:
-      "Our Cabo 40 Express charters up to 6 guests. Check the Half Day or Full Day experience page when you book for trip details and what’s included.",
+      "This boat charters up to 6 guests. Check the Half Day or Full Day experience page when you book for trip details and what’s included.",
   },
   {
     question: "What should we bring?",
@@ -41,9 +41,9 @@ const BOAT_PILLAR_FAQ_BASE: FAQItem[] = [
 function getSeoFaqForBoat(): FAQItem[] {
   return [
     {
-      question: "Do I need a fishing license for a Cabo charter?",
+      question: "Do I need a fishing license?",
       answer:
-        `Licenses for the anglers listed on your package are included with ${brand.companyName} charters. We’ll confirm guest count when you book.`,
+        `Licenses, if required for this location, are confirmed when you book with ${brand.companyName}. We’ll confirm guest count when you reserve.`,
     },
     {
       question: "Where do we meet for departure?",
@@ -121,12 +121,12 @@ function ServiceJsonLd({
   const service = {
     "@context": "https://schema.org",
     "@type": "Service",
-    serviceType: "Sport Fishing Charter",
+    serviceType: "Boat Charter",
     name: boatName,
     description,
     image: imageUrl ? getDisplayImageUrl(imageUrl) : undefined,
     provider: { "@type": "LocalBusiness", name: brand.companyName },
-    areaServed: { "@type": "Place", name: "Cabo San Lucas, Mexico" },
+    areaServed: { "@type": "Place", name: brand.address.city || "Local waterways" },
   };
   return (
     <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify(service) }} />
@@ -187,7 +187,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
                 {boat.name}
               </h1>
               <p className="mt-2 text-white/85 text-base sm:text-lg max-w-xl mx-auto">
-                {boat.heroSubtitle?.trim() || "Cabo San Lucas sportfisher · Captain & crew included"}
+                {boat.heroSubtitle?.trim() || "Private charter · Captain & crew included"}
               </p>
               {boat.experiences.length > 0 && (
                 <div className="mt-6 flex justify-center">
@@ -236,10 +236,10 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
           </div>
         </section>
 
-        <section className="section-padding bg-white" aria-labelledby="cabo-charter-heading">
+        <section className="section-padding bg-white" aria-labelledby="charter-heading">
           <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8">
-            <h2 id="cabo-charter-heading" className="font-display text-xl font-bold text-brand-dark sm:text-2xl">
-              Cabo sport fishing charter — what you get
+            <h2 id="charter-heading" className="font-display text-xl font-bold text-brand-dark sm:text-2xl">
+              Private charter — what you get
             </h2>
             <div className="mt-4 max-w-2xl text-brand-dark/90 space-y-4">
               {seoParagraphs.map((p, i) => (
@@ -285,7 +285,7 @@ export default async function BoatPillarPage({ params }: { params: Promise<{ slu
 
         <section aria-labelledby="faq-heading">
           <h2 id="faq-heading" className="sr-only">
-            Frequently asked questions about {boat.name} and Cabo sport fishing charters
+            Frequently asked questions about {boat.name} and private charters
           </h2>
           <FAQ items={[...BOAT_PILLAR_FAQ_BASE, ...getSeoFaqForBoat()]} />
         </section>

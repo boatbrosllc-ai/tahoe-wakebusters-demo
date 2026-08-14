@@ -26,8 +26,8 @@ const footerLinks = [
 
 const seoRentalLinks = [
   { href: "/experiences", label: "Browse trips" },
-  { href: "/experiences/nasty-half-day", label: siteConfig.catalog.halfDay.title },
-  { href: "/experiences/nasty-full-day", label: siteConfig.catalog.fullDay.title },
+  { href: "/experiences/half-day", label: siteConfig.catalog.halfDay.title },
+  { href: "/experiences/full-day", label: siteConfig.catalog.fullDay.title },
   { href: "/packages", label: "Packages" },
   { href: OUR_BOAT_PATH, label: "Our boat" },
 ];

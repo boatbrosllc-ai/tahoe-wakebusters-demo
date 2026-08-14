@@ -58,7 +58,7 @@ export function TrustRow({
         </span>
       </span>
       <span className={sep} aria-hidden>·</span>
-      <span>Local Cabo crew</span>
+      <span>Local crew</span>
       <span className={sep} aria-hidden>·</span>
       <span>Captain included</span>
     </div>

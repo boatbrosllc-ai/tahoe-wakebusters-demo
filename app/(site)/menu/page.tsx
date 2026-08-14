@@ -46,7 +46,7 @@ const pageLinks = [
     href: OUR_BOAT_PATH,
     label: "Our Boat",
     icon: Ship,
-    description: "Meet the boat for your Cabo charter",
+    description: "Meet the boat for your charter",
   },
   {
     href: "/booking",
@@ -64,7 +64,7 @@ const pageLinks = [
     href: "/blog",
     label: "The Bite",
     icon: Newspaper,
-    description: "Cabo fishing tips, seasons, and trip news",
+    description: "Tips, seasons, and trip news",
   },
   {
     href: "/faqs",

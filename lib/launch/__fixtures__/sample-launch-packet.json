@@ -1,0 +1,165 @@
+{
+  "version": "1.0",
+  "orgId": "org_demo_001",
+  "siteId": "lake-austin-charters",
+  "company": {
+    "name": "Lake Austin Charters",
+    "legalName": "Lake Austin Charters LLC",
+    "shortName": "Lake Austin",
+    "tagline": "Private captained charters on Lake Austin — book online.",
+    "description": "Half-day and full-day private boat charters with captain included."
+  },
+  "domain": "lakeaustincharters.com",
+  "contact": {
+    "email": "bookings@lakeaustincharters.com",
+    "phone": "(512) 555-0100",
+    "address": {
+      "line1": "501 Westlake Dr",
+      "city": "Austin",
+      "state": "TX",
+      "zip": "78746",
+      "country": "US"
+    },
+    "marinaMeetNote": "Meet at Westlake Marina — gate code sent after booking.",
+    "areaServed": ["Lake Austin", "Austin, TX"]
+  },
+  "timezone": "America/Chicago",
+  "booking": {
+    "depositFraction": 0.5,
+    "minimumNoticeHours": 48,
+    "turnaroundMinutes": 60,
+    "cancellation": {
+      "freeCancelDays": 14,
+      "partialRefundDaysStart": 7,
+      "partialRefundDaysEnd": 14,
+      "noRefundWithinDays": 7,
+      "fullText": "Free cancellation until 14 days before departure. 50% refund for cancellations 7–14 days before departure. No refund within 7 days. Weather cancellations receive a full refund or reschedule.",
+      "summary": "Free cancel 14+ days · 50% refund 7–14 days · No refund within 7 days"
+    },
+    "weatherPolicyText": "We cancel for unsafe weather and offer a full refund or reschedule.",
+    "safetyPolicyText": "All guests must follow captain instructions and wear life jackets when required."
+  },
+  "operatingHours": {
+    "startHour": 7,
+    "endHour": 19,
+    "firstDepartureHour": 8,
+    "lastDepartureHour": 14
+  },
+  "blackoutDates": ["2026-12-25"],
+  "season": {
+    "enabled": true,
+    "startMonth": 3,
+    "endMonth": 10
+  },
+  "fuelGratuity": {
+    "fuelSurchargeCents": 7500,
+    "fuelSurchargeLabel": "Fuel surcharge",
+    "suggestedGratuityPercent": 20,
+    "gratuityAddonCatalogKey": "gratuity"
+  },
+  "pricing": {
+    "standardRates": {
+      "halfDayCents": 65000,
+      "fullDayCents": 110000,
+      "peakFullDayCents": 125000
+    },
+    "extensionHourCents": 12500,
+    "includedItems": ["Private boat", "USCG captain", "Life jackets", "Cooler with ice"]
+  },
+  "branding": {
+    "theme": {
+      "primaryColor": "#0ea5e9",
+      "secondaryColor": "#f97316"
+    },
+    "media": {
+      "hero": "/photos/stock/charter/fishing-boat-sunset.jpg",
+      "welcome": "/photos/stock/charter/yachts-at-dock.jpg"
+    }
+  },
+  "boats": [
+    {
+      "externalId": "boat_primary_001",
+      "name": "Sunset Runner",
+      "slug": "sunset-runner",
+      "capacity": 8,
+      "photos": ["/photos/stock/charter/yachts-at-dock.jpg"],
+      "experienceSlugs": ["half-day", "full-day"],
+      "heroSubtitle": "Tritoon · up to 8 guests"
+    }
+  ],
+  "experiences": [
+    {
+      "externalId": "exp_half_day",
+      "slug": "half-day",
+      "title": "Half Day Charter",
+      "subtitle": "5 hours · Private captained charter",
+      "description": "Morning or afternoon half-day charter on Lake Austin. Captain included.",
+      "maxGuests": 8,
+      "rates": [
+        {
+          "durationHours": 5,
+          "displayName": "Half Day (5 Hours)",
+          "priceCents": 65000
+        }
+      ],
+      "addonCatalogKeys": ["cooler-ice", "gratuity"]
+    },
+    {
+      "externalId": "exp_full_day",
+      "slug": "full-day",
+      "title": "Full Day Charter",
+      "subtitle": "8 hours · Private captained charter",
+      "description": "Full-day charter with optional extra hours at checkout.",
+      "maxGuests": 8,
+      "rates": [
+        {
+          "durationHours": 8,
+          "displayName": "Full Day (8 Hours)",
+          "priceCents": 110000,
+          "priceHolidayCents": 125000
+        },
+        {
+          "durationHours": 9,
+          "displayName": "Full Day +1 Hour",
+          "priceCents": 122500,
+          "priceHolidayCents": 137500
+        }
+      ]
+    }
+  ],
+  "addons": [
+    {
+      "catalogKey": "cooler-ice",
+      "name": "Extra Ice",
+      "description": "Additional ice for your cooler.",
+      "priceCents": 1500,
+      "type": "toggle",
+      "bookable": true
+    },
+    {
+      "catalogKey": "gratuity",
+      "name": "Gratuity",
+      "description": "Add a gratuity for your captain and crew.",
+      "priceCents": 0,
+      "type": "tip",
+      "bookable": true
+    }
+  ],
+  "waiver": {
+    "externalId": "waiver_default",
+    "title": "Adventure Waiver",
+    "description": "Required for all guests before departure.",
+    "termsHtml": "<p>I acknowledge the risks of boating activities...</p>",
+    "requiredFields": {
+      "dob": true,
+      "phone": true,
+      "address": false,
+      "bookingDate": true
+    },
+    "signature": {
+      "mode": "both",
+      "requireTypedName": true
+    },
+    "isActive": true
+  }
+}

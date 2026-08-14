@@ -11,6 +11,11 @@ import type { Booking, BookingStripe } from "./types";
 import type { BookingEmailContext } from "./brevo";
 import { isDepositMode } from "./deposit-mode";
 import { DEPOSIT_FRACTION } from "./constants";
+import {
+  formatBalanceLeadTimePhrase,
+  getDepositPercentLabel,
+} from "./booking-policy-copy";
+import { shouldAutoChargeRemainingBalance } from "./customer-operations";
 
 /** @deprecated Use isDepositMode from deposit-mode.ts. Kept for Brevo template params. */
 export function isDepositFromBookingStripe(booking: Booking): boolean {
@@ -132,18 +137,22 @@ export function renderBookingConfirmationHtml(booking: Booking, context: Booking
       ? new Date(finalChargeAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
       : null;
   const cancellationPolicy = cancellationPolicyText || DEFAULT_CANCELLATION_POLICY;
-  const depositPct = Math.round(DEPOSIT_FRACTION * 100);
-  const depositPctLabel = `${depositPct}%`;
+  const depositPctLabel = getDepositPercentLabel();
+  const balanceLeadPhrase = formatBalanceLeadTimePhrase();
   /** Short line for deposit flow: distinguish "remaining will be charged" vs "remaining was already charged" (e.g. resend for final_paid). */
   const depositCopy = isDeposit
     ? context.remainingAlreadyCharged
       ? `You paid a ${depositPctLabel} deposit (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) was already charged. Your booking is fully paid.`
-      : `You paid a ${depositPctLabel} deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) will be charged automatically 48 hours before your trip${finalChargeAtFormatted ? ` on ${finalChargeAtFormatted}` : ""}.`
+      : shouldAutoChargeRemainingBalance()
+        ? `You paid a ${depositPctLabel} deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) will be charged automatically ${balanceLeadPhrase}${finalChargeAtFormatted ? ` on ${finalChargeAtFormatted}` : ""}.`
+        : `You paid a ${depositPctLabel} deposit today (${depositPaidFormatted}). The remaining balance (${remainingFormatted}) is due on arrival.`
     : "";
 
   const remainingBalanceLabel = context.remainingAlreadyCharged
     ? "Remaining balance (already charged)"
-    : `Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : "48 hours before your trip"})`;
+    : shouldAutoChargeRemainingBalance()
+      ? `Remaining balance (auto-charged ${finalChargeAtFormatted ? escapeHtml(finalChargeAtFormatted) : balanceLeadPhrase})`
+      : "Remaining balance (due on arrival)";
   const paymentRows = isDeposit
     ? `
                       <tr><td style="padding: 6px 0; font-size: 13px; color: ${MUTED_COLOR};"><strong style="color: ${DARK_COLOR};">Deposit paid today (${depositPctLabel})</strong></td><td style="padding: 6px 0; font-size: 14px; color: ${DARK_COLOR}; text-align: right;">${depositPaidFormatted}</td></tr>

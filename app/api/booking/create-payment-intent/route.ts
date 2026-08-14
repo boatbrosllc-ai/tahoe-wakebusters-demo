@@ -25,6 +25,7 @@ import { verifyIndexedStripeCustomerOrClear } from "@/lib/booking/stripe-custome
 import { buildBookingPaymentIntentMethodParams } from "@/lib/booking/payment-intent-methods";
 import { parseSlotIdRelaxed, parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { isDepositEligibleByLeadTime } from "@/lib/booking/final-charge-at";
+import { getDepositLeadTimeHours, shouldForceFullPaymentAtCheckout } from "@/lib/booking/customer-operations";
 
 /** Re-sign after optional hold extension so the client can cancel/back after the original create-hold window. */
 function releaseTokenFieldForResponse(holdId: string, effectiveExpiresAt: Date): { releaseToken: string } | Record<string, never> {
@@ -478,7 +479,9 @@ export async function POST(request: NextRequest) {
     }
     // Shared ticketed experiences always charge full — no deposit option.
     let payFullAmount: boolean;
-    if ((hold as { bookingMode?: string }).bookingMode === "shared") {
+    if (shouldForceFullPaymentAtCheckout()) {
+      payFullAmount = true;
+    } else if ((hold as { bookingMode?: string }).bookingMode === "shared") {
       payFullAmount = true;
     } else if (hold.experienceId && experienceForPolicy) {
       // Charter: allowDeposit gates whether deposit is offered; when true, honor client payFullAmount (default deposit).
@@ -500,7 +503,7 @@ export async function POST(request: NextRequest) {
           ).start;
           if (!isDepositEligibleByLeadTime(slotStart.getTime(), Date.now())) {
             return NextResponse.json(
-              { error: "Deposit is only available for trips more than 48 hours away. Please pay in full." },
+              { error: `Deposit is only available for trips more than ${getDepositLeadTimeHours()} hours away. Please pay in full.` },
               { status: 400 }
             );
           }

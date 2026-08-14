@@ -22,8 +22,8 @@ export interface SitemapExperienceEntry {
 
 /** Stable fallback when Firebase is unavailable during sitemap generation. */
 export const FALLBACK_EXPERIENCE_PAGE_SLUGS: readonly string[] = [
-  "nasty-half-day",
-  "nasty-full-day",
+  "half-day",
+  "full-day",
 ];
 
 function toIso(t: unknown): string | undefined {

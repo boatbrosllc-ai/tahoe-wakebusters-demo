@@ -24,11 +24,9 @@ export interface Experience {
   durationMinutes?: number;
   capacity: string;
   heroImage: string;
-  /** From admin: CSS object-position for card thumbnails. */
   listingCardImagePosition?: string;
   gallery: string[];
   pricingNote: string;
-  /** Optional: lowest price in cents for "From $X" on cards. Use null when pricing is only from live API. */
   fromPriceCents?: number | null;
   faqs?: { q: string; a: string }[];
   ctaLabel?: string;
@@ -44,15 +42,14 @@ export const experiences: Experience[] = [
     title: siteConfig.catalog.halfDay.title,
     shortDescription: `5 hours · Private captained charter.`,
     description:
-      "Private captained charter with captain and mate. Inclusions are listed on the trip page and confirmed at checkout.",
-    highlights: CHARTER_INCLUDED.slice(0, 6),
+      "Private captained charter with captain and crew. Inclusions are listed on the trip page and confirmed at checkout.",
+    highlights: CHARTER_INCLUDED,
     duration: "5 hours",
     durationMinutes: 300,
     capacity: "Up to 6",
     heroImage: siteConfig.media.welcome,
     gallery: [
       siteConfig.media.welcome,
-      "/photos/stock/charter/anglers-on-boat-pexels.jpg",
       siteConfig.media.galleryFallback,
       siteConfig.media.hero,
     ],
@@ -62,7 +59,7 @@ export const experiences: Experience[] = [
     fromPriceCents: halfCents,
     ctaLabel: "BOOK HALF DAY",
     faqs: [
-      { q: "Is a captain included?", a: "Yes. Every trip includes a licensed captain and mate." },
+      { q: "Is a captain included?", a: "Yes. Every trip includes a licensed captain and crew." },
       { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. Specific inclusions are listed when you book." },
     ],
   },
@@ -72,7 +69,7 @@ export const experiences: Experience[] = [
     shortDescription: "8 hours · Private captained charter — most popular.",
     description:
       "Full-day private captained charter. Same inclusions as Half Day with more time on the water.",
-    highlights: CHARTER_INCLUDED.slice(0, 6),
+    highlights: CHARTER_INCLUDED,
     duration: "8 hours",
     durationMinutes: 480,
     capacity: "Up to 6",
@@ -80,17 +77,16 @@ export const experiences: Experience[] = [
     gallery: [
       siteConfig.media.boats,
       siteConfig.media.hero,
-      "/photos/stock/charter/anglers-on-boat-pexels.jpg",
       siteConfig.media.galleryFallback,
     ],
     pricingNote: FOUNDING_ANGLER_RATE_ACTIVE
-      ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(fullCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.full)}). Peak dates from ${formatUsdFromCents(239_500)}.`
-      : `${formatUsdFromCents(fullCents)} before tax. Peak / tournament dates priced higher.`,
+      ? `${FOUNDING_ANGLER_LABEL}: ${formatUsdFromCents(fullCents)} before tax (standard ${formatUsdFromCents(STANDARD_RATE_CENTS.full)}).`
+      : `${formatUsdFromCents(fullCents)} before tax.`,
     fromPriceCents: fullCents,
     ctaLabel: "BOOK FULL DAY",
     badge: "MOST POPULAR",
     faqs: [
-      { q: "How far do we go?", a: "Depends on conditions and the trip length you book. Full-day trips give more range." },
+      { q: "How long is the trip?", a: "Full-day trips run the duration listed on the package. We'll confirm dock details after you book." },
     ],
   },
 ];
@@ -107,10 +103,6 @@ export function getExperienceBySlug(slug: string): Experience | undefined {
   return experiences.find((e) => e.slug === s);
 }
 
-/**
- * Format "from" price for display by experience slug or pricingType.
- * Charter packages: "From $X". Ticketed leftovers: per-ticket wording.
- */
 export function formatExperiencePriceLabel(
   slug: string | null | undefined,
   fromPriceCents: number | null | undefined,

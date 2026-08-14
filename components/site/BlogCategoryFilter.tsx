@@ -13,9 +13,9 @@ import { Clock, Anchor, ArrowRight, Sparkles, Waves } from "lucide-react";
 const DOCK_CATEGORIES: { id: BlogCategory | "all"; label: string; description: string }[] = [
   { id: "all", label: "All", description: "All posts" },
   { id: "fishing-tips", label: "Fishing tips", description: "Tackle, techniques, and trip prep" },
-  { id: "cabo-guides", label: "Cabo guides", description: "Marina, seasons, and what to expect" },
-  { id: "charter-news", label: "Charter news", description: "Bite reports and charter updates" },
-  { id: "general", label: "Stories", description: "Crew stories and Cabo life" },
+  { id: "cabo-guides", label: "Guides", description: "Marina, seasons, and what to expect" },
+  { id: "charter-news", label: "Charter news", description: "Trip reports and charter updates" },
+  { id: "general", label: "Stories", description: "Crew stories and days on the water" },
 ];
 
 const container = {
@@ -95,7 +95,7 @@ export function BlogCategoryFilter({ allPosts, initialCategory }: BlogCategoryFi
             Latest from the crew
           </h2>
           <p className="text-center text-brand-muted max-w-xl mx-auto mb-12">
-            Tips, seasons, and trip news to get the most out of your Cabo fishing charter.
+            Tips, seasons, and trip news to get the most out of your charter.
           </p>
 
           <AnimatePresence mode="wait">

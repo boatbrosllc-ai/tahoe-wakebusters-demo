@@ -132,7 +132,7 @@ export function PaymentOptions() {
         <p className="text-base sm:text-lg text-brand-muted text-center max-w-2xl mx-auto mb-8 sm:mb-12 leading-relaxed">
           We&apos;re here to help you get on the water, not make checkout harder. That&apos;s why we went out
           of our way to offer as many payment options as we can: cards, bank, wallets, and buy now, pay later.
-          Book your Cabo charter the way that works for you.
+          Book your charter the way that works for you.
         </p>
 
         <ul className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 max-w-4xl mx-auto list-none">

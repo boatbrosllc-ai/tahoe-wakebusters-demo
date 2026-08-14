@@ -55,9 +55,9 @@ export const inquiryPackages: InquiryPackage[] = [
     fishingDays: "2 fishing days",
     boats: "2 boats",
     fromPriceLabel: "Starting at $22,000",
-    hook: "Two boats. One polished Cabo base.",
+    hook: "Two boats. One polished base.",
     description:
-      "Team retreat built around dual-boat fishing days, shared meals, and a polished Cabo base of operations.",
+      "Team retreat built around dual-boat days, shared meals, and a polished base of operations.",
     includesHint:
       "Multi-boat fishing, villa coordination, transportation, provisioning, catch handling, on-ground coordination.",
     image: brand.media.welcome,
@@ -70,7 +70,7 @@ export const inquiryPackages: InquiryPackage[] = [
     ],
   },
   {
-    id: "nasty-cabo-week",
+    id: "charter-week",
     title: "Charter Week",
     guests: "8 guests",
     nights: "5 nights",
@@ -78,7 +78,7 @@ export const inquiryPackages: InquiryPackage[] = [
     fromPriceLabel: "Starting at $29,800",
     hook: "More days on the water. One coordinated week.",
     description:
-      "A full week of Cabo fishing and downtime — more days on the water, one coordinated package.",
+      "A full week on the water and downtime — more days out, one coordinated package.",
     includesHint: "Four fishing days, villa coordination, transportation, food/provisioning, catch handling.",
     image: brand.media.hero,
     imageAlt: "Charter boat at sunset",
@@ -90,7 +90,7 @@ export const inquiryPackages: InquiryPackage[] = [
     ],
   },
   {
-    id: "nasty-tournament-week",
+    id: "tournament-week",
     title: "Tournament Week",
     guests: "Custom group",
     nights: "Flexible nights",
@@ -122,10 +122,10 @@ export const PACKAGE_QUOTE_STEPS = [
   },
   {
     title: "We build the quote",
-    body: "Nasty coordinates fishing days plus vetted partners for lodging, transport, and provisioning around your group.",
+    body: `${brand.companyName} coordinates charter days plus vetted partners for lodging, transport, and provisioning around your group.`,
   },
   {
     title: "Confirm & arrive",
-    body: "Once you approve the quote, we lock the plan and send marina check-in details before you land in Cabo.",
+    body: "Once you approve the quote, we lock the plan and send dock check-in details before you arrive.",
   },
 ] as const;

@@ -1,7 +1,6 @@
 import { brand } from "@/content/brand";
 /**
- * Static blog posts for The Bite (${brand.companyName}).
- * Austin / Boat Bros posts removed. Add Cabo fishing posts here or via CMS.
+ * Static blog posts. The template ships empty — add posts here or via CMS.
  */
 
 export type BlogCategory = "fishing-tips" | "cabo-guides" | "charter-news" | "general";
@@ -32,8 +31,8 @@ export type BlogPost = {
 };
 
 const categoryLabels: Record<BlogCategory, string> = {
-  "fishing-tips": "Fishing tips",
-  "cabo-guides": "Cabo guides",
+  "fishing-tips": "Tips",
+  "cabo-guides": "Guides",
   "charter-news": "Charter news",
   general: "General",
 };

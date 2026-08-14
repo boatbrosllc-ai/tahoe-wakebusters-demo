@@ -182,7 +182,7 @@ async function main() {
   const missing = [];
   const requiredAliases = {
     STRIPE_SECRET_KEY: ["STRIPE_SECRET_KEY", "STRIPE_CONNECT_SECRET_KEY"],
-    APP_BASE_URL: ["APP_BASE_URL", "NEXT_PUBLIC_APP_URL"],
+    APP_BASE_URL: ["APP_BASE_URL", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SITE_URL"],
     ADMIN_EMAIL: ["ADMIN_EMAIL", "PLATFORM_ADMIN_EMAIL"],
     CONTACT_EMAIL: ["CONTACT_EMAIL", "BREVO_SENDER_EMAIL", "SENDGRID_FROM_EMAIL"],
   };
@@ -190,10 +190,13 @@ async function main() {
     const names = requiredAliases[name] || [name];
     if (!hasAny(...names)) missing.push(names.join(" or "));
   }
-  if (hasValue("APP_BASE_URL")) {
-    const u = String(process.env.APP_BASE_URL).trim();
+  if (hasValue("APP_BASE_URL") || hasValue("NEXT_PUBLIC_SITE_URL")) {
+    const u = String(process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL).trim();
     if (!u.startsWith("https://") && !u.startsWith("http://")) {
-      missing.push("APP_BASE_URL must be an absolute URL (https://... or http:// for local dev) so waiver and email links work");
+      missing.push("APP_BASE_URL / NEXT_PUBLIC_SITE_URL must be an absolute URL (https://... or http:// for local dev) so waiver and email links work");
+    }
+    if (process.env.NODE_ENV === "production" && /example\.com/i.test(u)) {
+      missing.push("APP_BASE_URL / NEXT_PUBLIC_SITE_URL must not use example.com in production — set the customer's real public URL");
     }
   }
   // Firebase: path mode (preferred) OR credential-variable mode — same contract as lib/booking/env.ts

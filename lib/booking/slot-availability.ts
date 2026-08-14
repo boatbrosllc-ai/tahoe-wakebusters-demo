@@ -12,6 +12,7 @@ import {
   bookingLookbackDaysFromMaxDuration,
   intervalsOverlapMs,
 } from "@/lib/booking/booking-interval";
+import { intervalsConflictWithTurnaround } from "@/lib/booking/booking-schedule-rules";
 import { hasOverlappingBlock } from "@/lib/booking/has-overlapping-block";
 import { getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import type { Slot } from "@/lib/booking/types";
@@ -108,7 +109,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
         }
         const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
         const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-        if (slotStartMs < existingEnd && slotEndMs > existingStart) {
+        if (intervalsConflictWithTurnaround(slotStartMs, slotEndMs, existingStart, existingEnd)) {
           throw new SlotConflictError("Slot no longer available");
         }
       }

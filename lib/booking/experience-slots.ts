@@ -1,23 +1,22 @@
 import { fromZonedTime } from "date-fns-tz";
 import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
+import { getOperatingEndHour, getOperatingStartHour } from "@/lib/booking/customer-operations";
 
 /**
  * Experience slot grid: all dates are available until booked or blocked.
  * Slot id format: YYYY-MM-DD-startHour-durationHours (e.g. 2025-02-10-13-3) for :00 starts,
  * or YYYY-MM-DD-startHour-minute-durationHours (e.g. 2025-02-10-9-30-4) for :30 starts.
  *
- * Operating hours: 6am–7pm in the Nasty business timezone (Cabo / America/Mazatlan).
- * Start times are every hour from 6am unless a boat defines allowedStartTimes.
+ * Operating hours come from `siteConfig.operations.operatingHours` (launch packet).
+ * Start times are hourly unless a boat defines allowedStartTimes.
  */
 
 /** Business timezone for slot wall times (re-export of BUSINESS_TIMEZONE). */
 export const SLOT_TIMEZONE = BUSINESS_TIMEZONE;
 
-/** Operating window: 6am (6) to 7pm (19). Last departure at 7pm; trips may end after 7pm.
- * 6am supports NSF sunrise half/full-day departures (Cabo).
- */
-export const OPERATING_START_HOUR = 6;
-export const OPERATING_END_HOUR = 19;
+/** Operating window from customer config (defaults 7am–7pm). Last departure at end hour. */
+export const OPERATING_START_HOUR = getOperatingStartHour();
+export const OPERATING_END_HOUR = getOperatingEndHour();
 
 /** Hourly start times from 7am through 7pm (19). Final departure at 7pm. */
 export const EXPERIENCE_START_HOURS = Array.from(

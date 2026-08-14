@@ -3,7 +3,7 @@ import { allowBoatTypeForSlug, inferSlugFromTitle } from "@/lib/booking/experien
 export const ALLOWED_BOAT_TYPES = ["pontoon", "wake", "tritoon"] as const;
 export type AllowedBoatType = (typeof ALLOWED_BOAT_TYPES)[number];
 
-const PLACEHOLDER_BOAT_IMAGE = "/photos/nsf/cabo-40-express.png";
+const PLACEHOLDER_BOAT_IMAGE = "/photos/stock/charter/yachts-at-dock.jpg";
 
 /** Site-relative marketing photos under /public/photos (launch fleet images). */
 function isApprovedSitePhotoPath(raw: string): boolean {

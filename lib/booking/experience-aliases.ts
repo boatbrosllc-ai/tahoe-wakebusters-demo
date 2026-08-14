@@ -17,10 +17,10 @@ function watersportsAllowUntypedBoatInInventory(): boolean {
 }
 
 export const EXPERIENCE_ALIAS_FAMILIES: readonly (readonly string[])[] = [
-  // Firestore slug `pontoon` = Half Day. Keep only NSF-needed public aliases.
-  ["pontoon", "nasty-half-day", "half-day"],
-  // Firestore slug `watersports` = Full Day.
-  ["watersports", "nasty-full-day", "full-day"],
+  // Firestore slug `pontoon` = Half Day. Public URL is `half-day`.
+  ["pontoon", "half-day", "nasty-half-day"],
+  // Firestore slug `watersports` = Full Day. Public URL is `full-day`.
+  ["watersports", "full-day", "nasty-full-day"],
   // Specialty listings (inactive by default in seed). Keep sunset-cruise alias for historical booking ID variants.
   ["sunset", "sunset-cruise"],
   ["holiday"],
@@ -197,9 +197,9 @@ export function getSlugForBoatTypeFilter(
  */
 export function inferSlugFromTitle(titleOrName: string | undefined): string {
   const t = (titleOrName ?? "").toLowerCase();
-  // Prefer NSF product names before legacy Austin keywords.
-  if (/nasty\s*full|full\s*day/.test(t)) return "watersports";
-  if (/nasty\s*half|half\s*day/.test(t)) return "pontoon";
+  // Prefer generic product names before legacy keywords.
+  if (/full\s*day|nasty\s*full/.test(t)) return "watersports";
+  if (/half\s*day|nasty\s*half/.test(t)) return "pontoon";
   if (/wake|surf|watersport|wakeboard|tube/.test(t)) return "watersports";
   if (/pontoon|tritoon|party/.test(t)) return "pontoon";
   if (/sunset|cruise/.test(t)) return "sunset";
@@ -222,15 +222,15 @@ export function buildStaticToFirestoreSlugMap(): Record<string, string> {
   return out;
 }
 
-/** Dedicated public page slug for the Half Day (pontoon) family. */
-export const PONTOON_CANONICAL_PAGE_SLUG = "nasty-half-day";
+/** Dedicated public page slug for the Half Day family. */
+export const PONTOON_CANONICAL_PAGE_SLUG = "half-day";
 
-/** Dedicated public page slug for the Full Day (watersports) family. */
-export const WATERSPORTS_CANONICAL_PAGE_SLUG = "nasty-full-day";
+/** Dedicated public page slug for the Full Day family. */
+export const WATERSPORTS_CANONICAL_PAGE_SLUG = "full-day";
 
 /**
  * Resolve the canonical public URL slug for an experience page.
- * Prefers NSF public slugs for pontoon/watersports families; preserves alias redirects for old URLs.
+ * Prefers generic public slugs for pontoon/watersports families; preserves alias redirects for old URLs.
  */
 export function resolveCanonicalExperienceSlug(requestedSlug: string, firestoreSlug?: string): string {
   const requested = (requestedSlug ?? "").toLowerCase().trim();

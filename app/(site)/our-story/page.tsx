@@ -23,14 +23,14 @@ export const metadata: Metadata = {
         url: ogImage,
         width: 1800,
         height: 2400,
-        alt: `${brand.companyName} angler with twin yellowfin tuna on deck in Cabo`,
+        alt: `${brand.companyName} on the water`,
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
     title: `Our Story | ${brand.companyName}`,
-    description: "Come to Cabo to fish. Private Cabo charters. Serious fishing. No bullshit.",
+    description: "Private captained boat rentals. Book online.",
     images: [ogImage],
   },
 };

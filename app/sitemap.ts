@@ -8,7 +8,6 @@ import {
   isLocalBlogCanonical,
 } from "@/lib/booking/get-sitemap-data";
 import { SEO_SITEMAP_PATHS } from "@/lib/seo/paths";
-import { getPublishedFishingReports } from "@/content/seo/fishing-reports";
 import { getSiteBaseUrl } from "@/config/site";
 
 
@@ -23,8 +22,8 @@ const SITE_CONTENT_EPOCH = new Date("2024-01-01T00:00:00.000Z");
 const staticPaths = [
   "",
   "/experiences",
-  "/experiences/nasty-half-day",
-  "/experiences/nasty-full-day",
+  "/experiences/half-day",
+  "/experiences/full-day",
   "/packages",
   "/location",
   "/boats",
@@ -46,10 +45,7 @@ function staticPriority(path: string): number {
     path === "/experiences" ||
     path === "/boats" ||
     path === "/location" ||
-    path === "/packages" ||
-    path === "/cabo-san-lucas-fishing-charters" ||
-    path === "/cabo-fishing-charter-prices" ||
-    path === "/deep-sea-fishing-cabo"
+    path === "/packages"
   ) {
     return 0.9;
   }
@@ -152,14 +148,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       lastModified: exp.updatedAt ? new Date(exp.updatedAt) : SITE_CONTENT_EPOCH,
       changeFrequency: "weekly",
       priority: 0.8,
-    });
-  }
-
-  for (const report of getPublishedFishingReports()) {
-    addEntry(deduped, `${baseUrl}/fishing-reports/${encodeURIComponent(report.slug)}`, {
-      lastModified: report.date ? new Date(`${report.date}T12:00:00.000Z`) : SITE_CONTENT_EPOCH,
-      changeFrequency: "monthly",
-      priority: 0.7,
     });
   }
 

@@ -17,7 +17,7 @@ const baseUrl = getSiteBaseUrl();
 
 type Props = { params: Promise<{ slug: string }> };
 
-const FIRESTORE_SLUGS = ["pontoon", "watersports", "nasty-half-day", "nasty-full-day", "sunset", "holiday"] as const;
+const FIRESTORE_SLUGS = ["pontoon", "watersports", "half-day", "full-day", "sunset", "holiday"] as const;
 
 async function getAdminManagedExperience(slug: string): Promise<{ active: boolean } | null> {
   const db = getDb();
@@ -70,10 +70,9 @@ export async function generateStaticParams() {
 
 const SLUG_KEYWORDS: Record<string, string[]> = {
   pontoon: ["half day boat rental", "Half Day", "private boat charter"],
-  "nasty-half-day": ["Half Day", "half day boat rental", "5 hour charter"],
-  "lake-austin-pontoon": ["boat rental", "private boat charter"],
+  "half-day": ["Half Day", "half day boat rental", "5 hour charter"],
   watersports: ["full day boat rental", "Full Day", "private boat charter"],
-  "nasty-full-day": ["Full Day", "full day boat rental", "8 hour charter"],
+  "full-day": ["Full Day", "full day boat rental", "8 hour charter"],
   sunset: ["sunset boat rental", "evening charter"],
   holiday: ["specialty charter", "private boat trip"],
 };

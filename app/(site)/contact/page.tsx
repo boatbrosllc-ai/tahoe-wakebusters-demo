@@ -83,7 +83,7 @@ export default function ContactPage() {
             Get in touch
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-lg text-white/90 sm:text-xl">
-            Email or send a message. We&apos;re here to help with Cabo charter bookings and questions.
+            Email or send a message. We&apos;re here to help with bookings and questions.
           </p>
           <p className="mt-3">
             <Link

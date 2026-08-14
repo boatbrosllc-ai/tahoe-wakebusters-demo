@@ -7,19 +7,18 @@ const baseUrl = getSiteBaseUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
-  title: "The Bite | Cabo Fishing Tips & Guides",
+  title: "Blog | Tips & Guides",
   description:
-    `Cabo fishing tips, charter guides, and bite notes from ${brand.companyName} — seasons, species, and trip prep for Cabo San Lucas.`,
+    `Tips, charter guides, and trip notes from ${brand.companyName}.`,
   keywords: [
-    "Cabo fishing blog",
-    "Cabo fishing tips",
-    "Cabo San Lucas fishing guides",
-    "sport fishing Cabo",
+    "boat rental blog",
+    "charter tips",
+    "trip guides",
   ],
   openGraph: {
-    title: `The Bite | Cabo Fishing Tips & Guides | ${brand.companyName}`,
+    title: `Blog | ${brand.companyName}`,
     description:
-      `Cabo fishing tips, charter guides, and bite notes from ${brand.companyName}.`,
+      `Tips, charter guides, and trip notes from ${brand.companyName}.`,
     url: `${baseUrl}/blog`,
     type: "website",
   },

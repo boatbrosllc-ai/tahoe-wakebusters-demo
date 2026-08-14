@@ -15,7 +15,7 @@ export type SeoGuideSection =
   | { type: "ul"; items: string[] }
   | { type: "note"; text: string }
   | { type: "prices" }
-  | { type: "cta"; experienceSlug?: "nasty-half-day" | "nasty-full-day" };
+  | { type: "cta"; experienceSlug?: "half-day" | "full-day" };
 
 type Props = {
   path: string;

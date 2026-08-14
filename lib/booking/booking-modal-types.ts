@@ -41,6 +41,7 @@ export interface BoatOption {
   boatType?: string;
   photos: string[];
   fromPriceCents: number | null;
+  maxGuests: number;
   rates: { id: string; durationHours: number; displayName: string; priceCents: number }[];
 }
 
@@ -52,6 +53,7 @@ export interface SlotDto {
   boatId?: string;
   /** When present, used to dedupe calendar “booked” tallies when one booking fans out per boat. */
   bookingId?: string | null;
+  maxCapacity?: number;
   spotsBooked?: number;
   spotsRemaining?: number;
   /** Ticketed: holds query failed for this date — capacity may be understated; show uncertain styling. */

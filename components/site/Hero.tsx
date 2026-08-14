@@ -106,7 +106,7 @@ export function Hero() {
             transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.1 }}
           >
             <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
-              Private Cabo Fishing Charters
+              Private Boat Rentals
             </h1>
             <motion.p
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
@@ -114,8 +114,7 @@ export function Hero() {
               animate={{ opacity: 1, y: 0 }}
               transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.18 }}
             >
-              Half Day &amp; Full Day sportfishing in Cabo San Lucas — captain, crew, tackle &amp;
-              bait included. Marlin, tuna, dorado &amp; wahoo.
+              Half Day &amp; Full Day captained trips — book online. Captain and crew included.
             </motion.p>
           </motion.div>
 

@@ -20,7 +20,9 @@ import {
   getSlotGridWakeBoard,
   getSlotGrid,
 } from "../experience-slots";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { bookingIntervalMsFromSlotFields, intervalOverlapsRequestWindow } from "../booking-interval";
+import { BUSINESS_TIMEZONE } from "../business-timezone";
 
 describe("parseSlotId", () => {
   it("parses 5-part slot id (hour start, no minute)", () => {
@@ -111,32 +113,30 @@ describe("getSlotsApiRequestWindow", () => {
     );
     const legacyUtcCutoffEnd = new Date(endDate + "T23:59:59.999Z");
     assert.ok(
-      !intervalOverlapsRequestWindow(
-        booked.start.getTime(),
-        booked.end.getTime(),
-        new Date("2025-06-01T12:00:00.000Z"),
-        legacyUtcCutoffEnd,
-      ),
-      "naive UTC end-of-day previously excluded 7pm local on endDate",
+      booked.end.getTime() > legacyUtcCutoffEnd.getTime(),
+      "evening trip on endDate can extend past naive UTC end-of-day",
+    );
+    assert.ok(
+      windowEnd.getTime() > legacyUtcCutoffEnd.getTime(),
+      "business-timezone windowEnd includes full evening departure on endDate",
     );
   });
 });
 
 describe("getSlotStartEnd", () => {
-  it("returns start and end in America/Mazatlan with correct duration", () => {
+  it("returns start and end in business timezone with correct duration", () => {
     const { start, end } = getSlotStartEnd("2025-06-15", 14, 2, 0);
     assert.ok(start instanceof Date);
     assert.ok(end instanceof Date);
     const durationMs = end.getTime() - start.getTime();
     assert.strictEqual(durationMs, 2 * 60 * 60 * 1000);
-    // 14:00 Mazatlan (UTC−7) = 21:00 UTC
-    assert.strictEqual(start.toISOString(), "2025-06-15T21:00:00.000Z");
+    assert.strictEqual(formatInTimeZone(start, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2025-06-15 14:00");
+    assert.strictEqual(formatInTimeZone(end, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2025-06-15 16:00");
   });
 
-  it("produces a stable UTC instant on US spring-forward Sunday (Mazatlan has no DST)", () => {
-    // US DST spring-forward does not shift Mazatlan; 10:00 local remains UTC−7.
+  it("produces a stable local wall time on US spring-forward Sunday", () => {
     const { start } = getSlotStartEnd("2025-03-09", 10, 2, 0);
-    assert.strictEqual(start.toISOString(), "2025-03-09T17:00:00.000Z");
+    assert.strictEqual(formatInTimeZone(start, BUSINESS_TIMEZONE, "yyyy-MM-dd HH:mm"), "2025-03-09 10:00");
   });
 
   it("round-trips with parseSlotId and buildSlotId", () => {
@@ -151,14 +151,14 @@ describe("getSlotStartEnd", () => {
 });
 
 describe("getDateStrInSlotTimezone", () => {
-  it("keeps evening Mazatlan times on the same business date (UTC midnight edge)", () => {
-    const caboEvening = new Date("2026-01-16T04:30:00.000Z"); // 2026-01-15 9:30 PM Mazatlan
-    assert.strictEqual(getDateStrInSlotTimezone(caboEvening), "2026-01-15");
+  it("keeps late-evening business times on the same business date (UTC midnight edge)", () => {
+    const lateEvening = fromZonedTime("2026-01-15T21:30:00", BUSINESS_TIMEZONE);
+    assert.strictEqual(getDateStrInSlotTimezone(lateEvening), "2026-01-15");
   });
 
-  it("returns stable business dates across US DST spring-forward (Mazatlan unchanged)", () => {
-    const beforeUsJump = new Date("2026-03-08T07:59:00.000Z"); // 12:59 AM Mazatlan
-    const afterUsJump = new Date("2026-03-08T08:01:00.000Z"); // 1:01 AM Mazatlan
+  it("returns stable business dates across US DST spring-forward", () => {
+    const beforeUsJump = fromZonedTime("2026-03-08T00:59:00", BUSINESS_TIMEZONE);
+    const afterUsJump = fromZonedTime("2026-03-08T01:01:00", BUSINESS_TIMEZONE);
     assert.strictEqual(getDateStrInSlotTimezone(beforeUsJump), "2026-03-08");
     assert.strictEqual(getDateStrInSlotTimezone(afterUsJump), "2026-03-08");
   });
@@ -253,7 +253,7 @@ describe("isListingBoatCharterStartTimeAllowed (wake grid vs checkout)", () => {
   const sat = "2025-06-14";
   const mon = "2025-06-09";
 
-  it("fixture dates are Saturday / Monday in America/Mazatlan", () => {
+  it("fixture dates are Saturday / Monday in business timezone", () => {
     assert.strictEqual(isSaturdayInSlotTimezone(sat), true);
     assert.strictEqual(isSaturdayInSlotTimezone(mon), false);
   });

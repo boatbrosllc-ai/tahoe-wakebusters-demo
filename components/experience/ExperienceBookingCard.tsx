@@ -25,6 +25,11 @@ import { cn } from "@/lib/utils";
 import { bookingLog, bookingError, bookingDebugLog } from "@/lib/booking/debug";
 import { stripePublishableKey, isStripeCheckoutReady, STRIPE_CHECKOUT_NOT_CONFIGURED_MESSAGE } from "@/lib/booking/stripe-publishable";
 import { TAX_RATE } from "@/lib/booking/constants";
+import {
+  formatDepositBalanceTimingHint,
+  formatRemainingBalanceShort,
+  getDepositPercentLabel,
+} from "@/lib/booking/booking-policy-copy";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -958,8 +963,8 @@ export function ExperienceBookingCard({
           {!isTicketed && !payFullAmount && (
             <p className="text-xs text-brand-muted">
               {remainingCents != null
-                ? `Remaining 50% (${formatMoneyNonNegative(remainingCents)}) charged 48 hours before your trip`
-                : "Remaining balance charged 48 hours before your trip"}
+                ? `Remaining ${getDepositPercentLabel()} (${formatMoneyNonNegative(remainingCents)}) — ${formatDepositBalanceTimingHint()}`
+                : formatRemainingBalanceShort()}
             </p>
           )}
         </div>
@@ -1411,11 +1416,11 @@ export function ExperienceBookingCard({
                   : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
               )}
             >
-              <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
+              <span className="font-semibold text-brand-dark">Pay {getDepositPercentLabel()} deposit</span>
               <span className="block mt-0.5 text-brand-muted font-normal text-xs">
                 {depositCentsFromServer != null
-                  ? `${formatMoneyNonNegative(depositCentsFromServer)} now — remaining balance charged 48 hours before your trip`
-                  : "Loading… — remaining 50% charged 48 hours before your trip"}
+                  ? `${formatMoneyNonNegative(depositCentsFromServer)} now — ${formatDepositBalanceTimingHint()}`
+                  : `Loading… — ${formatDepositBalanceTimingHint()}`}
               </span>
             </button>
             <button

@@ -14,9 +14,9 @@ import { cn, getDisplayImageUrl } from "@/lib/utils";
 import { siteConfig } from "@/config/site";
 
 const PACKAGE_HEROES: Record<BundleId, string> = {
-  nasty: siteConfig.media.welcome,
-  nastier: siteConfig.media.boats,
-  nastiest: siteConfig.media.hero,
+  "half-day": siteConfig.media.welcome,
+  "full-day": siteConfig.media.boats,
+  "all-in": siteConfig.media.hero,
 };
 
 type ListingPayload = {
@@ -34,8 +34,7 @@ function packageHero(bundle: BundlePreset): string {
 }
 
 /**
- * Homepage package ladder: Nasty (Half) → Nastier (Full) → Nastiest (Full all-in).
- * Each card books one real charter; Nasty/Nastier leave add-ons a la carte.
+ * Homepage package ladder: Half Day → Full Day → All-In.
  */
 export function BundleChooser({ initialListings: _initialListings = [] }: { initialListings?: ListingPayload[] }) {
   const { openWithSelection } = useBookingModal();
@@ -85,13 +84,13 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
           {bundlePresets.map((bundle, i) => {
             const hero = packageHero(bundle);
             const tripLabel = bundle.charterOptions[0]?.label ?? bundle.tagline;
-            const isNastiest = bundle.id === "nastiest";
+            const isAllIn = bundle.id === "all-in";
             return (
               <motion.article
                 key={bundle.id}
                 className={cn(
                   "group relative flex flex-col overflow-visible",
-                  isNastiest && "z-20"
+                  isAllIn && "z-20"
                 )}
                 initial={{ opacity: 0, y: 18 }}
                 whileInView={{ opacity: 1, y: 0 }}
@@ -107,7 +106,7 @@ export function BundleChooser({ initialListings: _initialListings = [] }: { init
                       : "border-brand-dark/10 shadow-sm group-hover:border-brand-primary/45 group-hover:shadow-lg group-hover:shadow-brand-dark/10"
                   )}
                 >
-                  {isNastiest && (
+                  {isAllIn && (
                     <div
                       className="pointer-events-none absolute top-0 right-0 z-30 h-40 w-40 sm:h-52 sm:w-52 lg:h-64 lg:w-64 translate-x-[28%] -translate-y-1/2 rotate-[16deg] transition-transform duration-500 ease-out group-hover:scale-110 group-hover:rotate-[22deg]"
                       aria-hidden

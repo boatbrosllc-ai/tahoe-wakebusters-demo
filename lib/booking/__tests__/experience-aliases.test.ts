@@ -1,7 +1,7 @@
 import { brand } from "@/content/brand";
 /**
  * Experience alias / boat-resolution contract tests for ${brand.companyName}.
- * Firestore slugs `pontoon` / `watersports` are intentional legacy IDs for Half/Full Day.
+ * Firestore slugs `pontoon` / `watersports` are template inventory IDs for Half/Full Day.
  */
 
 import { describe, it } from "node:test";
@@ -20,8 +20,8 @@ import {
 } from "../experience-aliases";
 
 describe("EXPERIENCE_ALIAS_FAMILIES", () => {
-  const halfFamily = ["pontoon", "nasty-half-day", "half-day"];
-  const fullFamily = ["watersports", "nasty-full-day", "full-day"];
+  const halfFamily = ["pontoon", "half-day", "nasty-half-day"];
+  const fullFamily = ["watersports", "full-day", "nasty-full-day"];
 
   it("pontoon family: every alias yields same variant set", () => {
     const docId = "exp-pontoon-1";
@@ -50,8 +50,8 @@ describe("EXPERIENCE_ALIAS_FAMILIES", () => {
 
 describe("getSlugLookupCandidates", () => {
   it("orders requested slug first then family", () => {
-    const c = getSlugLookupCandidates("nasty-half-day");
-    assert.strictEqual(c[0], "nasty-half-day");
+    const c = getSlugLookupCandidates("half-day");
+    assert.strictEqual(c[0], "half-day");
     assert.ok(c.includes("pontoon"));
   });
 });
@@ -61,6 +61,7 @@ describe("boatMatchesExperience", () => {
     assert.strictEqual(boatMatchesExperience({ experienceIds: ["exp-1"] }, "exp-1", "pontoon"), true);
   });
   it("matches family alias", () => {
+    assert.strictEqual(boatMatchesExperience({ experienceIds: ["half-day"] }, "exp-1", "pontoon"), true);
     assert.strictEqual(boatMatchesExperience({ experienceIds: ["nasty-half-day"] }, "exp-1", "pontoon"), true);
   });
   it("rejects unrelated", () => {
@@ -74,12 +75,12 @@ describe("boatMatchesExperience", () => {
 
 describe("slug helpers", () => {
   it("isPontoonSlug true for half-day family", () => {
-    for (const slug of ["pontoon", "nasty-half-day", "half-day"]) {
+    for (const slug of ["pontoon", "half-day", "nasty-half-day"]) {
       assert.strictEqual(isPontoonSlug(slug), true);
     }
   });
   it("isWatersportsSlug true for full-day family", () => {
-    for (const slug of ["watersports", "nasty-full-day", "full-day"]) {
+    for (const slug of ["watersports", "full-day", "nasty-full-day"]) {
       assert.strictEqual(isWatersportsSlug(slug), true);
     }
   });
@@ -94,7 +95,7 @@ describe("slug helpers", () => {
 
 describe("allowBoatTypeForSlug", () => {
   it("half/full day: any boat type so packages share inventory", () => {
-    for (const slug of ["pontoon", "nasty-half-day", "watersports", "nasty-full-day"]) {
+    for (const slug of ["pontoon", "half-day", "watersports", "full-day"]) {
       const allow = allowBoatTypeForSlug(slug);
       assert.strictEqual(allow("wake"), true, slug);
       assert.strictEqual(allow("pontoon"), true, slug);
@@ -108,14 +109,15 @@ describe("allowBoatTypeForSlug", () => {
 });
 
 describe("resolveCanonicalExperienceSlug", () => {
-  it("maps half-day family to nasty-half-day", () => {
-    assert.strictEqual(resolveCanonicalExperienceSlug("pontoon"), "nasty-half-day");
-    assert.strictEqual(resolveCanonicalExperienceSlug("half-day"), "nasty-half-day");
-    assert.strictEqual(resolveCanonicalExperienceSlug("nasty-half-day", "pontoon"), "nasty-half-day");
+  it("maps half-day family to half-day", () => {
+    assert.strictEqual(resolveCanonicalExperienceSlug("pontoon"), "half-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("half-day"), "half-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("nasty-half-day", "pontoon"), "half-day");
   });
-  it("maps full-day family to nasty-full-day", () => {
-    assert.strictEqual(resolveCanonicalExperienceSlug("watersports"), "nasty-full-day");
-    assert.strictEqual(resolveCanonicalExperienceSlug("full-day"), "nasty-full-day");
+  it("maps full-day family to full-day", () => {
+    assert.strictEqual(resolveCanonicalExperienceSlug("watersports"), "full-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("full-day"), "full-day");
+    assert.strictEqual(resolveCanonicalExperienceSlug("nasty-full-day"), "full-day");
   });
   it("uses Firestore slug for specialty experiences", () => {
     assert.strictEqual(resolveCanonicalExperienceSlug("sunset", "sunset"), "sunset");
@@ -123,12 +125,12 @@ describe("resolveCanonicalExperienceSlug", () => {
 });
 
 describe("static-slug-map alignment", () => {
-  it("buildStaticToFirestoreSlugMap includes NSF public aliases", () => {
+  it("buildStaticToFirestoreSlugMap includes public aliases", () => {
     const map = buildStaticToFirestoreSlugMap();
-    assert.strictEqual(map["nasty-half-day"], "pontoon");
     assert.strictEqual(map["half-day"], "pontoon");
-    assert.strictEqual(map["nasty-full-day"], "watersports");
+    assert.strictEqual(map["nasty-half-day"], "pontoon");
     assert.strictEqual(map["full-day"], "watersports");
+    assert.strictEqual(map["nasty-full-day"], "watersports");
   });
   it("canonical slugs are first in each family", () => {
     for (const family of EXPERIENCE_ALIAS_FAMILIES) {

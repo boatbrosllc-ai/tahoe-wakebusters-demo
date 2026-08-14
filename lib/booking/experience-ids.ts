@@ -1,19 +1,19 @@
 /**
- * Stable Firestore experience slugs for this operator.
+ * Stable experience slugs for this operator.
  *
- * These IDs originated in the Boat Bros codebase clone. They are intentional
- * implementation details — DO NOT rename Firestore documents. Customers see
- * public titles and URL aliases via `lib/booking/experience-ids.ts` and content.
+ * Firestore document slugs `pontoon` / `watersports` are the template's half-day
+ * and full-day inventory IDs (legacy engine keys). Public URLs are `half-day`
+ * and `full-day`. Do not put a customer brand name in these constants.
  */
 
 /** Firestore `experiences.slug` for Half Day. */
-export const NASTY_HALF_DAY_EXPERIENCE_SLUG = "pontoon" as const;
+export const HALF_DAY_EXPERIENCE_SLUG = "pontoon" as const;
 
 /** Firestore `experiences.slug` for Full Day. */
-export const NASTY_FULL_DAY_EXPERIENCE_SLUG = "watersports" as const;
+export const FULL_DAY_EXPERIENCE_SLUG = "watersports" as const;
 
 /** Public canonical page slug for Half Day. */
-export const NASTY_HALF_DAY_PAGE_SLUG = "nasty-half-day" as const;
+export const HALF_DAY_PAGE_SLUG = "half-day" as const;
 
 /** Public canonical page slug for Full Day. */
-export const NASTY_FULL_DAY_PAGE_SLUG = "nasty-full-day" as const;
+export const FULL_DAY_PAGE_SLUG = "full-day" as const;

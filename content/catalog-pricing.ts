@@ -1,42 +1,39 @@
-import { brand } from "@/content/brand";
 /**
- * ${brand.companyName} — catalog pricing presentation & seed defaults.
+ * Catalog pricing presentation & seed defaults.
  *
  * Charged amounts still flow through Firestore rates → create-hold → computePricing.
- * This file only decides which cents we write onto rate.priceCents when seeding/reconciling,
+ * This file only decides which cents we write onto rate.priceCents when seeding,
  * and what marketing badges to show. It does NOT replace lib/booking/pricing.ts.
  *
- * TAX: live money math remains in lib/booking/constants.ts (TAX_RATE still
- * legacy pending Cabo IVA decision). PROCESSING_FEE_RATE is 0 — published
- * rates absorb payment-processing cost; no customer surcharge at checkout.
+ * Replace these placeholder cents from a Slipstack.io launch packet (or admin)
+ * before a real customer goes live. FOUNDING_ANGLER_RATE_ACTIVE stays off in the template.
  */
 
 export type CharterKind = "half" | "full";
 
 /** When true, seed/reconcile writes founder cents onto rate.priceCents (new holds only). */
-export const FOUNDING_ANGLER_RATE_ACTIVE = true;
+export const FOUNDING_ANGLER_RATE_ACTIVE = false;
 
 /** Customer-facing badge when founding rates are active. Not a coupon code. */
 export const FOUNDING_ANGLER_LABEL = "LAUNCH RATE";
 
-/** Standard advertised rates (USD cents), before tax/fees. */
+/** Placeholder advertised rates (USD cents), before tax/fees. Replace per customer. */
 export const STANDARD_RATE_CENTS: Record<CharterKind, number> = {
-  half: 149_500, // $1,495
-  full: 209_500, // $2,095
+  half: 50_000, // $500
+  full: 80_000, // $800
 };
 
-/** Temporary launch rates (USD cents), before tax/fees. */
+/** Optional launch rates (USD cents). Unused while FOUNDING_ANGLER_RATE_ACTIVE is false. */
 export const FOUNDING_RATE_CENTS: Record<CharterKind, number> = {
-  half: 129_500, // $1,295
-  full: 189_500, // $1,895
+  half: 50_000,
+  full: 80_000,
 };
 
 /**
- * Peak / tournament Full Day override (USD cents).
- * Applied via rate.priceHolidayCents + experience.holidayDates or pricing calendar —
- * not a separate experience/boat.
+ * Peak / holiday Full Day override (USD cents).
+ * Applied via rate.priceHolidayCents + experience.holidayDates or pricing calendar.
  */
-export const PEAK_FULL_DAY_CENTS = 239_500; // $2,395+
+export const PEAK_FULL_DAY_CENTS = 100_000; // $1,000
 
 export function getActiveCatalogRateCents(kind: CharterKind): number {
   return FOUNDING_ANGLER_RATE_ACTIVE ? FOUNDING_RATE_CENTS[kind] : STANDARD_RATE_CENTS[kind];
@@ -50,17 +47,10 @@ export function formatUsdFromCents(cents: number): string {
   }).format(cents / 100);
 }
 
-/** Shared included list for Half Day + Full Day charters. */
+/** Shared included list for Half Day + Full Day charters. Customer should replace via seed/admin. */
 export const CHARTER_INCLUDED: string[] = [
   "Private boat",
-  "Captain and mate",
-  "Premium tackle",
-  "Live bait allowance",
-  "Fishing licenses for up to four anglers",
+  "Captain and crew",
+  "Life jackets",
   "Water",
-  "Soft drinks",
-  "Snacks",
-  "Light breakfast",
-  "Crew photos of the catch",
-  "Local-grounds fuel",
 ];

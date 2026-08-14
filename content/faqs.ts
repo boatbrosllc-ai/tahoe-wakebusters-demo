@@ -1,6 +1,6 @@
 import { brand } from "@/content/brand";
 /**
- * Global FAQs — ${brand.companyName} Cabo charter policy and FAQ content.
+ * Global FAQs — ${brand.companyName} charter policy and FAQ content.
  */
 
 export interface FaqItem {

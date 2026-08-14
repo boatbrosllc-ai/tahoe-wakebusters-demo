@@ -159,7 +159,7 @@ export function OurStoryPageClient() {
             <FadeIn delay={0.05} className="mt-8 space-y-6 text-base sm:text-lg text-brand-muted leading-relaxed">
               <p>
                 We built <strong className="font-semibold text-brand-dark">{brand.companyName}</strong> because
-                too many fishing trips in Cabo feel exactly the same.
+                too many boat days feel like a tourist package instead of a real trip.
               </p>
               <p className="border-l-2 border-brand-secondary/70 pl-5 text-brand-dark/85">
                 Meet at the marina. Get shuffled onto a boat. Troll around for a few hours. Take a picture.
@@ -178,9 +178,7 @@ export function OurStoryPageClient() {
                 Getting you on fish.
               </p>
               <p className="mt-5 text-base sm:text-lg text-brand-muted leading-relaxed">
-                Cabo San Lucas is one of the greatest sportfishing destinations on the planet. Marlin,
-                yellowfin tuna, dorado, wahoo and more move through these waters every year, and when the bite
-                turns on, there are few places like it. We believe the charter should live up to the fishery.
+                We wanted a private boat, a serious crew, and a day built around being on the water — not a canned route.
               </p>
             </FadeIn>
           </div>
@@ -218,16 +216,13 @@ export function OurStoryPageClient() {
 
               <FadeIn delay={0.08} className="lg:col-span-7 space-y-6 text-base sm:text-lg text-white/75 leading-relaxed">
                 <p>
-                  Where are the fish moving? What has been biting? What are the water temperatures doing? Are
-                  we running the Pacific side, the Sea of Cortez, the banks, or pushing farther offshore?
+                  Where should we go today? What are the conditions? How do we give this group the best day on the water?
                 </p>
                 <p>
-                  Our captain and crew build the day around what gives you the best opportunity to catch fish.
-                  Sometimes that means chasing marlin. Sometimes it means finding schools of yellowfin and
-                  turning the deck into absolute chaos.
+                  Our captain and crew build the day around the conditions — not a canned sightseeing route.
                 </p>
                 <p className="pt-2 font-display text-xl sm:text-2xl font-bold text-white tracking-tight">
-                  That is fishing. And that is exactly why we built Nasty.
+                  That is the day on the water. And that is exactly why we built {brand.companyName}.
                 </p>
               </FadeIn>
             </div>
@@ -242,7 +237,7 @@ export function OurStoryPageClient() {
             <FadeIn className="relative aspect-[4/5] max-h-[540px] w-full overflow-hidden rounded-2xl bg-brand-dark ring-1 ring-brand-dark/10 shadow-soft-lg order-1 lg:order-1 mx-auto lg:mx-0">
               <Image
                 src={CATCH_PHOTO}
-                alt="Guest and crew with a yellowfin tuna offshore after a Cabo charter"
+                alt="Guests and crew on the water after a private charter"
                 fill
                 className="object-cover object-[center_22%]"
                 sizes="(max-width: 1024px) 92vw, 44vw"
@@ -260,24 +255,22 @@ export function OurStoryPageClient() {
               <div className="mt-5 sm:mt-6 space-y-5 text-base sm:text-lg text-brand-muted leading-relaxed">
                 <p>
                   {brand.companyName} is built around{" "}
-                  <strong className="font-semibold text-brand-dark">private Cabo charters</strong>. You
+                  <strong className="font-semibold text-brand-dark">private charters</strong>. You
                   aren&apos;t sharing the boat with strangers. You aren&apos;t fighting six other groups for
                   space on the rail.
                 </p>
                 <p className="font-display text-xl sm:text-2xl font-bold text-brand-dark tracking-tight leading-snug">
-                  When you book Nasty, the boat is yours.
+                  When you book {brand.companyName}, the boat is yours.
                   <span className="block mt-1 text-lg sm:text-xl font-semibold text-brand-muted">
                     Your captain. Your crew. Your fishing plan.
                   </span>
                 </p>
                 <p>
-                  Whether you&apos;re an experienced offshore angler looking for a trophy fish or you&apos;re
-                  bringing your family offshore for the first time, we adjust the trip around you without
-                  watering down the experience.
+                  Whether you&apos;re an experienced boater or bringing your family out for the first time, we adjust the trip around you without watering down the experience.
                 </p>
                 <p>
-                  We handle the boat, tackle, bait, ice, safety and strategy.{" "}
-                  <strong className="font-semibold text-brand-dark">You show up ready to fish.</strong>
+                  We handle the boat, safety, and the plan.{" "}
+                  <strong className="font-semibold text-brand-dark">You show up ready to go.</strong>
                 </p>
               </div>
             </FadeIn>
@@ -304,11 +297,10 @@ export function OurStoryPageClient() {
                   day offshore.
                 </p>
                 <p className="mt-5 text-base sm:text-lg text-brand-muted leading-relaxed">
-                  Nasty is being built as a{" "}
-                  <strong className="font-semibold text-brand-dark">complete sportfishing experience</strong>,
-                  not simply a boat rental. From the moment you book to the moment your fish is packed and
-                  your photos are on your phone, we want the entire experience to feel simple, premium and
-                  handled.
+                  {brand.companyName} is being built as a{" "}
+                  <strong className="font-semibold text-brand-dark">complete day on the water</strong>,
+                  not simply a boat rental. From the moment you book to the moment you&apos;re back at the dock,
+                  we want the entire experience to feel simple, premium and handled.
                 </p>
               </FadeIn>
 
@@ -350,7 +342,7 @@ export function OurStoryPageClient() {
           >
             <Image
               src={CREW_PHOTO}
-              alt={`${brand.companyName} angler with twin yellowfin tuna on deck in Cabo`}
+              alt={`${brand.companyName} guests on the water`}
               fill
               className="object-cover object-[center_20%]"
               sizes="(max-width: 1024px) 100vw, 50vw"
@@ -374,7 +366,7 @@ export function OurStoryPageClient() {
                   {/* eslint-disable-next-line @next/next/no-img-element -- must stay truly inline with surrounding text */}
                   <img
                     src={brand.logoNavbarPath}
-                    alt="Nasty"
+                    alt={brand.companyName}
                     width={200}
                     height={90}
                     className="inline h-[1.35em] w-auto align-baseline object-contain object-left ml-[0.08em] mr-[0.12em] relative top-[0.1em]"
@@ -399,7 +391,7 @@ export function OurStoryPageClient() {
               </ul>
 
               <p className="mt-7 text-base sm:text-lg text-white/70 leading-relaxed">
-                Those are the moments people fly to Cabo for. Those are the moments we built{" "}
+                Those are the moments people come out here for. Those are the moments we built{" "}
                 {brand.companyName} around.
               </p>
 
@@ -422,7 +414,7 @@ export function OurStoryPageClient() {
               id="close-heading"
               className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-brand-dark tracking-tight"
             >
-              Come to Cabo to fish.
+              Come ready for the water.
             </h2>
             <p className="mt-5 text-base sm:text-lg text-brand-muted leading-relaxed">
               Not to take a boat ride. Not to get pushed through another tourist package. Come ready to chase
@@ -433,7 +425,7 @@ export function OurStoryPageClient() {
                 This is {brand.companyName}.
               </p>
               <p className="mt-2 text-base sm:text-lg font-semibold text-brand-muted">
-                Private Cabo charters. Serious fishing. No bullshit.
+                Private charters. A real day on the water.
               </p>
             </div>
             <div className="mt-8 flex justify-center">

@@ -35,7 +35,7 @@ export function CharterPriceCards({ compact = false }: { compact?: boolean }) {
             <p className="mt-1 text-sm text-brand-muted">Before tax · private charter</p>
           )}
           <Link
-            href="/experiences/nasty-half-day"
+            href="/experiences/half-day"
             className="mt-4 inline-block text-sm font-semibold text-brand-primary hover:underline"
           >
             Half Day details
@@ -56,7 +56,7 @@ export function CharterPriceCards({ compact = false }: { compact?: boolean }) {
             Peak / holiday windows from {formatUsdFromCents(PEAK_FULL_DAY_CENTS)} when configured
           </p>
           <Link
-            href="/experiences/nasty-full-day"
+            href="/experiences/full-day"
             className="mt-4 inline-block text-sm font-semibold text-brand-primary hover:underline"
           >
             Full Day details

@@ -227,7 +227,7 @@ export default async function LocationPage() {
               Service areas
             </h2>
             <p className="mt-2 text-brand-muted">
-              Cabo San Lucas and Los Cabos — we fish the Pacific and Sea of Cortez grounds off Cabo.
+              We run the local waterways listed below. The captain sets the plan for the day based on conditions.
             </p>
             <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2 text-brand-dark">
               {location.areaServed.map((area) => (
@@ -240,7 +240,7 @@ export default async function LocationPage() {
             <p className="mt-6 text-brand-dark/90">
               See our{" "}
               <Link href="/experiences" className="text-brand-primary font-medium hover:underline">
-                Cabo fishing charters
+                charters
               </Link>
               ,{" "}
               <Link href={OUR_BOAT_PATH} className="text-brand-primary font-medium hover:underline">

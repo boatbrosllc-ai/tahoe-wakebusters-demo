@@ -22,6 +22,21 @@ import { loadConfetti } from "@/lib/client/load-confetti";
 import { TAX_RATE, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
+import {
+  formatDepositBalanceTimingHint,
+  formatRemainingBalanceShort,
+  getDepositPercentLabel,
+  getFuelPolicyCopy,
+  getGratuityPolicyCopy,
+} from "@/lib/booking/booking-policy-copy";
+import {
+  getAlcoholPolicyText,
+  getMinAgePolicy,
+  getRefundPolicyText,
+  getSafetyPolicyText,
+  getWeatherPolicyText,
+  shouldForceFullPaymentAtCheckout,
+} from "@/lib/booking/customer-operations";
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
@@ -235,6 +250,25 @@ export function InlineBookingDetailsStep({
     };
   }, []);
 
+  const depositPercentLabel = getDepositPercentLabel();
+  const gratuityNotes = getGratuityPolicyCopy();
+  const fuelNotes = getFuelPolicyCopy();
+  const policySections = useMemo(() => {
+    const rows: { title: string; text: string }[] = [];
+    const weather = getWeatherPolicyText();
+    const safety = getSafetyPolicyText();
+    const alcohol = getAlcoholPolicyText() || siteConfig.booking.alcoholPolicyText?.trim() || null;
+    const refund = getRefundPolicyText();
+    const minAge = getMinAgePolicy();
+    if (weather) rows.push({ title: "Weather policy", text: weather });
+    if (safety) rows.push({ title: "Safety policy", text: safety });
+    if (alcohol) rows.push({ title: "Alcohol policy", text: alcohol });
+    if (refund) rows.push({ title: "Refund policy", text: refund });
+    if (minAge) rows.push({ title: "Minimum age", text: `All guests must be at least ${minAge} years old.` });
+    if (fuelNotes) rows.push({ title: "Fuel", text: fuelNotes });
+    return rows;
+  }, [fuelNotes]);
+  const depositCheckoutAllowed = allowDeposit === true && !shouldForceFullPaymentAtCheckout();
   const [depositLeadTimeHoursFromHold, setDepositLeadTimeHoursFromHold] = useState<number | null>(null);
   const [depositLeadTimeTick, setDepositLeadTimeTick] = useState(0);
   useEffect(() => {
@@ -1021,7 +1055,7 @@ export function InlineBookingDetailsStep({
                     <span className="h-6 w-16 animate-pulse rounded bg-brand-dark/10" aria-hidden />
                   )}
                 </div>
-                <p className="text-xs text-brand-muted">Remaining 50% charged 48h before trip</p>
+                <p className="text-xs text-brand-muted">{formatRemainingBalanceShort()}</p>
               </>
             ) : (
               <div className="flex justify-between">
@@ -1213,7 +1247,7 @@ export function InlineBookingDetailsStep({
         )}
 
         {/* Payment amount — deposit only when experience explicitly enables it */}
-        {bookingMode !== "shared" && allowDeposit === true && !isDepositWithinLeadTime ? (
+        {bookingMode !== "shared" && depositCheckoutAllowed && !isDepositWithinLeadTime ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="flex flex-col gap-2">
@@ -1225,9 +1259,9 @@ export function InlineBookingDetailsStep({
                   !payFullAmount ? "border-brand-primary bg-brand-primary/10" : "border-brand-dark/15 bg-white"
                 )}
               >
-                <span className="font-semibold">Pay 50% deposit</span>
+                <span className="font-semibold">Pay {depositPercentLabel}% deposit</span>
                 <span className="block text-xs text-brand-muted">
-                  {depositCentsFromServer != null ? `${formatMoneyNonNegative(depositCentsFromServer)} now` : "Loading…"} · remaining balance charged 48h before your trip
+                  {depositCentsFromServer != null ? `${formatMoneyNonNegative(depositCentsFromServer)} now` : "Loading…"} · {formatDepositBalanceTimingHint()}
                 </span>
               </button>
               <button
@@ -1243,7 +1277,7 @@ export function InlineBookingDetailsStep({
               </button>
             </div>
           </div>
-        ) : bookingMode === "shared" || (allowDeposit === true && isDepositWithinLeadTime) ? (
+        ) : bookingMode === "shared" || (depositCheckoutAllowed && isDepositWithinLeadTime) ? (
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">Payment amount</p>
             <div className="rounded-xl border-2 border-brand-primary bg-brand-primary/10 py-3 px-3 text-sm">
@@ -1341,6 +1375,18 @@ export function InlineBookingDetailsStep({
             className="w-full rounded-lg border border-brand-dark/10 px-3 py-2.5 text-base mt-2 resize-none touch-manipulation"
           />
         </div>
+
+        {/* Trip policies from launch packet / site config */}
+        {policySections.length > 0 ? (
+          <div className="rounded-xl border border-brand-dark/10 bg-white p-3 space-y-2">
+            {policySections.map((section) => (
+              <div key={section.title}>
+                <p className="text-xs font-semibold text-brand-dark mb-0.5">{section.title}</p>
+                <p className="text-[11px] text-brand-muted leading-relaxed">{section.text}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {/* Cancellation */}
         <div className="rounded-xl border-2 border-amber-200/60 bg-amber-50/50 p-3">
@@ -1465,9 +1511,7 @@ export function InlineBookingDetailsStep({
       >
         <div>
           <h3 className="text-lg font-bold text-brand-dark mb-2">Captain gratuity</h3>
-          <p className="text-sm text-brand-dark leading-relaxed mb-2">
-            To ensure exceptional service, a 20% gratuity is required for all private charters. Gratuity is paid directly to your captain at the end of the trip via Venmo, Zelle, Cash App, or cash.
-          </p>
+          <p className="text-sm text-brand-dark leading-relaxed mb-2">{gratuityNotes}</p>
           <p className="text-xs text-brand-muted leading-relaxed mb-4">
             If any part of your experience does not meet expectations, contact us immediately and we&apos;ll take care of it.
           </p>

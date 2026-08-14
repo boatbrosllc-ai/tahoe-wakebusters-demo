@@ -7,7 +7,7 @@ import { analytics } from "@/lib/analytics";
 type Props = {
   page: string;
   source?: string;
-  experienceSlug?: "nasty-half-day" | "nasty-full-day" | "pontoon" | "watersports";
+  experienceSlug?: "half-day" | "full-day" | "pontoon" | "watersports";
   className?: string;
   showSecondaryLink?: boolean;
 };
@@ -15,8 +15,8 @@ type Props = {
 /** Map public SEO/canonical slugs to Firestore experience slugs for modal preselect. */
 function toFirestoreSlug(slug: Props["experienceSlug"]): string | undefined {
   if (!slug) return undefined;
-  if (slug === "nasty-half-day" || slug === "pontoon") return "pontoon";
-  if (slug === "nasty-full-day" || slug === "watersports") return "watersports";
+  if (slug === "half-day" || slug === "pontoon") return "pontoon";
+  if (slug === "full-day" || slug === "watersports") return "watersports";
   return slug;
 }
 

@@ -149,7 +149,7 @@ export function Testimonials() {
         </div>
 
         <p className="mt-6 text-center text-sm text-white/50">
-          Real reviews from Cabo fishing guests
+          Real reviews from guests
         </p>
       </div>
     </section>

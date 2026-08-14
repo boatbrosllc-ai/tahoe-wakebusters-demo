@@ -9,9 +9,8 @@ import { siteConfig } from "@/config/site";
  * Addons: upsert by catalogKey (or name fallback).
  */
 
-import type { CollectionReference, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type { Experience, ExperienceAddon, ExperienceRate } from "@/lib/booking/types";
 import { getDb } from "@/lib/booking/firebase-admin";
-import type { Experience, ExperienceRate, ExperienceAddon } from "@/lib/booking/types";
 import {
   CHARTER_INCLUDED,
   FOUNDING_ANGLER_RATE_ACTIVE,
@@ -23,20 +22,12 @@ import {
 import { NSF_EXTENSION_HOUR_CENTS } from "@/content/charter-windows";
 import { CHARTER_UPSELLS } from "@/content/upsells";
 
-const CANCELLATION_POLICY = {
-  freeCancelDays: 30,
-  partialRefundDaysStart: 15,
-  partialRefundDaysEnd: 30,
-  noRefundWithinDays: 14,
-  fullText:
-    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days.",
-};
+import { DEFAULT_EXPERIENCE_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+import { reconcileAddons, reconcileRates, type AddonSeed, type RateSeed } from "@/lib/booking/seed-reconcile";
 
+const CANCELLATION_POLICY = DEFAULT_EXPERIENCE_CANCELLATION_POLICY;
 const WHAT_TO_BRING = ["Sunscreen", "Sunglasses", "Hat", "Soft-soled shoes", "Valid ID"];
-const RULES = ["Follow captain instructions", "No glass on deck", "Release billfish when required"];
-
-type RateSeed = Omit<ExperienceRate, "active"> & { active: boolean };
-type AddonSeed = Omit<ExperienceAddon, "active"> & { active: boolean; catalogKey: string };
+const RULES = ["Follow captain instructions", "No glass on deck"];
 
 /** Current bookable / catalog upsells from content/upsells.ts */
 const ACTIVE_UPSELL_ADDONS: AddonSeed[] = CHARTER_UPSELLS.map((u) => ({
@@ -52,82 +43,8 @@ const ACTIVE_UPSELL_ADDONS: AddonSeed[] = CHARTER_UPSELLS.map((u) => ({
   ...(u.highlight ? { highlight: true as const } : {}),
 }));
 
-/** Legacy keys kept in Firestore (reconcile updates) but deactivated. */
-const LEGACY_ADDONS: AddonSeed[] = [
-  {
-    catalogKey: "extra-fishing-hour",
-    name: "Extra Fishing Hour",
-    description: "Superseded by Full Day +1/+2/+3 hour extensions.",
-    priceCents: 300_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "offshore-run",
-    name: "Offshore Run Upgrade",
-    description: "Ask when booking if you want additional fuel range for longer runs.",
-    priceCents: 450_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "celebration-package",
-    name: "Celebration Package",
-    description: "Legacy celebration add-on — no longer offered.",
-    priceCents: 225_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "cook-your-catch",
-    name: "Cook Your Catch",
-    description: "Legacy partner cook-your-catch — no longer offered at checkout.",
-    priceCents: 125_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-    partnerFulfilled: true,
-  },
-  {
-    catalogKey: "fish-processing-delivery",
-    name: "Fish Processing & Delivery",
-    description: "Replaced by Nasty In-House Fish Processing + Resort Fish Delivery.",
-    priceCents: 135_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "framed-catch-print",
-    name: "Framed Catch Print",
-    description: "Replaced by Trophy Replica Concierge.",
-    priceCents: 149_00,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "extra-ice",
-    name: "Extra ice",
-    description: "Additional ice for the cooler",
-    priceCents: 1000,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-  {
-    catalogKey: "fish-cleaning",
-    name: "Fish cleaning",
-    description: "Prefer Nasty In-House Fish Processing for full service.",
-    priceCents: 2500,
-    type: "toggle",
-    active: false,
-    hiddenFromBookingUI: true,
-  },
-];
+/** Legacy keys kept in Firestore (reconcile updates) but deactivated. Template has none. */
+const LEGACY_ADDONS: AddonSeed[] = [];
 
 const CATALOG_ADDONS: AddonSeed[] = [...ACTIVE_UPSELL_ADDONS, ...LEGACY_ADDONS];
 
@@ -210,11 +127,11 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [
       { q: "Is a captain included?", a: "Yes. Every charter includes a licensed captain and mate." },
-      { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. We provide tackle, bait, snacks, and drinks listed in what's included." },
+      { q: "What should we bring?", a: "Sunscreen, sunglasses, hat, soft-soled shoes. Specific inclusions are listed when you book." },
     ],
     seasonal: { enabled: false },
     active: true,
-    timezone: "America/Mazatlan",
+    timezone: brand.timezone,
     pricingType: "charter",
     allowDeposit: true,
     featured: false,
@@ -249,11 +166,11 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     rules: RULES,
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [
-      { q: "How far offshore do we go?", a: "Depends on the bite and conditions. Full-day trips give us range to work multiple grounds." },
+      { q: "How long is the trip?", a: "Full-day trips run the duration listed on the package. We'll confirm dock details after you book." },
     ],
     seasonal: { enabled: false },
     active: true,
-    timezone: "America/Mazatlan",
+    timezone: brand.timezone,
     pricingType: "charter",
     allowDeposit: true,
     featured: true,
@@ -263,38 +180,32 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     metaDescription: `Book ${siteConfig.catalog.fullDay.title} — private captained charter. ${brand.companyName}.`,
     tagline: FOUNDING_ANGLER_RATE_ACTIVE ? FOUNDING_ANGLER_LABEL : "MOST POPULAR",
     stats: ["MOST POPULAR"],
-    // Peak/tournament windows: set date ranges in admin (holidayDates) or pricing calendar.
-    // priceHolidayCents on the 8h rate = $2,395 when those dates apply.
+    // Peak windows: set date ranges in admin (holidayDates) or pricing calendar.
     holidayDates: [],
     _rates: fullDayRates(),
   },
   {
     slug: "sunset",
-    title: "Sunset Bite",
-    subtitle: "Evening charter — golden hour, rods out, Cabo skyline.",
+    title: "Sunset",
+    subtitle: "Evening charter — specialty listing (inactive by default).",
     descriptionLong:
-      "Shorter evening trip timed around sunset. Available as a specialty charter — primary packages are Half Day and Full Day.",
-    heroMedia: { type: "image", url: "/photos/stock/cabo/el-arco-sunset-jarvis.jpg" },
-    gallery: [
-      "/photos/stock/cabo/el-arco-sunset-jarvis.jpg",
-      "/photos/stock/charter/fishing-boat-sunset.jpg",
-      "/photos/nsf/rods-wake-sunset.png",
-      "/photos/nsf/reel-sunset.png",
-    ],
+      "Shorter evening trip timed around sunset. Inactive in the template — activate in admin if this customer offers it.",
+    heroMedia: { type: "image", url: siteConfig.media.hero },
+    gallery: [siteConfig.media.hero, siteConfig.media.galleryFallback],
     location: {
-      title: "Marina Cabo San Lucas",
-      addressText: "We'll send exact slip / meet-up after booking.",
+      title: "Marina / dock",
+      addressText: siteConfig.contact.marinaMeetNote,
     },
     maxGuests: 6,
     petsMax: 0,
-    included: CHARTER_INCLUDED.slice(0, 6),
+    included: CHARTER_INCLUDED,
     whatToBring: ["Light layer", "Camera", "Valid ID"],
     rules: RULES,
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [],
     seasonal: { enabled: false },
     active: false,
-    timezone: "America/Mazatlan",
+    timezone: brand.timezone,
     pricingType: "charter",
     sortOrder: 90,
     _rates: [
@@ -303,20 +214,15 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
   },
   {
     slug: "holiday",
-    title: "Billfish Special",
-    subtitle: "Marlin and sailfish days when Cabo is on fire.",
+    title: "Holiday Special",
+    subtitle: "Seasonal specialty listing (inactive by default).",
     descriptionLong:
-      "Targeted billfish charter. Primary bookable products are Half Day and Full Day; ask us about billfish-focused days.",
-    heroMedia: { type: "image", url: "/photos/nsf/sailfish-baitball.png" },
-    gallery: [
-      "/photos/nsf/sailfish-baitball.png",
-      "/photos/stock/species/tuna-underwater-bacanek.jpg",
-      "/photos/nsf/yellowfin-marina-catch.png",
-      "/photos/stock/cabo/aerial-lands-end-clark.jpg",
-    ],
+      "Seasonal specialty charter. Inactive in the template — activate in admin if this customer offers it.",
+    heroMedia: { type: "image", url: siteConfig.media.boats },
+    gallery: [siteConfig.media.boats, siteConfig.media.galleryFallback],
     location: {
-      title: "Marina Cabo San Lucas",
-      addressText: "We'll send exact slip / meet-up after booking.",
+      title: "Marina / dock",
+      addressText: siteConfig.contact.marinaMeetNote,
     },
     maxGuests: 6,
     petsMax: 0,
@@ -325,15 +231,15 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     rules: RULES,
     cancellationPolicy: CANCELLATION_POLICY,
     faqs: [],
-    seasonal: { enabled: true, startMonth: 5, endMonth: 11 },
+    seasonal: { enabled: false },
     active: false,
-    timezone: "America/Mazatlan",
+    timezone: brand.timezone,
     pricingType: "charter",
     sortOrder: 91,
     _rates: [
       {
         durationHours: 8,
-        displayName: "Billfish Day (8 Hours)",
+        displayName: "Holiday Day (8 Hours)",
         priceCents: getActiveCatalogRateCents("full"),
         priceHolidayCents: PEAK_FULL_DAY_CENTS,
         active: true,
@@ -341,68 +247,6 @@ const EXPERIENCES: (Omit<Experience, "id"> & { _rates: RateSeed[] })[] = [
     ],
   },
 ];
-
-async function reconcileRates(
-  ratesRef: CollectionReference,
-  desired: RateSeed[]
-): Promise<void> {
-  const existing = await ratesRef.get();
-  const byHours = new Map<number, QueryDocumentSnapshot>();
-  for (const doc of existing.docs) {
-    const hours = (doc.data() as ExperienceRate).durationHours;
-    if (typeof hours === "number" && !byHours.has(hours)) byHours.set(hours, doc);
-  }
-
-  const desiredHours = new Set(desired.map((r) => r.durationHours));
-
-  for (const rate of desired) {
-    const hit = byHours.get(rate.durationHours);
-    if (hit) {
-      await hit.ref.update({
-        displayName: rate.displayName,
-        priceCents: rate.priceCents,
-        active: rate.active,
-        ...(rate.priceHolidayCents != null ? { priceHolidayCents: rate.priceHolidayCents } : {}),
-        ...(rate.priceWeekendCents != null ? { priceWeekendCents: rate.priceWeekendCents } : {}),
-        ...(rate.priceFriSunCents != null ? { priceFriSunCents: rate.priceFriSunCents } : {}),
-      });
-    } else {
-      await ratesRef.doc().set(rate);
-    }
-  }
-
-  // Deactivate any leftover duration tiers not in the desired set (do not delete).
-  for (const [hours, doc] of Array.from(byHours.entries())) {
-    if (!desiredHours.has(hours)) {
-      await doc.ref.update({ active: false });
-    }
-  }
-}
-
-async function reconcileAddons(
-  addonsRef: CollectionReference,
-  desired: AddonSeed[]
-): Promise<void> {
-  const existing = await addonsRef.get();
-  const byKey = new Map<string, QueryDocumentSnapshot>();
-  for (const doc of existing.docs) {
-    const data = doc.data() as ExperienceAddon & { catalogKey?: string };
-    const key = (data.catalogKey ?? data.name ?? "").toLowerCase().trim();
-    if (key && !byKey.has(key)) byKey.set(key, doc);
-  }
-
-  for (const addon of desired) {
-    const key = addon.catalogKey.toLowerCase();
-    const nameKey = addon.name.toLowerCase();
-    const hit = byKey.get(key) ?? byKey.get(nameKey);
-    const payload = { ...addon, active: addon.active };
-    if (hit) {
-      await hit.ref.update(payload);
-    } else {
-      await addonsRef.doc().set(payload);
-    }
-  }
-}
 
 export async function runSeedExperiences(): Promise<
   { ok: true; experienceIds: string[] } | { ok: false; error: string }

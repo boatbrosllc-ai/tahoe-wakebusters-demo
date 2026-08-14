@@ -1,33 +1,33 @@
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
+import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 /**
- * Launch fleet — single placeholder boat for platform-dev.
+ * Launch fleet — single placeholder boat for the master template.
  * Seeded into Firestore via POST /api/admin/seed.
  *
- * Keep `slug` and `previousSlugs` stable so re-seed updates the existing boat doc.
+ * Replace name/slug/photos from a launch packet. Keep `slug` stable after go-live
+ * so re-seed updates the existing boat doc.
  */
 
 export const LAUNCH_BOAT = {
-  name: "40 Express",
-  slug: "cabo-40-express",
-  /** Previous seed name/slug so re-seed upgrades the existing doc when present. */
-  previousNames: ["Nasty Sportfisher", "Cabo 40 Express"] as const,
-  previousSlugs: ["nasty-sportfisher"] as const,
-  year: 2010,
-  model: "40 Express",
-  make: "Express",
+  name: "Charter Boat",
+  slug: "charter-boat",
+  previousNames: [] as const,
+  previousSlugs: [] as const,
+  year: 2020,
+  model: "Charter",
+  make: "Custom",
   heroSubtitle: "Captain & crew included",
   capacity: 6,
   timezone: brand.timezone,
   capacityMax: 6,
   petsMax: 0,
   defaultLocationText: siteConfig.contact.marinaMeetNote,
-  cancellationPolicyText:
-    "Free cancellation up to 30 days before. Partial refund 15–30 days before. No refund within 14 days.",
+  cancellationPolicyText: DEFAULT_CANCELLATION_POLICY,
   photos: [siteConfig.media.listingFallback] as string[],
   description: [
-    `The 40 Express is ${brand.companyName}'s flagship private charter boat — captain and crew included on every trip.`,
-    "Every charter includes a licensed captain and mate. Book Half Day or Full Day and we'll put you on the water.",
+    `The charter boat is ${brand.companyName}'s primary vessel — captain and crew included on every trip.`,
+    "Book Half Day or Full Day and we'll confirm dock details after you reserve.",
   ].join("\n\n"),
 } as const;
 

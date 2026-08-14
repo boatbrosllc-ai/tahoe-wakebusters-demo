@@ -14,7 +14,7 @@ import {
 } from "@/lib/booking/complete-after-payment-client";
 import { SESSION_HOLD_ID_KEY, type ModalHoldRecoveryPayloadV1 } from "@/components/site/useHoldCreation";
 import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analytics-client";
-import { DEPOSIT_FRACTION } from "@/lib/booking/constants";
+import { formatAutoChargeBalanceSentence, getDepositPercentNumber } from "@/lib/booking/booking-policy-copy";
 
 function receiptClaimForCompleteAfterPayment(receiptTokenFromUrl: string | null): string | null {
   const u = receiptTokenFromUrl?.trim();
@@ -580,15 +580,15 @@ function BookingSuccessContent() {
             <p className="text-sm text-brand-muted mb-4">
               {data.paymentSummary.depositPaidLabel ? (
                 <>
-                  You paid a <strong>deposit</strong> today. The remaining balance will be charged automatically 48 hours before your trip. Check your card statement or confirmation email for the exact amount.
+                  You paid a <strong>deposit</strong> today. {formatAutoChargeBalanceSentence()} Check your card statement or confirmation email for the exact amount.
                 </>
               ) : data.paymentSummary.depositAmountIsEstimate ? (
                 <>
-                  You paid a <strong>deposit</strong> today (about half of your trip total — exact amount may differ; check your card statement or confirmation email). The remaining balance will be charged automatically 48 hours before your trip.
+                  You paid a <strong>deposit</strong> today (about half of your trip total — exact amount may differ; check your card statement or confirmation email). {formatAutoChargeBalanceSentence()}
                 </>
               ) : (
                 <>
-                  You paid a <strong>{Math.round(DEPOSIT_FRACTION * 100)}% deposit</strong> today. The remaining balance will be charged automatically 48 hours before your trip.
+                  You paid a <strong>{getDepositPercentNumber()}% deposit</strong> today. {formatAutoChargeBalanceSentence()}
                 </>
               )}
             </p>

@@ -1,30 +1,7 @@
 const path = require('path');
-const fs = require('fs');
-
-function readEnvLocal(name) {
-  if (process.env[name]?.trim()) return process.env[name].trim();
-  try {
-    const raw = fs.readFileSync(path.join(__dirname, '.env.local'), 'utf8');
-    const match = raw.match(new RegExp(`^${name}=(.*)$`, 'm'));
-    return match ? match[1].trim().replace(/^["']|["']$/g, '') : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Dev/build-time customer site. Domain-based routing is not implemented yet. */
-const slipstackSiteId =
-  readEnvLocal('NEXT_PUBLIC_SLIPSTACK_SITE_ID') ||
-  readEnvLocal('SLIPSTACK_SITE_ID') ||
-  readEnvLocal('SITE_ID') ||
-  'platform-dev';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  env: {
-    SLIPSTACK_SITE_ID: slipstackSiteId,
-    NEXT_PUBLIC_SLIPSTACK_SITE_ID: slipstackSiteId,
-  },
   /** Dev-only: StrictMode double-mount + HMR can trigger Suspense/webpack "moduleId is not a function". Keep strict in prod builds. */
   /** Avoid `app/(site)/loading.tsx` at the segment root — nested Suspense + streaming + HMR commonly throws `updateDehydratedSuspenseComponent` / `__webpack_modules__[moduleId] is not a function` in dev. Use route-level loading.tsx only where needed. */
   reactStrictMode: process.env.NODE_ENV !== 'development',
@@ -54,7 +31,7 @@ const nextConfig = {
   rewrites: async () => [
     {
       source: "/favicon.ico",
-      destination: slipstackSiteId === "abc-boats" ? "/sites/abc-boats/logo.svg" : "/brand/logo.svg",
+      destination: "/brand/logo.svg",
     },
   ],
   images: {
@@ -65,16 +42,9 @@ const nextConfig = {
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },
       { protocol: 'https', hostname: 'storage.googleapis.com' },
-      // Legacy / prior-customer Firebase hosts may still serve historical uploaded media.
       // Add the current customer's FIREBASE_STORAGE_BUCKET host when onboarding.
-      { protocol: 'https', hostname: 'boat-bros-app.appspot.com' },
-      { protocol: 'https', hostname: 'boat-bros-app.firebasestorage.app' },
-      { protocol: 'https', hostname: 'nasty-sport-fishing.appspot.com' },
-      { protocol: 'https', hostname: 'nasty-sport-fishing.firebasestorage.app' },
       { protocol: 'https', hostname: 'slipstack-platform-dev.appspot.com' },
       { protocol: 'https', hostname: 'slipstack-platform-dev.firebasestorage.app' },
-      { protocol: 'https', hostname: 'nastysportfishing.com' },
-      { protocol: 'https', hostname: 'www.nastysportfishing.com' },
     ],
   },
   // Don't bundle firebase-admin; use Node require at runtime (server-only)

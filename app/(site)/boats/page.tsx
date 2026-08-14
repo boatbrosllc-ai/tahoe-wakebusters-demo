@@ -34,7 +34,7 @@ export const metadata: Metadata = {
 
 function shortDescription(description: string | undefined): string {
   if (!description || !description.trim()) {
-    return `${brand.companyName}'s Cabo charter boat. Captain & crew included.`;
+    return `${brand.companyName}'s charter boat. Captain & crew included.`;
   }
   const first = description.trim().split(/\n\n+/)[0];
   return first.length > 220 ? first.slice(0, 217) + "..." : first;
@@ -121,7 +121,7 @@ export default async function BoatsHubPage() {
         <div className="container-narrow mx-auto px-5 sm:px-6 lg:px-8 text-center">
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-brand-dark tracking-tight">See you on the water</h2>
           <p className="mt-4 text-brand-muted text-base max-w-md mx-auto">
-            Every Cabo charter includes a licensed captain and crew. Book online or reach out—we&apos;re here to help.
+            Every charter includes a licensed captain and crew. Book online or reach out—we&apos;re here to help.
           </p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link

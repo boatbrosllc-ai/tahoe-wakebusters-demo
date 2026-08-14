@@ -2,7 +2,7 @@
 
 import { Suspense } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import { getSiteHeader } from "@/lib/site/chrome";
+import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { PlatformDevBanner } from "@/components/site/PlatformDevBanner";
 import { MobileStickyBar } from "@/components/site/MobileStickyBar";
@@ -10,8 +10,6 @@ import { NavProgress } from "@/components/site/NavProgress";
 import { BookingModalProvider } from "@/components/site/BookingModalContext";
 import { BookingPreload } from "@/components/site/BookingPreload";
 import { cn } from "@/lib/utils";
-
-const Header = getSiteHeader();
 
 function SiteChromeInner({
   children,

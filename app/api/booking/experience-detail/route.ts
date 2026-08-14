@@ -29,6 +29,7 @@ export interface ExperienceDetailBoat {
   description?: string;
   photos: string[];
   fromPriceCents: number | null;
+  maxGuests: number;
 }
 
 export interface ExperienceDetailRate {
@@ -182,6 +183,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((doc) => {
         const boat = doc.data() as ListingBoat;
+        const maxGuests = getMaxGuestsForExperience(
+          {
+            slug: expData?.slug,
+            title: expData?.title ?? expData?.name,
+            maxGuests: expData?.maxGuests,
+            pricingType: pricingType ?? "charter",
+            maxCapacity: expData?.maxCapacity,
+          },
+          boat.capacity,
+        );
         return {
           id: doc.id,
           name: boat.name,
@@ -190,8 +201,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           description: boat.description,
           photos: boat.photos ?? [],
           fromPriceCents,
+          maxGuests,
         };
       });
+
+    const experienceMaxGuests =
+      boats.length > 0
+        ? Math.max(...boats.map((b) => b.maxGuests))
+        : getMaxGuestsForExperience({
+            slug: expData?.slug,
+            title: expData?.title ?? expData?.name,
+            maxGuests: expData?.maxGuests,
+            pricingType: pricingType ?? "charter",
+            maxCapacity: expData?.maxCapacity,
+          });
 
     // --- Add-ons (exclude tip type — shown separately as Tip now / Tip later buttons) ---
     const addons: ExperienceDetailAddon[] = addonsSnap.docs
@@ -225,13 +248,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       rates,
       addons,
       ...(pricingType && { pricingType }),
-      maxGuests: getMaxGuestsForExperience({
-        slug: expData?.slug,
-        title: expData?.title ?? expData?.name,
-        maxGuests: expData?.maxGuests,
-        pricingType: pricingType ?? "charter",
-        maxCapacity: expData?.maxCapacity,
-      }),
+      maxGuests: experienceMaxGuests,
       ...(pricingType === "ticketed" && { maxCapacity: expData?.maxCapacity ?? 35, departureHour: expData?.departureHour ?? 19, departureMinute: expData?.departureMinute ?? 0 }),
       // Charters require explicit opt-in for deposit (match create-payment-intent); ticketed never
       allowDeposit: pricingType === "ticketed" ? false : expData?.allowDeposit === true,

@@ -10,6 +10,7 @@ import type {
   QuerySnapshot,
   Transaction,
 } from "firebase-admin/firestore";
+import { intervalsConflictWithTurnaround } from "@/lib/booking/booking-schedule-rules";
 
 /** Transaction#get is overloaded; this matches runtime behavior for Query | DocumentReference. */
 export function transactionGetQueryOrDoc(
@@ -112,7 +113,7 @@ export async function assertNoOverlappingActiveSameDaySlots(
       }
       const existingStart = (data.startAt as { toDate(): Date }).toDate().getTime();
       const existingEnd = (data.endAt as { toDate(): Date }).toDate().getTime();
-      const timeOverlap = slotStartMs < existingEnd && slotEndMs > existingStart;
+      const timeOverlap = intervalsConflictWithTurnaround(slotStartMs, slotEndMs, existingStart, existingEnd);
       const existingParsed =
         parseSlotIdRelaxed(doc.id) ??
         (typeof (data as { slotId?: string }).slotId === "string"

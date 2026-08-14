@@ -44,29 +44,29 @@ describe("PROCESSING_FEE_RATE customer-facing policy", () => {
 });
 
 describe("catalog → checkout price consistency (no processing fee)", () => {
-  it("Standard Half Day $1,495", () => {
+  it("Standard Half Day (template placeholder)", () => {
     assertCharterPriceJourney("Standard Half Day", STANDARD_RATE_CENTS.half);
-    assert.strictEqual(STANDARD_RATE_CENTS.half, 149_500);
+    assert.strictEqual(STANDARD_RATE_CENTS.half, 50_000);
   });
 
-  it("Standard Full Day $2,095", () => {
+  it("Standard Full Day (template placeholder)", () => {
     assertCharterPriceJourney("Standard Full Day", STANDARD_RATE_CENTS.full);
-    assert.strictEqual(STANDARD_RATE_CENTS.full, 209_500);
+    assert.strictEqual(STANDARD_RATE_CENTS.full, 80_000);
   });
 
-  it("Founding Half Day $1,295", () => {
+  it("Founding Half Day (template placeholder)", () => {
     assertCharterPriceJourney("Founding Half Day", FOUNDING_RATE_CENTS.half);
-    assert.strictEqual(FOUNDING_RATE_CENTS.half, 129_500);
+    assert.strictEqual(FOUNDING_RATE_CENTS.half, 50_000);
   });
 
-  it("Founding Full Day $1,895", () => {
+  it("Founding Full Day (template placeholder)", () => {
     assertCharterPriceJourney("Founding Full Day", FOUNDING_RATE_CENTS.full);
-    assert.strictEqual(FOUNDING_RATE_CENTS.full, 189_500);
+    assert.strictEqual(FOUNDING_RATE_CENTS.full, 80_000);
   });
 
-  it("Peak Full Day $2,395", () => {
+  it("Peak Full Day (template placeholder)", () => {
     assertCharterPriceJourney("Peak Full Day", PEAK_FULL_DAY_CENTS);
-    assert.strictEqual(PEAK_FULL_DAY_CENTS, 239_500);
+    assert.strictEqual(PEAK_FULL_DAY_CENTS, 100_000);
   });
 });
 
@@ -81,7 +81,7 @@ describe("add-ons do not receive a processing surcharge", () => {
       ],
       qty: 1,
     });
-    assert.strictEqual(priced.subtotalCents, charter + TRANSPORT_CENTS + LUNCH_CENTS); // $2,495
+    assert.strictEqual(priced.subtotalCents, charter + TRANSPORT_CENTS + LUNCH_CENTS);
     assert.strictEqual(priced.feesCents, 0);
     assert.strictEqual(priced.taxCents, Math.round(priced.subtotalCents * TAX_RATE));
     assert.strictEqual(priced.totalCents, priced.subtotalCents + priced.taxCents);

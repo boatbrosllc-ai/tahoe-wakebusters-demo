@@ -1,6 +1,6 @@
 /**
- * Final off-session charge time: exactly 48 clock hours before trip start in the
- * Nasty business timezone (Cabo / America/Mazatlan).
+ * Final off-session charge time: exactly 48 clock hours before trip start in
+ * BUSINESS_TIMEZONE (from site config).
  *
  * Uses floating wall-clock arithmetic in BUSINESS_TIMEZONE (not system-local
  * `toZonedTime` + `subHours`, which mis-counts across the host machine's DST).
@@ -8,8 +8,10 @@
 
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
+import { getDepositLeadTimeHours } from "@/lib/booking/customer-operations";
 
-export const DEPOSIT_LEAD_TIME_HOURS = 48;
+/** Hours before trip start for deposit eligibility and final balance charge (from site config). */
+export const DEPOSIT_LEAD_TIME_HOURS = getDepositLeadTimeHours();
 export const DEPOSIT_LEAD_TIME_MS = DEPOSIT_LEAD_TIME_HOURS * 60 * 60 * 1000;
 
 /** True when the cron final-charge instant (48 business-local hours before trip start) is still after `nowMs`. */

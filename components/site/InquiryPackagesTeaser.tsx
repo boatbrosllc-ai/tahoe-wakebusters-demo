@@ -39,7 +39,7 @@ export function InquiryPackagesTeaser() {
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.4, delay: 0.04 }}
           >
-            Multi-day Cabo packages
+            Multi-day packages
           </motion.h2>
           <motion.p
             className="mt-4 text-base sm:text-lg text-white/80 leading-relaxed"

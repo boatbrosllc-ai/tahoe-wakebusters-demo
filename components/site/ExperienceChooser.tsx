@@ -51,7 +51,7 @@ export function ExperienceChooser({ initialListings = [] }: ExperienceChooserPro
   const [listings, setListings] = useState<ExperienceListingPayload[]>(initialListings);
   const [apiError, setApiError] = useState(false);
   const staticBySlug = new Map(experiences.map((exp) => [exp.slug, exp]));
-  const adminManagedStaticSlugs = new Set(["pontoon", "watersports", "sunset", "holiday", "nasty-half-day", "nasty-full-day"]);
+  const adminManagedStaticSlugs = new Set(["pontoon", "watersports", "sunset", "holiday", "half-day", "full-day"]);
   const isAdminManagedSlug = (slug: string) =>
     isPontoonSlug(slug) || slug === "watersports" || slug === "sunset" || slug === "holiday";
   useEffect(() => {

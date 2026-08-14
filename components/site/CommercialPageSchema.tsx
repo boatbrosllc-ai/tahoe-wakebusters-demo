@@ -4,20 +4,14 @@ import { headers } from "next/headers";
 const COMMERCIAL_PATHS = new Set([
   "/",
   "/experiences",
-  "/experiences/nasty-half-day",
-  "/experiences/nasty-full-day",
+  "/experiences/half-day",
+  "/experiences/full-day",
   "/experiences/pontoon",
   "/experiences/watersports",
   "/experiences/sunset",
   "/experiences/holiday",
   "/packages",
   "/booking",
-  "/cabo-san-lucas-fishing-charters",
-  "/deep-sea-fishing-cabo",
-  "/los-cabos-fishing-charters",
-  "/cabo-fishing-charter-prices",
-  "/best-fishing-charters-cabo-san-lucas",
-  "/cabo-fish-processing",
 ]);
 
 function isCommercialPath(pathname: string | null): boolean {

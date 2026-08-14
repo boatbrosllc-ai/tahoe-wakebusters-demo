@@ -77,11 +77,11 @@ async function fetchActiveExperiencesForPublic(): Promise<PublicExperienceListIt
       ...(isTicketed && (exp.maxCapacity != null ? { maxCapacity: exp.maxCapacity } : { maxCapacity: 35 })),
       ...(isTicketed && { departureHour: exp.departureHour ?? 19 }),
       ...(isTicketed && { departureMinute: exp.departureMinute ?? 0 }),
-      allowDeposit: isTicketed ? false : exp.allowDeposit !== false,
+      allowDeposit: isTicketed ? false : exp.allowDeposit === true,
     };
   });
 
-  const slugOrder = ["pontoon", "nasty-half-day", "watersports", "nasty-full-day", "sunset", "holiday"];
+  const slugOrder = ["pontoon", "half-day", "watersports", "full-day", "sunset", "holiday"];
   const slugOrderIndex = (slug: string): number => {
     const lower = (slug ?? "").toLowerCase();
     const i = slugOrder.findIndex((s) => lower.includes(s) || lower === s);

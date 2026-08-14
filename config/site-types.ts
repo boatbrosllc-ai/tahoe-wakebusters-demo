@@ -1,16 +1,13 @@
 /**
- * Shared shape for customer site configuration.
+ * Customer configuration shape for this cloned Slipstack deployment.
  *
- * Each folder under `sites/<id>/` exports a config that satisfies this type.
- * `config/site.ts` resolves the active site and re-exports `siteConfig` so
- * existing imports keep working.
+ * One repo = one customer. Edit `config/site.ts` (and env vars) — do not add
+ * a multi-site registry or `SITE_IDS` switcher.
  */
 
-export const SITE_IDS = ["platform-dev", "abc-boats"] as const;
-export type SiteId = (typeof SITE_IDS)[number];
-
 export type SiteConfig = {
-  tenantId: SiteId;
+  /** Stable id for this customer deployment (launch packet / ops). Not a site switcher. */
+  tenantId: string;
   environment: "development" | "staging" | "production";
 
   company: {
@@ -114,6 +111,7 @@ export type SiteConfig = {
     currency: string;
     country: string;
     locale: string;
+    /** Sales tax applied to subtotal (e.g. 0.0825). Template default is 0 until the customer sets it. */
     taxRate: number;
     legal: { governingLaw: string; venue: string };
   };
@@ -123,6 +121,72 @@ export type SiteConfig = {
     mode: "embed" | "link";
     providerUrl: string;
     embedSrc: string;
+    /** Fraction of total collected as deposit (e.g. 0.5). */
+    depositFraction: number;
+    /**
+     * Hours before trip start when deposit checkout is allowed and final balance is charged.
+     * Defaults to 48 when omitted.
+     */
+    minimumNoticeHours?: number;
+    /** Minutes between consecutive trips on the same boat. */
+    turnaroundMinutes?: number;
+    /** When the remaining balance is collected. */
+    balanceTiming?: "at_booking" | "hours_before" | "on_arrival";
+    /** Hours before trip start to auto-charge balance when balanceTiming is hours_before. */
+    balanceHoursBefore?: number;
+    refundPolicyText?: string;
+    alcoholPolicyText?: string;
+    minAge?: number;
+    /**
+     * `hourly` — standard start-time grid (default for new customers).
+     * `fixed-windows` — AM/PM/full-day fixed departures (legacy sportfishing flow).
+     */
+    slotSelectionMode?: "hourly" | "fixed-windows";
+    cancellation: {
+      freeCancelDays: number;
+      partialRefundDaysStart: number;
+      partialRefundDaysEnd: number;
+      noRefundWithinDays: number;
+      fullText: string;
+      summary: string;
+    };
+  };
+
+  /** Operational rules from launch packet (optional until import). */
+  operations?: {
+    operatingHours?: {
+      startHour: number;
+      endHour: number;
+      firstDepartureHour?: number;
+      lastDepartureHour?: number;
+    };
+    season?: {
+      enabled: boolean;
+      startMonth?: number;
+      endMonth?: number;
+      startDate?: string;
+      endDate?: string;
+    };
+    fuelGratuity?: {
+      fuelSurchargeCents?: number;
+      fuelSurchargeLabel?: string;
+      suggestedGratuityPercent?: number;
+      gratuityAddonCatalogKey?: string;
+      gratuityNotes?: string;
+      fuelPolicy?: "included" | "extra" | "customer_pays";
+      gratuityPolicy?: "included" | "optional" | "not_included" | "required";
+    };
+    weatherPolicyText?: string;
+    safetyPolicyText?: string;
+    alcoholPolicyText?: string;
+    weeklySchedule?: Array<{
+      weekday: number;
+      closed: boolean;
+      openHour: number;
+      openMinute: number;
+      closeHour: number;
+      closeMinute: number;
+    }>;
   };
 
   features: {
@@ -130,14 +194,16 @@ export type SiteConfig = {
     paypal: boolean;
     giftCards: boolean;
     smsReminders: boolean;
-    /**
-     * `sites` = this customer has a folder under `sites/<tenantId>/`.
-     * Firebase/Stripe accounts are per-deployment env vars, not this flag.
-     */
-    customerSiteLayer: "inline" | "sites";
   };
 
   phone: string;
   phoneTel: string;
   sms: string;
 };
+
+/** Values that mean this clone has not been filled in for a real customer. */
+export const TEMPLATE_PLACEHOLDER = {
+  companyName: "Boat Rental Company",
+  domain: "example.com",
+  email: "info@example.com",
+} as const;

@@ -1,5 +1,11 @@
-/** All boats (including wakeboard/watersports) support up to 14 people. */
+import { siteConfig } from "@/config/site";
+
+/** Fallback when experience/boat caps are missing. */
 const MAX_GUESTS = 14;
+
+function isFixedCharterWindowsMode(): boolean {
+  return siteConfig.booking.slotSelectionMode === "fixed-windows";
+}
 
 /** Watersports/wake family slugs — wake boat max party is always 14. */
 const WATERCRAFT_SLUGS = new Set([
@@ -17,24 +23,37 @@ function isWatersportsSlug(slug: string | undefined): boolean {
  * Ticketed experiences use maxCapacity; charter experiences use experience maxGuests or MAX_GUESTS.
  * Wake/watersports charter is always 14 regardless of stored value.
  */
-export function getMaxGuestsForExperience(experience: {
-  slug?: string;
-  title?: string;
-  maxGuests?: number;
-  pricingType?: "charter" | "ticketed";
-  maxCapacity?: number;
-}): number {
+export function getMaxGuestsForExperience(
+  experience: {
+    slug?: string;
+    title?: string;
+    maxGuests?: number;
+    pricingType?: "charter" | "ticketed";
+    maxCapacity?: number;
+  },
+  boatCapacityMax?: number | null,
+): number {
+  let cap: number;
   if (experience.pricingType === "ticketed" && experience.maxCapacity != null && experience.maxCapacity > 0) {
-    return experience.maxCapacity;
+    cap = experience.maxCapacity;
+  } else {
+    const slug = (experience.slug ?? "").trim();
+    const title = (experience.title ?? "").toLowerCase();
+    const isCharter = experience.pricingType !== "ticketed";
+    if (
+      isCharter &&
+      isFixedCharterWindowsMode() &&
+      (isWatersportsSlug(slug) || /wake|surf|watersport|wakeboard|tube/.test(title))
+    ) {
+      cap = MAX_GUESTS;
+    } else if (experience.maxGuests != null && experience.maxGuests > 0) {
+      cap = experience.maxGuests;
+    } else {
+      cap = MAX_GUESTS;
+    }
   }
-  const slug = (experience.slug ?? "").trim();
-  const title = (experience.title ?? "").toLowerCase();
-  const isCharter = experience.pricingType !== "ticketed";
-  if (isCharter && (isWatersportsSlug(slug) || /wake|surf|watersport|wakeboard|tube/.test(title))) {
-    return MAX_GUESTS;
+  if (typeof boatCapacityMax === "number" && boatCapacityMax > 0) {
+    cap = Math.min(cap, boatCapacityMax);
   }
-  if (experience.maxGuests != null && experience.maxGuests > 0) {
-    return experience.maxGuests;
-  }
-  return MAX_GUESTS;
+  return cap;
 }

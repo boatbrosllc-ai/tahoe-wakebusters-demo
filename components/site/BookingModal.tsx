@@ -64,6 +64,14 @@ import { trackBookingCompletedOnce } from "@/lib/booking/booking-completed-analy
 import { ratingWithReviewCount } from "@/content/location";
 import { DEPOSIT_FRACTION, TIP_MAX_PERCENT } from "@/lib/booking/constants";
 import { DEPOSIT_LEAD_TIME_HOURS } from "@/lib/booking/final-charge-at";
+import {
+  formatDepositBalanceTimingHint,
+  formatRemainingBalanceShort,
+  getDepositPercentLabel,
+  getGratuityPolicyCopy,
+} from "@/lib/booking/booking-policy-copy";
+import { DEFAULT_CANCELLATION_SUMMARY } from "@/lib/booking/cancellation-policy";
+import { shouldForceFullPaymentAtCheckout } from "@/lib/booking/customer-operations";
 import { formatMoneyNonNegative } from "@/lib/booking/format-money";
 import { BookingStep1Category } from "@/components/site/booking-modal-steps/BookingStep1Category";
 import { BookingStep2Calendar } from "@/components/site/booking-modal-steps/BookingStep2Calendar";
@@ -416,8 +424,22 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     isTicketed,
   );
 
-  /** Max sellable tickets (ticketed) or max guests (charter). */
-  const ticketMax = isTicketed ? (selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36) : (selectedExperience?.maxGuests ?? 14);
+  /** Max sellable tickets (ticketed) or max guests (charter), respecting selected boat capacity when set. */
+  const ticketMax = useMemo(() => {
+    if (isTicketed) return selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36;
+    if (selectedBoat?.maxGuests != null && selectedBoat.maxGuests > 0) return selectedBoat.maxGuests;
+    return selectedExperience?.maxGuests ?? 14;
+  }, [
+    isTicketed,
+    selectedBoat?.id,
+    selectedBoat?.maxGuests,
+    selectedExperience?.maxGuests,
+    selectedExperience?.maxCapacity,
+  ]);
+  const depositPercentLabel = getDepositPercentLabel();
+  const depositCheckoutAllowed =
+    selectedExperience?.allowDeposit === true && !isTicketed && !shouldForceFullPaymentAtCheckout();
+  const gratuityPolicyCopy = getGratuityPolicyCopy();
   /** Ticketed: per-date availability from date-prices (same window as calendar). Used when ticket-availability fails so the flow is not dead-ended. */
   const ticketedCalendarAvail =
     isTicketed && selectedDate != null && typeof ticketsAvailableByDate[selectedDate] === "number"
@@ -690,11 +712,11 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     () => new Date(viewMonthYear, viewMonthMonth, 0).getDate(),
     [viewMonthYear, viewMonthMonth]
   );
-  // When experience changes, clamp party size to new max (e.g. pontoon 14 → wake 14)
+  // When experience or boat changes, clamp party size to effective max capacity.
   useEffect(() => {
-    const max = selectedExperience?.maxGuests ?? 14;
+    const max = ticketMax;
     setPartySize((prev) => (prev > max ? max : prev));
-  }, [selectedExperience?.id, selectedExperience?.maxGuests]);
+  }, [selectedExperience?.id, selectedBoat?.id, ticketMax]);
 
   // Clear time selection when date is cleared (e.g. modal reset)
   useEffect(() => {
@@ -758,7 +780,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
     return h * 60 * 60 * 1000;
   }, [chicagoDateTick, depositLeadTimeHoursFromHold]);
 
-  const isDepositWithin48h = useMemo(() => {
+  const isDepositWithinLeadTime = useMemo(() => {
     void chicagoDateTick;
     if (selectedSlot == null) return false;
     const startMs = getSlotStartMs(selectedSlot);
@@ -767,10 +789,10 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   }, [selectedSlot, depositLeadTimeMs, chicagoDateTick]);
 
   useEffect(() => {
-    if (isDepositWithin48h && !payFullAmount) {
+    if (isDepositWithinLeadTime && !payFullAmount) {
       setPayFullAmount(true);
     }
-  }, [isDepositWithin48h, payFullAmount]);
+  }, [isDepositWithinLeadTime, payFullAmount]);
 
   // Ticketed: auto-select the first open slot on date change (fixed departure, no user choice).
   // Validate that the selected slot's startHour matches experience.departureHour when available; if mismatch, clear and refresh.
@@ -3468,7 +3490,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                                 <p className="text-[10px] text-brand-muted">Exact amount confirmed at checkout</p>
                               )}
                               <div className="flex justify-between items-baseline text-sm">
-                                <span className="text-brand-muted">Remaining (charged 48h before trip)</span>
+                                <span className="text-brand-muted">{formatRemainingBalanceShort()}</span>
                                 {priceReady ? (
                                   <span className="font-medium text-brand-dark">
                                     {finalAmountIsEstimate ? "~" : ""}
@@ -3694,7 +3716,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </p>
                     )}
                     {tipChoice === "later" && (
-                      <p className="text-xs text-brand-muted mt-1.5">You&apos;ll tip your captain directly at the end of the trip.</p>
+                      <p className="text-xs text-brand-muted mt-1.5">{gratuityPolicyCopy}</p>
                     )}
                     {tipChoice === null && allowTipNow && allowTipLater && paymentError?.toLowerCase().includes("tip") && (
                       <p className="text-xs text-red-600 mt-1.5">Please choose a tip option above.</p>
@@ -3703,7 +3725,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   )}
 
                   {/* Pay deposit or full — charters only; ticketed always pays full and has no deposit option */}
-                  {!isTicketed && selectedExperience?.allowDeposit === true && !isDepositWithin48h && (
+                  {!isTicketed && depositCheckoutAllowed && !isDepositWithinLeadTime && (
                   <div className="pb-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted mb-2">
                       Payment amount
@@ -3719,7 +3741,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                             : "border-brand-dark/15 bg-white text-brand-muted hover:border-brand-dark/25 hover:text-brand-dark"
                         )}
                       >
-                        <span className="font-semibold text-brand-dark">Pay 50% deposit</span>
+                        <span className="font-semibold text-brand-dark">Pay {depositPercentLabel} deposit</span>
                         <span className="block mt-0.5 text-brand-muted font-normal">
                           {priceReady ? (
                             depositCentsFromServer == null ? (
@@ -3729,8 +3751,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                               </>
                             ) : (
                               <>
-                                {formatMoneyNonNegative(displayDepositCents)} now — we&apos;ll charge the remaining 50% 48
-                                hours before your trip
+                                {formatMoneyNonNegative(displayDepositCents)} now — {formatDepositBalanceTimingHint()}
                               </>
                             )
                           ) : (
@@ -3889,7 +3910,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                         )}
                         {!isTicketed && !payFullAmount && (
                           <p className="text-[10px] sm:text-[11px] text-brand-muted mt-0.5">
-                            Remaining 50% charged 48 hours before your trip
+                            {formatRemainingBalanceShort()}
                             {depositCentsFromServer == null && priceReady ? " · Exact amount confirmed at checkout" : ""}
                           </p>
                         )}
@@ -4219,7 +4240,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   <div className="min-h-[200px] sm:min-h-[220px] flex flex-col shrink-0">
                     <Elements key={clientSecret ?? ""} stripe={stripePromise} options={{ clientSecret }}>
                       <p className="text-center text-xs text-brand-muted mb-3 px-2 leading-snug order-first">
-                        ⭐ {ratingWithReviewCount()} · Cancel within 48 hours for a full refund.
+                        ⭐ {ratingWithReviewCount()} · {DEFAULT_CANCELLATION_SUMMARY}
                       </p>
                       <BookingStep4PaymentForm
                         receiptClaimToken={receiptClaimToken}

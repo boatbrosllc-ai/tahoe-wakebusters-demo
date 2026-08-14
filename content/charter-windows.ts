@@ -1,6 +1,6 @@
 import { brand } from "@/content/brand";
 /**
- * ${brand.companyName} — fixed charter windows (Cabo / America/Mazatlan).
+ * ${brand.companyName} — fixed charter windows (times are template defaults; adjust per customer).
  *
  * Guest flow: package → date → window (half AM/PM) or full day + optional extension → checkout.
  * No free-form clock times; no boat picker (single boat).
@@ -18,13 +18,14 @@ import {
 } from "@/content/catalog-pricing";
 import { buildSlotId, getSlotStartEnd, type ParsedSlotId } from "@/lib/booking/experience-slots";
 import { intervalsOverlapMs } from "@/lib/booking/booking-interval";
+import { useFixedCharterWindows } from "@/lib/booking/customer-operations";
 
 export type NsfHalfWindowId = "am" | "pm";
 export type NsfWindowId = NsfHalfWindowId | "full";
 export type NsfExtensionHours = 0 | 1 | 2 | 3;
 
 /** Extra hour offshore (USD cents) — charged via longer full-day rates (9/10/11h). */
-export const NSF_EXTENSION_HOUR_CENTS = FOUNDING_ANGLER_RATE_ACTIVE ? 25_000 : 30_000; // $250 / $300
+export const NSF_EXTENSION_HOUR_CENTS = FOUNDING_ANGLER_RATE_ACTIVE ? 10_000 : 10_000; // $100 / extra hour
 
 export type NsfCharterWindow = {
   id: NsfWindowId;
@@ -113,11 +114,13 @@ export const NSF_EXTENSION_OPTIONS: {
 ];
 
 export function isNsfHalfDayBundle(bundleId: string | null | undefined): boolean {
-  return bundleId === "nasty";
+  if (!useFixedCharterWindows()) return false;
+  return bundleId === "half-day" || bundleId === "nasty";
 }
 
 export function isNsfFullDayBundle(bundleId: string | null | undefined): boolean {
-  return bundleId === "nastier" || bundleId === "nastiest";
+  if (!useFixedCharterWindows()) return false;
+  return bundleId === "full-day" || bundleId === "all-in" || bundleId === "nastier" || bundleId === "nastiest";
 }
 
 export function nsfWindowsForBundle(bundleId: string | null | undefined): NsfCharterWindow[] {
@@ -189,6 +192,8 @@ export function nsfCharterSlotsConflict(
   const bStart = getSlotStartEnd(b.dateStr, b.startHour, b.durationHours, b.startMinute ?? 0).start.getTime();
   const bEnd = getSlotStartEnd(b.dateStr, b.startHour, b.durationHours, b.startMinute ?? 0).end.getTime();
   if (intervalsOverlapMs(aStart, aEnd, bStart, bEnd)) return true;
+
+  if (!useFixedCharterWindows()) return false;
 
   const aFull = isNsfFullDaySlot(a);
   const bFull = isNsfFullDaySlot(b);

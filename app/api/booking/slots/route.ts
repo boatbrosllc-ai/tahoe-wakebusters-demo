@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
 import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit";
+import { filterSlotGridBySchedule } from "@/lib/booking/booking-schedule-rules";
 import {
   buildSlotId,
   getSlotGrid,
@@ -290,13 +291,15 @@ export async function GET(request: NextRequest) {
         const ticketedWeekdaysRestricted = ticketedWeekdaysForFirestore(
           normalizeTicketedWeekdaysInput((expDataFull as { ticketedWeekdays?: unknown }).ticketedWeekdays)
         );
-        const ticketedGrid = getTicketedSlotGrid(
-          gridStart,
-          gridEnd,
-          tDurationHours,
-          tDepartureHour,
-          tDepartureMinute,
-          ticketedWeekdaysRestricted ?? null
+        const ticketedGrid = filterSlotGridBySchedule(
+          getTicketedSlotGrid(
+            gridStart,
+            gridEnd,
+            tDurationHours,
+            tDepartureHour,
+            tDepartureMinute,
+            ticketedWeekdaysRestricted ?? null,
+          ),
         );
         const ticketedStartDateStrLower = addCalendarDaysToDateStr(
           startDate,
@@ -709,8 +712,10 @@ export async function GET(request: NextRequest) {
       );
       const slotDocsQueryEnd = winEnd;
       const boatIdParam = request.nextUrl.searchParams.get("boatId");
-      const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }>();
-      mergedBoatDocs.forEach((d) => boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string }));
+      const boatDocDataById = new Map<string, { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string; capacity?: number }>();
+      mergedBoatDocs.forEach((d) =>
+        boatDocDataById.set(d.id, d.data() as { allowedStartTimes?: { hour: number; minute: number }[]; boatType?: string; capacity?: number }),
+      );
       let boatIds: string[] = mergedBoatDocs
         .filter((d) => allowBoatType((d.data() as { boatType?: string }).boatType))
         .map((d) => d.id);
@@ -749,6 +754,28 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: "Boat not found or not assigned to this experience" }, { status: 404 });
         }
         boatIds = [boatIdParam];
+      }
+      const expDataForCap = expDataFull as
+        | {
+            slug?: string;
+            title?: string;
+            name?: string;
+            maxGuests?: number;
+            pricingType?: "charter" | "ticketed";
+            maxCapacity?: number;
+          }
+        | undefined;
+      const expForCapacity = {
+        slug: expDataForCap?.slug,
+        title: expDataForCap?.title ?? expDataForCap?.name,
+        maxGuests: expDataForCap?.maxGuests,
+        pricingType: (expDataForCap?.pricingType ?? "charter") as "charter" | "ticketed",
+        maxCapacity: expDataForCap?.maxCapacity,
+      };
+      const boatMaxCapacityById = new Map<string, number>();
+      for (const bid of boatIds) {
+        const cap = boatDocDataById.get(bid)?.capacity;
+        boatMaxCapacityById.set(bid, getMaxGuestsForExperience(expForCapacity, cap));
       }
       let legacyQueryHitLimitCharter = false;
       // If no boats linked to this experience (e.g. boats use slug and experience has different id), still show booked slots by using boatIds from bookings.
@@ -1310,6 +1337,7 @@ export async function GET(request: NextRequest) {
         } else {
           grid = getSlotGrid(gridStart, gridEnd, durationsUnique);
         }
+        grid = filterSlotGridBySchedule(grid);
         gridByBoatId.set(bid, grid);
       }
       const blockRangesByBoat = new Map<string, { start: number; end: number }[]>();
@@ -1426,6 +1454,7 @@ export async function GET(request: NextRequest) {
             updatedAt: openSlotDocRow ? openSlotDocRow.updatedAt : null,
             boatId: bid,
             experienceId,
+            maxCapacity: boatMaxCapacityById.get(bid),
             ...(bookingDurationHours != null ? { bookingDurationHours } : {}),
           });
         }

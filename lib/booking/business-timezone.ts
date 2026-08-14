@@ -1,14 +1,12 @@
 /**
- * Single operational timezone for ${brand.companyName} boat/trip operations.
+ * Single operational timezone for boat/trip operations.
  *
- * Authority: Cabo San Lucas business time (`America/Mazatlan`).
+ * Authority: `siteConfig.business.timezone` / `brand.timezone`.
  * Kept in `lib/booking` so server booking code does not scatter string literals.
  *
  * DO NOT use for:
  * - Firestore createdAt/updatedAt (UTC timestamps)
  * - Stripe / webhook event times (UTC)
- *
- * Mazatlan does not observe DST (UTC−7 year-round). Chicago DST tests must not apply here.
  */
 
 import { brand } from "@/content/brand";
@@ -17,4 +15,4 @@ import { brand } from "@/content/brand";
 export const BUSINESS_TIMEZONE: string =
   typeof brand.timezone === "string" && brand.timezone.trim()
     ? brand.timezone.trim()
-    : "America/Mazatlan";
+    : "America/New_York";
